@@ -13,9 +13,9 @@ COPY . .
 
 # Build arguments with defaults
 ARG NODE_ENV=production
-ARG PORT=3000
+ARG PORT=3003
 ARG MONGODB_URI=mongodb://mongo:27017/telephony-app
-ARG BASE_URL=http://localhost:3000
+ARG BASE_URL=http://localhost:3003
 ARG TELNYX_API_KEY
 ARG TELNYX_CONNECTION_ID
 ARG TELNYX_MESSAGING_PROFILE_ID
