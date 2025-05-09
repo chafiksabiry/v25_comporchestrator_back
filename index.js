@@ -9,10 +9,10 @@ if (result.error) {
 }
 
 // Debug logs
-console.log('Environment variables loaded:');
+/* console.log('Environment variables loaded:');
 console.log('TELNYX_API_KEY:', process.env.TELNYX_API_KEY);
 console.log('NODE_ENV:', process.env.NODE_ENV);
-console.log('Current working directory:', process.cwd());
+console.log('Current working directory:', process.cwd()); */
 
 import { config } from './src/config/env.js';
 import express from 'express';

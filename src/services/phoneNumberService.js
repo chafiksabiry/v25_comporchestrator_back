@@ -13,7 +13,7 @@ class PhoneNumberService {
   async searchAvailableNumbers(searchParams) {
     const availableNumbers = await this.telnyxClient.availablePhoneNumbers.list({
       filter: {
-        "country_code": "FR",
+        "country_code": searchParams.countryCode,
          "phone_number_type": "local",
           "features": ["voice"],
            "limit": 10
@@ -24,10 +24,11 @@ class PhoneNumberService {
 
   async purchaseNumber(phoneNumber, connectionId, messagingProfileId, baseUrl) {
     // Purchase the number through Telnyx
-    const purchasedNumber = await this.telnyxClient.phoneNumbers.create({
-      phone_number: phoneNumber,
+    const purchasedNumber = await this.telnyxClient.numberOrders.create({
+    /*   phone_number: phoneNumber,
       connection_id: connectionId,
-      messaging_profile_id: messagingProfileId
+      messaging_profile_id: messagingProfileId */
+      phone_numbers:[{"phone_number": phoneNumber}]
     });
 
     // Save to database
