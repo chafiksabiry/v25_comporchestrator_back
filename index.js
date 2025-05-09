@@ -1,15 +1,26 @@
+// Load environment variables first
+import dotenv from 'dotenv';
+// Load .env file
+const result = dotenv.config();
+
+if (result.error) {
+  console.error('Error loading .env file:', result.error);
+  process.exit(1);
+}
+
+// Debug logs
+/* console.log('Environment variables loaded:');
+console.log('TELNYX_API_KEY:', process.env.TELNYX_API_KEY);
+console.log('NODE_ENV:', process.env.NODE_ENV);
+console.log('Current working directory:', process.cwd()); */
+
+import { config } from './src/config/env.js';
 import express from 'express';
 import cors from 'cors';
 import bodyParser from 'body-parser';
-import dotenv from 'dotenv';
 import mongoose from 'mongoose';
-import telnyx from 'telnyx';
-
 import { phoneNumberRoutes } from './src/routes/phoneNumber.js';
 import { callRoutes } from './src/routes/call.js';
-
-// Load environment variables
-dotenv.config();
 
 const app = express();
 
@@ -17,26 +28,17 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-// Initialize Telnyx client
-const telnyxClient = telnyx(process.env.TELNYX_API_KEY);
-
-// Add Telnyx client to requests
-app.use((req, res, next) => {
-  req.telnyx = telnyxClient;
-  next();
-});
-
-// Routes
-app.use('/api/phone-numbers', phoneNumberRoutes);
-app.use('/api/calls', callRoutes);
-
 // Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI, {
+mongoose.connect(config.mongodbUri, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
 .then(() => console.log('Connected to MongoDB'))
 .catch((error) => console.error('MongoDB connection error:', error));
+
+// Routes
+app.use('/api/phone-numbers', phoneNumberRoutes);
+app.use('/api/calls', callRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -45,7 +47,6 @@ app.use((err, req, res, next) => {
 });
 
 // Start server
-const PORT = process.env.PORT || 3003;
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+app.listen(config.port, () => {
+  console.log(`Server is running on port ${config.port}`);
 });
