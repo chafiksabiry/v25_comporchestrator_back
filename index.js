@@ -30,6 +30,11 @@ mongoose.connect(config.mongodbUri, {
 })
 .then(() => console.log('Connected to MongoDB'))
 .catch((error) => console.error('MongoDB connection error:', error));
+
+app.use(express.urlencoded({ extended: true }));
+
+// Body parser
+app.use(express.json());
 // Middleware
 app.use(cors({
   origin: [
@@ -38,22 +43,19 @@ app.use(cors({
     'http://localhost:5173', // Pour le développement local
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'X-Requested-With', 'Accept'],
-  exposedHeaders: ['Content-Length', 'X-Foo', 'X-Bar'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
-  maxAge: 86400 // Cache les résultats du preflight pendant 24 heures
 }));
 
 // Ajout d'un middleware pour les headers CORS sur toutes les routes
-app.use((req, res, next) => {
+/* app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', 'https://comp-orchestrator.harx.ai');
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
   next();
-});
+}); */
 
-app.use(bodyParser.json());
 // Routes
 app.use('/api/phone-numbers', phoneNumberRoutes);
 app.use('/api/calls', callRoutes);
