@@ -25,7 +25,9 @@ import { callRoutes } from './src/routes/call.js';
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: ['http://localhost:3003', 'https://comp-orchestrator.harx.ai']
+}));
 app.use(bodyParser.json());
 
 // Connect to MongoDB
