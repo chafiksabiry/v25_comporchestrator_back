@@ -1,12 +1,7 @@
 // Load environment variables first
 import dotenv from 'dotenv';
-// Load .env file
-const result = dotenv.config();
-
-if (result.error) {
-  console.error('Error loading .env file:', result.error);
-  process.exit(1);
-}
+// Load .env file silently
+dotenv.config({ silent: true });
 
 import { config } from './src/config/env.js';
 import express from 'express';
@@ -34,7 +29,7 @@ app.use(cors({
   origin: [
     'https://comp-orchestrator.harx.ai',
     'https://api-comp-orchestrator.harx.ai',
-    'http://localhost:5173', // Pour le développement local
+    'http://localhost:5184', // Pour le développement local
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
