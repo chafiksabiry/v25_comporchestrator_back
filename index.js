@@ -26,8 +26,12 @@ const app = express();
 
 // Middleware
 app.use(cors({
-  origin: ['http://localhost:3003', 'https://comp-orchestrator.harx.ai']
+  origin: ['http://localhost:3003', 'https://comp-orchestrator.harx.ai'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  credentials: true,
+  optionsSuccessStatus: 200
 }));
+
 app.use(bodyParser.json());
 
 // Connect to MongoDB
