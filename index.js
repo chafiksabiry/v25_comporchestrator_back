@@ -48,13 +48,13 @@ app.use(cors({
 }));
 
 // Ajout d'un middleware pour les headers CORS sur toutes les routes
-app.use((req, res, next) => {
+/* app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', 'https://comp-orchestrator.harx.ai');
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
   next();
-});
+}); */
 
 // Routes
 app.use('/api/phone-numbers', phoneNumberRoutes);
