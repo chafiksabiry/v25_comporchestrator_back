@@ -1,10 +1,12 @@
 import { phoneNumberService } from '../services/phoneNumberService.js';
+import { config } from '../config/env.js';
 
 class PhoneNumberController {
   async searchNumbers(req, res) {
     try {
       const { countryCode, type, features } = req.query;
-      const numbers = await phoneNumberService.searchAvailableNumbers(req.telnyx, {
+      console.log(countryCode, type, features);
+      const numbers = await phoneNumberService.searchAvailableNumbers({
         countryCode,
         type,
         features
@@ -20,11 +22,10 @@ class PhoneNumberController {
     try {
       const { phoneNumber } = req.body;
       const newNumber = await phoneNumberService.purchaseNumber(
-        req.telnyx,
         phoneNumber,
-        process.env.TELNYX_CONNECTION_ID,
-        process.env.TELNYX_MESSAGING_PROFILE_ID,
-        process.env.BASE_URL
+        config.telnyxConnectionId,
+        config.telnyxMessagingProfileId,
+        config.baseUrl
       );
       res.json(newNumber);
     } catch (error) {
@@ -45,7 +46,7 @@ class PhoneNumberController {
 
   async deleteNumber(req, res) {
     try {
-      const result = await phoneNumberService.deletePhoneNumber(req.telnyx, req.params.id);
+      const result = await phoneNumberService.deletePhoneNumber(req.params.id);
       res.json(result);
     } catch (error) {
       console.error('Error deleting phone number:', error);
