@@ -23,7 +23,13 @@ import { phoneNumberRoutes } from './src/routes/phoneNumber.js';
 import { callRoutes } from './src/routes/call.js';
 
 const app = express();
-
+// Connect to MongoDB
+mongoose.connect(config.mongodbUri, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+})
+.then(() => console.log('Connected to MongoDB'))
+.catch((error) => console.error('MongoDB connection error:', error));
 // Middleware
 app.use(cors({
   origin: [
@@ -36,15 +42,6 @@ app.use(cors({
 }));
 
 app.use(bodyParser.json());
-
-// Connect to MongoDB
-mongoose.connect(config.mongodbUri, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
-.then(() => console.log('Connected to MongoDB'))
-.catch((error) => console.error('MongoDB connection error:', error));
-
 // Routes
 app.use('/api/phone-numbers', phoneNumberRoutes);
 app.use('/api/calls', callRoutes);
