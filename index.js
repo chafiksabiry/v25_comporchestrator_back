@@ -29,7 +29,8 @@ app.use(cors({
   origin: [
     'https://comp-orchestrator.harx.ai',
     'https://api-comp-orchestrator.harx.ai',
-    'http://localhost:5184', // Pour le développement local
+    'http://localhost:5184',
+    'https://v25.harx.ai', // Pour le développement local
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
