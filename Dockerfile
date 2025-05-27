@@ -14,7 +14,7 @@ COPY . .
 # Expose port
 EXPOSE 3003
 
-ENV MONGODB_URI="mongodb://harx:gcZ62rl8hoME@185.137.122.3:27017/V25_CompanySearchWizard"
+ENV MONGODB_URI="mongodb://harx:ix5S3vU6BjKn4MHp@207.180.226.2:27017/V25_HarxPreProd"
 ENV PORT=3003
 ENV NODE_ENV=development
 #ENV MONGODB_URI=mongodb://localhost:27017/telephony-app
@@ -22,7 +22,7 @@ ENV NODE_ENV=development
 ENV TELNYX_API_KEY=KEY019690D1904628BDD9BA5E852B56E231_pje6tiJqaeCqb5uD9Z586f
 ENV TELNYX_CONNECTION_ID=1234567890
 ENV TELNYX_MESSAGING_PROFILE_ID=12345
-ENV BASE_URL=https://api-Comp-Orchestrator.harx.ai
+ENV BASE_URL=https://preprod-api-comp-orchestrator.harx.ai
 
 # Start the app
 CMD ["npm", "start"]
