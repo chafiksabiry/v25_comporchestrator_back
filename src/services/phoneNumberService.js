@@ -148,42 +148,77 @@ class PhoneNumberService {
         }
       });
 
-      phoneNumber.connectionId = config.telnyxConnectionId;
-      phoneNumber.webhookUrl = `${config.baseUrl}/api/webhooks/voice`;
-      await phoneNumber.save();
-
-      console.log('✅ Number settings configured successfully');
-    } catch (error) {
-      console.error('❌ Error configuring number settings:', error);
-      phoneNumber.errorDetails = {
-        code: 'configuration_error',
-        message: error.message,
-        timestamp: new Date()
-      };
-      await phoneNumber.save();
-      throw error;
+      return newPhoneNumber;
     }
   }
 
-  async getNumberStatus(gigId) {
+  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId) {
+    if (!gigId) {
+      throw new Error('gigId is required to purchase a phone number');
+    }
+
     try {
-      const number = await PhoneNumber.findOne({ gigId })
-        .populate('requirementGroupId')
-        .lean();
+      // Purchase number through Twilio
+       const purchasedNumber = await this.twilioClient.incomingPhoneNumbers
+        .create({
+          phoneNumber: phoneNumber,
+          friendlyName: 'Test Number:' + phoneNumber,
+        });  
+    /*     const purchasedNumber = {
+          accountSid: 'AC8a453959a6cb01cbbd1c819b00c5782f',
+          addressSid: null,
+          addressRequirements: 'none',
+          apiVersion: '2010-04-01',
+          beta: false,
+          capabilities: { fax: false, mms: true, sms: true, voice: true },
+          dateCreated: '2025-06-12T15:39:07.000Z',
+          dateUpdated: '2025-06-12T15:39:07.000Z',
+          friendlyName: 'Test Number = +16086557543',
+          identitySid: null,
+          phoneNumber: '+16086557543',
+          origin: 'twilio',
+          sid: 'PN8b00ba8d95cf44ace1e04d2ec5eb96b2',
+          smsApplicationSid: '',
+          smsFallbackMethod: 'POST',
+          smsFallbackUrl: '',
+          smsMethod: 'POST',
+          smsUrl: '',
+          statusCallback: '',
+          statusCallbackMethod: 'POST',
+          trunkSid: null,
+          uri: '/2010-04-01/Accounts/AC8a453959a6cb01cbbd1c819b00c5782f/IncomingPhoneNumbers/PN8b00ba8d95cf44ace1e04d2ec5eb96b2.json',
+          voiceReceiveMode: 'voice',
+          voiceApplicationSid: null,
+          voiceCallerIdLookup: false,
+          voiceFallbackMethod: 'POST',
+          voiceFallbackUrl: null,
+          voiceMethod: 'POST',
+          voiceUrl: null,
+          emergencyStatus: 'Active',
+          emergencyAddressSid: null,
+          emergencyAddressStatus: 'unregistered',
+          bundleSid: null,
+          status: 'in-use'
+        }  */
 
-      if (!number) {
-        return { hasNumber: false };
-      }
+      console.log("purchasedNumber", purchasedNumber);
 
-      return {
-        hasNumber: true,
-        status: number.status,
-        orderStatus: number.orderStatus,
-        phoneNumber: number.phoneNumber,
-        requirementGroup: number.requirementGroupId,
-        needsDocuments: number.status === 'requirements_pending',
-        error: number.errorDetails
+      // Create document with only the necessary fields for Twilio
+      const phoneNumberData = {
+        phoneNumber: purchasedNumber.phoneNumber,
+        twilioId: purchasedNumber.sid,
+        provider: 'twilio',
+        status: 'active',
+        features: ['voice', 'sms'],
+        gigId
       };
+
+      // Save to database
+      const newPhoneNumber = new PhoneNumber(phoneNumberData);
+      await newPhoneNumber.save();
+      
+      console.log("newPhoneNumber", newPhoneNumber);
+      return newPhoneNumber;
     } catch (error) {
       console.error('❌ Error getting number status:', error);
       throw error;
