@@ -7,10 +7,12 @@ const phoneNumberSchema = new mongoose.Schema({
     unique: true
   },
   telnyxId: {
-    type: String
+    type: String,
+    sparse: true
   },
   twilioId: {
-    type: String
+    type: String,
+    sparse: true
   },
   provider: {
     type: String,
@@ -67,12 +69,13 @@ export const initializePhoneNumberIndexes = async () => {
       { unique: true }
     );
     
+    // Create sparse indexes for provider-specific IDs
     await PhoneNumber.collection.createIndex(
       { telnyxId: 1 },
       { 
         unique: true,
         sparse: true,
-        partialFilterExpression: { telnyxId: { $type: "string" } }
+        partialFilterExpression: { provider: 'telnyx' }
       }
     );
     
@@ -81,7 +84,7 @@ export const initializePhoneNumberIndexes = async () => {
       { 
         unique: true,
         sparse: true,
-        partialFilterExpression: { twilioId: { $type: "string" } }
+        partialFilterExpression: { provider: 'twilio' }
       }
     );
 
