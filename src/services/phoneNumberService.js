@@ -63,7 +63,11 @@ class PhoneNumberService {
     return availableNumbers.data;
   }
 
-  async purchaseNumber(phoneNumber, provider, connectionId, messagingProfileId, baseUrl) {
+  async purchaseNumber(phoneNumber, provider, connectionId, messagingProfileId, baseUrl, gigId) {
+    if (!gigId) {
+      throw new Error('gigId is required to purchase a phone number');
+    }
+
     if (provider === 'twilio') {
       // Purchase number through Twilio
       const purchasedNumber = await this.twilioClient.incomingPhoneNumbers
@@ -78,7 +82,8 @@ class PhoneNumberService {
         telnyxId: purchasedNumber.sid,
         provider: 'twilio',
         connectionId,
-        status: 'active'
+        status: 'active',
+        gigId
       });
 
       await newPhoneNumber.save();
@@ -96,7 +101,8 @@ class PhoneNumberService {
         telnyxId: purchasedNumber.data.id,
         provider: 'telnyx',
         connectionId,
-        status: 'active'
+        status: 'active',
+        gigId
       });
 
       await newPhoneNumber.save();
@@ -114,15 +120,19 @@ class PhoneNumberService {
     }
   }
 
-  async purchaseTwilioNumber(phoneNumber, baseUrl) {
+  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId) {
+    if (!gigId) {
+      throw new Error('gigId is required to purchase a phone number');
+    }
+
     try {
       // Purchase number through Twilio
-       const purchasedNumber = await this.twilioClient.incomingPhoneNumbers
+      const purchasedNumber = await this.twilioClient.incomingPhoneNumbers
         .create({
           phoneNumber: phoneNumber,
           friendlyName: 'Test Number:' + phoneNumber,
-        }); 
-     /*   const purchasedNumber = {
+        });  
+    /*     const purchasedNumber = {
           accountSid: 'AC8a453959a6cb01cbbd1c819b00c5782f',
           addressSid: null,
           addressRequirements: 'none',
@@ -131,9 +141,9 @@ class PhoneNumberService {
           capabilities: { fax: false, mms: true, sms: true, voice: true },
           dateCreated: '2025-06-12T15:39:07.000Z',
           dateUpdated: '2025-06-12T15:39:07.000Z',
-          friendlyName: 'Test Number = +16086557582',
+          friendlyName: 'Test Number = +16086557683',
           identitySid: null,
-          phoneNumber: '+16086557582',
+          phoneNumber: '+16086557683',
           origin: 'twilio',
           sid: 'PN8b00ba8d95cf44ace1e04d2ec5eb96b2',
           smsApplicationSid: '',
@@ -157,7 +167,9 @@ class PhoneNumberService {
           emergencyAddressStatus: 'unregistered',
           bundleSid: null,
           status: 'in-use'
-        } */
+        }  */
+       
+
       console.log("purchasedNumber", purchasedNumber);
 
       // Save to database with twilioId
@@ -166,7 +178,8 @@ class PhoneNumberService {
         twilioId: purchasedNumber.sid,
         provider: 'twilio',
         status: 'active',
-        features: ['voice', 'sms']
+        features: ['voice', 'sms'],
+        gigId
       });
 
       await newPhoneNumber.save();

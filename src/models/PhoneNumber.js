@@ -31,6 +31,11 @@ const phoneNumberSchema = new mongoose.Schema({
   webhookUrl: {
     type: String
   },
+  gigId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Gig',
+    required: true
+  },
   createdAt: {
     type: Date,
     default: Date.now
@@ -78,6 +83,11 @@ export const initializePhoneNumberIndexes = async () => {
         sparse: true,
         partialFilterExpression: { twilioId: { $type: "string" } }
       }
+    );
+
+    // Add index for gigId
+    await PhoneNumber.collection.createIndex(
+      { gigId: 1 }
     );
     
     console.log('PhoneNumber indexes initialized successfully');

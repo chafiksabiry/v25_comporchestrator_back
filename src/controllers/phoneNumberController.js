@@ -38,10 +38,11 @@ class PhoneNumberController {
 
   async purchaseNumber(req, res) {
     try {
-      const { phoneNumber, provider } = req.body;
+      const { phoneNumber, provider, gigId } = req.body;
       const newNumber = await phoneNumberService.purchaseNumber(
         phoneNumber,
         provider,
+        gigId,
         config.telnyxConnectionId,
         config.telnyxMessagingProfileId,
         config.baseUrl
@@ -55,11 +56,12 @@ class PhoneNumberController {
 
   async purchaseTwilioNumber(req, res) {
     try {
-      const { phoneNumber } = req.body;
+      const { phoneNumber, gigId } = req.body;
       console.log("phoneNumber",phoneNumber);
       const newNumber = await phoneNumberService.purchaseTwilioNumber(
         phoneNumber,
-        config.baseUrl
+        config.baseUrl,
+        gigId
       );
       console.log("newNumber",newNumber);
       res.json(newNumber);
