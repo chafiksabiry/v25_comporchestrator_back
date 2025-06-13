@@ -5,7 +5,7 @@ import { PhoneNumber } from '../models/PhoneNumber.js';
 async function fixIndexes() {
   try {
     // Connect to MongoDB
-    await mongoose.connect(config.mongodbUri, {
+    await mongoose.connect('mongodb://harx:gcZ62rl8hoME@38.242.208.242:27018/V25_CompanySearchWizard', {
       useNewUrlParser: true,
       useUnifiedTopology: true,
     });
