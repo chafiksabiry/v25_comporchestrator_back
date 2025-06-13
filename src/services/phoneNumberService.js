@@ -127,12 +127,12 @@ class PhoneNumberService {
 
     try {
       // Purchase number through Twilio
-      const purchasedNumber = await this.twilioClient.incomingPhoneNumbers
+     /*  const purchasedNumber = await this.twilioClient.incomingPhoneNumbers
         .create({
           phoneNumber: phoneNumber,
           friendlyName: 'Test Number:' + phoneNumber,
-        });  
-       /*  const purchasedNumber = {
+        });  */ 
+         const purchasedNumber = {
           accountSid: 'AC8a453959a6cb01cbbd1c819b00c5782f',
         addressSid: null,
         addressRequirements: 'none',
@@ -141,9 +141,9 @@ class PhoneNumberService {
         capabilities: { fax: false, mms: true, sms: true, voice: true },
         dateCreated: '2025-06-12T15:39:07.000Z',
         dateUpdated: '2025-06-12T15:39:07.000Z',
-        friendlyName: 'Test Number = +16086557587',
+        friendlyName: 'Test Number = +16086557577',
         identitySid: null,
-        phoneNumber: '+16086557587',
+        phoneNumber: '+16086557577',
         origin: 'twilio',
         sid: 'PN8b00ba8d95cf44ace1e04d2ec5eb96b2',
         smsApplicationSid: '',
@@ -167,7 +167,7 @@ class PhoneNumberService {
         emergencyAddressStatus: 'unregistered',
         bundleSid: null,
         status: 'in-use'
-      }  */
+      }  
      
       console.log("purchasedNumber", purchasedNumber);
 
