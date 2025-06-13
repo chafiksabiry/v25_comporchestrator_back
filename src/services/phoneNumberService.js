@@ -76,16 +76,18 @@ class PhoneNumberService {
           voiceUrl: `${baseUrl}/api/webhooks/voice`
         });
 
-      // Save to database
-      const newPhoneNumber = new PhoneNumber({
+      // Create document without telnyxId field for Twilio numbers
+      const phoneNumberData = {
         phoneNumber: purchasedNumber.phoneNumber,
-        telnyxId: purchasedNumber.sid,
+        twilioId: purchasedNumber.sid,
         provider: 'twilio',
         connectionId,
         status: 'active',
         gigId
-      });
+      };
 
+      // Save to database
+      const newPhoneNumber = new PhoneNumber(phoneNumberData);
       await newPhoneNumber.save();
       return newPhoneNumber;
     } else {
@@ -95,16 +97,18 @@ class PhoneNumberService {
       });
       console.log(purchasedNumber);
 
-      // Save to database
-      const newPhoneNumber = new PhoneNumber({
+      // Create document without twilioId field for Telnyx numbers
+      const phoneNumberData = {
         phoneNumber: phoneNumber,
         telnyxId: purchasedNumber.data.id,
         provider: 'telnyx',
         connectionId,
         status: 'active',
         gigId
-      });
+      };
 
+      // Save to database
+      const newPhoneNumber = new PhoneNumber(phoneNumberData);
       await newPhoneNumber.save();
 
       // Configure voice settings
@@ -131,58 +135,61 @@ class PhoneNumberService {
         .create({
           phoneNumber: phoneNumber,
           friendlyName: 'Test Number:' + phoneNumber,
-        });  */ 
-         const purchasedNumber = {
+        });  */
+        const purchasedNumber = {
           accountSid: 'AC8a453959a6cb01cbbd1c819b00c5782f',
-        addressSid: null,
-        addressRequirements: 'none',
-        apiVersion: '2010-04-01',
-        beta: false,
-        capabilities: { fax: false, mms: true, sms: true, voice: true },
-        dateCreated: '2025-06-12T15:39:07.000Z',
-        dateUpdated: '2025-06-12T15:39:07.000Z',
-        friendlyName: 'Test Number = +16086557577',
-        identitySid: null,
-        phoneNumber: '+16086557577',
-        origin: 'twilio',
-        sid: 'PN8b00ba8d95cf44ace1e04d2ec5eb96b2',
-        smsApplicationSid: '',
-        smsFallbackMethod: 'POST',
-        smsFallbackUrl: '',
-        smsMethod: 'POST',
-        smsUrl: '',
-        statusCallback: '',
-        statusCallbackMethod: 'POST',
-        trunkSid: null,
-        uri: '/2010-04-01/Accounts/AC8a453959a6cb01cbbd1c819b00c5782f/IncomingPhoneNumbers/PN8b00ba8d95cf44ace1e04d2ec5eb96b2.json',
-        voiceReceiveMode: 'voice',
-        voiceApplicationSid: null,
-        voiceCallerIdLookup: false,
-        voiceFallbackMethod: 'POST',
-        voiceFallbackUrl: null,
-        voiceMethod: 'POST',
-        voiceUrl: null,
-        emergencyStatus: 'Active',
-        emergencyAddressSid: null,
-        emergencyAddressStatus: 'unregistered',
-        bundleSid: null,
-        status: 'in-use'
-      }  
-     
+          addressSid: null,
+          addressRequirements: 'none',
+          apiVersion: '2010-04-01',
+          beta: false,
+          capabilities: { fax: false, mms: true, sms: true, voice: true },
+          dateCreated: '2025-06-12T15:39:07.000Z',
+          dateUpdated: '2025-06-12T15:39:07.000Z',
+          friendlyName: 'Test Number = +16086557542',
+          identitySid: null,
+          phoneNumber: '+16086557542',
+          origin: 'twilio',
+          sid: 'PN8b00ba8d95cf44ace1e04d2ec5eb96b2',
+          smsApplicationSid: '',
+          smsFallbackMethod: 'POST',
+          smsFallbackUrl: '',
+          smsMethod: 'POST',
+          smsUrl: '',
+          statusCallback: '',
+          statusCallbackMethod: 'POST',
+          trunkSid: null,
+          uri: '/2010-04-01/Accounts/AC8a453959a6cb01cbbd1c819b00c5782f/IncomingPhoneNumbers/PN8b00ba8d95cf44ace1e04d2ec5eb96b2.json',
+          voiceReceiveMode: 'voice',
+          voiceApplicationSid: null,
+          voiceCallerIdLookup: false,
+          voiceFallbackMethod: 'POST',
+          voiceFallbackUrl: null,
+          voiceMethod: 'POST',
+          voiceUrl: null,
+          emergencyStatus: 'Active',
+          emergencyAddressSid: null,
+          emergencyAddressStatus: 'unregistered',
+          bundleSid: null,
+          status: 'in-use'
+        } 
+       
+
       console.log("purchasedNumber", purchasedNumber);
 
-      // Save to database with twilioId
-      const newPhoneNumber = new PhoneNumber({
+      // Create document without telnyxId field for Twilio numbers
+      const phoneNumberData = {
         phoneNumber: purchasedNumber.phoneNumber,
         twilioId: purchasedNumber.sid,
-        telnyxId: undefined, // Explicitly set to undefined instead of null
         provider: 'twilio',
         status: 'active',
         features: ['voice', 'sms'],
         gigId
-      });
+      };
 
+      // Save to database
+      const newPhoneNumber = new PhoneNumber(phoneNumberData);
       await newPhoneNumber.save();
+      
       console.log("newPhoneNumber", newPhoneNumber);
       return newPhoneNumber;
     } catch (error) {
