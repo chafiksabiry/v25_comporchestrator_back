@@ -131,44 +131,7 @@ class PhoneNumberService {
         .create({
           phoneNumber: phoneNumber,
           friendlyName: 'Test Number:' + phoneNumber,
-        });  
-    /*     const purchasedNumber = {
-          accountSid: 'AC8a453959a6cb01cbbd1c819b00c5782f',
-          addressSid: null,
-          addressRequirements: 'none',
-          apiVersion: '2010-04-01',
-          beta: false,
-          capabilities: { fax: false, mms: true, sms: true, voice: true },
-          dateCreated: '2025-06-12T15:39:07.000Z',
-          dateUpdated: '2025-06-12T15:39:07.000Z',
-          friendlyName: 'Test Number = +16086557683',
-          identitySid: null,
-          phoneNumber: '+16086557683',
-          origin: 'twilio',
-          sid: 'PN8b00ba8d95cf44ace1e04d2ec5eb96b2',
-          smsApplicationSid: '',
-          smsFallbackMethod: 'POST',
-          smsFallbackUrl: '',
-          smsMethod: 'POST',
-          smsUrl: '',
-          statusCallback: '',
-          statusCallbackMethod: 'POST',
-          trunkSid: null,
-          uri: '/2010-04-01/Accounts/AC8a453959a6cb01cbbd1c819b00c5782f/IncomingPhoneNumbers/PN8b00ba8d95cf44ace1e04d2ec5eb96b2.json',
-          voiceReceiveMode: 'voice',
-          voiceApplicationSid: null,
-          voiceCallerIdLookup: false,
-          voiceFallbackMethod: 'POST',
-          voiceFallbackUrl: null,
-          voiceMethod: 'POST',
-          voiceUrl: null,
-          emergencyStatus: 'Active',
-          emergencyAddressSid: null,
-          emergencyAddressStatus: 'unregistered',
-          bundleSid: null,
-          status: 'in-use'
-        }  */
-       
+        }); 
 
       console.log("purchasedNumber", purchasedNumber);
 
@@ -176,6 +139,7 @@ class PhoneNumberService {
       const newPhoneNumber = new PhoneNumber({
         phoneNumber: purchasedNumber.phoneNumber,
         twilioId: purchasedNumber.sid,
+        telnyxId: undefined, // Explicitly set to undefined instead of null
         provider: 'twilio',
         status: 'active',
         features: ['voice', 'sms'],
