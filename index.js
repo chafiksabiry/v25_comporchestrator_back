@@ -30,6 +30,7 @@ app.use(cors({
     'https://comp-orchestrator.harx.ai',
     'https://api-comp-orchestrator.harx.ai',
     'http://localhost:5184',
+    'http://localhost:5183',
     'https://v25.harx.ai', // Pour le développement local
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
