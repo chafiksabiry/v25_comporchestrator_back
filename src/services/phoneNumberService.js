@@ -131,7 +131,7 @@ class PhoneNumberService {
 
     try {
       // Purchase number through Twilio
-     /*  const purchasedNumber = await this.twilioClient.incomingPhoneNumbers
+  /*     const purchasedNumber = await this.twilioClient.incomingPhoneNumbers
         .create({
           phoneNumber: phoneNumber,
           friendlyName: 'Test Number:' + phoneNumber,
@@ -145,9 +145,9 @@ class PhoneNumberService {
           capabilities: { fax: false, mms: true, sms: true, voice: true },
           dateCreated: '2025-06-12T15:39:07.000Z',
           dateUpdated: '2025-06-12T15:39:07.000Z',
-          friendlyName: 'Test Number = +16086557552',
+          friendlyName: 'Test Number = +16086557543',
           identitySid: null,
-          phoneNumber: '+16086557552',
+          phoneNumber: '+16086557543',
           origin: 'twilio',
           sid: 'PN8b00ba8d95cf44ace1e04d2ec5eb96b2',
           smsApplicationSid: '',
@@ -172,11 +172,10 @@ class PhoneNumberService {
           bundleSid: null,
           status: 'in-use'
         } 
-       
 
       console.log("purchasedNumber", purchasedNumber);
 
-      // Create document without telnyxId field for Twilio numbers
+      // Create document with only the necessary fields for Twilio
       const phoneNumberData = {
         phoneNumber: purchasedNumber.phoneNumber,
         twilioId: purchasedNumber.sid,
