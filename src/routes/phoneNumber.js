@@ -3,11 +3,17 @@ import { phoneNumberController } from '../controllers/phoneNumberController.js';
 
 const router = express.Router();
 
-// Search available phone numbers
+// Search available phone numbers (Telnyx)
 router.get('/search', phoneNumberController.searchNumbers.bind(phoneNumberController));
 
-// Purchase a phone number
+// Search available Twilio phone numbers
+router.get('/search/twilio', phoneNumberController.searchTwilioNumbers.bind(phoneNumberController));
+
+// Purchase a phone number (Telnyx)
 router.post('/purchase', phoneNumberController.purchaseNumber.bind(phoneNumberController));
+
+// Purchase a phone number (Twilio)
+router.post('/purchase/twilio', phoneNumberController.purchaseTwilioNumber.bind(phoneNumberController));
 
 // Get all phone numbers
 router.get('/', phoneNumberController.getAllNumbers.bind(phoneNumberController));
