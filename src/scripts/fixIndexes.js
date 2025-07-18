@@ -4,8 +4,8 @@ import { PhoneNumber } from '../models/PhoneNumber.js';
 
 async function fixIndexes() {
   try {
-    // Connect to MongoDB
-    await mongoose.connect('mongodb://harx:gcZ62rl8hoME@38.242.208.242:27018/V25_CompanySearchWizard', {
+    // Connect to MongoDB preprod database 
+    await mongoose.connect('mongodb://harx:ix5S3vU6BjKn4MHp@207.180.226.2:27017/V25_HarxPreProd', {
       useNewUrlParser: true,
       useUnifiedTopology: true,
     });

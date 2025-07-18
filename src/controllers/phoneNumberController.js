@@ -57,13 +57,22 @@ class PhoneNumberController {
   async purchaseTwilioNumber(req, res) {
     try {
       const { phoneNumber, gigId } = req.body;
-      console.log("phoneNumber",phoneNumber);
+      console.log("phoneNumber", phoneNumber);
+
+      // Check if gig already has a phone number
+      const existingNumber = await phoneNumberService.getPhoneNumbersByGigId(gigId);
+      if (existingNumber && existingNumber.length > 0) {
+        return res.status(400).json({ 
+          error: 'This gig already has a phone number assigned'
+        });
+      }
+
       const newNumber = await phoneNumberService.purchaseTwilioNumber(
         phoneNumber,
         config.baseUrl,
         gigId
       );
-      console.log("newNumber",newNumber);
+      console.log("newNumber", newNumber);
       res.json(newNumber);
     } catch (error) {
       console.error('Error purchasing Twilio phone number:', error);
@@ -78,6 +87,17 @@ class PhoneNumberController {
     } catch (error) {
       console.error('Error fetching phone numbers:', error);
       res.status(500).json({ error: 'Failed to fetch phone numbers' });
+    }
+  }
+
+  async getNumbersByGigId(req, res) {
+    try {
+      const { gigId } = req.params;
+      const numbers = await phoneNumberService.getPhoneNumbersByGigId(gigId);
+      res.json(numbers);
+    } catch (error) {
+      console.error('Error fetching phone numbers by gigId:', error);
+      res.status(500).json({ error: 'Failed to fetch phone numbers by gigId' });
     }
   }
 
