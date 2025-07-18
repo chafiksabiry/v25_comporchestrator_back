@@ -201,6 +201,10 @@ class PhoneNumberService {
     return await PhoneNumber.find();
   }
 
+  async getPhoneNumbersByGigId(gigId) {
+    return await PhoneNumber.find({ gigId });
+  }
+
   async deletePhoneNumber(id) {
     const phoneNumber = await PhoneNumber.findById(id);
     if (!phoneNumber) {
