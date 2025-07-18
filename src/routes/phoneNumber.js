@@ -18,6 +18,9 @@ router.post('/purchase/twilio', phoneNumberController.purchaseTwilioNumber.bind(
 // Get all phone numbers
 router.get('/', phoneNumberController.getAllNumbers.bind(phoneNumberController));
 
+// Get phone numbers by gigId
+router.get('/gig/:gigId', phoneNumberController.getNumbersByGigId.bind(phoneNumberController));
+
 // Delete a phone number
 router.delete('/:id', phoneNumberController.deleteNumber.bind(phoneNumberController));
 
