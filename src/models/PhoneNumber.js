@@ -10,33 +10,83 @@ const phoneNumberSchema = new mongoose.Schema({
     type: String,
     sparse: true
   },
-  twilioId: {
-    type: String,
-    sparse: true
-  },
   provider: {
     type: String,
     required: true,
-    enum: ['telnyx', 'twilio']
+    enum: ['telnyx']
+  },
+  orderId: {
+    type: String,
+    sparse: true
+  },
+  requirementGroupId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'RequirementGroup'
+  },
+  gigId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Gig',
+    required: true
+  },
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    required: true
   },
   status: {
     type: String,
     required: true,
+    enum: [
+      'pending',              // Initial state
+      'processing',           // Order created
+      'requirements_pending', // Waiting for documents
+      'active',              // Number ready to use
+      'error',               // Something went wrong
+      'deleted'              // Number released
+    ],
     default: 'pending'
   },
-  features: [{
-    type: String
-  }],
+  orderStatus: {
+    type: String,
+    required: true,
+    enum: [
+      'pending',
+      'requirements-info-pending',
+      'in-progress',
+      'completed',
+      'failed',
+      'expired'
+    ],
+    default: 'pending'
+  },
+  features: {
+    voice: {
+      type: Boolean,
+      default: true
+    },
+    sms: {
+      type: Boolean,
+      default: false
+    },
+    mms: {
+      type: Boolean,
+      default: false
+    }
+  },
   connectionId: {
     type: String
   },
   webhookUrl: {
     type: String
   },
-  gigId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Gig',
-    required: true
+  metadata: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
+  },
+  errorDetails: {
+    code: String,
+    message: String,
+    timestamp: Date
   },
   createdAt: {
     type: Date,
@@ -48,56 +98,16 @@ const phoneNumberSchema = new mongoose.Schema({
   }
 });
 
-// Update the updatedAt timestamp before saving
+// Middleware pour mettre à jour updatedAt
 phoneNumberSchema.pre('save', function(next) {
   this.updatedAt = new Date();
   next();
 });
 
-// Create the model
-const PhoneNumber = mongoose.model('PhoneNumber', phoneNumberSchema);
+// Index pour la recherche rapide par gig et company
+phoneNumberSchema.index({ gigId: 1, companyId: 1 });
 
-// Function to initialize indexes properly
-export const initializePhoneNumberIndexes = async () => {
-  try {
-    // Drop existing indexes except _id
-    await PhoneNumber.collection.dropIndexes();
-    
-    // Create new indexes
-    await PhoneNumber.collection.createIndex(
-      { phoneNumber: 1 },
-      { unique: true }
-    );
-    
-    // Create sparse indexes for provider-specific IDs
-    await PhoneNumber.collection.createIndex(
-      { telnyxId: 1 },
-      { 
-        unique: true,
-        sparse: true,
-        partialFilterExpression: { provider: 'telnyx' }
-      }
-    );
-    
-    await PhoneNumber.collection.createIndex(
-      { twilioId: 1 },
-      { 
-        unique: true,
-        sparse: true,
-        partialFilterExpression: { provider: 'twilio' }
-      }
-    );
+// Index pour la recherche par orderId
+phoneNumberSchema.index({ orderId: 1 });
 
-    // Add index for gigId
-    await PhoneNumber.collection.createIndex(
-      { gigId: 1 }
-    );
-    
-    console.log('PhoneNumber indexes initialized successfully');
-  } catch (error) {
-    console.error('Error initializing PhoneNumber indexes:', error);
-    throw error;
-  }
-};
-
-export { PhoneNumber };
+export const PhoneNumber = mongoose.model('PhoneNumber', phoneNumberSchema);

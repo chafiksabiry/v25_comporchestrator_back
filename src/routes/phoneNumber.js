@@ -24,4 +24,7 @@ router.get('/gig/:gigId', phoneNumberController.getNumbersByGigId.bind(phoneNumb
 // Delete a phone number
 router.delete('/:id', phoneNumberController.deleteNumber.bind(phoneNumberController));
 
+// Check if a gig has an active number
+router.get('/gig/:gigId/check', phoneNumberController.checkGigNumber.bind(phoneNumberController));
+
 export const phoneNumberRoutes = router;

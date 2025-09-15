@@ -39,18 +39,83 @@ class PhoneNumberController {
   async purchaseNumber(req, res) {
     try {
       const { phoneNumber, provider, gigId } = req.body;
+
+      if (!phoneNumber || !provider || !gigId) {
+        return res.status(400).json({
+          error: 'Missing required fields',
+          details: {
+            phoneNumber: !phoneNumber ? 'Phone number is required' : null,
+            provider: !provider ? 'Provider is required' : null,
+            gigId: !gigId ? 'Gig ID is required' : null
+          }
+        });
+      }
+
+      // Validate provider
+      if (!['telnyx', 'twilio'].includes(provider)) {
+        return res.status(400).json({
+          error: 'Invalid provider',
+          details: 'Provider must be either "telnyx" or "twilio"'
+        });
+      }
+
       const newNumber = await phoneNumberService.purchaseNumber(
         phoneNumber,
         provider,
-        gigId,
         config.telnyxConnectionId,
         config.telnyxMessagingProfileId,
-        config.baseUrl
+        config.baseUrl,
+        gigId
       );
-      res.json(newNumber);
+
+      res.json({
+        success: true,
+        data: {
+          phoneNumber: newNumber.phoneNumber,
+          status: newNumber.status,
+          providerStatus: newNumber.providerStatus,
+          features: newNumber.features,
+          provider: newNumber.provider
+        }
+      });
+
     } catch (error) {
       console.error('Error purchasing phone number:', error);
-      res.status(500).json({ error: 'Failed to purchase phone number' });
+
+      // Handle specific error cases
+      if (error.message.includes('already exists')) {
+        return res.status(409).json({
+          error: 'Conflict',
+          message: error.message
+        });
+      }
+
+      if (error.message.includes('Insufficient balance')) {
+        return res.status(402).json({
+          error: 'Payment Required',
+          message: error.message
+        });
+      }
+
+      if (error.message.includes('no longer available')) {
+        return res.status(410).json({
+          error: 'Gone',
+          message: error.message
+        });
+      }
+
+      if (error.message.includes('invalid')) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: error.message
+        });
+      }
+
+      // Generic error handler
+      res.status(500).json({
+        error: 'Internal Server Error',
+        message: error.message || 'Failed to purchase phone number'
+      });
     }
   }
 
@@ -90,14 +155,26 @@ class PhoneNumberController {
     }
   }
 
-  async getNumbersByGigId(req, res) {
+  async checkGigNumber(req, res) {
     try {
       const { gigId } = req.params;
-      const numbers = await phoneNumberService.getPhoneNumbersByGigId(gigId);
-      res.json(numbers);
+      
+      if (!gigId) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'gigId is required'
+        });
+      }
+
+      console.log(`🔍 Checking number for gig: ${gigId}`);
+      const result = await phoneNumberService.checkGigNumber(gigId);
+      res.json(result);
     } catch (error) {
-      console.error('Error fetching phone numbers by gigId:', error);
-      res.status(500).json({ error: 'Failed to fetch phone numbers by gigId' });
+      console.error('Error checking gig number:', error);
+      res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'Failed to check gig number'
+      });
     }
   }
 
