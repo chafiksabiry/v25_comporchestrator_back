@@ -10,6 +10,8 @@ import bodyParser from 'body-parser';
 import mongoose from 'mongoose';
 import { phoneNumberRoutes } from './src/routes/phoneNumber.js';
 import { callRoutes } from './src/routes/call.js';
+import { requirementRoutes } from './src/routes/requirement.js';
+import { webhookRoutes } from './src/routes/webhook.js';
 
 const app = express();
 // Connect to MongoDB
@@ -31,6 +33,7 @@ app.use(cors({
     'https://api-comp-orchestrator.harx.ai',
     'http://localhost:5184',
     'http://localhost:5183',
+    'http://localhost:3000',
     'https://v25.harx.ai', // Pour le développement local
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -48,8 +51,13 @@ app.use(cors({
 }); */
 
 // Routes
+// Routes API standard
 app.use('/api/phone-numbers', phoneNumberRoutes);
 app.use('/api/calls', callRoutes);
+app.use('/api/requirements', requirementRoutes);
+
+// Route webhook (doit être avant le body parser pour garder le body brut)
+app.use('/webhooks', webhookRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
