@@ -65,9 +65,9 @@ class TelnyxRequirementGroupService {
     }
   }
 
-  async updateRequirementValue(groupId, requirementId, value) {
+  async updateRequirements(groupId, requirements) {
     try {
-      console.log(`📝 Updating requirement ${requirementId} in group ${groupId}`);
+      console.log(`📝 Updating requirements for group ${groupId}`);
 
       // 1. Trouver le groupe
       const group = await TelnyxRequirementGroup.findById(groupId);
@@ -77,26 +77,28 @@ class TelnyxRequirementGroupService {
 
       // 2. Mettre à jour chez Telnyx d'abord
       const updateData = {
-        regulatory_requirements: [{
-          requirement_id: requirementId,
-          field_value: value
-        }]
+        regulatory_requirements: requirements.map(req => ({
+          requirement_id: req.requirementId,
+          field_value: req.value
+        }))
       };
 
       await this.axiosInstance.patch(`/requirement_groups/${group.telnyxId}`, updateData);
 
       // 3. Si la mise à jour Telnyx réussit, mettre à jour en local
-      const requirement = group.requirements.find(r => r.requirementId === requirementId);
-      if (requirement) {
-        requirement.submittedValueId = value;
-        requirement.submittedAt = new Date();
-        requirement.status = 'pending'; // Le statut sera mis à jour via webhook
-        await group.save();
+      for (const req of requirements) {
+        const requirement = group.requirements.find(r => r.requirementId === req.requirementId);
+        if (requirement) {
+          requirement.submittedValueId = req.value;
+          requirement.submittedAt = new Date();
+          requirement.status = 'pending'; // Le statut sera mis à jour via webhook
+        }
       }
 
+      await group.save();
       return group;
     } catch (error) {
-      console.error('❌ Error updating requirement value:', error);
+      console.error('❌ Error updating requirements:', error);
       throw error;
     }
   }
