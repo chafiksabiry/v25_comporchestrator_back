@@ -7,6 +7,7 @@ import express from 'express';
 import cors from 'cors';
 import { requirementRoutes } from './src/routes/requirement.js';
 import { addressRoutes } from './src/routes/address.js';
+import { documentRoutes } from './src/routes/document.js';
 
 const app = express();
 
@@ -32,6 +33,7 @@ app.use(cors({
 // Routes API
 app.use('/api/requirements', requirementRoutes);
 app.use('/api/addresses', addressRoutes);
+app.use('/api/documents', documentRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
