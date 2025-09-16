@@ -16,4 +16,10 @@ router.get(
   documentController.getDocument
 );
 
+// Supprimer un document
+router.delete(
+  '/:documentId',
+  documentController.deleteDocument
+);
+
 export const documentRoutes = router;

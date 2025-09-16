@@ -40,10 +40,16 @@ export const documentController = {
         });
       }
 
-      // Récupérer le nom personnalisé du body
+      // Récupérer le nom personnalisé et la référence client du body
       const customFilename = req.body.filename;
+      const customerReference = req.body.customer_reference;
 
-      const document = await documentService.uploadDocument(req.file, customFilename);
+      const document = await documentService.uploadDocument(
+        req.file,
+        customFilename,
+        customerReference
+      );
+      
       res.status(201).json(document);
     } catch (error) {
       console.error('Error in uploadDocument:', error);
@@ -62,7 +68,36 @@ export const documentController = {
     }
   },
 
-  // Récupérer un document
+  async deleteDocument(req, res) {
+    try {
+      const { documentId } = req.params;
+
+      if (!documentId) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'Document ID is required'
+        });
+      }
+
+      const result = await documentService.deleteDocument(documentId);
+      res.json(result);
+    } catch (error) {
+      console.error('Error in deleteDocument:', error);
+      
+      if (error.response?.status === 404) {
+        return res.status(404).json({
+          error: 'Not Found',
+          message: 'Document not found'
+        });
+      }
+
+      res.status(500).json({
+        error: 'Internal Server Error',
+        message: error.message
+      });
+    }
+  },
+
   async getDocument(req, res) {
     try {
       const { documentId } = req.params;
