@@ -91,27 +91,19 @@ export const telnyxRequirementGroupController = {
   async updateRequirementValue(req, res) {
     try {
       const { groupId, requirementId } = req.params;
-      const { value, type } = req.body;
+      const { value } = req.body;
 
-      if (!value || !type) {
+      if (!value) {
         return res.status(400).json({
           error: 'Bad Request',
-          message: 'Value and type are required'
-        });
-      }
-
-      if (!['document', 'textual', 'address'].includes(type)) {
-        return res.status(400).json({
-          error: 'Bad Request',
-          message: 'Invalid requirement type'
+          message: 'Value is required'
         });
       }
 
       const group = await telnyxRequirementGroupService.updateRequirementValue(
         groupId,
         requirementId,
-        value,
-        type
+        value
       );
 
       res.json(group);
