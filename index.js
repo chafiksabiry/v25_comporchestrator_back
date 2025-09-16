@@ -5,11 +5,27 @@ dotenv.config({ silent: true });
 import { config } from './src/config/env.js';
 import express from 'express';
 import cors from 'cors';
+import mongoose from 'mongoose';
 import { requirementRoutes } from './src/routes/requirement.js';
 import { addressRoutes } from './src/routes/address.js';
 import { documentRoutes } from './src/routes/document.js';
+import { telnyxRequirementGroupRoutes } from './src/routes/telnyxRequirementGroup.js';
 
 const app = express();
+
+// MongoDB Connection
+mongoose.connect(config.mongodbUri, {
+  serverSelectionTimeoutMS: 15000, // Timeout after 15s instead of 10s
+  socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
+  connectTimeoutMS: 15000, // Give up initial connection after 15s
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+}).then(() => {
+  console.log('✅ Connected to MongoDB');
+}).catch((error) => {
+  console.error('❌ MongoDB connection error:', error);
+  process.exit(1); // Exit if we can't connect to database
+});
 
 // Middleware
 app.use(express.json());
@@ -34,6 +50,7 @@ app.use(cors({
 app.use('/api/requirements', requirementRoutes);
 app.use('/api/addresses', addressRoutes);
 app.use('/api/documents', documentRoutes);
+app.use('/api/requirement-groups', telnyxRequirementGroupRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -42,6 +59,17 @@ app.use((err, req, res, next) => {
 });
 
 // Start server
-app.listen(config.port, () => {
-  console.log(`Server is running on port ${config.port}`);
+const server = app.listen(config.port, () => {
+  console.log(`✅ Server is running on port ${config.port}`);
+});
+
+// Handle process termination
+process.on('SIGINT', () => {
+  mongoose.connection.close(() => {
+    console.log('MongoDB connection closed through app termination');
+    server.close(() => {
+      console.log('Server closed through app termination');
+      process.exit(0);
+    });
+  });
 });
