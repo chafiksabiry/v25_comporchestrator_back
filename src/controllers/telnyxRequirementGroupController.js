@@ -87,28 +87,39 @@ export const telnyxRequirementGroupController = {
     }
   },
 
-  // Mettre à jour une valeur de requirement
-  async updateRequirementValue(req, res) {
+  // Mettre à jour plusieurs requirements
+  async updateRequirements(req, res) {
     try {
-      const { groupId, requirementId } = req.params;
-      const { value } = req.body;
+      const { groupId } = req.params;
+      const { requirements } = req.body;
 
-      if (!value) {
+      if (!Array.isArray(requirements) || requirements.length === 0) {
         return res.status(400).json({
           error: 'Bad Request',
-          message: 'Value is required'
+          message: 'Requirements array is required and must not be empty'
         });
       }
 
-      const group = await telnyxRequirementGroupService.updateRequirementValue(
+      // Valider le format de chaque requirement
+      const invalidRequirements = requirements.filter(
+        req => !req.requirementId || !req.value
+      );
+
+      if (invalidRequirements.length > 0) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'Each requirement must have requirementId and value'
+        });
+      }
+
+      const group = await telnyxRequirementGroupService.updateRequirements(
         groupId,
-        requirementId,
-        value
+        requirements
       );
 
       res.json(group);
     } catch (error) {
-      console.error('Error in updateRequirementValue:', error);
+      console.error('Error in updateRequirements:', error);
       
       if (error.message.includes('not found')) {
         return res.status(404).json({

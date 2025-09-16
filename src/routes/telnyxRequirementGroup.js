@@ -21,10 +21,10 @@ router.get(
   telnyxRequirementGroupController.getCompanyGroup
 );
 
-// Mettre à jour une valeur de requirement
+// Mettre à jour plusieurs requirements d'un groupe
 router.patch(
-  '/:groupId/requirements/:requirementId',
-  telnyxRequirementGroupController.updateRequirementValue
+  '/:groupId/requirements',
+  telnyxRequirementGroupController.updateRequirements
 );
 
 export const telnyxRequirementGroupRoutes = router;
