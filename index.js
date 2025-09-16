@@ -1,32 +1,19 @@
 // Load environment variables first
 import dotenv from 'dotenv';
-// Load .env file silently
 dotenv.config({ silent: true });
 
 import { config } from './src/config/env.js';
 import express from 'express';
 import cors from 'cors';
-import bodyParser from 'body-parser';
-import mongoose from 'mongoose';
-import { phoneNumberRoutes } from './src/routes/phoneNumber.js';
-import { callRoutes } from './src/routes/call.js';
 import { requirementRoutes } from './src/routes/requirement.js';
-import { webhookRoutes } from './src/routes/webhook.js';
+import { addressRoutes } from './src/routes/address.js';
 
 const app = express();
-// Connect to MongoDB
-mongoose.connect(config.mongodbUri, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
-.then(() => console.log('Connected to MongoDB'))
-.catch((error) => console.error('MongoDB connection error:', error));
 
+// Middleware
+app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Body parser
-app.use(express.json());
-// Middleware
 app.use(cors({
   origin: [
     'https://comp-orchestrator.harx.ai',
@@ -42,23 +29,9 @@ app.use(cors({
   credentials: true,
 }));
 
-// Ajout d'un middleware pour les headers CORS sur toutes les routes
-/* app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', 'https://comp-orchestrator.harx.ai');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-  next();
-}); */
-
-// Routes
-// Routes API standard
-app.use('/api/phone-numbers', phoneNumberRoutes);
-app.use('/api/calls', callRoutes);
+// Routes API
 app.use('/api/requirements', requirementRoutes);
-
-// Route webhook (doit être avant le body parser pour garder le body brut)
-app.use('/webhooks', webhookRoutes);
+app.use('/api/addresses', addressRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
