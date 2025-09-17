@@ -9,6 +9,7 @@ import mongoose from 'mongoose';
 import { requirementRoutes } from './src/routes/requirement.js';
 import { addressRoutes } from './src/routes/address.js';
 import { documentRoutes } from './src/routes/document.js';
+import { phoneNumberRoutes } from './src/routes/phoneNumber.js';
 import { telnyxRequirementGroupRoutes } from './src/routes/telnyxRequirementGroup.js';
 
 const app = express();
@@ -50,6 +51,7 @@ app.use('/api/requirements', requirementRoutes);
 app.use('/api/addresses', addressRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/requirement-groups', telnyxRequirementGroupRoutes);
+app.use('/api/phone-numbers', phoneNumberRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

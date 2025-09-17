@@ -1,5 +1,4 @@
 import { PhoneNumber } from '../models/PhoneNumber.js';
-import { requirementGroupService } from './requirementGroupService.js';
 import { config } from '../config/env.js';
 import telnyx from 'telnyx';
 
@@ -29,113 +28,41 @@ class PhoneNumberService {
     }
   }
 
-  async initiateNumberPurchase(phoneNumber, gigId, companyId, requirementGroupId = null) {
-    try {
-      console.log('🛒 Starting number purchase process');
+  async searchTwilioNumbers(searchParams) {
+    const countryCode = (searchParams.countryCode || 'US').toString().toUpperCase();
+    
+    // Prepare search options without areaCode by default
+    const searchOptions = {
+      limit: searchParams.limit,
+      excludeAllAddressRequired: true,
+      voice: true
+    };
 
-      // Vérifier si un numéro existe déjà pour ce gig
-      const existingNumber = await PhoneNumber.findOne({ 
-        gigId,
-        status: { $in: ['active', 'pending', 'processing', 'requirements_pending'] }
-      });
-
-      if (existingNumber) {
-        throw new Error('A phone number is already associated with this gig');
-      }
-
-      // Créer l'order chez Telnyx
-      const orderParams = {
-        phone_numbers: [{ phone_number: phoneNumber }]
-      };
-
-      // Ajouter le requirement group si fourni
-      if (requirementGroupId) {
-        const groupValidity = await requirementGroupService.checkGroupValidity(requirementGroupId);
-        if (groupValidity.valid) {
-          const group = await RequirementGroup.findById(requirementGroupId);
-          orderParams.requirement_group_id = group.telnyxGroupId;
-        }
-      }
-
-      console.log('📞 Creating order with params:', orderParams);
-      const order = await this.telnyxClient.numberOrders.create(orderParams);
-
-      // Créer l'entrée dans notre base
-      const phoneNumberDoc = new PhoneNumber({
-        phoneNumber,
-        provider: 'telnyx',
-        orderId: order.data.id,
-        requirementGroupId,
-        gigId,
-        companyId,
-        status: 'processing',
-        orderStatus: 'pending'
-      });
-
-      await phoneNumberDoc.save();
-      console.log('✅ Number purchase initiated:', phoneNumberDoc._id);
-
-      return phoneNumberDoc;
-    } catch (error) {
-      console.error('❌ Error initiating number purchase:', error);
-      throw error;
+    // Only add areaCode if it's provided
+    if (searchParams.areaCode) {
+      searchOptions.areaCode = searchParams.areaCode;
     }
-  }
 
-  async handleOrderWebhook(event) {
-    try {
-      const { payload } = event.data;
-      const { id: orderId, status, phone_numbers, requirements } = payload;
-
-      console.log(`📱 Processing order webhook: ${orderId} (${status})`);
-
-      const phoneNumber = await PhoneNumber.findOne({ orderId });
-      if (!phoneNumber) {
-        console.log('⚠️ No matching phone number found for order:', orderId);
-        return;
+    const numbers = await this.twilioClient.availablePhoneNumbers(countryCode)
+      .local
+      .list(searchOptions);
+    
+    console.log("numbers", numbers);
+    
+    return numbers.map(number => ({
+      phoneNumber: number.phoneNumber,
+      friendlyName: number.friendlyName,
+      locality: number.locality,
+      region: number.region,
+      isoCountry: number.isoCountry,
+      capabilities: {
+        voice: number.capabilities.voice,
+        SMS: number.capabilities.SMS,
+        MMS: number.capabilities.MMS
       }
-
-      // Mettre à jour le statut
-      phoneNumber.orderStatus = status;
-
-      switch (status) {
-        case 'requirements-info-pending':
-          phoneNumber.status = 'requirements_pending';
-          phoneNumber.metadata.requirements = requirements;
-          break;
-
-        case 'completed':
-          phoneNumber.status = 'active';
-          phoneNumber.telnyxId = phone_numbers[0].id;
-          
-          // Configurer les webhooks et la connexion voix
-          await this.configureNumberSettings(phoneNumber);
-          break;
-
-        case 'failed':
-          phoneNumber.status = 'error';
-          phoneNumber.errorDetails = {
-            code: payload.error_code,
-            message: payload.error_message,
-            timestamp: new Date()
-          };
-          break;
-
-        case 'expired':
-          phoneNumber.status = 'deleted';
-          break;
-      }
-
-      await phoneNumber.save();
-      console.log(`✅ Updated number status: ${phoneNumber.status}`);
-
-      return phoneNumber;
-    } catch (error) {
-      console.error('❌ Error processing order webhook:', error);
-      throw error;
-    }
+    }));
   }
-
+  
   async configureNumberSettings(phoneNumber) {
     try {
       console.log('⚙️ Configuring number settings:', phoneNumber.telnyxId);
