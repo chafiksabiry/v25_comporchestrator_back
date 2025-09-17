@@ -13,5 +13,7 @@ export const config = {
   baseUrl: process.env.BASE_URL || 'http://localhost:3000',
   webhookSecret: process.env.TELNYX_WEBHOOK_SECRET,
   // Délai d'expiration pour les requirement groups (90 jours par défaut)
-  requirementGroupExpiration: parseInt(process.env.REQUIREMENT_GROUP_EXPIRATION) || 90 * 24 * 60 * 60 * 1000
+  requirementGroupExpiration: parseInt(process.env.REQUIREMENT_GROUP_EXPIRATION) || 90 * 24 * 60 * 60 * 1000,
+  twilioAccountSid: process.env.TWILIO_ACCOUNT_SID,
+  twilioAuthToken: process.env.TWILIO_AUTH_TOKEN
 }; 

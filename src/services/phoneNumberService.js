@@ -1,6 +1,8 @@
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { config } from '../config/env.js';
 import telnyx from 'telnyx';
+import twilio from 'twilio';
+
 
 class PhoneNumberService {
   constructor() {
@@ -8,8 +10,47 @@ class PhoneNumberService {
       throw new Error('TELNYX_API_KEY is not defined in environment variables');
     }
     this.telnyxClient = telnyx(config.telnyxApiKey);
+    if (!config.twilioAccountSid || !config.twilioAuthToken) {
+      throw new Error('TWILIO credentials are not defined in environment variables');
+    }
+    this.twilioClient = twilio(config.twilioAccountSid, config.twilioAuthToken);
   }
 
+  async searchTwilioNumbers(searchParams) {
+    const countryCode = (searchParams.countryCode || 'US').toString().toUpperCase();
+    
+    // Prepare search options without areaCode by default
+    const searchOptions = {
+      limit: searchParams.limit,
+      excludeAllAddressRequired: true,
+      voice: true
+    };
+
+    // Only add areaCode if it's provided
+    if (searchParams.areaCode) {
+      searchOptions.areaCode = searchParams.areaCode;
+    }
+
+    const numbers = await this.twilioClient.availablePhoneNumbers(countryCode)
+      .local
+      .list(searchOptions);
+    
+    console.log("numbers", numbers);
+    
+    return numbers.map(number => ({
+      phoneNumber: number.phoneNumber,
+      friendlyName: number.friendlyName,
+      locality: number.locality,
+      region: number.region,
+      isoCountry: number.isoCountry,
+      capabilities: {
+        voice: number.capabilities.voice,
+        SMS: number.capabilities.SMS,
+        MMS: number.capabilities.MMS
+      }
+    }));
+  }
+  
   async searchAvailableNumbers(countryCode) {
     try {
       console.log(`🔍 Searching numbers for country: ${countryCode}`);
@@ -63,21 +104,25 @@ class PhoneNumberService {
     }));
   }
   
-  async configureNumberSettings(phoneNumber) {
-    try {
-      console.log('⚙️ Configuring number settings:', phoneNumber.telnyxId);
+    async configureNumberSettings(phoneNumber) {
+      try {
+        console.log('⚙️ Configuring number settings:', phoneNumber.telnyxId);
 
-      await this.telnyxClient.phoneNumbers.update(phoneNumber.telnyxId, {
-        connection_id: config.telnyxConnectionId,
-        voice: {
-          format: 'sip',
-          webhook_url: `${config.baseUrl}/api/webhooks/voice`
-        }
-      });
+        await this.telnyxClient.phoneNumbers.update(phoneNumber.telnyxId, {
+          connection_id: config.telnyxConnectionId,
+          voice: {
+            format: 'sip',
+            webhook_url: `${config.baseUrl}/api/webhooks/voice`
+          }
+        });
 
-      return newPhoneNumber;
+        return newPhoneNumber;
+      }
+      catch (error) {
+        console.error('❌ Error configuring number settings:', error);
+        throw error;
+      }
     }
-  }
 
   async purchaseTwilioNumber(phoneNumber, baseUrl, gigId) {
     if (!gigId) {
