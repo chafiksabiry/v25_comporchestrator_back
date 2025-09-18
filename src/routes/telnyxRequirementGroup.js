@@ -33,4 +33,10 @@ router.get(
   telnyxRequirementGroupController.checkCompanyRequirementsStatus
 );
 
+// Vérifier le statut d'un groupe spécifique
+router.get(
+  '/:groupId/status',
+  telnyxRequirementGroupController.checkGroupStatus
+);
+
 export const telnyxRequirementGroupRoutes = router;

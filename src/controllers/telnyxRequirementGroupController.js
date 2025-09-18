@@ -205,5 +205,78 @@ export const telnyxRequirementGroupController = {
         message: error.message
       });
     }
+  },
+
+  // Vérifier le statut d'un groupe de requirements spécifique
+  async checkGroupStatus(req, res) {
+    try {
+      const { groupId } = req.params;
+
+      const group = await telnyxRequirementGroupService.getRequirementGroup(groupId);
+      
+      // Récupérer les détails des requirements complétés
+      const completedRequirements = await Promise.all(
+        group.requirements
+          .filter(req => req.status === 'completed')
+          .map(async req => {
+            const details = {
+              id: req.requirementId,
+              type: req.type,
+              status: req.status,
+              submittedAt: req.submittedAt
+            };
+
+            if (req.type === 'address' && req.submittedValueId) {
+              try {
+                const addressDetails = await addressService.retrieveAddress(req.submittedValueId);
+                details.value = addressDetails;
+              } catch (error) {
+                console.error(`Failed to fetch address details for ${req.submittedValueId}:`, error);
+                details.value = { id: req.submittedValueId, error: 'Failed to fetch address details' };
+              }
+            } else if (req.type === 'document' && req.submittedValueId) {
+              try {
+                const documentDetails = await documentService.getDocument(req.submittedValueId);
+                details.value = {
+                  ...documentDetails,
+                  downloadUrl: `${config.baseUrl}/api/documents/${req.submittedValueId}/download`
+                };
+              } catch (error) {
+                console.error(`Failed to fetch document details for ${req.submittedValueId}:`, error);
+                details.value = { id: req.submittedValueId, error: 'Failed to fetch document details' };
+              }
+            } else {
+              details.value = req.submittedValueId; // Pour les requirements textuels
+            }
+
+            return details;
+          })
+      );
+
+      const status = {
+        groupId: group._id,
+        destinationZone: group.destinationZone,
+        isComplete: group.isComplete(),
+        totalRequirements: group.requirements.length,
+        completedRequirements,
+        pendingRequirements: group.requirements.filter(req => req.status === 'pending').length
+      };
+
+      res.json(status);
+    } catch (error) {
+      console.error('Error in checkGroupStatus:', error);
+      
+      if (error.message.includes('not found')) {
+        return res.status(404).json({
+          error: 'Not Found',
+          message: 'Requirement group not found'
+        });
+      }
+
+      res.status(500).json({
+        error: 'Internal Server Error',
+        message: error.message
+      });
+    }
   }
 };
