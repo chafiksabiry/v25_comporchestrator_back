@@ -89,7 +89,7 @@ class DocumentService {
 
   async getDocument(documentId) {
     try {
-      console.log(`📄 Retrieving document: ${documentId}`);
+      console.log(`📄 Retrieving document metadata: ${documentId}`);
       
       const response = await this.axiosInstance.get(`/documents/${documentId}`);
       
@@ -105,7 +105,33 @@ class DocumentService {
         createdAt: response.data.data.created_at
       };
     } catch (error) {
-      console.error(`❌ Error retrieving document ${documentId}:`, error.response?.data || error);
+      console.error(`❌ Error retrieving document metadata ${documentId}:`, error.response?.data || error);
+      throw error;
+    }
+  }
+
+  async downloadDocument(documentId) {
+    try {
+      console.log(`📥 Downloading document content: ${documentId}`);
+
+      // D'abord, récupérer les métadonnées pour avoir le type de contenu et le nom du fichier
+      const metadata = await this.getDocument(documentId);
+      
+      // Configurer axios pour recevoir une réponse binaire
+      const response = await this.axiosInstance.get(`/documents/${documentId}/download`, {
+        responseType: 'arraybuffer',
+        headers: {
+          'Accept': '*/*' // Accepter tous les types de contenu
+        }
+      });
+
+      return {
+        content: response.data, // Le contenu binaire du document
+        contentType: metadata.content_type || 'application/octet-stream',
+        filename: metadata.filename
+      };
+    } catch (error) {
+      console.error(`❌ Error downloading document ${documentId}:`, error.response?.data || error);
       throw error;
     }
   }

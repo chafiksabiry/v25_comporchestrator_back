@@ -126,5 +126,41 @@ export const documentController = {
         message: error.message
       });
     }
+  },
+
+  async downloadDocument(req, res) {
+    try {
+      const { documentId } = req.params;
+
+      if (!documentId) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'Document ID is required'
+        });
+      }
+
+      const documentData = await documentService.downloadDocument(documentId);
+      
+      // Définir les headers pour le téléchargement
+      res.setHeader('Content-Type', documentData.contentType);
+      res.setHeader('Content-Disposition', `attachment; filename="${documentData.filename}"`);
+      
+      // Envoyer le contenu binaire
+      res.send(documentData.content);
+    } catch (error) {
+      console.error('Error in downloadDocument:', error);
+      
+      if (error.response?.status === 404) {
+        return res.status(404).json({
+          error: 'Not Found',
+          message: 'Document not found'
+        });
+      }
+
+      res.status(500).json({
+        error: 'Internal Server Error',
+        message: error.message
+      });
+    }
   }
 };

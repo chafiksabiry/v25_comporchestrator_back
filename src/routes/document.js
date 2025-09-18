@@ -10,10 +10,16 @@ router.post(
   documentController.uploadDocument
 );
 
-// Récupérer un document
+// Récupérer les métadonnées d'un document
 router.get(
   '/:documentId',
   documentController.getDocument
+);
+
+// Télécharger le contenu d'un document
+router.get(
+  '/:documentId/download',
+  documentController.downloadDocument
 );
 
 // Supprimer un document
