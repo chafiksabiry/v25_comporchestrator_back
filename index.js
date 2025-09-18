@@ -42,7 +42,7 @@ app.use(cors({
     'https://v25.harx.ai',
     'https://v25-preprod.harx.ai' // Pour le développement local
   ],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
 }));
