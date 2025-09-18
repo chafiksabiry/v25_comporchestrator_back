@@ -133,5 +133,33 @@ export const telnyxRequirementGroupController = {
         message: error.message
       });
     }
+  },
+
+  // Vérifier le statut des requirements d'une entreprise
+  async checkCompanyRequirementsStatus(req, res) {
+    try {
+      const { companyId } = req.params;
+
+      const groups = await telnyxRequirementGroupService.getCompanyRequirementGroups(companyId);
+      
+      const status = groups.map(group => ({
+        destinationZone: group.destinationZone,
+        isComplete: group.isComplete(),
+        totalRequirements: group.requirements.length,
+        completedRequirements: group.requirements.filter(req => req.status === 'completed').length,
+        pendingRequirements: group.requirements.filter(req => req.status === 'pending').length
+      }));
+
+      res.json({
+        companyId,
+        requirementGroups: status
+      });
+    } catch (error) {
+      console.error('Error in checkCompanyRequirementsStatus:', error);
+      res.status(500).json({
+        error: 'Internal Server Error',
+        message: error.message
+      });
+    }
   }
 };

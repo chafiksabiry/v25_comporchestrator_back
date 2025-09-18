@@ -91,7 +91,7 @@ class TelnyxRequirementGroupService {
         if (requirement) {
           requirement.submittedValueId = req.value;
           requirement.submittedAt = new Date();
-          requirement.status = 'pending'; // Le statut sera mis à jour via webhook
+          requirement.status = 'completed'; // Marquer comme complété dès qu'une valeur est soumise
         }
       }
 
@@ -120,7 +120,7 @@ class TelnyxRequirementGroupService {
       for (const req of group.requirements) {
         const telnyxReq = telnyxReqs.find(tr => tr.requirement_id === req.requirementId);
         if (telnyxReq) {
-          req.status = telnyxReq.field_value ? 'approved' : 'pending';
+          req.status = telnyxReq.field_value ? 'completed' : 'pending';
         }
       }
 
@@ -149,6 +149,22 @@ class TelnyxRequirementGroupService {
       return this.getRequirementGroup(group._id);
     } catch (error) {
       console.error('❌ Error fetching company requirement group:', error);
+      throw error;
+    }
+  }
+
+  async getCompanyRequirementGroups(companyId) {
+    try {
+      console.log(`🔍 Fetching all requirement groups for company ${companyId}`);
+      
+      const groups = await TelnyxRequirementGroup.find({
+        companyId,
+        status: { $ne: 'rejected' }
+      });
+
+      return groups;
+    } catch (error) {
+      console.error('❌ Error fetching company requirement groups:', error);
       throw error;
     }
   }

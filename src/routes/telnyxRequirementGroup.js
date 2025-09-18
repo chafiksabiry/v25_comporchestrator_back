@@ -27,4 +27,10 @@ router.patch(
   telnyxRequirementGroupController.updateRequirements
 );
 
+// Vérifier le statut des requirements d'une entreprise
+router.get(
+  '/company/:companyId/status',
+  telnyxRequirementGroupController.checkCompanyRequirementsStatus
+);
+
 export const telnyxRequirementGroupRoutes = router;
