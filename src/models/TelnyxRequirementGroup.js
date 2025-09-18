@@ -34,7 +34,7 @@ const telnyxRequirementGroupSchema = new mongoose.Schema({
     },
     status: {
       type: String,
-      enum: ['pending', 'approved', 'rejected'],
+      enum: ['pending', 'completed'],
       default: 'pending'
     },
     // Pour stocker l'ID du document/adresse ou la valeur textuelle soumise
@@ -63,7 +63,7 @@ telnyxRequirementGroupSchema.index({ companyId: 1, destinationZone: 1 });
 
 // Méthode pour vérifier si tous les requirements sont approuvés
 telnyxRequirementGroupSchema.methods.isComplete = function() {
-  return this.requirements.every(req => req.status === 'approved');
+  return this.requirements.every(req => req.status === 'completed');
 };
 
 // Méthode pour obtenir les requirements en attente
