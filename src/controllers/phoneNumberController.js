@@ -81,7 +81,6 @@ class PhoneNumberController {
         data: {
           phoneNumber: newNumber.phoneNumber,
           status: newNumber.status,
-          providerStatus: newNumber.providerStatus,
           features: newNumber.features,
           provider: newNumber.provider
         }

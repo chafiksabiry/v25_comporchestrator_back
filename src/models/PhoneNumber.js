@@ -36,33 +36,12 @@ const phoneNumberSchema = new mongoose.Schema({
   status: {
     type: String,
     required: true,
-    enum: [
-      'pending',              // Initial state
-      'processing',           // Order created
-      'requirements_pending', // Waiting for documents
-      'active',              // Number ready to use
-      'error',               // Something went wrong
-      'deleted'              // Number released
-    ],
-    default: 'pending'
-  },
-  orderStatus: {
-    type: String,
-    required: true,
-    enum: [
-      'pending',
-      'requirements-info-pending',
-      'in-progress',
-      'completed',
-      'failed',
-      'expired'
-    ],
     default: 'pending'
   },
   features: {
     voice: {
       type: Boolean,
-      default: true
+      default: false
     },
     sms: {
       type: Boolean,

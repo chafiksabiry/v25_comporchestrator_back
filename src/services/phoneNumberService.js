@@ -64,13 +64,12 @@ class PhoneNumberService {
             phoneNumber: phoneNumber,
             provider: 'telnyx',
             status: response.data.status || 'pending',
-            orderStatus: response.data.status || 'pending',
             gigId,
             companyId,
             orderId: response.data.id,
             telnyxId: response.data.phone_numbers[0]?.id,
             features: {
-              voice: true,
+              voice: false,
               sms: false,
               mms: false
             }
