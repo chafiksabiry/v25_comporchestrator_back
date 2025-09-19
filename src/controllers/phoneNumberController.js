@@ -189,6 +189,74 @@ class PhoneNumberController {
       }
     }
   }
+
+  async handleTelnyxNumberOrderWebhook(req, res) {
+    try {
+      // 1. Vérifier les headers requis
+      const timestamp = req.headers['telnyx-timestamp'];
+      const signature = req.headers['telnyx-signature-ed25519'];
+
+      if (!timestamp || !signature) {
+        return res.status(400).json({ 
+          error: 'Missing required headers',
+          details: 'telnyx-timestamp and telnyx-signature-ed25519 are required'
+        });
+      }
+
+      const event = req.body;
+      console.log('📞 Received Telnyx webhook:', {
+        event_type: event.data.event_type,
+        id: event.data.id,
+        occurred_at: event.data.occurred_at
+      });
+
+      // 2. Vérifier que c'est un événement number_order.complete
+      if (event.data.event_type !== 'number_order.complete') {
+        console.log(`⚠️ Ignoring event type: ${event.data.event_type}`);
+        return res.status(200).json({ 
+          message: 'Event type not handled',
+          eventType: event.data.event_type
+        });
+      }
+
+      // 3. Extraire les informations de la commande
+      const {
+        id: eventId,
+        occurred_at: occurredAt,
+        payload: {
+          id: orderId,
+          status: orderStatus,
+          phone_numbers = [],
+          requirements_met,
+          sub_number_orders_ids = []
+        }
+      } = event.data;
+
+      console.log(`📦 Processing order ${orderId} with status ${orderStatus}`);
+
+      // 4. Mettre à jour le statut dans la base de données
+      const result = await phoneNumberService.updateNumberOrderStatus({
+        eventId,
+        occurredAt,
+        orderId,
+        orderStatus,
+        phoneNumbers,
+        requirementsMet: requirements_met,
+        subOrderIds: sub_number_orders_ids
+      });
+
+      // 5. Retourner 200 pour confirmer la réception
+      res.status(200).json({ 
+        success: true,
+        orderId,
+        status: orderStatus,
+        updatedNumbers: result.updatedCount
+      });
+    } catch (error) {
+      console.error('❌ Error handling Telnyx webhook:', error);
+      res.status(500).json({ error: 'Failed to process webhook' });
+    }
+  }
 }
 
 export const phoneNumberController = new PhoneNumberController(); 

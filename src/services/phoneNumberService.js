@@ -221,6 +221,81 @@ class PhoneNumberService {
     }
   }
 
+  async updateNumberOrderStatus({ eventId, occurredAt, orderId, orderStatus, phoneNumbers, requirementsMet, subOrderIds }) {
+    try {
+      console.log(`📝 Processing number order: ${orderId} (${orderStatus})`);
+
+      // 1. Trouver tous les numéros associés à cette commande
+      const existingNumbers = await PhoneNumber.find({ orderId });
+      console.log(`📱 Found ${existingNumbers.length} numbers in DB for order ${orderId}`);
+
+      // 2. Créer un Map des numéros existants pour une recherche rapide
+      const existingNumbersMap = new Map(
+        existingNumbers.map(n => [n.phoneNumber, n])
+      );
+
+      // 3. Pour chaque numéro dans la commande
+      let updatedCount = 0;
+      for (const phoneNumberData of phoneNumbers) {
+        const { 
+          phone_number,
+          id: telnyxId,
+          status,
+          requirements_met,
+          requirements_status,
+          country_code
+        } = phoneNumberData;
+
+        // Trouver le numéro dans notre base de données
+        let phoneNumber = existingNumbersMap.get(phone_number);
+
+        if (!phoneNumber) {
+          console.warn(`⚠️ Phone number not found in DB: ${phone_number}`);
+          continue;
+        }
+
+        // 4. Mettre à jour le statut selon la réponse Telnyx
+        phoneNumber.status = status;
+        phoneNumber.telnyxId = telnyxId;
+        
+        // Mettre à jour les métadonnées
+        phoneNumber.metadata = {
+          ...phoneNumber.metadata,
+          countryCode: country_code,
+          requirementsMet: requirements_met,
+          requirementsStatus: requirements_status,
+          lastEventId: eventId,
+          lastEventAt: occurredAt,
+          orderStatus,
+          subOrderIds
+        };
+
+        // 5. Sauvegarder les changements
+        await phoneNumber.save();
+        console.log(`✅ Updated phone number: ${phone_number} -> ${status}`);
+        updatedCount++;
+      }
+
+      // 6. Vérifier si tous les numéros ont été mis à jour
+      const success = updatedCount === existingNumbers.length;
+      const finalStatus = success ? 'success' : 
+                         updatedCount > 0 ? 'partial-success' : 
+                         'failed';
+
+      console.log(`📊 Order status: ${finalStatus} (${updatedCount}/${existingNumbers.length} numbers updated)`);
+
+      return { 
+        success: true, 
+        updatedCount,
+        totalCount: existingNumbers.length,
+        finalStatus
+      };
+    } catch (error) {
+      console.error('❌ Error updating number order status:', error);
+      throw error;
+    }
+  }
+
   async purchaseTwilioNumber(phoneNumber, baseUrl, gigId) {
     if (!gigId) {
       throw new Error('gigId is required to purchase a phone number');
