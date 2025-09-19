@@ -38,19 +38,91 @@ class PhoneNumberController {
 
   async purchaseNumber(req, res) {
     try {
-      const { phoneNumber, provider, gigId } = req.body;
+      const { phoneNumber, provider, gigId, requirementGroupId, companyId } = req.body;
+
+      // Validation des champs obligatoires
+      const missingFields = {
+        phoneNumber: !phoneNumber ? 'Phone number is required' : null,
+        provider: !provider ? 'Provider is required' : null,
+        gigId: !gigId ? 'Gig ID is required' : null,
+        requirementGroupId: !requirementGroupId ? 'Requirement group ID is required' : null,
+        companyId: !companyId ? 'Company ID is required' : null
+      };
+
+      const missingFieldsList = Object.entries(missingFields)
+        .filter(([_, value]) => value !== null)
+        .map(([key, value]) => ({ field: key, message: value }));
+
+      if (missingFieldsList.length > 0) {
+        return res.status(400).json({
+          error: 'Missing required fields',
+          details: missingFieldsList
+        });
+      }
+
+      // Validate provider
+      if (!['telnyx', 'twilio'].includes(provider)) {
+        return res.status(400).json({
+          error: 'Invalid provider',
+          details: 'Provider must be either "telnyx" or "twilio"'
+        });
+      }
+
       const newNumber = await phoneNumberService.purchaseNumber(
         phoneNumber,
         provider,
         gigId,
-        config.telnyxConnectionId,
-        config.telnyxMessagingProfileId,
-        config.baseUrl
+        requirementGroupId,
+        companyId
       );
-      res.json(newNumber);
+
+      res.json({
+        success: true,
+        data: {
+          phoneNumber: newNumber.phoneNumber,
+          status: newNumber.status,
+          features: newNumber.features,
+          provider: newNumber.provider
+        }
+      });
+
     } catch (error) {
       console.error('Error purchasing phone number:', error);
-      res.status(500).json({ error: 'Failed to purchase phone number' });
+
+      // Handle specific error cases
+      if (error.message.includes('already exists')) {
+        return res.status(409).json({
+          error: 'Conflict',
+          message: error.message
+        });
+      }
+
+      if (error.message.includes('Insufficient balance')) {
+        return res.status(402).json({
+          error: 'Payment Required',
+          message: error.message
+        });
+      }
+
+      if (error.message.includes('no longer available')) {
+        return res.status(410).json({
+          error: 'Gone',
+          message: error.message
+        });
+      }
+
+      if (error.message.includes('invalid')) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: error.message
+        });
+      }
+
+      // Generic error handler
+      res.status(500).json({
+        error: 'Internal Server Error',
+        message: error.message || 'Failed to purchase phone number'
+      });
     }
   }
 
@@ -90,14 +162,26 @@ class PhoneNumberController {
     }
   }
 
-  async getNumbersByGigId(req, res) {
+  async checkGigNumber(req, res) {
     try {
       const { gigId } = req.params;
-      const numbers = await phoneNumberService.getPhoneNumbersByGigId(gigId);
-      res.json(numbers);
+      
+      if (!gigId) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'gigId is required'
+        });
+      }
+
+      console.log(`🔍 Checking number for gig: ${gigId}`);
+      const result = await phoneNumberService.checkGigNumber(gigId);
+      res.json(result);
     } catch (error) {
-      console.error('Error fetching phone numbers by gigId:', error);
-      res.status(500).json({ error: 'Failed to fetch phone numbers by gigId' });
+      console.error('Error checking gig number:', error);
+      res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'Failed to check gig number'
+      });
     }
   }
 
@@ -112,6 +196,74 @@ class PhoneNumberController {
       } else {
         res.status(500).json({ error: 'Failed to delete phone number' });
       }
+    }
+  }
+
+  async handleTelnyxNumberOrderWebhook(req, res) {
+    try {
+      // 1. Vérifier les headers requis
+      const timestamp = req.headers['telnyx-timestamp'];
+      const signature = req.headers['telnyx-signature-ed25519'];
+
+      if (!timestamp || !signature) {
+        return res.status(400).json({ 
+          error: 'Missing required headers',
+          details: 'telnyx-timestamp and telnyx-signature-ed25519 are required'
+        });
+      }
+
+      const event = req.body;
+      console.log('📞 Received Telnyx webhook:', {
+        event_type: event.data.event_type,
+        id: event.data.id,
+        occurred_at: event.data.occurred_at
+      });
+
+      // 2. Vérifier que c'est un événement number_order.complete
+      if (event.data.event_type !== 'number_order.complete') {
+        console.log(`⚠️ Ignoring event type: ${event.data.event_type}`);
+        return res.status(200).json({ 
+          message: 'Event type not handled',
+          eventType: event.data.event_type
+        });
+      }
+
+      // 3. Extraire les informations de la commande
+      const {
+        id: eventId,
+        occurred_at: occurredAt,
+        payload: {
+          id: orderId,
+          status: orderStatus,
+          phone_numbers = [],
+          requirements_met,
+          sub_number_orders_ids = []
+        }
+      } = event.data;
+
+      console.log(`📦 Processing order ${orderId} with status ${orderStatus}`);
+
+      // 4. Mettre à jour le statut dans la base de données
+      const result = await phoneNumberService.updateNumberOrderStatus({
+        eventId,
+        occurredAt,
+        orderId,
+        orderStatus,
+        phoneNumbers,
+        requirementsMet: requirements_met,
+        subOrderIds: sub_number_orders_ids
+      });
+
+      // 5. Retourner 200 pour confirmer la réception
+      res.status(200).json({ 
+        success: true,
+        orderId,
+        status: orderStatus,
+        updatedNumbers: result.updatedCount
+      });
+    } catch (error) {
+      console.error('❌ Error handling Telnyx webhook:', error);
+      res.status(500).json({ error: 'Failed to process webhook' });
     }
   }
 }
