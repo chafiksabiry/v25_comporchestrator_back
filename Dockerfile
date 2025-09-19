@@ -26,6 +26,8 @@ ENV BASE_URL=https://preprod-api-comp-orchestrator.harx.ai
 #ENV BASE_URL=https://api-Comp-Orchestrator.harx.ai
 ENV TWILIO_ACCOUNT_SID=AC8a453959a6cb01cbbd1c819b00c5782f
 ENV TWILIO_AUTH_TOKEN=7ade91a170bff98bc625543287ee62c8
+TELNYX_MIN_BALANCE=10
+ENV TWILIO_ACCOUNT_SID=AC8a453959a6cb01cbbd1c819b00c5782f
 
 # Start the app
 CMD ["npm", "start"]
