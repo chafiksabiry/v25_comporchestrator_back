@@ -16,46 +16,11 @@ class PhoneNumberService {
     this.twilioClient = twilio(config.twilioAccountSid, config.twilioAuthToken);
   }
 
-  async searchTwilioNumbers(searchParams) {
-    const countryCode = (searchParams.countryCode || 'US').toString().toUpperCase();
-    
-    // Prepare search options without areaCode by default
-    const searchOptions = {
-      limit: searchParams.limit,
-      excludeAllAddressRequired: true,
-      voice: true
-    };
-
-    // Only add areaCode if it's provided
-    if (searchParams.areaCode) {
-      searchOptions.areaCode = searchParams.areaCode;
-    }
-
-    const numbers = await this.twilioClient.availablePhoneNumbers(countryCode)
-      .local
-      .list(searchOptions);
-    
-    console.log("numbers", numbers);
-    
-    return numbers.map(number => ({
-      phoneNumber: number.phoneNumber,
-      friendlyName: number.friendlyName,
-      locality: number.locality,
-      region: number.region,
-      isoCountry: number.isoCountry,
-      capabilities: {
-        voice: number.capabilities.voice,
-        SMS: number.capabilities.SMS,
-        MMS: number.capabilities.MMS
-      }
-    }));
-  }
-  
   async searchAvailableNumbers(countryCode) {
     try {
       console.log(`🔍 Searching numbers for country: ${countryCode}`);
       const response = await this.telnyxClient.availablePhoneNumbers.list({
-      filter: {
+        filter: {
           country_code: countryCode,
           features: ['voice'],
           phone_number_type: 'local'
@@ -65,6 +30,77 @@ class PhoneNumberService {
       return response.data;
     } catch (error) {
       console.error('❌ Error searching numbers:', error);
+      throw error;
+    }
+  }
+
+  async purchaseNumber(phoneNumber, provider, gigId, requirementGroupId, companyId) {
+    if (!gigId || !requirementGroupId || !companyId) {
+      throw new Error('gigId, requirementGroupId, and companyId are required to purchase a number');
+    }
+
+    try {
+      if (provider === 'telnyx') {
+        // 1. Créer la commande avec le requirement group
+        const orderData = {
+          phone_numbers: [
+            {
+              phone_number: phoneNumber,
+              requirement_group_id: requirementGroupId
+            }
+          ]
+        };
+
+        // 2. Envoyer la commande à Telnyx
+        const response = await this.telnyxClient.numberOrders.create(orderData);
+        console.log('📝 Telnyx response:', response.data);
+
+        if (!response.data) {
+          throw new Error('Invalid response from Telnyx');
+        }
+
+        // 3. Sauvegarder en DB avec le statut Telnyx
+          const phoneNumberData = {
+            phoneNumber: phoneNumber,
+            provider: 'telnyx',
+            status: response.data.status || 'pending',
+            orderStatus: response.data.status || 'pending',
+            gigId,
+            companyId,
+            orderId: response.data.id,
+            telnyxId: response.data.phone_numbers[0]?.id,
+            features: {
+              voice: true,
+              sms: false,
+              mms: false
+            }
+          };
+
+        const newPhoneNumber = new PhoneNumber(phoneNumberData);
+        await newPhoneNumber.save();
+
+        // 4. Retourner la réponse Telnyx
+        return response.data;
+      } else {
+        throw new Error(`Unsupported provider: ${provider}`);
+      }
+    } catch (error) {
+      console.error('❌ Error purchasing number:', error);
+      
+      // Handle specific Telnyx errors
+      if (error.raw) {
+        switch (error.raw.code) {
+          case 'number_already_registered':
+            throw new Error('This number already exists in your account');
+          case 'insufficient_funds':
+            throw new Error('Insufficient balance to purchase this number');
+          case 'number_not_available':
+            throw new Error('This number is no longer available');
+          default:
+            throw new Error(error.raw.message || 'Failed to purchase number');
+        }
+      }
+      
       throw error;
     }
   }
@@ -105,24 +141,86 @@ class PhoneNumberService {
   }
   
     async configureNumberSettings(phoneNumber) {
-      try {
-        console.log('⚙️ Configuring number settings:', phoneNumber.telnyxId);
+    try {
+      console.log('⚙️ Configuring number settings:', phoneNumber.telnyxId);
 
-        await this.telnyxClient.phoneNumbers.update(phoneNumber.telnyxId, {
-          connection_id: config.telnyxConnectionId,
-          voice: {
-            format: 'sip',
-            webhook_url: `${config.baseUrl}/api/webhooks/voice`
+      await this.telnyxClient.phoneNumbers.update(phoneNumber.telnyxId, {
+        connection_id: config.telnyxConnectionId,
+        voice: {
+          format: 'sip',
+          webhook_url: `${config.baseUrl}/api/webhooks/voice`,
+          outbound: {
+            outbound_voice_profile_id: config.telnyxOutboundProfileId
           }
-        });
+        }
+      });
 
-        return newPhoneNumber;
-      }
-      catch (error) {
-        console.error('❌ Error configuring number settings:', error);
-        throw error;
-      }
+      return phoneNumber;
     }
+    catch (error) {
+      console.error('❌ Error configuring number settings:', error);
+      throw error;
+    }
+  }
+
+  async checkGigNumber(gigId) {
+    try {
+      console.log(`🔍 Checking number for gig: ${gigId}`);
+      
+      // Chercher un numéro actif pour ce gig
+      const number = await PhoneNumber.findOne({
+        gigId,
+        status: { $in: ['active', 'pending'] }
+      });
+
+      if (!number) {
+        return {
+          hasNumber: false,
+          message: 'No active phone number found for this gig'
+        };
+      }
+
+      return {
+        hasNumber: true,
+        number: {
+          phoneNumber: number.phoneNumber,
+          provider: number.provider,
+          status: number.status,
+          features: number.features
+        }
+      };
+    } catch (error) {
+      console.error('❌ Error checking gig number:', error);
+      throw error;
+    }
+  }
+
+  async getAllPhoneNumbers() {
+    try {
+      console.log('📞 Fetching all phone numbers');
+      
+      // Récupérer tous les numéros de téléphone de la base de données
+      const numbers = await PhoneNumber.find({})
+        .sort({ createdAt: -1 }) // Les plus récents d'abord
+        .lean(); // Pour de meilleures performances
+
+      return numbers.map(number => ({
+        id: number._id,
+        phoneNumber: number.phoneNumber,
+        provider: number.provider,
+        status: number.status,
+        orderStatus: number.orderStatus,
+        features: number.features,
+        gigId: number.gigId,
+        companyId: number.companyId,
+        createdAt: number.createdAt,
+        updatedAt: number.updatedAt
+      }));
+    } catch (error) {
+      console.error('❌ Error fetching all phone numbers:', error);
+      throw error;
+    }
+  }
 
   async purchaseTwilioNumber(phoneNumber, baseUrl, gigId) {
     if (!gigId) {

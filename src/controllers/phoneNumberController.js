@@ -38,16 +38,25 @@ class PhoneNumberController {
 
   async purchaseNumber(req, res) {
     try {
-      const { phoneNumber, provider, gigId } = req.body;
+      const { phoneNumber, provider, gigId, requirementGroupId, companyId } = req.body;
 
-      if (!phoneNumber || !provider || !gigId) {
+      // Validation des champs obligatoires
+      const missingFields = {
+        phoneNumber: !phoneNumber ? 'Phone number is required' : null,
+        provider: !provider ? 'Provider is required' : null,
+        gigId: !gigId ? 'Gig ID is required' : null,
+        requirementGroupId: !requirementGroupId ? 'Requirement group ID is required' : null,
+        companyId: !companyId ? 'Company ID is required' : null
+      };
+
+      const missingFieldsList = Object.entries(missingFields)
+        .filter(([_, value]) => value !== null)
+        .map(([key, value]) => ({ field: key, message: value }));
+
+      if (missingFieldsList.length > 0) {
         return res.status(400).json({
           error: 'Missing required fields',
-          details: {
-            phoneNumber: !phoneNumber ? 'Phone number is required' : null,
-            provider: !provider ? 'Provider is required' : null,
-            gigId: !gigId ? 'Gig ID is required' : null
-          }
+          details: missingFieldsList
         });
       }
 
@@ -62,10 +71,9 @@ class PhoneNumberController {
       const newNumber = await phoneNumberService.purchaseNumber(
         phoneNumber,
         provider,
-        config.telnyxConnectionId,
-        config.telnyxMessagingProfileId,
-        config.baseUrl,
-        gigId
+        gigId,
+        requirementGroupId,
+        companyId
       );
 
       res.json({
