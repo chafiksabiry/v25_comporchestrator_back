@@ -12,7 +12,7 @@ app.use(cors());
 app.use(express.json());
 
 // Connect to MongoDB
-mongoose.connect(config.mongoUri)
+mongoose.connect(config.mongodbUri)
   .then(async () => {
     console.log('Connected to MongoDB');
     try {

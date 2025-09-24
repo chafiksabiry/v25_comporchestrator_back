@@ -21,4 +21,10 @@ router.get('/', phoneNumberController.getAllNumbers.bind(phoneNumberController))
 // Delete a phone number
 router.delete('/:id', phoneNumberController.deleteNumber.bind(phoneNumberController));
 
+// Check if a gig has an active number
+router.get('/gig/:gigId/check', phoneNumberController.checkGigNumber.bind(phoneNumberController));
+
+// Webhook for Telnyx number order status updates
+router.post('/webhooks/telnyx/number-order', phoneNumberController.handleTelnyxNumberOrderWebhook.bind(phoneNumberController));
+
 export const phoneNumberRoutes = router;
