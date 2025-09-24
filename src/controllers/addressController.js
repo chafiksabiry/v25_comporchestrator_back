@@ -3,7 +3,7 @@ import { addressService } from '../services/addressService.js';
 export const addressController = {
   async createAddress(req, res) {
     try {
-      let {
+      const {
         businessName,
         streetAddress,
         locality,
@@ -14,19 +14,9 @@ export const addressController = {
         customerReference
       } = req.body;
 
-      // Normalize and trim inputs
-      if (typeof countryCode === 'string') {
-        countryCode = countryCode.trim().toUpperCase();
-      }
-
-      [businessName, streetAddress, locality, postalCode, extendedAddress, administrativeArea, customerReference] =
-        [businessName, streetAddress, locality, postalCode, extendedAddress, administrativeArea, customerReference]
-          .map(v => (typeof v === 'string' ? v.trim() : v));
-
       // Validation des champs requis
       const requiredFields = ['businessName', 'streetAddress', 'locality', 'postalCode', 'countryCode'];
-      const fieldValues = { businessName, streetAddress, locality, postalCode, countryCode };
-      const missingFields = requiredFields.filter(field => !fieldValues[field]);
+      const missingFields = requiredFields.filter(field => !req.body[field]);
 
       if (missingFields.length > 0) {
         return res.status(400).json({
@@ -36,18 +26,10 @@ export const addressController = {
       }
 
       // Validation du code pays
-      if (!countryCode || countryCode.length !== 2) {
+      if (countryCode.length !== 2) {
         return res.status(400).json({
           error: 'Bad Request',
           message: 'Country code must be a 2-letter ISO code'
-        });
-      }
-
-      // Rules spécifiques pour la France
-      if (countryCode === 'FR' && !/^[0-9]{5}$/.test(postalCode)) {
-        return res.status(400).json({
-          error: 'Bad Request',
-          message: 'For country FR, postalCode must be 5 digits (e.g. "75001")'
         });
       }
 
@@ -66,16 +48,11 @@ export const addressController = {
     } catch (error) {
       console.error('Error in createAddress:', error);
       
-      // Gestion spécifique des erreurs Telnyx : renvoyer les détails si disponibles
-      if (error.response?.data) {
-        const telnyxData = error.response.data;
-        const msg = Array.isArray(telnyxData.errors)
-          ? telnyxData.errors.map(e => e.detail).join(', ')
-          : JSON.stringify(telnyxData);
-
+      // Gestion spécifique des erreurs Telnyx
+      if (error.response?.data?.errors) {
         return res.status(error.response.status || 400).json({
           error: 'Telnyx API Error',
-          message: msg
+          message: error.response.data.errors.map(e => e.detail).join(', ')
         });
       }
 
