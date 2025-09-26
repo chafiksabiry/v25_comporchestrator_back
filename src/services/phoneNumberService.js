@@ -169,7 +169,6 @@ class PhoneNumberService {
       // Chercher un numéro actif pour ce gig
       const number = await PhoneNumber.findOne({
         gigId,
-        status: { $in: ['active', 'pending'] }
       });
 
       if (!number) {
@@ -303,12 +302,12 @@ class PhoneNumberService {
 
     try {
       // Purchase number through Twilio
-       const purchasedNumber = await this.twilioClient.incomingPhoneNumbers
+  /*     const purchasedNumber = await this.twilioClient.incomingPhoneNumbers
         .create({
           phoneNumber: phoneNumber,
           friendlyName: 'Test Number:' + phoneNumber,
-        });  
-    /*     const purchasedNumber = {
+        });  */
+        const purchasedNumber = {
           accountSid: 'AC8a453959a6cb01cbbd1c819b00c5782f',
           addressSid: null,
           addressRequirements: 'none',
@@ -343,7 +342,7 @@ class PhoneNumberService {
           emergencyAddressStatus: 'unregistered',
           bundleSid: null,
           status: 'in-use'
-        }  */
+        } 
 
       console.log("purchasedNumber", purchasedNumber);
 
