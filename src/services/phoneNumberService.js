@@ -367,6 +367,29 @@ class PhoneNumberService {
       throw error;
     }
   }
+
+  async getAllPhoneNumbers() {
+    return await PhoneNumber.find();
+  }
+
+  async getPhoneNumbersByGigId(gigId) {
+    return await PhoneNumber.find({ gigId });
+  }
+
+  async deletePhoneNumber(id) {
+    const phoneNumber = await PhoneNumber.findById(id);
+    if (!phoneNumber) {
+      throw new Error('Phone number not found');
+    }
+
+    // Release number from Telnyx
+    await this.telnyxClient.phoneNumbers.delete(phoneNumber.telnyxId);
+
+    // Remove from database
+    await phoneNumber.remove();
+    
+    return { message: 'Phone number deleted successfully' };
+  }
 }
 
 export const phoneNumberService = new PhoneNumberService(); 
