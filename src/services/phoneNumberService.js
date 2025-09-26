@@ -169,7 +169,6 @@ class PhoneNumberService {
       // Chercher un numéro actif pour ce gig
       const number = await PhoneNumber.findOne({
         gigId,
-        status: { $in: ['active', 'pending'] }
       });
 
       if (!number) {
