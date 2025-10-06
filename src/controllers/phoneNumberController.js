@@ -215,10 +215,10 @@ class PhoneNumberController {
 
       // 2. Vérifier la signature avec telnyx.webhooks.constructEvent
       const event = telnyx.webhooks.constructEvent(
-        req.body,
+        JSON.stringify(req.body),  // Important : convertir le body en string
         signature,
         timestamp,
-        config.telnyxWebhookSecret
+        config.telnyxPublicKey    // Utiliser la clé publique
       );
 
       console.log('📞 Received Telnyx webhook:', {
@@ -264,7 +264,7 @@ class PhoneNumberController {
         subOrderIds: sub_number_orders_ids
       });
 
-      // 5. Retourner 200 pour confirmer la réception
+      // Répondre avec succès après la vérification et le traitement
       res.status(200).json({ 
         success: true,
         orderId,
@@ -272,6 +272,13 @@ class PhoneNumberController {
         updatedNumbers: result.updatedCount
       });
     } catch (error) {
+      if (error.type === 'TelnyxSignatureVerificationError') {
+        console.error('❌ Signature verification failed:', error.message);
+        return res.status(400).json({
+          error: 'Invalid signature',
+          message: 'The webhook signature verification failed'
+        });
+      }
       console.error('❌ Error handling Telnyx webhook:', error);
       res.status(500).json({ error: 'Failed to process webhook' });
     }
