@@ -26,7 +26,7 @@ export const webhookController = {
           await handleDocumentUpdate(event.data);
           break;
         }
-        case 'number_order.updated': {
+        case 'number_order.complete': {
           await handleNumberOrderUpdate(event.data);
           break;
         }

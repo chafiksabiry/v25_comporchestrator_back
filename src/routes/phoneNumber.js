@@ -25,6 +25,9 @@ router.delete('/:id', phoneNumberController.deleteNumber.bind(phoneNumberControl
 router.get('/gig/:gigId/check', phoneNumberController.checkGigNumber.bind(phoneNumberController));
 
 // Webhook for Telnyx number order status updates
-router.post('/webhooks/telnyx/number-order', phoneNumberController.handleTelnyxNumberOrderWebhook.bind(phoneNumberController));
+router.post('/webhooks/telnyx/number-order', 
+  express.raw({ type: 'application/json' }), // Important pour la vérification de signature
+  phoneNumberController.handleTelnyxNumberOrderWebhook.bind(phoneNumberController)
+);
 
 export const phoneNumberRoutes = router;

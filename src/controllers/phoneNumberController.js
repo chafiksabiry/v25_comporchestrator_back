@@ -1,5 +1,6 @@
 import { phoneNumberService } from '../services/phoneNumberService.js';
 import { config } from '../config/env.js';
+import telnyx from 'telnyx';
 
 class PhoneNumberController {
   async searchNumbers(req, res) {
@@ -212,34 +213,43 @@ class PhoneNumberController {
         });
       }
 
-      const event = req.body;
+      // 2. Vérifier la signature avec telnyx.webhooks.constructEvent
+      const event = telnyx.webhooks.constructEvent(
+        req.body,
+        signature,
+        timestamp,
+        config.telnyxWebhookSecret
+      );
+
       console.log('📞 Received Telnyx webhook:', {
-        event_type: event.data.event_type,
-        id: event.data.id,
-        occurred_at: event.data.occurred_at
+        event_type: event.webhook.event_type,
+        id: event.id,
+        occurred_at: event.webhook.occurred_at
       });
 
-      // 2. Vérifier que c'est un événement number_order.complete
-      if (event.data.event_type !== 'number_order.complete') {
-        console.log(`⚠️ Ignoring event type: ${event.data.event_type}`);
+      // 3. Vérifier que c'est un événement number_order.complete
+      if (event.webhook.event_type !== 'number_order.complete') {
+        console.log(`⚠️ Ignoring event type: ${event.webhook.event_type}`);
         return res.status(200).json({ 
           message: 'Event type not handled',
-          eventType: event.data.event_type
+          eventType: event.webhook.event_type
         });
       }
 
-      // 3. Extraire les informations de la commande
+      // 4. Extraire les informations de la commande
       const {
         id: eventId,
-        occurred_at: occurredAt,
-        payload: {
-          id: orderId,
-          status: orderStatus,
-          phone_numbers = [],
-          requirements_met,
-          sub_number_orders_ids = []
+        webhook: {
+          occurred_at: occurredAt,
+          payload: {
+            id: orderId,
+            status: orderStatus,
+            phone_numbers = [],
+            requirements_met,
+            sub_number_orders_ids = []
+          }
         }
-      } = event.data;
+      } = event;
 
       console.log(`📦 Processing order ${orderId} with status ${orderStatus}`);
 
