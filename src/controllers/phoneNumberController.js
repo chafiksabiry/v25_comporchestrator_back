@@ -222,24 +222,24 @@ class PhoneNumberController {
       );
 
       console.log('📞 Received Telnyx webhook:', {
-        event_type: event.webhook.event_type,
-        id: event.id,
-        occurred_at: event.webhook.occurred_at
+        event_type: event.data.event_type,
+        id: event.data.id,
+        occurred_at: event.data.occurred_at
       });
 
       // 3. Vérifier que c'est un événement number_order.complete
-      if (event.webhook.event_type !== 'number_order.complete') {
-        console.log(`⚠️ Ignoring event type: ${event.webhook.event_type}`);
+      if (event.data.event_type !== 'number_order.complete') {
+        console.log(`⚠️ Ignoring event type: ${event.data.event_type}`);
         return res.status(200).json({ 
           message: 'Event type not handled',
-          eventType: event.webhook.event_type
+          eventType: event.data.event_type
         });
       }
 
       // 4. Extraire les informations de la commande
       const {
-        id: eventId,
-        webhook: {
+        data: {
+          id: eventId,
           occurred_at: occurredAt,
           payload: {
             id: orderId,
