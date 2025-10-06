@@ -29,7 +29,13 @@ mongoose.connect(config.mongodbUri, {
 });
 
 // Middleware
-app.use(express.json());
+app.use((req, res, next) => {
+  if (req.originalUrl === '/api/phone-numbers/webhooks/telnyx/number-order') {
+    next();
+  } else {
+    express.json()(req, res, next);
+  }
+});
 app.use(express.urlencoded({ extended: true }));
 
 app.use(cors({
