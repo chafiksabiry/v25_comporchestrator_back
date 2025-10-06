@@ -214,11 +214,18 @@ class PhoneNumberController {
       }
 
       // 2. Vérifier la signature avec telnyx.webhooks.constructEvent
+      console.log('📝 Raw body:', req.body);
+      console.log('🔐 Signature:', signature);
+      console.log('⏰ Timestamp:', timestamp);
+
+      // Convertir le body en string s'il ne l'est pas déjà
+      const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+      
       const event = telnyx.webhooks.constructEvent(
-        JSON.stringify(req.body),  // Important : convertir le body en string
+        rawBody,
         signature,
         timestamp,
-        config.telnyxPublicKey    // Utiliser la clé publique
+        config.telnyxPublicKey
       );
 
       console.log('📞 Received Telnyx webhook:', {
@@ -276,7 +283,8 @@ class PhoneNumberController {
         console.error('❌ Signature verification failed:', error.message);
         return res.status(400).json({
           error: 'Invalid signature',
-          message: 'The webhook signature verification failed'
+          message: 'The webhook signature verification failed',
+          telnyxError: error.message
         });
       }
       console.error('❌ Error handling Telnyx webhook:', error);
