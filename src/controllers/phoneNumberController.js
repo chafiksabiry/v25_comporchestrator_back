@@ -1,5 +1,6 @@
 import { phoneNumberService } from '../services/phoneNumberService.js';
 import { config } from '../config/env.js';
+import telnyx from 'telnyx';
 
 class PhoneNumberController {
   async searchNumbers(req, res) {
@@ -212,14 +213,28 @@ class PhoneNumberController {
         });
       }
 
-      const event = req.body;
+      // 2. Vérifier la signature avec telnyx.webhooks.constructEvent
+      console.log('📝 Raw body:', req.body);
+      console.log('🔐 Signature:', signature);
+      console.log('⏰ Timestamp:', timestamp);
+
+      // Convertir le body en string s'il ne l'est pas déjà
+      const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+      
+      const event = telnyx.webhooks.constructEvent(
+        rawBody,
+        signature,
+        timestamp,
+        config.telnyxPublicKey
+      );
+
       console.log('📞 Received Telnyx webhook:', {
         event_type: event.data.event_type,
         id: event.data.id,
         occurred_at: event.data.occurred_at
       });
 
-      // 2. Vérifier que c'est un événement number_order.complete
+      // 3. Vérifier que c'est un événement number_order.complete
       if (event.data.event_type !== 'number_order.complete') {
         console.log(`⚠️ Ignoring event type: ${event.data.event_type}`);
         return res.status(200).json({ 
@@ -228,18 +243,20 @@ class PhoneNumberController {
         });
       }
 
-      // 3. Extraire les informations de la commande
+      // 4. Extraire les informations de la commande
       const {
-        id: eventId,
-        occurred_at: occurredAt,
-        payload: {
-          id: orderId,
-          status: orderStatus,
-          phone_numbers = [],
-          requirements_met,
-          sub_number_orders_ids = []
+        data: {
+          id: eventId,
+          occurred_at: occurredAt,
+          payload: {
+            id: orderId,
+            status: orderStatus,
+            phone_numbers = [],
+            requirements_met,
+            sub_number_orders_ids = []
+          }
         }
-      } = event.data;
+      } = event;
 
       console.log(`📦 Processing order ${orderId} with status ${orderStatus}`);
 
@@ -254,7 +271,7 @@ class PhoneNumberController {
         subOrderIds: sub_number_orders_ids
       });
 
-      // 5. Retourner 200 pour confirmer la réception
+      // Répondre avec succès après la vérification et le traitement
       res.status(200).json({ 
         success: true,
         orderId,
@@ -262,6 +279,14 @@ class PhoneNumberController {
         updatedNumbers: result.updatedCount
       });
     } catch (error) {
+      if (error.type === 'TelnyxSignatureVerificationError') {
+        console.error('❌ Signature verification failed:', error.message);
+        return res.status(400).json({
+          error: 'Invalid signature',
+          message: 'The webhook signature verification failed',
+          telnyxError: error.message
+        });
+      }
       console.error('❌ Error handling Telnyx webhook:', error);
       res.status(500).json({ error: 'Failed to process webhook' });
     }
