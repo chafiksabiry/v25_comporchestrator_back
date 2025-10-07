@@ -36,7 +36,10 @@ const logWebhook = (req, res, next) => {
   console.log('🔑 Headers:', JSON.stringify({
     ...req.headers,
     // Masquer les informations sensibles dans les logs
-    'telnyx-signature-ed25519': req.headers['telnyx-signature-ed25519'] ? '***' : undefined
+    'Telnyx-Signature-Ed25519': req.headers['Telnyx-Signature-Ed25519'] ? '***' : undefined,
+    'Telnyx-Timestamp': req.headers['Telnyx-Timestamp'],
+    'Content-Type': req.headers['content-type'],
+    'User-Agent': req.headers['user-agent']
   }, null, 2));
 
   // Convertir le body brut en string pour le logging
