@@ -154,17 +154,20 @@ class PhoneNumberService {
       const response = await this.telnyxClient.phoneNumbers.list({
         filter: { phone_number: phoneNumber }
       });
-
+      console.log("Retreiving phone number details from telnyx", response);
       if (!response.data?.[0]) {
         throw new Error('Phone number not found in Telnyx');
       }
 
       const telnyxNumberId = response.data[0].id;
 
+      console.log("telnyxNumberId retrieved from telnyx", telnyxNumberId);
       // 3. Configurer la voix
-      await this.telnyxClient.phoneNumbers.update(telnyxNumberId, {
-        connection_id: config.telnyxConnectionId
+      console.log("Configuring voice settings with connection_id:", config.telnyxConnectionId);
+      const updateNumberVoiceSettingsResponse = await this.telnyxClient.phoneNumbers.update(telnyxNumberId, {
+        connection_id: config.TELNYX_APPLICATION_ID
       });
+      console.log("Voice settings update response:", updateNumberVoiceSettingsResponse);
 
       // 4. Mettre à jour notre base de données
       const updatedNumber = await PhoneNumber.findOneAndUpdate(
