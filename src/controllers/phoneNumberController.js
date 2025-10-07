@@ -203,13 +203,20 @@ class PhoneNumberController {
   async handleTelnyxNumberOrderWebhook(req, res) {
     try {
       // 1. Vérifier les headers requis
-      const timestamp = req.headers['telnyx-timestamp'];
-      const signature = req.headers['telnyx-signature-ed25519'];
+      const timestamp = req.headers['Telnyx-Timestamp'];
+      const signature = req.headers['Telnyx-Signature-Ed25519'];
+      
+      console.log('📝 Headers received:', {
+        timestamp: req.headers['Telnyx-Timestamp'],
+        signature: req.headers['Telnyx-Signature-Ed25519'] ? '***' : undefined,
+        contentType: req.headers['content-type'],
+        userAgent: req.headers['user-agent']
+      });
 
       if (!timestamp || !signature) {
         return res.status(400).json({ 
           error: 'Missing required headers',
-          details: 'telnyx-timestamp and telnyx-signature-ed25519 are required'
+          details: 'Telnyx-Timestamp and Telnyx-Signature-Ed25519 are required'
         });
       }
 
@@ -219,8 +226,14 @@ class PhoneNumberController {
       console.log('⏰ Timestamp:', timestamp);
 
       // Convertir le body en string s'il ne l'est pas déjà
-      const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+      // Convertir le Buffer en string UTF-8
+      const rawBody = typeof req.body === 'string' ? req.body : req.body.toString('utf8');
       
+      console.log('📝 Debug webhook verification:');
+      console.log('- Body type:', typeof req.body);
+      console.log('- Is Buffer?', Buffer.isBuffer(req.body));
+      console.log('- Raw body:', rawBody);
+      console.log('- Verification string:', `${timestamp}|${rawBody}`);
       const event = telnyx.webhooks.constructEvent(
         rawBody,
         signature,
