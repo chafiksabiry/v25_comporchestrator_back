@@ -225,15 +225,21 @@ class PhoneNumberController {
       console.log('🔐 Signature:', signature);
       console.log('⏰ Timestamp:', timestamp);
 
-      // Convertir le body en string s'il ne l'est pas déjà
-      // Convertir le Buffer en string UTF-8
-      const rawBody = typeof req.body === 'string' ? req.body : req.body.toString('utf8');
+      // 1. Convertir le Buffer en string UTF-8
+      let rawBody = req.body.toString('utf8');
+      
+      // 2. Parser et re-stringifier pour avoir un format JSON consistant
+      try {
+        const parsedBody = JSON.parse(rawBody);
+        rawBody = JSON.stringify(parsedBody);  // Sans espaces ni sauts de ligne
+      } catch (e) {
+        console.error('❌ Failed to normalize JSON:', e);
+      }
       
       console.log('📝 Debug webhook verification:');
-      console.log('- Body type:', typeof req.body);
-      console.log('- Is Buffer?', Buffer.isBuffer(req.body));
-      console.log('- Raw body:', rawBody);
-      console.log('- Verification string:', `${timestamp}|${rawBody}`);
+      console.log('- Original body:', req.body.toString('utf8'));
+      console.log('- Normalized body:', rawBody);
+      console.log('- Final verification string:', `${timestamp}|${rawBody}`);
       const event = telnyx.webhooks.constructEvent(
         rawBody,
         signature,
