@@ -37,12 +37,7 @@ const logWebhook = (req, res, next) => {
   console.log(`\n🔔 [${requestId}] Webhook request received at ${requestTime}`);
   console.log('📍 Origin:', req.ip);
   console.log('🔑 Headers:', JSON.stringify({
-    ...req.headers,
-    // Masquer les informations sensibles dans les logs
-    'Telnyx-Signature-Ed25519': req.headers['Telnyx-Signature-Ed25519'] ? '***' : undefined,
-    'Telnyx-Timestamp': req.headers['Telnyx-Timestamp'],
-    'Content-Type': req.headers['content-type'],
-    'User-Agent': req.headers['user-agent']
+    ...req.headers
   }, null, 2));
 
   // Convertir le body brut en string pour le logging
