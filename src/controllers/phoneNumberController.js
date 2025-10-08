@@ -280,12 +280,12 @@ class PhoneNumberController {
   async handleTelnyxNumberOrderWebhook(req, res) {
     try {
       // 1. Vérifier les headers requis
-      const timestamp = req.headers['Telnyx-Timestamp'];
-      const signature = req.headers['Telnyx-Signature-Ed25519'];
+      const timestamp = req.headers['telnyx-timestamp'];
+      const signature = req.headers['telnyx-signature-ed25519'];
       
       console.log('📝 Headers received:', {
-        timestamp: req.headers['Telnyx-Timestamp'],
-        signature: req.headers['Telnyx-Signature-Ed25519'] ? '***' : undefined,
+        timestamp: req.headers['telnyx-timestamp'],
+        signature: req.headers['telnyx-signature-ed25519'] ? req.headers['telnyx-signature-ed25519'] : undefined,
         contentType: req.headers['content-type'],
         userAgent: req.headers['user-agent']
       });
