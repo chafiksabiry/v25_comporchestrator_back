@@ -139,7 +139,55 @@ class PhoneNumberService {
     }));
   }
   
-    async configureNumberSettings(phoneNumber) {
+    async configureVoiceFeature(phoneNumber) {
+    try {
+      console.log(`🔧 Configuring voice feature for number: ${phoneNumber}`);
+
+      // 1. Vérifier si la voix est déjà configurée
+      const existingNumber = await PhoneNumber.findOne({ phoneNumber });
+      if (existingNumber?.features?.voice) {
+        console.log('✅ Voice already configured');
+        return existingNumber;
+      }
+
+      // 2. Obtenir l'ID Telnyx du numéro
+      const response = await this.telnyxClient.phoneNumbers.list({
+        filter: { phone_number: phoneNumber }
+      });
+      console.log("Retreiving phone number details from telnyx", response);
+      if (!response.data?.[0]) {
+        throw new Error('Phone number not found in Telnyx');
+      }
+
+      const telnyxNumberId = response.data[0].id;
+
+      console.log("telnyxNumberId retrieved from telnyx", telnyxNumberId);
+      // 3. Configurer la voix
+      console.log("Configuring voice settings with connection_id:", config.telnyxConnectionId);
+      const updateNumberVoiceSettingsResponse = await this.telnyxClient.phoneNumbers.update(telnyxNumberId, {
+        connection_id: config.TELNYX_APPLICATION_ID
+      });
+      console.log("Voice settings update response:", updateNumberVoiceSettingsResponse);
+
+      // 4. Mettre à jour notre base de données
+      const updatedNumber = await PhoneNumber.findOneAndUpdate(
+        { phoneNumber },
+        { 
+          'features.voice': true,
+          telnyxId: telnyxNumberId  // Sauvegarder l'ID pour usage futur
+        },
+        { new: true }
+      );
+
+      console.log('✅ Voice feature configured successfully');
+      return updatedNumber;
+    } catch (error) {
+      console.error('❌ Failed to configure voice feature:', error);
+      throw error;
+    }
+  }
+
+  async configureNumberSettings(phoneNumber) {
     try {
       console.log('⚙️ Configuring number settings:', phoneNumber.telnyxId);
 
@@ -335,6 +383,10 @@ class PhoneNumberService {
 
   async getAllPhoneNumbers() {
     return await PhoneNumber.find();
+  }
+
+  async getPhoneNumberByNumber(phoneNumber) {
+    return await PhoneNumber.findOne({ phoneNumber });
   }
 
   async getPhoneNumbersByGigId(gigId) {

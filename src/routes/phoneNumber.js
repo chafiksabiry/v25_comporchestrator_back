@@ -24,6 +24,9 @@ router.delete('/:id', phoneNumberController.deleteNumber.bind(phoneNumberControl
 // Check if a gig has an active number
 router.get('/gig/:gigId/check', phoneNumberController.checkGigNumber.bind(phoneNumberController));
 
+// Configure voice feature for a phone number
+router.post('/:phoneNumber/configure-voice', phoneNumberController.configureVoiceFeature.bind(phoneNumberController));
+
 // Webhook for Telnyx number order status updates
 // Middleware de logging pour le webhook
 const logWebhook = (req, res, next) => {

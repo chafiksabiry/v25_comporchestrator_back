@@ -200,6 +200,83 @@ class PhoneNumberController {
     }
   }
 
+  /**
+   * Configure la fonctionnalité voix pour un numéro de téléphone
+   * @route POST /api/phone-numbers/:phoneNumber/configure-voice
+   */
+  async configureVoiceFeature(req, res) {
+    try {
+      const { phoneNumber } = req.params;
+
+      // Valider le format du numéro
+      if (!phoneNumber || !phoneNumber.match(/^\+[1-9]\d{1,14}$/)) {
+        return res.status(400).json({
+          error: 'Invalid phone number format',
+          message: 'Phone number must be in E.164 format (e.g., +33123456789)'
+        });
+      }
+
+      console.log(`🎯 Configuring voice feature for number: ${phoneNumber}`);
+
+      // Vérifier si le numéro existe dans notre base
+      const existingNumber = await phoneNumberService.getPhoneNumberByNumber(phoneNumber);
+      if (!existingNumber) {
+        return res.status(404).json({
+          error: 'Phone number not found',
+          message: 'The specified phone number is not found in our database'
+        });
+      }
+
+      // Vérifier si le numéro est actif
+      if (existingNumber.status !== 'success') {
+        return res.status(400).json({
+          error: 'Invalid number status',
+          message: 'Phone number must be in success status to configure voice feature',
+          currentStatus: existingNumber.status
+        });
+      }
+
+      // Configurer la fonctionnalité voix
+      const updatedNumber = await phoneNumberService.configureVoiceFeature(phoneNumber);
+
+      res.json({
+        success: true,
+        message: 'Voice feature configured successfully',
+        data: {
+          phoneNumber: updatedNumber.phoneNumber,
+          features: updatedNumber.features,
+          status: updatedNumber.status
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Error configuring voice feature:', error);
+
+      // Gérer les erreurs spécifiques
+      if (error.message === 'Phone number not found in Telnyx') {
+        return res.status(404).json({
+          error: 'Telnyx configuration error',
+          message: 'Phone number not found in Telnyx system'
+        });
+      }
+
+      // Erreur de l'API Telnyx
+      if (error.response?.data) {
+        return res.status(error.response.status || 500).json({
+          error: 'Telnyx API error',
+          message: error.response.data.errors?.[0]?.detail || 'Failed to configure voice feature',
+          telnyxError: error.response.data
+        });
+      }
+
+      // Erreur générique
+      res.status(500).json({
+        error: 'Internal server error',
+        message: 'Failed to configure voice feature'
+      });
+    }
+  }
+
   async handleTelnyxNumberOrderWebhook(req, res) {
     try {
       // 1. Vérifier les headers requis
@@ -225,17 +302,13 @@ class PhoneNumberController {
       console.log('🔐 Signature:', signature);
       console.log('⏰ Timestamp:', timestamp);
 
-      // Convertir le body en string s'il ne l'est pas déjà
-      // Convertir le Buffer en string UTF-8
-      const rawBody = typeof req.body === 'string' ? req.body : req.body.toString('utf8');
-      
+      // Laisser Telnyx gérer la conversion et la normalisation
       console.log('📝 Debug webhook verification:');
       console.log('- Body type:', typeof req.body);
       console.log('- Is Buffer?', Buffer.isBuffer(req.body));
-      console.log('- Raw body:', rawBody);
-      console.log('- Verification string:', `${timestamp}|${rawBody}`);
+      
       const event = telnyx.webhooks.constructEvent(
-        rawBody,
+        req.body,  // Passer le body tel quel, Telnyx s'occupe de la conversion
         signature,
         timestamp,
         config.telnyxPublicKey
