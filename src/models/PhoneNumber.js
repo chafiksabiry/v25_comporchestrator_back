@@ -38,6 +38,10 @@ const phoneNumberSchema = new mongoose.Schema({
     required: true,
     default: 'pending'
   },
+  telnyxStatus: {
+    type: String,
+    sparse: true
+  },
   features: {
     voice: {
       type: Boolean,
