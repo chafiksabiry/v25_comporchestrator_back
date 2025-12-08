@@ -45,8 +45,7 @@ app.use(cors({
     'http://localhost:5184',
     'http://localhost:5183',
     'http://localhost:3000',
-    'https://v25.harx.ai',
-    'https://v25-preprod.harx.ai' // Pour le développement local
+    'https://v25.harx.ai' // Pour le développement local
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization'],
