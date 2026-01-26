@@ -18,20 +18,37 @@ class PhoneNumberService {
 
   async searchAvailableNumbers(params) {
     try {
-      const countryCode = (params.countryCode || 'US').toString().toUpperCase();
-      console.log(`🔍 Searching numbers for country: ${countryCode}`);
+      // Handle both string (countryCode) and object (params) for backward compatibility
+      const countryCode = (typeof params === 'string' ? params : (params?.countryCode || 'US')).toString().toUpperCase();
+
+      // Ensure features is an array and type is set
+      const features = (typeof params === 'object' && params?.features)
+        ? (Array.isArray(params.features) ? params.features : [params.features])
+        : ['voice'];
+      const type = (typeof params === 'object' && params?.type) || 'local';
+
+      console.log(`🔍 Searching Telnyx numbers: country=${countryCode}, type=${type}, features=${JSON.stringify(features)}`);
+
+      if (!this.telnyxClient || !this.telnyxClient.availablePhoneNumbers) {
+        throw new Error('Telnyx client or availablePhoneNumbers resource not properly initialized');
+      }
 
       const response = await this.telnyxClient.availablePhoneNumbers.list({
         filter: {
           country_code: countryCode,
-          features: params.features || ['voice'],
-          phone_number_type: params.type || 'local'
+          features: features,
+          phone_number_type: type
         }
       });
 
-      return response.data;
+      console.log(`✅ Found ${response?.data?.length || 0} Telnyx numbers`);
+      return response.data || [];
     } catch (error) {
-      console.error('❌ Error searching numbers:', error);
+      console.error('❌ Error searching Telnyx numbers:', error);
+      // Log more details if it's a Telnyx specific error
+      if (error.raw) {
+        console.error('Telnyx API Raw Error:', JSON.stringify(error.raw, null, 2));
+      }
       throw error;
     }
   }
@@ -407,9 +424,6 @@ class PhoneNumberService {
     }
   }
 
-  async getAllPhoneNumbers() {
-    return await PhoneNumber.find();
-  }
 
   async getPhoneNumberByNumber(phoneNumber) {
     return await PhoneNumber.findOne({ phoneNumber });
