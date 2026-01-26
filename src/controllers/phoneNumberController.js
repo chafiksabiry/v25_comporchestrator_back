@@ -129,8 +129,8 @@ class PhoneNumberController {
 
   async purchaseTwilioNumber(req, res) {
     try {
-      const { phoneNumber, gigId } = req.body;
-      console.log("phoneNumber", phoneNumber);
+      const { phoneNumber, gigId, companyId } = req.body;
+      console.log("phoneNumber", phoneNumber, "gigId", gigId, "companyId", companyId);
 
       // Check if gig already has a phone number
       const existingNumber = await phoneNumberService.getPhoneNumbersByGigId(gigId);
@@ -143,7 +143,8 @@ class PhoneNumberController {
       const newNumber = await phoneNumberService.purchaseTwilioNumber(
         phoneNumber,
         config.baseUrl,
-        gigId
+        gigId,
+        companyId
       );
       console.log("newNumber", newNumber);
       res.json(newNumber);

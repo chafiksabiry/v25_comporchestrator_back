@@ -16,20 +16,39 @@ class PhoneNumberService {
     this.twilioClient = twilio(config.twilioAccountSid, config.twilioAuthToken);
   }
 
-  async searchAvailableNumbers(countryCode) {
+  async searchAvailableNumbers(params) {
     try {
-      console.log(`🔍 Searching numbers for country: ${countryCode}`);
+      // Handle both string (countryCode) and object (params) for backward compatibility
+      const countryCode = (typeof params === 'string' ? params : (params?.countryCode || 'US')).toString().toUpperCase();
+
+      // Ensure features is an array and type is set
+      const features = (typeof params === 'object' && params?.features)
+        ? (Array.isArray(params.features) ? params.features : [params.features])
+        : ['voice'];
+      const type = (typeof params === 'object' && params?.type) || 'local';
+
+      console.log(`🔍 Searching Telnyx numbers: country=${countryCode}, type=${type}, features=${JSON.stringify(features)}`);
+
+      if (!this.telnyxClient || !this.telnyxClient.availablePhoneNumbers) {
+        throw new Error('Telnyx client or availablePhoneNumbers resource not properly initialized');
+      }
+
       const response = await this.telnyxClient.availablePhoneNumbers.list({
         filter: {
           country_code: countryCode,
-          features: ['voice'],
-          phone_number_type: 'local'
+          features: features,
+          phone_number_type: type
         }
       });
 
-      return response.data;
+      console.log(`✅ Found ${response?.data?.length || 0} Telnyx numbers`);
+      return response.data || [];
     } catch (error) {
-      console.error('❌ Error searching numbers:', error);
+      console.error('❌ Error searching Telnyx numbers:', error);
+      // Log more details if it's a Telnyx specific error
+      if (error.raw) {
+        console.error('Telnyx API Raw Error:', JSON.stringify(error.raw, null, 2));
+      }
       throw error;
     }
   }
@@ -308,9 +327,9 @@ class PhoneNumberService {
     }
   }
 
-  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId) {
-    if (!gigId) {
-      throw new Error('gigId is required to purchase a phone number');
+  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId) {
+    if (!gigId || !companyId) {
+      throw new Error('gigId and companyId are required to purchase a phone number');
     }
 
     try {
@@ -365,9 +384,16 @@ class PhoneNumberService {
         twilioId: purchasedNumber.sid,
         provider: 'twilio',
         status: 'active',
-        features: ['voice', 'sms'],
-        gigId
+        features: {
+          voice: true,
+          sms: true,
+          mms: false
+        },
+        gigId,
+        companyId
       };
+
+      console.log("phoneNumberData to save:", phoneNumberData);
 
       // Save to database
       const newPhoneNumber = new PhoneNumber(phoneNumberData);
@@ -381,9 +407,6 @@ class PhoneNumberService {
     }
   }
 
-  async getAllPhoneNumbers() {
-    return await PhoneNumber.find();
-  }
 
   async getPhoneNumberByNumber(phoneNumber) {
     return await PhoneNumber.findOne({ phoneNumber });
