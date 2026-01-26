@@ -22,9 +22,9 @@ class PhoneNumberController {
   async searchTwilioNumbers(req, res) {
     try {
       const { countryCode, areaCode, limit } = req.query;
-      console.log("countryCode",countryCode);
-      console.log("areaCode",areaCode);
-      console.log("limit",limit);
+      console.log("countryCode", countryCode);
+      console.log("areaCode", areaCode);
+      console.log("limit", limit);
       const numbers = await phoneNumberService.searchTwilioNumbers({
         countryCode: countryCode || 'US',
         areaCode,
@@ -42,11 +42,11 @@ class PhoneNumberController {
       const { phoneNumber, provider, gigId, requirementGroupId, companyId } = req.body;
 
       // Validation des champs obligatoires
+      // Validation des champs obligatoires
       const missingFields = {
         phoneNumber: !phoneNumber ? 'Phone number is required' : null,
         provider: !provider ? 'Provider is required' : null,
         gigId: !gigId ? 'Gig ID is required' : null,
-        requirementGroupId: !requirementGroupId ? 'Requirement group ID is required' : null,
         companyId: !companyId ? 'Company ID is required' : null
       };
 
@@ -135,7 +135,7 @@ class PhoneNumberController {
       // Check if gig already has a phone number
       const existingNumber = await phoneNumberService.getPhoneNumbersByGigId(gigId);
       if (existingNumber && existingNumber.length > 0) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: 'This gig already has a phone number assigned'
         });
       }
@@ -166,7 +166,7 @@ class PhoneNumberController {
   async checkGigNumber(req, res) {
     try {
       const { gigId } = req.params;
-      
+
       if (!gigId) {
         return res.status(400).json({
           error: 'Bad Request',
@@ -282,7 +282,7 @@ class PhoneNumberController {
       // 1. Vérifier les headers requis
       const timestamp = req.headers['telnyx-timestamp'];
       const signature = req.headers['telnyx-signature-ed25519'];
-      
+
       console.log('📝 Headers received:', {
         timestamp: req.headers['telnyx-timestamp'],
         signature: req.headers['telnyx-signature-ed25519'] ? req.headers['telnyx-signature-ed25519'] : undefined,
@@ -291,7 +291,7 @@ class PhoneNumberController {
       });
 
       if (!timestamp || !signature) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: 'Missing required headers',
           details: 'Telnyx-Timestamp and Telnyx-Signature-Ed25519 are required'
         });
@@ -306,7 +306,7 @@ class PhoneNumberController {
       console.log('📝 Debug webhook verification:');
       console.log('- Body type:', typeof req.body);
       console.log('- Is Buffer?', Buffer.isBuffer(req.body));
-      
+
       const event = telnyx.webhooks.constructEvent(
         req.body,  // Passer le body tel quel, Telnyx s'occupe de la conversion
         signature,
@@ -323,7 +323,7 @@ class PhoneNumberController {
       // 3. Vérifier que c'est un événement number_order.complete
       if (event.data.event_type !== 'number_order.complete') {
         console.log(`⚠️ Ignoring event type: ${event.data.event_type}`);
-        return res.status(200).json({ 
+        return res.status(200).json({
           message: 'Event type not handled',
           eventType: event.data.event_type
         });
@@ -358,7 +358,7 @@ class PhoneNumberController {
       });
 
       // Répondre avec succès après la vérification et le traitement
-      res.status(200).json({ 
+      res.status(200).json({
         success: true,
         orderId,
         status: orderStatus,

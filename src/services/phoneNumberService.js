@@ -35,8 +35,8 @@ class PhoneNumberService {
   }
 
   async purchaseNumber(phoneNumber, provider, gigId, requirementGroupId, companyId) {
-    if (!gigId || !requirementGroupId || !companyId) {
-      throw new Error('gigId, requirementGroupId, and companyId are required to purchase a number');
+    if (!gigId || !companyId) {
+      throw new Error('gigId and companyId are required to purchase a number');
     }
 
     try {
@@ -45,11 +45,14 @@ class PhoneNumberService {
         const orderData = {
           phone_numbers: [
             {
-              phone_number: phoneNumber,
-              requirement_group_id: requirementGroupId
+              phone_number: phoneNumber
             }
           ]
         };
+
+        if (requirementGroupId) {
+          orderData.phone_numbers[0].requirement_group_id = requirementGroupId;
+        }
 
         // 2. Envoyer la commande à Telnyx
         const response = await this.telnyxClient.numberOrders.create(orderData);
@@ -60,20 +63,20 @@ class PhoneNumberService {
         }
 
         // 3. Sauvegarder en DB avec le statut Telnyx
-          const phoneNumberData = {
-            phoneNumber: phoneNumber,
-            provider: 'telnyx',
-            status: response.data.status || 'pending',
-            gigId,
-            companyId,
-            orderId: response.data.id,
-            telnyxId: response.data.phone_numbers[0]?.id,
-            features: {
-              voice: false,
-              sms: false,
-              mms: false
-            }
-          };
+        const phoneNumberData = {
+          phoneNumber: phoneNumber,
+          provider: 'telnyx',
+          status: response.data.status || 'pending',
+          gigId,
+          companyId,
+          orderId: response.data.id,
+          telnyxId: response.data.phone_numbers[0]?.id,
+          features: {
+            voice: false,
+            sms: false,
+            mms: false
+          }
+        };
 
         const newPhoneNumber = new PhoneNumber(phoneNumberData);
         await newPhoneNumber.save();
@@ -85,7 +88,7 @@ class PhoneNumberService {
       }
     } catch (error) {
       console.error('❌ Error purchasing number:', error);
-      
+
       // Handle specific Telnyx errors
       if (error.raw) {
         switch (error.raw.code) {
@@ -99,14 +102,14 @@ class PhoneNumberService {
             throw new Error(error.raw.message || 'Failed to purchase number');
         }
       }
-      
+
       throw error;
     }
   }
 
   async searchTwilioNumbers(searchParams) {
     const countryCode = (searchParams.countryCode || 'US').toString().toUpperCase();
-    
+
     // Prepare search options without areaCode by default
     const searchOptions = {
       limit: searchParams.limit,
@@ -122,9 +125,9 @@ class PhoneNumberService {
     const numbers = await this.twilioClient.availablePhoneNumbers(countryCode)
       .local
       .list(searchOptions);
-    
+
     console.log("numbers", numbers);
-    
+
     return numbers.map(number => ({
       phoneNumber: number.phoneNumber,
       friendlyName: number.friendlyName,
@@ -138,8 +141,8 @@ class PhoneNumberService {
       }
     }));
   }
-  
-    async configureVoiceFeature(phoneNumber) {
+
+  async configureVoiceFeature(phoneNumber) {
     try {
       console.log(`🔧 Configuring voice feature for number: ${phoneNumber}`);
 
@@ -172,7 +175,7 @@ class PhoneNumberService {
       // 4. Mettre à jour notre base de données
       const updatedNumber = await PhoneNumber.findOneAndUpdate(
         { phoneNumber },
-        { 
+        {
           'features.voice': true,
           telnyxId: telnyxNumberId  // Sauvegarder l'ID pour usage futur
         },
@@ -213,7 +216,7 @@ class PhoneNumberService {
   async checkGigNumber(gigId) {
     try {
       console.log(`🔍 Checking number for gig: ${gigId}`);
-      
+
       // Chercher un numéro actif pour ce gig
       const number = await PhoneNumber.findOne({
         gigId,
@@ -244,7 +247,7 @@ class PhoneNumberService {
   async getAllPhoneNumbers() {
     try {
       console.log('📞 Fetching all phone numbers');
-      
+
       // Récupérer tous les numéros de téléphone de la base de données
       const numbers = await PhoneNumber.find({})
         .sort({ createdAt: -1 }) // Les plus récents d'abord
@@ -271,12 +274,12 @@ class PhoneNumberService {
   async updateNumberOrderStatus({ eventId, occurredAt, orderId, orderStatus, phoneNumbers, requirementsMet, subOrderIds }) {
     try {
       console.log(`📝 Processing number order update for ${phoneNumbers.length} numbers`);
-      
+
       let updatedCount = 0;
-      
+
       // Pour chaque numéro dans la commande
       for (const phoneNumberData of phoneNumbers) {
-        const { 
+        const {
           id: telnyxId,
           status
         } = phoneNumberData;
@@ -291,15 +294,15 @@ class PhoneNumberService {
 
         // Mettre à jour le statut avec celui envoyé par Telnyx
         phoneNumber.status = status;
-        
+
         // Sauvegarder les changements
         await phoneNumber.save();
         console.log(`✅ Updated phone number ${phoneNumber.phoneNumber} status to: ${status}`);
         updatedCount++;
       }
 
-      return { 
-        success: true, 
+      return {
+        success: true,
         updatedCount
       };
     } catch (error) {
@@ -315,47 +318,47 @@ class PhoneNumberService {
 
     try {
       // Purchase number through Twilio
-  /*     const purchasedNumber = await this.twilioClient.incomingPhoneNumbers
-        .create({
-          phoneNumber: phoneNumber,
-          friendlyName: 'Test Number:' + phoneNumber,
-        });  */
-        const purchasedNumber = {
-          accountSid: 'AC8a453959a6cb01cbbd1c819b00c5782f',
-          addressSid: null,
-          addressRequirements: 'none',
-          apiVersion: '2010-04-01',
-          beta: false,
-          capabilities: { fax: false, mms: true, sms: true, voice: true },
-          dateCreated: '2025-06-12T15:39:07.000Z',
-          dateUpdated: '2025-06-12T15:39:07.000Z',
-          friendlyName: 'Test Number = +16086557543',
-          identitySid: null,
-          phoneNumber: '+16086557543',
-          origin: 'twilio',
-          sid: 'PN8b00ba8d95cf44ace1e04d2ec5eb96b2',
-          smsApplicationSid: '',
-          smsFallbackMethod: 'POST',
-          smsFallbackUrl: '',
-          smsMethod: 'POST',
-          smsUrl: '',
-          statusCallback: '',
-          statusCallbackMethod: 'POST',
-          trunkSid: null,
-          uri: '/2010-04-01/Accounts/AC8a453959a6cb01cbbd1c819b00c5782f/IncomingPhoneNumbers/PN8b00ba8d95cf44ace1e04d2ec5eb96b2.json',
-          voiceReceiveMode: 'voice',
-          voiceApplicationSid: null,
-          voiceCallerIdLookup: false,
-          voiceFallbackMethod: 'POST',
-          voiceFallbackUrl: null,
-          voiceMethod: 'POST',
-          voiceUrl: null,
-          emergencyStatus: 'Active',
-          emergencyAddressSid: null,
-          emergencyAddressStatus: 'unregistered',
-          bundleSid: null,
-          status: 'in-use'
-        } 
+      /*     const purchasedNumber = await this.twilioClient.incomingPhoneNumbers
+            .create({
+              phoneNumber: phoneNumber,
+              friendlyName: 'Test Number:' + phoneNumber,
+            });  */
+      const purchasedNumber = {
+        accountSid: 'AC8a453959a6cb01cbbd1c819b00c5782f',
+        addressSid: null,
+        addressRequirements: 'none',
+        apiVersion: '2010-04-01',
+        beta: false,
+        capabilities: { fax: false, mms: true, sms: true, voice: true },
+        dateCreated: '2025-06-12T15:39:07.000Z',
+        dateUpdated: '2025-06-12T15:39:07.000Z',
+        friendlyName: 'Test Number = +16086557543',
+        identitySid: null,
+        phoneNumber: '+16086557543',
+        origin: 'twilio',
+        sid: 'PN8b00ba8d95cf44ace1e04d2ec5eb96b2',
+        smsApplicationSid: '',
+        smsFallbackMethod: 'POST',
+        smsFallbackUrl: '',
+        smsMethod: 'POST',
+        smsUrl: '',
+        statusCallback: '',
+        statusCallbackMethod: 'POST',
+        trunkSid: null,
+        uri: '/2010-04-01/Accounts/AC8a453959a6cb01cbbd1c819b00c5782f/IncomingPhoneNumbers/PN8b00ba8d95cf44ace1e04d2ec5eb96b2.json',
+        voiceReceiveMode: 'voice',
+        voiceApplicationSid: null,
+        voiceCallerIdLookup: false,
+        voiceFallbackMethod: 'POST',
+        voiceFallbackUrl: null,
+        voiceMethod: 'POST',
+        voiceUrl: null,
+        emergencyStatus: 'Active',
+        emergencyAddressSid: null,
+        emergencyAddressStatus: 'unregistered',
+        bundleSid: null,
+        status: 'in-use'
+      }
 
       console.log("purchasedNumber", purchasedNumber);
 
@@ -372,7 +375,7 @@ class PhoneNumberService {
       // Save to database
       const newPhoneNumber = new PhoneNumber(phoneNumberData);
       await newPhoneNumber.save();
-      
+
       console.log("newPhoneNumber", newPhoneNumber);
       return newPhoneNumber;
     } catch (error) {
@@ -404,7 +407,7 @@ class PhoneNumberService {
 
     // Remove from database
     await phoneNumber.remove();
-    
+
     return { message: 'Phone number deleted successfully' };
   }
 }
