@@ -16,14 +16,16 @@ class PhoneNumberService {
     this.twilioClient = twilio(config.twilioAccountSid, config.twilioAuthToken);
   }
 
-  async searchAvailableNumbers(countryCode) {
+  async searchAvailableNumbers(params) {
     try {
+      const countryCode = (params.countryCode || 'US').toString().toUpperCase();
       console.log(`🔍 Searching numbers for country: ${countryCode}`);
+
       const response = await this.telnyxClient.availablePhoneNumbers.list({
         filter: {
           country_code: countryCode,
-          features: ['voice'],
-          phone_number_type: 'local'
+          features: params.features || ['voice'],
+          phone_number_type: params.type || 'local'
         }
       });
 
@@ -325,9 +327,9 @@ class PhoneNumberService {
     }
   }
 
-  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId) {
-    if (!gigId) {
-      throw new Error('gigId is required to purchase a phone number');
+  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId) {
+    if (!gigId || !companyId) {
+      throw new Error('gigId and companyId are required to purchase a phone number');
     }
 
     try {
@@ -382,9 +384,16 @@ class PhoneNumberService {
         twilioId: purchasedNumber.sid,
         provider: 'twilio',
         status: 'active',
-        features: ['voice', 'sms'],
-        gigId
+        features: {
+          voice: true,
+          sms: true,
+          mms: false
+        },
+        gigId,
+        companyId
       };
+
+      console.log("phoneNumberData to save:", phoneNumberData);
 
       // Save to database
       const newPhoneNumber = new PhoneNumber(phoneNumberData);

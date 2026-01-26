@@ -10,10 +10,14 @@ const phoneNumberSchema = new mongoose.Schema({
     type: String,
     sparse: true
   },
+  twilioId: {
+    type: String,
+    sparse: true
+  },
   provider: {
     type: String,
     required: true,
-    enum: ['telnyx']
+    enum: ['telnyx', 'twilio']
   },
   orderId: {
     type: String,
@@ -82,7 +86,7 @@ const phoneNumberSchema = new mongoose.Schema({
 });
 
 // Middleware pour mettre à jour updatedAt
-phoneNumberSchema.pre('save', function(next) {
+phoneNumberSchema.pre('save', function (next) {
   this.updatedAt = new Date();
   next();
 });
