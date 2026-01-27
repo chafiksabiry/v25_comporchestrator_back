@@ -15,6 +15,17 @@ router.post('/purchase', phoneNumberController.purchaseNumber.bind(phoneNumberCo
 // Purchase a phone number (Twilio)
 router.post('/purchase/twilio', phoneNumberController.purchaseTwilioNumber.bind(phoneNumberController));
 
+// Twilio Regulatory Compliance Routes
+import multer from 'multer';
+const upload = multer({ storage: multer.memoryStorage() });
+
+router.get('/twilio/requirements', phoneNumberController.getTwilioRequirements.bind(phoneNumberController));
+router.post('/twilio/end-users', phoneNumberController.createTwilioEndUser.bind(phoneNumberController));
+router.post('/twilio/documents', upload.single('file'), phoneNumberController.createTwilioDocument.bind(phoneNumberController));
+router.post('/twilio/bundles', phoneNumberController.createTwilioBundle.bind(phoneNumberController));
+router.post('/twilio/bundles/:sid/items', phoneNumberController.assignItemToBundle.bind(phoneNumberController));
+router.post('/twilio/bundles/:sid/submit', phoneNumberController.submitTwilioBundle.bind(phoneNumberController));
+
 // Get all phone numbers
 router.get('/', phoneNumberController.getAllNumbers.bind(phoneNumberController));
 
@@ -43,7 +54,7 @@ const logWebhook = (req, res, next) => {
   // Convertir le body brut en string pour le logging
   const rawBody = req.body.toString('utf8');
   console.log('📦 Raw Body:', rawBody);
-  
+
   try {
     // Tenter de parser le JSON pour un logging plus lisible
     const parsedBody = JSON.parse(rawBody);
@@ -54,20 +65,20 @@ const logWebhook = (req, res, next) => {
 
   // Intercepter la réponse pour logger
   const originalSend = res.send;
-  res.send = function(body) {
+  res.send = function (body) {
     const responseTime = new Date().toISOString();
     console.log(`\n✉️ [${requestId}] Response sent at ${responseTime}`);
     console.log('📤 Status:', res.statusCode);
     console.log('📤 Body:', body);
     console.log(`\n${'='.repeat(80)}\n`);
-    
+
     return originalSend.call(this, body);
   };
 
   next();
 };
 
-router.post('/webhooks/telnyx/number-order', 
+router.post('/webhooks/telnyx/number-order',
   express.raw({ type: 'application/json' }), // Important pour la vérification de signature
   logWebhook, // Middleware de logging
   phoneNumberController.handleTelnyxNumberOrderWebhook.bind(phoneNumberController)

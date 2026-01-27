@@ -401,6 +401,86 @@ class PhoneNumberController {
       res.status(500).json({ error: 'Failed to process webhook' });
     }
   }
+  async getTwilioRequirements(req, res) {
+    try {
+      const { countryCode, type } = req.query;
+      const requirements = await phoneNumberService.getTwilioRequirements(countryCode, type);
+      res.json(requirements);
+      res.status(500).json({ error: 'Failed to fetch Twilio requirements', details: error.message });
+    }
+  }
+
+  async createTwilioEndUser(req, res) {
+    try {
+      const { friendlyName, type, attributes } = req.body;
+      const endUser = await phoneNumberService.createTwilioEndUser(friendlyName, type, attributes);
+      res.json(endUser);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to create End User', details: error.message });
+    }
+  }
+
+  async createTwilioDocument(req, res) {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'File is required' });
+      }
+
+      const { friendlyName, type, attributes } = req.body;
+      const parsedAttributes = typeof attributes === 'string' ? JSON.parse(attributes) : attributes;
+
+      const document = await phoneNumberService.createTwilioDocument(
+        req.file.buffer,
+        req.file.mimetype,
+        friendlyName || req.file.originalname,
+        type,
+        parsedAttributes
+      );
+      res.json(document);
+    } catch (error) {
+      console.error('Error in createTwilioDocument:', error);
+      res.status(500).json({ error: 'Failed to upload document', details: error.message });
+    }
+  }
+
+  async createTwilioBundle(req, res) {
+    try {
+      // Expects friendlyName, email, regulationSid, isoCountry
+      const { friendlyName, email, regulationSid, isoCountry } = req.body;
+      const bundle = await phoneNumberService.createTwilioBundle(friendlyName, email, undefined, regulationSid, isoCountry);
+      res.json(bundle);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to create Bundle', details: error.message });
+    }
+  }
+
+  async assignItemToBundle(req, res) {
+    try {
+      const { sid } = req.params;
+      const { objectSid } = req.body;
+      const item = await phoneNumberService.assignItemToBundle(sid, objectSid);
+      res.json(item);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to assign item', details: error.message });
+    }
+  }
+
+  async submitTwilioBundle(req, res) {
+    try {
+      const { sid } = req.params;
+      const bundle = await phoneNumberService.submitTwilioBundle(sid);
+      res.json(bundle);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to submit Bundle', details: error.message });
+    }
+  }
+
+  async createTwilioRegulatoryParams(req, res) {
+    // Generic endpoint to handle creation of EndUser, or Bundle, or Assignment
+    // Depending on 'action' param? Or separate endpoints.
+    // Let's go with separate for clarity.
+    res.status(501).json({ error: 'Not implemented' });
+  }
 }
 
-export const phoneNumberController = new PhoneNumberController(); 
+export const phoneNumberController = new PhoneNumberController();

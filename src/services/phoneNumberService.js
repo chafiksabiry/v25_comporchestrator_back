@@ -2,6 +2,8 @@ import { PhoneNumber } from '../models/PhoneNumber.js';
 import { config } from '../config/env.js';
 import telnyx from 'telnyx';
 import twilio from 'twilio';
+import axios from 'axios';
+import FormData from 'form-data';
 
 
 class PhoneNumberService {
@@ -385,6 +387,135 @@ class PhoneNumberService {
     await phoneNumber.remove();
 
     return { message: 'Phone number deleted successfully' };
+  }
+  // Twilio Regulatory Compliance Methods
+
+  async getTwilioRequirements(isoCountry, numberType = 'local') {
+    try {
+      console.log(`🔍 Fetching Twilio requirements for ${isoCountry} ${numberType}`);
+      const regulations = await this.twilioClient.numbers.v2.regulatoryCompliance
+        .regulations
+        .list({
+          isoCountries: isoCountry,
+          numberType: numberType,
+          limit: 1
+        });
+
+      if (!regulations || regulations.length === 0) {
+        return { requirements: [] };
+      }
+
+      const regulation = regulations[0];
+
+      // Get detailed requirements including end-user and document types
+      // Note: In a real implementation, we would need to fetch end-user-types and document-types linked to this regulation
+      // For now, we return the regulation details and let the frontend drive the form based on known Twilio patterns
+      // or we can fetch them here.
+
+      return {
+        regulationSid: regulation.sid,
+        friendlyName: regulation.friendlyName,
+        endUserType: regulation.endUserType,
+        requirements: regulation.requirements
+      };
+    } catch (error) {
+      console.error('❌ Error fetching Twilio requirements:', error);
+      throw error;
+    }
+  }
+
+  async createTwilioEndUser(friendlyName, type, attributes) {
+    try {
+      console.log(`👤 Creating Twilio End User: ${friendlyName} (${type})`);
+      const endUser = await this.twilioClient.numbers.v2.regulatoryCompliance
+        .endUsers
+        .create({
+          friendlyName: friendlyName,
+          type: type,
+          attributes: JSON.stringify(attributes)
+        });
+
+      return endUser;
+    } catch (error) {
+      console.error('❌ Error creating Twilio End User:', error);
+      ```
+    }
+  }
+
+  async createTwilioDocument(fileBuffer, mimeType, fileName, type, attributes) {
+    try {
+      console.log(`📄 Uploading Twilio Document via Axios: ${ fileName } `);
+      
+      const form = new FormData();
+      form.append('FriendlyName', fileName);
+      form.append('Type', type);
+      form.append('Attributes', JSON.stringify(attributes));
+      form.append('File', fileBuffer, { filename: fileName, contentType: mimeType });
+
+      const auth = Buffer.from(`${ config.twilioAccountSid }:${ config.twilioAuthToken } `).toString('base64');
+
+      const response = await axios.post(
+        'https://numbers.twilio.com/v2/RegulatoryCompliance/SupportingDocuments',
+        form,
+        {
+          headers: {
+            ...form.getHeaders(),
+            'Authorization': `Basic ${ auth } `
+          }
+        }
+      );
+
+      console.log('✅ Twilio Document Uploaded:', response.data.sid);
+      return response.data;
+    } catch (error) {
+      console.error('❌ Error creating Twilio Document:', error.response?.data || error.message);
+      throw error;
+    }
+  }
+
+  async createTwilioBundle(friendlyName, email, statusCallback) {
+    try {
+      console.log(`📦 Creating Twilio Bundle: ${ friendlyName } `);
+      const bundle = await this.twilioClient.numbers.v2.regulatoryCompliance
+        .bundles
+        .create({
+          friendlyName: friendlyName,
+          email: email,
+          statusCallback: statusCallback,
+          regulationSid: arguments[3], // Hack if we pass more args
+          isoCountry: arguments[4]
+        });
+      return bundle;
+    } catch (error) {
+      console.error('❌ Error creating Twilio Bundle:', error);
+      throw error;
+    }
+  }
+
+  async assignItemToBundle(bundleSid, objectSid) {
+    try {
+      const item = await this.twilioClient.numbers.v2.regulatoryCompliance
+        .bundles(bundleSid)
+        .itemAssignments
+        .create({ objectSid: objectSid });
+      return item;
+    } catch (error) {
+      console.error('❌ Error assigning item to bundle:', error);
+      throw error;
+    }
+  }
+
+  async submitTwilioBundle(bundleSid) {
+    try {
+      console.log(`🚀 Submitting Twilio Bundle: ${ bundleSid } `);
+      const bundle = await this.twilioClient.numbers.v2.regulatoryCompliance
+        .bundles(bundleSid)
+        .update({ status: 'pending-review' });
+      return bundle;
+    } catch (error) {
+      console.error('❌ Error submitting Twilio Bundle:', error);
+      throw error;
+    }
   }
 }
 
