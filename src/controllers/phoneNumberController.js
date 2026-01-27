@@ -153,7 +153,26 @@ class PhoneNumberController {
       res.json(newNumber);
     } catch (error) {
       console.error('Error purchasing Twilio phone number:', error);
-      res.status(500).json({ error: 'Failed to purchase Twilio phone number' });
+
+      if (error.code === 21404) {
+        return res.status(400).json({
+          error: 'Twilio Trial Limit Reached',
+          message: 'Trial accounts are allowed only one Twilio number. Please upgrade your Twilio account to purchase more numbers.'
+        });
+      }
+
+      if (error.code === 21649) {
+        return res.status(400).json({
+          error: 'Regulatory Bundle Required',
+          message: 'This phone number requires regulatory documentation (Identity/Address verification). Please submit the required documents in the Twilio Console or choose a number from a different region.',
+          moreInfo: error.moreInfo
+        });
+      }
+
+      res.status(500).json({
+        error: 'Failed to purchase Twilio phone number',
+        message: error.message
+      });
     }
   }
 

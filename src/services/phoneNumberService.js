@@ -328,7 +328,11 @@ class PhoneNumberService {
       console.log('✅ Twilio purchase successful:', JSON.stringify(purchasedNumber, null, 2));
     } catch (twilioError) {
       console.error('❌ detailed Twilio API Error:', JSON.stringify(twilioError, Object.getOwnPropertyNames(twilioError), 2));
-      throw new Error(`Twilio Purchase Failed: ${twilioError.message}`);
+      const error = new Error(`Twilio Purchase Failed: ${twilioError.message}`);
+      error.code = twilioError.code;
+      error.status = twilioError.status;
+      error.moreInfo = twilioError.moreInfo;
+      throw error;
     }
 
     // Create document with only the necessary fields for Twilio
