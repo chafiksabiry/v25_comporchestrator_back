@@ -311,9 +311,9 @@ class PhoneNumberService {
     }
   }
 
-  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId) {
-    if (!gigId) {
-      throw new Error('gigId is required to purchase a phone number');
+  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId) {
+    if (!gigId || !companyId) {
+      throw new Error('gigId and companyId are required to purchase a phone number');
     }
 
     console.log(`🛒 Attempting to purchase number: ${phoneNumber} for gig: ${gigId}`);
@@ -338,7 +338,8 @@ class PhoneNumberService {
       provider: 'twilio',
       status: 'active',
       features: ['voice', 'sms'],
-      gigId
+      gigId,
+      companyId
     };
 
     // Save to database
