@@ -311,7 +311,7 @@ class PhoneNumberService {
     }
   }
 
-  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId) {
+  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId, { bundleSid, addressSid } = {}) {
     if (!gigId || !companyId) {
       throw new Error('gigId and companyId are required to purchase a phone number');
     }
@@ -320,11 +320,16 @@ class PhoneNumberService {
 
     let purchasedNumber;
     try {
+      const purchaseOptions = {
+        phoneNumber: phoneNumber,
+        friendlyName: 'Gig Number:' + phoneNumber,
+      };
+
+      if (bundleSid) purchaseOptions.bundleSid = bundleSid;
+      if (addressSid) purchaseOptions.addressSid = addressSid;
+
       purchasedNumber = await this.twilioClient.incomingPhoneNumbers
-        .create({
-          phoneNumber: phoneNumber,
-          friendlyName: 'Gig Number:' + phoneNumber,
-        });
+        .create(purchaseOptions);
       console.log('✅ Twilio purchase successful:', JSON.stringify(purchasedNumber, null, 2));
     } catch (twilioError) {
       console.error('❌ detailed Twilio API Error:', JSON.stringify(twilioError, Object.getOwnPropertyNames(twilioError), 2));

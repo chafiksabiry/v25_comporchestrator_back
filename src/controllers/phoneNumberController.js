@@ -132,7 +132,7 @@ class PhoneNumberController {
       console.log("📥 Received purchaseTwilioNumber request");
       console.log("📦 req.body:", JSON.stringify(req.body, null, 2));
 
-      const { phoneNumber, gigId, companyId } = req.body;
+      const { phoneNumber, gigId, companyId, bundleSid, addressSid } = req.body;
       console.log("phoneNumber", phoneNumber);
 
       // Check if gig already has a phone number
@@ -147,7 +147,8 @@ class PhoneNumberController {
         phoneNumber,
         config.baseUrl,
         gigId,
-        companyId
+        companyId,
+        { bundleSid, addressSid }
       );
       console.log("newNumber", newNumber);
       res.json(newNumber);
