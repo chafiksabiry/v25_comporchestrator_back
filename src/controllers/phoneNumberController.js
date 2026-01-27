@@ -129,6 +129,9 @@ class PhoneNumberController {
 
   async purchaseTwilioNumber(req, res) {
     try {
+      console.log("📥 Received purchaseTwilioNumber request");
+      console.log("📦 req.body:", JSON.stringify(req.body, null, 2));
+
       const { phoneNumber, gigId } = req.body;
       console.log("phoneNumber", phoneNumber);
 
