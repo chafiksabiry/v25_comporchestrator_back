@@ -316,64 +316,69 @@ class PhoneNumberService {
       throw new Error('gigId is required to purchase a phone number');
     }
 
+    console.log(`🛒 Attempting to purchase number: ${phoneNumber} for gig: ${gigId}`);
+
+    let purchasedNumber;
     try {
-      // Purchase number through Twilio
-      const purchasedNumber = await this.twilioClient.incomingPhoneNumbers
+      purchasedNumber = await this.twilioClient.incomingPhoneNumbers
         .create({
           phoneNumber: phoneNumber,
-          friendlyName: 'Test Number:' + phoneNumber,
+          friendlyName: 'Gig Number:' + phoneNumber,
         });
-
-      console.log("purchasedNumber", purchasedNumber);
-
-      // Create document with only the necessary fields for Twilio
-      const phoneNumberData = {
-        phoneNumber: purchasedNumber.phoneNumber,
-        twilioId: purchasedNumber.sid,
-        provider: 'twilio',
-        status: 'active',
-        features: ['voice', 'sms'],
-        gigId
-      };
-
-      // Save to database
-      const newPhoneNumber = new PhoneNumber(phoneNumberData);
-      await newPhoneNumber.save();
-
-      console.log("newPhoneNumber", newPhoneNumber);
-      return newPhoneNumber;
-    } catch (error) {
-      console.error('❌ Error getting number status:', error);
-      throw error;
+      console.log('✅ Twilio purchase successful:', JSON.stringify(purchasedNumber, null, 2));
+    } catch (twilioError) {
+      console.error('❌ detailed Twilio API Error:', JSON.stringify(twilioError, Object.getOwnPropertyNames(twilioError), 2));
+      throw new Error(`Twilio Purchase Failed: ${twilioError.message}`);
     }
+
+    // Create document with only the necessary fields for Twilio
+    const phoneNumberData = {
+      phoneNumber: purchasedNumber.phoneNumber,
+      twilioId: purchasedNumber.sid,
+      provider: 'twilio',
+      status: 'active',
+      features: ['voice', 'sms'],
+      gigId
+    };
+
+    // Save to database
+    const newPhoneNumber = new PhoneNumber(phoneNumberData);
+    await newPhoneNumber.save();
+
+    console.log("newPhoneNumber", newPhoneNumber);
+    return newPhoneNumber;
+  } catch(error) {
+    console.error('❌ Error getting number status:', error);
+    throw error;
   }
+}
 
   async getAllPhoneNumbers() {
-    return await PhoneNumber.find();
-  }
+  return await PhoneNumber.find();
+}
 
   async getPhoneNumberByNumber(phoneNumber) {
-    return await PhoneNumber.findOne({ phoneNumber });
-  }
+  return await PhoneNumber.findOne({ phoneNumber });
+}
 
   async getPhoneNumbersByGigId(gigId) {
-    return await PhoneNumber.find({ gigId });
-  }
+  return await PhoneNumber.find({ gigId });
+}
 
   async deletePhoneNumber(id) {
-    const phoneNumber = await PhoneNumber.findById(id);
-    if (!phoneNumber) {
-      throw new Error('Phone number not found');
-    }
-
-    // Release number from Telnyx
-    await this.telnyxClient.phoneNumbers.delete(phoneNumber.telnyxId);
-
-    // Remove from database
-    await phoneNumber.remove();
-
-    return { message: 'Phone number deleted successfully' };
+  const phoneNumber = await PhoneNumber.findById(id);
+  if (!phoneNumber) {
+    throw new Error('Phone number not found');
   }
+
+  // Release number from Telnyx
+  await this.telnyxClient.phoneNumbers.delete(phoneNumber.telnyxId);
+
+  // Remove from database
+  await phoneNumber.remove();
+
+  return { message: 'Phone number deleted successfully' };
+}
 }
 
 export const phoneNumberService = new PhoneNumberService(); 
