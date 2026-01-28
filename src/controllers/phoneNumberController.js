@@ -39,7 +39,7 @@ class PhoneNumberController {
 
   async purchaseNumber(req, res) {
     try {
-      const { phoneNumber, provider, gigId, requirementGroupId, companyId } = req.body;
+      const { phoneNumber, provider, gigId, requirementGroupId, companyId, bundleSid, addressSid } = req.body;
 
       // Validation des champs obligatoires
       // Validation des champs obligatoires
@@ -74,7 +74,8 @@ class PhoneNumberController {
         provider,
         gigId,
         requirementGroupId,
-        companyId
+        companyId,
+        { bundleSid, addressSid }
       );
 
       res.json({

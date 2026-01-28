@@ -36,13 +36,15 @@ class PhoneNumberService {
     }
   }
 
-  async purchaseNumber(phoneNumber, provider, gigId, requirementGroupId, companyId) {
+  async purchaseNumber(phoneNumber, provider, gigId, requirementGroupId, companyId, options = {}) {
     if (!gigId || !companyId) {
       throw new Error('gigId and companyId are required to purchase a number');
     }
 
     try {
-      if (provider === 'telnyx') {
+      if (provider === 'twilio') {
+        return await this.purchaseTwilioNumber(phoneNumber, null, gigId, companyId, options);
+      } else if (provider === 'telnyx') {
         // 1. Créer la commande avec le requirement group
         const orderData = {
           phone_numbers: [
