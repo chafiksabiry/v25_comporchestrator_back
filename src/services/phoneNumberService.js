@@ -350,7 +350,11 @@ class PhoneNumberService {
       twilioId: purchasedNumber.sid,
       provider: 'twilio',
       status: 'active',
-      features: ['voice', 'sms'],
+      features: {
+        voice: true,
+        sms: true,
+        mms: true
+      },
       gigId,
       companyId
     };
