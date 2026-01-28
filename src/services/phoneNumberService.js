@@ -438,21 +438,20 @@ class PhoneNumberService {
       return endUser;
     } catch (error) {
       console.error('❌ Error creating Twilio End User:', error);
-      ```
     }
   }
 
   async createTwilioDocument(fileBuffer, mimeType, fileName, type, attributes) {
     try {
-      console.log(`📄 Uploading Twilio Document via Axios: ${ fileName } `);
-      
+      console.log(`📄 Uploading Twilio Document via Axios: ${fileName} `);
+
       const form = new FormData();
       form.append('FriendlyName', fileName);
       form.append('Type', type);
       form.append('Attributes', JSON.stringify(attributes));
       form.append('File', fileBuffer, { filename: fileName, contentType: mimeType });
 
-      const auth = Buffer.from(`${ config.twilioAccountSid }:${ config.twilioAuthToken } `).toString('base64');
+      const auth = Buffer.from(`${config.twilioAccountSid}:${config.twilioAuthToken} `).toString('base64');
 
       const response = await axios.post(
         'https://numbers.twilio.com/v2/RegulatoryCompliance/SupportingDocuments',
@@ -460,7 +459,7 @@ class PhoneNumberService {
         {
           headers: {
             ...form.getHeaders(),
-            'Authorization': `Basic ${ auth } `
+            'Authorization': `Basic ${auth} `
           }
         }
       );
@@ -475,7 +474,7 @@ class PhoneNumberService {
 
   async createTwilioBundle(friendlyName, email, statusCallback) {
     try {
-      console.log(`📦 Creating Twilio Bundle: ${ friendlyName } `);
+      console.log(`📦 Creating Twilio Bundle: ${friendlyName} `);
       const bundle = await this.twilioClient.numbers.v2.regulatoryCompliance
         .bundles
         .create({
@@ -507,7 +506,7 @@ class PhoneNumberService {
 
   async submitTwilioBundle(bundleSid) {
     try {
-      console.log(`🚀 Submitting Twilio Bundle: ${ bundleSid } `);
+      console.log(`🚀 Submitting Twilio Bundle: ${bundleSid} `);
       const bundle = await this.twilioClient.numbers.v2.regulatoryCompliance
         .bundles(bundleSid)
         .update({ status: 'pending-review' });
