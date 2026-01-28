@@ -406,6 +406,7 @@ class PhoneNumberController {
       const { countryCode, type } = req.query;
       const requirements = await phoneNumberService.getTwilioRequirements(countryCode, type);
       res.json(requirements);
+    } catch (error) {
       res.status(500).json({ error: 'Failed to fetch Twilio requirements', details: error.message });
     }
   }
