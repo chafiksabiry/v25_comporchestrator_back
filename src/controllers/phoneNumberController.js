@@ -204,9 +204,11 @@ class PhoneNumberController {
       res.json(result);
     } catch (error) {
       console.error('Error checking gig number:', error);
+      console.error('Stack:', error.stack);
       res.status(500).json({
         error: 'Internal Server Error',
-        message: 'Failed to check gig number'
+        message: 'Failed to check gig number',
+        details: error.message
       });
     }
   }

@@ -93,9 +93,11 @@ class PhoneNumberService {
     } catch (error) {
       console.error('❌ Error purchasing number:', error);
 
-      // Handle specific Telnyx errors
       if (error.raw) {
-        switch (error.raw.code) {
+        const errorCode = error.raw.code || (error.raw.errors && error.raw.errors[0]?.code);
+        const errorMessage = error.raw.message || (error.raw.errors && error.raw.errors[0]?.detail) || 'Failed to purchase number';
+
+        switch (errorCode) {
           case 'number_already_registered':
             throw new Error('This number already exists in your account');
           case 'insufficient_funds':
@@ -103,7 +105,7 @@ class PhoneNumberService {
           case 'number_not_available':
             throw new Error('This number is no longer available');
           default:
-            throw new Error(error.raw.message || 'Failed to purchase number');
+            throw new Error(errorMessage);
         }
       }
 
@@ -244,6 +246,7 @@ class PhoneNumberService {
       };
     } catch (error) {
       console.error('❌ Error checking gig number:', error);
+      console.error('Stack:', error.stack);
       throw error;
     }
   }
@@ -255,7 +258,7 @@ class PhoneNumberService {
       // Récupérer tous les numéros de téléphone de la base de données
       const numbers = await PhoneNumber.find({})
         .sort({ createdAt: -1 }) // Les plus récents d'abord
-        .lean(); // Pour de meilleures performances
+        .lean();
 
       return numbers.map(number => ({
         id: number._id,
