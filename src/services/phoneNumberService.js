@@ -246,7 +246,6 @@ class PhoneNumberService {
       };
     } catch (error) {
       console.error('❌ Error checking gig number:', error);
-      console.error('Stack:', error.stack);
       throw error;
     }
   }
