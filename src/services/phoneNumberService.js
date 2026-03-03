@@ -119,7 +119,6 @@ class PhoneNumberService {
     // Prepare search options without areaCode by default
     const searchOptions = {
       limit: searchParams.limit,
-      excludeAllAddressRequired: true,
       voice: true
     };
 
