@@ -124,7 +124,7 @@ class PhoneNumberService {
 
     // Only add areaCode if it's provided
     if (searchParams.areaCode) {
-      searchOptions.areaCode = searchParams.areaCode;
+      searchOptions.areaCode = searchParams.areaCode;    
     }
 
     const numbers = await this.twilioClient.availablePhoneNumbers(countryCode)
