@@ -25,6 +25,7 @@ router.post('/twilio/documents', upload.single('file'), phoneNumberController.cr
 router.post('/twilio/bundles', phoneNumberController.createTwilioBundle.bind(phoneNumberController));
 router.post('/twilio/bundles/:sid/items', phoneNumberController.assignItemToBundle.bind(phoneNumberController));
 router.post('/twilio/bundles/:sid/submit', phoneNumberController.submitTwilioBundle.bind(phoneNumberController));
+router.post('/twilio/addresses', phoneNumberController.createTwilioAddress.bind(phoneNumberController));
 
 // Get all phone numbers
 router.get('/', phoneNumberController.getAllNumbers.bind(phoneNumberController));

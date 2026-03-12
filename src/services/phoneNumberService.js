@@ -514,13 +514,32 @@ class PhoneNumberService {
 
   async submitTwilioBundle(bundleSid) {
     try {
-      console.log(`🚀 Submitting Twilio Bundle: ${bundleSid} `);
+      console.log(`🚀 Submitting Twilio Bundle: ${bundleSid}`);
       const bundle = await this.twilioClient.numbers.v2.regulatoryCompliance
         .bundles(bundleSid)
         .update({ status: 'pending-review' });
       return bundle;
     } catch (error) {
       console.error('❌ Error submitting Twilio Bundle:', error);
+      throw error;
+    }
+  }
+
+  async createTwilioAddress(customerName, street, city, region, postalCode, isoCountry) {
+    try {
+      console.log(`📍 Creating Twilio Address for ${customerName} in ${isoCountry}`);
+      const address = await this.twilioClient.addresses.create({
+        customerName,
+        street,
+        city,
+        region,
+        postalCode,
+        isoCountry
+      });
+      console.log('✅ Twilio Address Created:', address.sid);
+      return address;
+    } catch (error) {
+      console.error('❌ Error creating Twilio Address:', error);
       throw error;
     }
   }

@@ -472,11 +472,22 @@ class PhoneNumberController {
     }
   }
 
-  async createTwilioRegulatoryParams(req, res) {
-    // Generic endpoint to handle creation of EndUser, or Bundle, or Assignment
-    // Depending on 'action' param? Or separate endpoints.
-    // Let's go with separate for clarity.
-    res.status(501).json({ error: 'Not implemented' });
+  async createTwilioAddress(req, res) {
+    try {
+      const { customerName, street, city, region, postalCode, isoCountry } = req.body;
+      const address = await phoneNumberService.createTwilioAddress(
+        customerName,
+        street,
+        city,
+        region,
+        postalCode,
+        isoCountry
+      );
+      res.json(address);
+    } catch (error) {
+      console.error('Error in createTwilioAddress:', error);
+      res.status(500).json({ error: 'Failed to create Address', details: error.message });
+    }
   }
 }
 
