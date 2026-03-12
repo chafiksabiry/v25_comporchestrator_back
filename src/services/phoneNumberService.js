@@ -20,18 +20,37 @@ class PhoneNumberService {
 
   async searchAvailableNumbers(countryCode) {
     try {
-      console.log(`🔍 Searching numbers for country: ${countryCode}`);
-      const response = await this.telnyxClient.availablePhoneNumbers.list({
-        filter: {
-          country_code: countryCode,
-          features: ['voice'],
-          phone_number_type: 'local'
-        }
-      });
+      console.log(`🔍 Searching Telnyx numbers for country: ${countryCode}`);
+      
+      const searchType = async (type) => {
+        const response = await this.telnyxClient.availablePhoneNumbers.list({
+          filter: {
+            country_code: countryCode,
+            features: ['voice'],
+            phone_number_type: type
+          }
+        });
+        return (response.data || []).map(number => ({
+          ...number,
+          type: type
+        }));
+      };
 
-      return response.data;
+      const localNumbers = await searchType('local');
+
+      if (countryCode === 'FR') {
+        try {
+          const nationalNumbers = await searchType('national');
+          return [...localNumbers, ...nationalNumbers];
+        } catch (natError) {
+          console.error('❌ Error searching Telnyx national numbers:', natError);
+          return localNumbers;
+        }
+      }
+
+      return localNumbers;
     } catch (error) {
-      console.error('❌ Error searching numbers:', error);
+      console.error('❌ Error searching Telnyx numbers:', error);
       throw error;
     }
   }
@@ -115,36 +134,71 @@ class PhoneNumberService {
 
   async searchTwilioNumbers(searchParams) {
     const countryCode = (searchParams.countryCode || 'US').toString().toUpperCase();
+    const limit = searchParams.limit || 10;
 
-    // Prepare search options without areaCode by default
+    // Prepare search options
     const searchOptions = {
-      limit: searchParams.limit,
+      limit: limit,
       voice: true
     };
 
-    // Only add areaCode if it's provided
     if (searchParams.areaCode) {
-      searchOptions.areaCode = searchParams.areaCode;    
+      searchOptions.areaCode = searchParams.areaCode;
     }
 
-    const numbers = await this.twilioClient.availablePhoneNumbers(countryCode)
-      .local
-      .list(searchOptions);
+    try {
+      // Search local numbers
+      const localNumbers = await this.twilioClient.availablePhoneNumbers(countryCode)
+        .local
+        .list(searchOptions);
 
-    console.log("numbers", numbers);
+      const mappedLocal = localNumbers.map(number => ({
+        phoneNumber: number.phoneNumber,
+        friendlyName: number.friendlyName,
+        locality: number.locality,
+        region: number.region,
+        isoCountry: number.isoCountry,
+        type: 'local',
+        capabilities: {
+          voice: number.capabilities.voice,
+          SMS: number.capabilities.SMS,
+          MMS: number.capabilities.MMS
+        }
+      }));
 
-    return numbers.map(number => ({
-      phoneNumber: number.phoneNumber,
-      friendlyName: number.friendlyName,
-      locality: number.locality,
-      region: number.region,
-      isoCountry: number.isoCountry,
-      capabilities: {
-        voice: number.capabilities.voice,
-        SMS: number.capabilities.SMS,
-        MMS: number.capabilities.MMS
+      // For France, we also search for national numbers if we haven't reached the limit
+      if (countryCode === 'FR' && mappedLocal.length < limit) {
+        try {
+          const nationalNumbers = await this.twilioClient.availablePhoneNumbers(countryCode)
+            .national
+            .list({ ...searchOptions, limit: limit - mappedLocal.length });
+
+          const mappedNational = nationalNumbers.map(number => ({
+            phoneNumber: number.phoneNumber,
+            friendlyName: number.friendlyName,
+            locality: number.locality,
+            region: number.region,
+            isoCountry: number.isoCountry,
+            type: 'national',
+            capabilities: {
+              voice: number.capabilities.voice,
+              SMS: number.capabilities.SMS,
+              MMS: number.capabilities.MMS
+            }
+          }));
+
+          return [...mappedLocal, ...mappedNational];
+        } catch (natError) {
+          console.error('❌ Error searching national numbers:', natError);
+          return mappedLocal;
+        }
       }
-    }));
+
+      return mappedLocal;
+    } catch (error) {
+      console.error('❌ Error in searchTwilioNumbers:', error);
+      throw error;
+    }
   }
 
   async configureVoiceFeature(phoneNumber) {
