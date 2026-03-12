@@ -136,13 +136,8 @@ class PhoneNumberController {
       const { phoneNumber, gigId, companyId, bundleSid, addressSid } = req.body;
       console.log("phoneNumber", phoneNumber);
 
-      // Check if gig already has a phone number
-      const existingNumber = await phoneNumberService.getPhoneNumbersByGigId(gigId);
-      if (existingNumber && existingNumber.length > 0) {
-        return res.status(400).json({
-          error: 'This gig already has a phone number assigned'
-        });
-      }
+      // Multi-number support: we allow multiple phone numbers per gig now.
+      // Removed the 'existingNumber' check.
 
       const newNumber = await phoneNumberService.purchaseTwilioNumber(
         phoneNumber,
