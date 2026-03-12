@@ -222,26 +222,27 @@ class PhoneNumberService {
     try {
       console.log(`🔍 Checking number for gig: ${gigId}`);
 
-      // Chercher un numéro actif pour ce gig
-      const number = await PhoneNumber.findOne({
+      // Chercher tous les numéros actifs pour ce gig
+      const numbers = await PhoneNumber.find({
         gigId,
       });
 
-      if (!number) {
+      if (!numbers || numbers.length === 0) {
         return {
           hasNumber: false,
-          message: 'No active phone number found for this gig'
+          numbers: [],
+          message: 'No active phone numbers found for this gig'
         };
       }
 
       return {
         hasNumber: true,
-        number: {
+        numbers: numbers.map(number => ({
           phoneNumber: number.phoneNumber,
           provider: number.provider,
           status: number.status,
           features: number.features
-        }
+        }))
       };
     } catch (error) {
       console.error('❌ Error checking gig number:', error);
