@@ -36,19 +36,23 @@ class PhoneNumberService {
         }));
       };
 
-      const localNumbers = await searchType('local');
+      const localNumbersPromise = searchType('local');
 
       if (countryCode === 'FR') {
-        try {
-          const nationalNumbers = await searchType('national');
-          return [...localNumbers, ...nationalNumbers];
-        } catch (natError) {
+        const nationalNumbersPromise = searchType('national').catch(natError => {
           console.error('❌ Error searching Telnyx national numbers:', natError);
-          return localNumbers;
-        }
+          return [];
+        });
+
+        const [localNumbers, nationalNumbers] = await Promise.all([
+          localNumbersPromise,
+          nationalNumbersPromise
+        ]);
+
+        return [...localNumbers, ...nationalNumbers];
       }
 
-      return localNumbers;
+      return await localNumbersPromise;
     } catch (error) {
       console.error('❌ Error searching Telnyx numbers:', error);
       throw error;
@@ -148,9 +152,22 @@ class PhoneNumberService {
 
     try {
       // Search local numbers
-      const localNumbers = await this.twilioClient.availablePhoneNumbers(countryCode)
+      const localNumbersPromise = this.twilioClient.availablePhoneNumbers(countryCode)
         .local
         .list(searchOptions);
+
+      // For France, we always also search for national numbers
+      let nationalNumbersPromise = Promise.resolve([]);
+      if (countryCode === 'FR') {
+        nationalNumbersPromise = this.twilioClient.availablePhoneNumbers(countryCode)
+          .national
+          .list(searchOptions);
+      }
+
+      const [localNumbers, nationalNumbers] = await Promise.all([
+        localNumbersPromise,
+        nationalNumbersPromise
+      ]);
 
       const mappedLocal = localNumbers.map(number => ({
         phoneNumber: number.phoneNumber,
@@ -166,35 +183,24 @@ class PhoneNumberService {
         }
       }));
 
-      // For France, we also search for national numbers if we haven't reached the limit
-      if (countryCode === 'FR' && mappedLocal.length < limit) {
-        try {
-          const nationalNumbers = await this.twilioClient.availablePhoneNumbers(countryCode)
-            .national
-            .list({ ...searchOptions, limit: limit - mappedLocal.length });
-
-          const mappedNational = nationalNumbers.map(number => ({
-            phoneNumber: number.phoneNumber,
-            friendlyName: number.friendlyName,
-            locality: number.locality,
-            region: number.region,
-            isoCountry: number.isoCountry,
-            type: 'national',
-            capabilities: {
-              voice: number.capabilities.voice,
-              SMS: number.capabilities.SMS,
-              MMS: number.capabilities.MMS
-            }
-          }));
-
-          return [...mappedLocal, ...mappedNational];
-        } catch (natError) {
-          console.error('❌ Error searching national numbers:', natError);
-          return mappedLocal;
+      const mappedNational = nationalNumbers.map(number => ({
+        phoneNumber: number.phoneNumber,
+        friendlyName: number.friendlyName,
+        locality: number.locality,
+        region: number.region,
+        isoCountry: number.isoCountry,
+        type: 'national',
+        capabilities: {
+          voice: number.capabilities.voice,
+          SMS: number.capabilities.SMS,
+          MMS: number.capabilities.MMS
         }
-      }
+      }));
 
-      return mappedLocal;
+      const combined = [...mappedLocal, ...mappedNational];
+      
+      // Sort to have a mix or just return combined (limited to avoid too many results if needed)
+      return combined.slice(0, Math.max(limit, 20));
     } catch (error) {
       console.error('❌ Error in searchTwilioNumbers:', error);
       throw error;
