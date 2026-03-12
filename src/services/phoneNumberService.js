@@ -43,13 +43,26 @@ class PhoneNumberService {
           console.error('❌ Error searching Telnyx national numbers:', natError);
           return [];
         });
+        const mobileNumbersPromise = searchType('mobile').catch(mobError => {
+          console.error('❌ Error searching Telnyx mobile numbers:', mobError);
+          return [];
+        });
 
-        const [localNumbers, nationalNumbers] = await Promise.all([
+        const [localResults, nationalResults, mobileResults] = await Promise.all([
           localNumbersPromise,
-          nationalNumbersPromise
+          nationalNumbersPromise,
+          mobileNumbersPromise
         ]);
 
-        return [...localNumbers, ...nationalNumbers];
+        const combined = [
+          ...localResults.map(n => ({ ...n, type: 'local' })),
+          ...nationalResults.map(n => ({ ...n, type: 'national' })),
+          ...mobileResults.map(n => ({ ...n, type: 'mobile' }))
+        ];
+        
+        // Use a default limit if not provided
+        const searchLimit = limit || 10;
+        return combined.slice(0, Math.max(searchLimit * 3, 30));
       }
 
       return await localNumbersPromise;
@@ -156,17 +169,31 @@ class PhoneNumberService {
         .local
         .list(searchOptions);
 
-      // For France, we always also search for national numbers
+      // For France, we always also search for national and mobile numbers
       let nationalNumbersPromise = Promise.resolve([]);
+      let mobileNumbersPromise = Promise.resolve([]);
       if (countryCode === 'FR') {
         nationalNumbersPromise = this.twilioClient.availablePhoneNumbers(countryCode)
           .national
-          .list(searchOptions);
+          .list(searchOptions)
+          .catch(err => {
+            console.error('⚠️ Twilio National numbers not available:', err.message);
+            return [];
+          });
+          
+        mobileNumbersPromise = this.twilioClient.availablePhoneNumbers(countryCode)
+          .mobile
+          .list(searchOptions)
+          .catch(err => {
+            console.error('⚠️ Twilio Mobile numbers not available:', err.message);
+            return [];
+          });
       }
 
-      const [localNumbers, nationalNumbers] = await Promise.all([
+      const [localNumbers, nationalNumbers, mobileNumbers] = await Promise.all([
         localNumbersPromise,
-        nationalNumbersPromise
+        nationalNumbersPromise,
+        mobileNumbersPromise
       ]);
 
       const mappedLocal = localNumbers.map(number => ({
@@ -197,10 +224,24 @@ class PhoneNumberService {
         }
       }));
 
-      const combined = [...mappedLocal, ...mappedNational];
+      const mappedMobile = mobileNumbers.map(number => ({
+        phoneNumber: number.phoneNumber,
+        friendlyName: number.friendlyName,
+        locality: number.locality,
+        region: number.region,
+        isoCountry: number.isoCountry,
+        type: 'mobile',
+        capabilities: {
+          voice: number.capabilities.voice,
+          SMS: number.capabilities.SMS,
+          MMS: number.capabilities.MMS
+        }
+      }));
+
+      const combined = [...mappedLocal, ...mappedNational, ...mappedMobile];
       
       // Sort to have a mix or just return combined (limited to avoid too many results if needed)
-      return combined.slice(0, Math.max(limit, 20));
+      return combined.slice(0, Math.max(limit * 3, 30));
     } catch (error) {
       console.error('❌ Error in searchTwilioNumbers:', error);
       throw error;
@@ -377,7 +418,7 @@ class PhoneNumberService {
     }
   }
 
-  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId, { bundleSid, addressSid } = {}) {
+  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId, { bundleSid, addressSid, type } = {}) {
     if (!gigId || !companyId) {
       throw new Error('gigId and companyId are required to purchase a phone number');
     }
@@ -418,7 +459,10 @@ class PhoneNumberService {
         mms: true
       },
       gigId,
-      companyId
+      companyId,
+      metadata: {
+        type: type // Save the original type (local, national, mobile)
+      }
     };
 
     // Save to database
