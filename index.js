@@ -29,6 +29,13 @@ mongoose.connect(config.mongodbUri, {
   process.exit(1); // Exit if we can't connect to database
 });
 
+app.use(cors({
+  origin: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+}));
+
 // Middleware
 app.use((req, res, next) => {
   if (req.originalUrl === '/api/phone-numbers/webhooks/telnyx/number-order') {
@@ -38,22 +45,6 @@ app.use((req, res, next) => {
   }
 });
 app.use(express.urlencoded({ extended: true }));
-
-app.use(cors({
-  origin: [
-    'https://comp-orchestrator.harx.ai',
-    'https://api-comp-orchestrator.harx.ai',
-    'http://localhost:5184',
-    'http://localhost:5183',
-    'http://localhost:3000',
-    'https://v25.harx.ai',
-    'https://v25-preprod.harx.ai',
-    'https://harx25pageslinks.netlify.app'
-  ],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-}));
 
 // Routes API
 app.use('/api/requirements', requirementRoutes);
