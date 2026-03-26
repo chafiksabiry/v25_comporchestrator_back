@@ -15,5 +15,7 @@ export const config = {
   // Délai d'expiration pour les requirement groups (90 jours par défaut)
   requirementGroupExpiration: parseInt(process.env.REQUIREMENT_GROUP_EXPIRATION) || 90 * 24 * 60 * 60 * 1000,
   twilioAccountSid: process.env.TWILIO_ACCOUNT_SID,
-  twilioAuthToken: process.env.TWILIO_AUTH_TOKEN
+  twilioAuthToken: process.env.TWILIO_AUTH_TOKEN,
+  stripeSecretKey: process.env.STRIPE_SECRET_KEY,
+  stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET
 }; 

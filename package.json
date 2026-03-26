@@ -8,7 +8,6 @@
     "dev": "nodemon index.js",
     "test": "node src/tests/requirement.test.js",
     "testWebhook": "node src/tests/webhook.test.js"
-
   },
   "keywords": [],
   "author": "",
@@ -24,6 +23,7 @@
     "form-data": "^4.0.4",
     "mongoose": "^7.6.3",
     "multer": "^2.0.2",
+    "stripe": "^21.0.1",
     "telnyx": "^1.25.5",
     "twilio": "^5.7.0"
   },
