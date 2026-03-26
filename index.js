@@ -68,7 +68,7 @@ app.use((err, req, res, next) => {
 
 // Start server
 const server = app.listen(config.port, () => {
-  console.log(`✅ Server is running on port ${config.port}`);
+  console.log(`✅ Server v1.0.1 is running on port ${config.port}`);
 });
 
 // Handle process termination
