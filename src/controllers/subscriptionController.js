@@ -26,9 +26,9 @@ export const subscriptionController = {
   },
 
   createCheckoutSession: async (req, res) => {
-    const { userId, planId, companyId, successUrl, cancelUrl } = req.body;
+    const { userId, planName, companyId, successUrl, cancelUrl } = req.body;
     try {
-      const plan = await SubscriptionPlan.findById(planId);
+      const plan = await SubscriptionPlan.findOne({ name: planName });
       if (!plan) return res.status(404).json({ error: 'Plan not found' });
 
       const session = await stripeService.createCheckoutSession(
