@@ -1,10 +1,6 @@
-// Load environment variables first
-import dotenv from 'dotenv';
-dotenv.config({ silent: true });
-
+import 'dotenv/config';
 import { config } from './src/config/env.js';
 import express from 'express';
-import cors from 'cors';
 import mongoose from 'mongoose';
 import { requirementRoutes } from './src/routes/requirement.js';
 import { addressRoutes } from './src/routes/address.js';
@@ -58,6 +54,11 @@ app.use('/api/documents', documentRoutes);
 app.use('/api/requirement-groups', telnyxRequirementGroupRoutes);
 app.use('/api/phone-numbers', phoneNumberRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
+
+// Health check to verify deployment
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', version: '1.0.1', timestamp: new Date() });
+});
 
 // Error handling middleware
 app.use((err, req, res, next) => {
