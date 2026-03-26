@@ -4,7 +4,7 @@ import { config } from '../config/env.js';
 const stripe = new Stripe(config.stripeSecretKey);
 
 export const stripeService = {
-  createCheckoutSession: async (userId, priceId, successUrl, cancelUrl) => {
+  createCheckoutSession: async (userId, priceId, successUrl, cancelUrl, metadata = {}) => {
     try {
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
@@ -18,10 +18,15 @@ export const stripeService = {
         success_url: successUrl,
         cancel_url: cancelUrl,
         client_reference_id: userId.toString(),
+        metadata: {
+          userId: userId.toString(),
+          ...metadata
+        },
         subscription_data: {
-          trial_period_days: 7, // As requested/seen in UI "Start trial"
+          trial_period_days: 7, 
           metadata: {
             userId: userId.toString(),
+            ...metadata
           },
         },
       });

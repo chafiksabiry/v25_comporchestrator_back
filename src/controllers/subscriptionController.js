@@ -12,8 +12,21 @@ export const subscriptionController = {
     }
   },
 
+  getCurrentSubscription: async (req, res) => {
+    const { companyId } = req.params;
+    try {
+      const subscription = await Subscription.findOne({ companyId }).populate('planId');
+      if (!subscription) {
+        return res.status(404).json({ message: 'No subscription found' });
+      }
+      res.json({ success: true, data: subscription });
+    } catch (error) {
+      res.status(500).json({ error: 'Error fetching subscription' });
+    }
+  },
+
   createCheckoutSession: async (req, res) => {
-    const { userId, planId, successUrl, cancelUrl } = req.body;
+    const { userId, planId, companyId, successUrl, cancelUrl } = req.body;
     try {
       const plan = await SubscriptionPlan.findById(planId);
       if (!plan) return res.status(404).json({ error: 'Plan not found' });
@@ -22,7 +35,8 @@ export const subscriptionController = {
         userId,
         plan.stripePriceId,
         successUrl,
-        cancelUrl
+        cancelUrl,
+        { companyId } // Pass metadata
       );
 
       res.json({ sessionId: session.id, url: session.url });
@@ -60,6 +74,7 @@ export const subscriptionController = {
 
 async function handleCheckoutSessionCompleted(session) {
   const userId = session.client_reference_id;
+  const companyId = session.metadata?.companyId;
   const stripeSubscriptionId = session.subscription;
   
   const stripeSubscription = await stripeService.getSubscription(stripeSubscriptionId);
@@ -69,6 +84,7 @@ async function handleCheckoutSessionCompleted(session) {
     { userId },
     {
       userId,
+      companyId,
       planId: plan._id,
       stripeSubscriptionId,
       stripeCustomerId: session.customer,
