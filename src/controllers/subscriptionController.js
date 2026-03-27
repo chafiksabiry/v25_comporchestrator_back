@@ -17,7 +17,7 @@ export const subscriptionController = {
     try {
       const subscription = await Subscription.findOne({ companyId }).populate('planId');
       if (!subscription) {
-        return res.status(404).json({ message: 'No subscription found' });
+        return res.json({ success: false, message: 'No subscription found' });
       }
       res.json({ success: true, data: subscription });
     } catch (error) {
