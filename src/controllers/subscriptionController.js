@@ -31,6 +31,8 @@ export const subscriptionController = {
       const plan = await SubscriptionPlan.findOne({ name: planName });
       if (!plan) return res.status(404).json({ error: 'Plan not found' });
 
+      console.log(`💳 Creating checkout session for user ${userId}, plan ${planName}, price ${plan.stripePriceId}`);
+      
       const session = await stripeService.createCheckoutSession(
         userId,
         plan.stripePriceId,
@@ -39,7 +41,13 @@ export const subscriptionController = {
         { companyId } // Pass metadata
       );
 
-      res.json({ sessionId: session.id, url: session.url });
+      res.json({ 
+        success: true, 
+        data: { 
+          sessionId: session.id, 
+          url: session.url 
+        } 
+      });
     } catch (error) {
       res.status(500).json({ error: 'Error creating checkout session' });
     }
