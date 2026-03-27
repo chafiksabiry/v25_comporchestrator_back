@@ -134,11 +134,19 @@ async function handleCheckoutSessionCompleted(session) {
   // Synchronize with Company document in searchcompanywizard (harx database)
   if (companyId) {
     const companySubscriptionType = plan.name === 'STARTER' ? 'standard' : 'premium';
+    // Trouver le plan MongoDB correspondant pour avoir son ObjectId
+    const planId = plan ? plan._id : null;
+
     await mongoose.connection.db.collection('companies').updateOne(
       { _id: new mongoose.Types.ObjectId(companyId) },
-      { $set: { subscription: companySubscriptionType } }
+      { 
+        $set: { 
+          subscription: companySubscriptionType,
+          planId: planId // On ajoute l'ObjectId du plan
+        } 
+      }
     );
-    console.log(`✅ Updated company ${companyId} subscription status to ${companySubscriptionType}`);
+    console.log(`✅ Updated company ${companyId} to subscription: ${companySubscriptionType} (Plan ID: ${planId})`);
   }
 }
 
