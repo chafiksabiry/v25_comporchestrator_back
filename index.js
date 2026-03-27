@@ -39,7 +39,12 @@ app.use((req, res, next) => {
 
 // Middleware
 app.use((req, res, next) => {
-  if (req.originalUrl === '/api/phone-numbers/webhooks/telnyx/number-order') {
+  // Exclure les webhooks du parsing JSON global pour permettre l'accès au raw body (Stripe, Telnyx, etc.)
+  const isWebhook = 
+    req.originalUrl === '/api/phone-numbers/webhooks/telnyx/number-order' ||
+    req.originalUrl === '/api/subscriptions/webhook';
+
+  if (isWebhook) {
     next();
   } else {
     express.json()(req, res, next);
