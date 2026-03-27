@@ -128,6 +128,11 @@ async function handleCheckoutSessionCompleted(session) {
 
     console.log(`✅ Plan found in DB: ${plan.name}`);
 
+    const periodStart = stripeSubscription.current_period_start ? new Date(stripeSubscription.current_period_start * 1000) : new Date();
+    const periodEnd = stripeSubscription.current_period_end ? new Date(stripeSubscription.current_period_end * 1000) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    
+    console.log(`⏳ Subscription status: ${stripeSubscription.status}, End: ${periodEnd}`);
+
     await Subscription.findOneAndUpdate(
       { userId },
       {
@@ -137,8 +142,8 @@ async function handleCheckoutSessionCompleted(session) {
         stripeSubscriptionId,
         stripeCustomerId: session.customer,
         status: stripeSubscription.status,
-        currentPeriodStart: new Date(stripeSubscription.current_period_start * 1000),
-        currentPeriodEnd: new Date(stripeSubscription.current_period_end * 1000),
+        currentPeriodStart: periodStart,
+        currentPeriodEnd: periodEnd,
       },
       { upsert: true, new: true }
     );
