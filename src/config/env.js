@@ -17,5 +17,9 @@ export const config = {
   twilioAccountSid: process.env.TWILIO_ACCOUNT_SID,
   twilioAuthToken: process.env.TWILIO_AUTH_TOKEN,
   stripeSecretKey: process.env.STRIPE_SECRET_KEY,
-  stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET
+  stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+  stripePriceStarter: process.env.STRIPE_PRICE_STARTER || 'price_starter_placeholder',
+  stripePriceGrowth: process.env.STRIPE_PRICE_GROWTH || 'price_growth_placeholder',
+  stripePriceScale: process.env.STRIPE_PRICE_SCALE || 'price_scale_placeholder'
+
 }; 

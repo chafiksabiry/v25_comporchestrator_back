@@ -6,7 +6,7 @@ const plans = [
   {
     name: 'STARTER',
     price: 99,
-    stripePriceId: 'price_starter_placeholder',
+    stripePriceId: config.stripePriceStarter,
     description: 'Start your campaigns with simplicity and efficiency',
     features: [
       'Active GIGs: 3',
@@ -25,7 +25,7 @@ const plans = [
   {
     name: 'GROWTH',
     price: 249,
-    stripePriceId: 'price_growth_placeholder',
+    stripePriceId: config.stripePriceGrowth,
     description: 'Drive multi channel efforts with AI automation',
     isPopular: true,
     features: [
@@ -45,7 +45,7 @@ const plans = [
   {
     name: 'SCALE',
     price: 499,
-    stripePriceId: 'price_scale_placeholder',
+    stripePriceId: config.stripePriceScale,
     description: 'Activate Intelligence at scale',
     features: [
       'Active GIGs: 25',
