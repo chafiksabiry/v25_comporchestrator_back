@@ -180,7 +180,7 @@ async function handleProductUpdated(product) {
     await SubscriptionPlan.findOneAndUpdate(
       { stripePriceId: price.id },
       { 
-        name: product.name.split(' ')[0].toUpperCase(), // Garder le format enum si possible ou le nom brut
+        name: product.name, // Nom réel complet dans Stripe
         description: product.description || ''
       }
     );
