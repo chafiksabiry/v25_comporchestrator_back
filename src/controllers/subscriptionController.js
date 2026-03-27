@@ -83,17 +83,22 @@ export const subscriptionController = {
 
       switch (event.type) {
         case 'checkout.session.completed':
-          const session = event.data.object;
-          await handleCheckoutSessionCompleted(session);
+          await handleCheckoutSessionCompleted(event.data.object);
           break;
         case 'customer.subscription.updated':
-          const subscription = event.data.object;
-          await handleSubscriptionUpdated(subscription);
+          await handleSubscriptionUpdated(event.data.object);
           break;
         case 'customer.subscription.deleted':
-          const deletedSubscription = event.data.object;
-          await handleSubscriptionDeleted(deletedSubscription);
+          await handleSubscriptionDeleted(event.data.object);
           break;
+        case 'product.updated':
+          await handleProductUpdated(event.data.object);
+          break;
+        case 'price.updated':
+          await handlePriceUpdated(event.data.object);
+          break;
+        default:
+          console.log(`Unhandled event type ${event.type}`);
       }
 
       res.json({ received: true });
@@ -164,4 +169,29 @@ async function handleSubscriptionDeleted(subscription) {
     );
     console.log(`✅ Reset company ${subRecord.companyId} subscription status to free`);
   }
+}
+
+async function handleProductUpdated(product) {
+  // Mettre à jour le nom et la description dans la DB pour tous les plans associés à ce produit
+  const prices = await stripeService.getPublicPlans();
+  const productPrices = prices.filter(p => p.product.id === product.id);
+  
+  for (const price of productPrices) {
+    await SubscriptionPlan.findOneAndUpdate(
+      { stripePriceId: price.id },
+      { 
+        name: product.name.split(' ')[0].toUpperCase(), // Garder le format enum si possible ou le nom brut
+        description: product.description || ''
+      }
+    );
+  }
+  console.log(`🔄 Synced product changes for ${product.name} to Database`);
+}
+
+async function handlePriceUpdated(price) {
+  await SubscriptionPlan.findOneAndUpdate(
+    { stripePriceId: price.id },
+    { price: price.unit_amount / 100 }
+  );
+  console.log(`🔄 Synced price changes for ${price.id} to Database`);
 }

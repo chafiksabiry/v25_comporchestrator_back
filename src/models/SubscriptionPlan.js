@@ -4,7 +4,6 @@ const subscriptionPlanSchema = new mongoose.Schema({
   name: {
     type: String,
     required: true,
-    enum: ['STARTER', 'GROWTH', 'SCALE'],
     uppercase: true
   },
   price: {
