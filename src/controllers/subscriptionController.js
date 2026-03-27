@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { SubscriptionPlan } from '../models/SubscriptionPlan.js';
 import { Subscription } from '../models/Subscription.js';
 import { stripeService } from '../services/stripeService.js';
@@ -102,6 +103,16 @@ async function handleCheckoutSessionCompleted(session) {
     },
     { upsert: true, new: true }
   );
+
+  // Synchronize with Company document in searchcompanywizard (harx database)
+  if (companyId) {
+    const companySubscriptionType = plan.name === 'STARTER' ? 'standard' : 'premium';
+    await mongoose.connection.db.collection('companies').updateOne(
+      { _id: new mongoose.Types.ObjectId(companyId) },
+      { $set: { subscription: companySubscriptionType } }
+    );
+    console.log(`✅ Updated company ${companyId} subscription status to ${companySubscriptionType}`);
+  }
 }
 
 async function handleSubscriptionUpdated(subscription) {
@@ -121,4 +132,14 @@ async function handleSubscriptionDeleted(subscription) {
     { stripeSubscriptionId: subscription.id },
     { status: 'canceled' }
   );
+
+  // Reset Company subscription to free
+  const subRecord = await Subscription.findOne({ stripeSubscriptionId: subscription.id });
+  if (subRecord && subRecord.companyId) {
+    await mongoose.connection.db.collection('companies').updateOne(
+      { _id: new mongoose.Types.ObjectId(subRecord.companyId) },
+      { $set: { subscription: 'free' } }
+    );
+    console.log(`✅ Reset company ${subRecord.companyId} subscription status to free`);
+  }
 }
