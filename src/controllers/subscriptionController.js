@@ -113,40 +113,59 @@ async function handleCheckoutSessionCompleted(session) {
   const companyId = session.metadata?.companyId;
   const stripeSubscriptionId = session.subscription;
   
-  const stripeSubscription = await stripeService.getSubscription(stripeSubscriptionId);
-  const plan = await SubscriptionPlan.findOne({ stripePriceId: stripeSubscription.plan.id });
+  console.log(`🔔 Webhook: Checkout Completed for User: ${userId}, Company: ${companyId}`);
+  
+  try {
+    const stripeSubscription = await stripeService.getSubscription(stripeSubscriptionId);
+    const priceId = stripeSubscription.items.data[0].price.id;
+    console.log(`📡 Stripe Price ID found: ${priceId}`);
 
-  await Subscription.findOneAndUpdate(
-    { userId },
-    {
-      userId,
-      companyId,
-      planId: plan._id,
-      stripeSubscriptionId,
-      stripeCustomerId: session.customer,
-      status: stripeSubscription.status,
-      currentPeriodStart: new Date(stripeSubscription.current_period_start * 1000),
-      currentPeriodEnd: new Date(stripeSubscription.current_period_end * 1000),
-    },
-    { upsert: true, new: true }
-  );
+    const plan = await SubscriptionPlan.findOne({ stripePriceId: priceId });
+    if (!plan) {
+      console.error(`❌ Plan not found in database for price ID: ${priceId}`);
+      return;
+    }
 
-  // Synchronize with Company document in searchcompanywizard (harx database)
-  if (companyId) {
-    const companySubscriptionType = plan.name === 'STARTER' ? 'standard' : 'premium';
-    // Trouver le plan MongoDB correspondant pour avoir son ObjectId
-    const planId = plan ? plan._id : null;
+    console.log(`✅ Plan found in DB: ${plan.name}`);
 
-    await mongoose.connection.db.collection('companies').updateOne(
-      { _id: new mongoose.Types.ObjectId(companyId) },
-      { 
-        $set: { 
-          subscription: companySubscriptionType,
-          planId: planId // On ajoute l'ObjectId du plan
-        } 
-      }
+    await Subscription.findOneAndUpdate(
+      { userId },
+      {
+        userId,
+        companyId,
+        planId: plan._id,
+        stripeSubscriptionId,
+        stripeCustomerId: session.customer,
+        status: stripeSubscription.status,
+        currentPeriodStart: new Date(stripeSubscription.current_period_start * 1000),
+        currentPeriodEnd: new Date(stripeSubscription.current_period_end * 1000),
+      },
+      { upsert: true, new: true }
     );
-    console.log(`✅ Updated company ${companyId} to subscription: ${companySubscriptionType} (Plan ID: ${planId})`);
+
+    // Synchronize with Company document
+    if (companyId) {
+      // Déterminer le type (standard/premium) de manière robuste
+      const nameLower = plan.name.toLowerCase();
+      const companySubscriptionType = nameLower.includes('starter') ? 'standard' : 'premium';
+      const planId = plan._id;
+
+      console.log(`📝 Syncing Company ${companyId} to ${companySubscriptionType} (ID: ${planId})`);
+
+      const updateResult = await mongoose.connection.db.collection('companies').updateOne(
+        { _id: new mongoose.Types.ObjectId(companyId) },
+        { 
+          $set: { 
+            subscription: companySubscriptionType,
+            planId: planId 
+          } 
+        }
+      );
+      
+      console.log(`✨ Company Update Result: modifiedCount=${updateResult.modifiedCount}`);
+    }
+  } catch (error) {
+    console.error('❌ Error in handleCheckoutSessionCompleted:', error);
   }
 }
 
