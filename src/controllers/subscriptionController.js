@@ -6,10 +6,35 @@ import { stripeService } from '../services/stripeService.js';
 export const subscriptionController = {
   getPlans: async (req, res) => {
     try {
-      const plans = await SubscriptionPlan.find();
-      res.json(plans);
+      // 1. Récupérer les plans réels depuis Stripe
+      const stripePrices = await stripeService.getPublicPlans();
+      
+      // 2. Récupérer les métadonnées (features, description) depuis la base de données
+      const dbPlans = await SubscriptionPlan.find();
+      
+      // 3. Fusionner les données : Prix/Nom de Stripe + Features/Description de la DB
+      const mergedPlans = stripePrices.map(stripePrice => {
+        const dbPlan = dbPlans.find(p => p.stripePriceId === stripePrice.id);
+        
+        return {
+          _id: dbPlan ? dbPlan._id : stripePrice.id,
+          name: stripePrice.product.name, // Le nom réel dans Stripe (ex: "STARTERs")
+          price: stripePrice.unit_amount / 100, // Le prix réel dans Stripe
+          currency: stripePrice.currency,
+          stripePriceId: stripePrice.id,
+          description: dbPlan ? dbPlan.description : stripePrice.product.description || '',
+          features: dbPlan ? dbPlan.features : [],
+          isPopular: dbPlan ? dbPlan.isPopular : false
+        };
+      });
+
+      // Trier par prix croissant
+      mergedPlans.sort((a, b) => a.price - b.price);
+
+      res.json(mergedPlans);
     } catch (error) {
-      res.status(500).json({ error: 'Error fetching plans' });
+      console.error('Error fetching plans:', error);
+      res.status(500).json({ error: 'Error fetching plans from Stripe' });
     }
   },
 
@@ -27,16 +52,13 @@ export const subscriptionController = {
   },
 
   createCheckoutSession: async (req, res) => {
-    const { userId, planName, companyId, successUrl, cancelUrl } = req.body;
+    const { userId, priceId, companyId, successUrl, cancelUrl, planName } = req.body;
     try {
-      const plan = await SubscriptionPlan.findOne({ name: planName });
-      if (!plan) return res.status(404).json({ error: 'Plan not found' });
-
-      console.log(`💳 Creating checkout session for user ${userId}, plan ${planName}, price ${plan.stripePriceId}`);
+      console.log(`💳 Creating checkout session for user ${userId}, plan ${planName || 'unknown'}, price ${priceId}`);
       
       const session = await stripeService.createCheckoutSession(
         userId,
-        plan.stripePriceId,
+        priceId,
         successUrl,
         cancelUrl,
         { companyId } // Pass metadata

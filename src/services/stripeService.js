@@ -51,6 +51,19 @@ export const stripeService = {
     }
   },
 
+  getPublicPlans: async () => {
+    try {
+      const prices = await stripe.prices.list({
+        active: true,
+        expand: ['data.product'],
+      });
+      return prices.data;
+    } catch (error) {
+      console.error('Error fetching plans from Stripe:', error);
+      throw error;
+    }
+  },
+
   getSubscription: async (subscriptionId) => {
     return await stripe.subscriptions.retrieve(subscriptionId);
   }
