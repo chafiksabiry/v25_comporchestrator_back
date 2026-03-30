@@ -172,39 +172,31 @@ class PhoneNumberService {
             setTimeout(() => reject(new Error(`Timeout searching ${name}`)), timeoutMs)
           )
         ]).catch(err => {
-          console.error(`⚠️ ${name} search failed or timed out:`, err.message);
+          // If Twilio returns 404 for a specific type (e.g. Mobile numbers not exist in US), it's fine
+          if (err.message.includes('Resource not found') || err.status === 404) {
+             return [];
+          }
+          console.error(`⚠️ ${name} search failed or timed out for ${countryCode}:`, err.message);
           return [];
         });
       };
 
-      // Search local numbers
-      console.log(`📡 Starting Twilio search for ${countryCode} (local)...`);
-      // For FR, local search is often extremely slow without areaCode
-      const localTimeout = (countryCode === 'FR' && !searchParams.areaCode) ? 10000 : 20000;
+      console.log(`📡 Starting comprehensive Twilio search for ${countryCode}...`);
       
       const localNumbersPromise = withTimeout(
         this.twilioClient.availablePhoneNumbers(countryCode).local.list(searchOptions),
-        'Local',
-        localTimeout
+        'Local'
       );
 
-      // For France, we always also search for national and mobile numbers
-      let nationalNumbersPromise = Promise.resolve([]);
-      let mobileNumbersPromise = Promise.resolve([]);
-      
-      if (countryCode === 'FR') {
-        console.log(`📡 Starting additional Twilio searches for France (national & mobile)...`);
-        
-        nationalNumbersPromise = withTimeout(
-          this.twilioClient.availablePhoneNumbers(countryCode).national.list(searchOptions),
-          'National'
-        );
+      const nationalNumbersPromise = withTimeout(
+        this.twilioClient.availablePhoneNumbers(countryCode).national.list(searchOptions),
+        'National'
+      );
           
-        mobileNumbersPromise = withTimeout(
-          this.twilioClient.availablePhoneNumbers(countryCode).mobile.list(searchOptions),
-          'Mobile'
-        );
-      }
+      const mobileNumbersPromise = withTimeout(
+        this.twilioClient.availablePhoneNumbers(countryCode).mobile.list(searchOptions),
+        'Mobile'
+      );
 
       const [localNumbers, nationalNumbers, mobileNumbers] = await Promise.all([
         localNumbersPromise,
