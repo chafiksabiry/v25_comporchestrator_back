@@ -164,53 +164,19 @@ class PhoneNumberService {
     }
 
     try {
-      // Helper function to wrap Twilio promises with a timeout
-      const withTimeout = (promise, name, timeoutMs = 15000) => {
-        return Promise.race([
-          promise,
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error(`Timeout searching ${name}`)), timeoutMs)
-          )
-        ]).catch(err => {
-          if (err.message.includes('Resource not found') || err.status === 404) {
-             return [];
-          }
-          console.error(`⚠️ ${name} search failed or timed out for ${countryCode}:`, err.message);
-          return [];
-        });
-      };
-
       console.log(`📡 Searching Twilio numbers for ${countryCode}...`);
       
-      // We start with Local which is standard for all zones
-      const localNumbersPromise = withTimeout(
+      // Standard local search for all countries (US, FR, etc.)
+      const numbers = await Promise.race([
         this.twilioClient.availablePhoneNumbers(countryCode).local.list(searchOptions),
-        'Local'
-      );
-
-      let nationalNumbersPromise = Promise.resolve([]);
-      let mobileNumbersPromise = Promise.resolve([]);
-      
-      // For FR (and potentially other non-US zones), we also try National/Mobile in parallel
-      if (countryCode !== 'US') {
-        nationalNumbersPromise = withTimeout(
-          this.twilioClient.availablePhoneNumbers(countryCode).national.list(searchOptions),
-          'National'
-        );
-          
-        mobileNumbersPromise = withTimeout(
-          this.twilioClient.availablePhoneNumbers(countryCode).mobile.list(searchOptions),
-          'Mobile'
-        );
-      }
-
-      const [localNumbers, nationalNumbers, mobileNumbers] = await Promise.all([
-        localNumbersPromise,
-        nationalNumbersPromise,
-        mobileNumbersPromise
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Twilio search timeout')), 25000)
+        )
       ]);
 
-      const mappedLocal = localNumbers.map(number => ({
+      console.log(`✅ Found ${numbers.length} numbers for ${countryCode}`);
+
+      return numbers.map(number => ({
         phoneNumber: number.phoneNumber,
         friendlyName: number.friendlyName,
         locality: number.locality,
@@ -223,39 +189,6 @@ class PhoneNumberService {
           MMS: number.capabilities.MMS
         }
       }));
-
-      const mappedNational = nationalNumbers.map(number => ({
-        phoneNumber: number.phoneNumber,
-        friendlyName: number.friendlyName,
-        locality: number.locality,
-        region: number.region,
-        isoCountry: number.isoCountry,
-        type: 'national',
-        capabilities: {
-          voice: number.capabilities.voice,
-          SMS: number.capabilities.SMS,
-          MMS: number.capabilities.MMS
-        }
-      }));
-
-      const mappedMobile = mobileNumbers.map(number => ({
-        phoneNumber: number.phoneNumber,
-        friendlyName: number.friendlyName,
-        locality: number.locality,
-        region: number.region,
-        isoCountry: number.isoCountry,
-        type: 'mobile',
-        capabilities: {
-          voice: number.capabilities.voice,
-          SMS: number.capabilities.SMS,
-          MMS: number.capabilities.MMS
-        }
-      }));
-
-      const combined = [...mappedLocal, ...mappedNational, ...mappedMobile];
-      
-      // Sort to have a mix or just return combined (limited to avoid too many results if needed)
-      return combined.slice(0, Math.max(limit * 3, 30));
     } catch (error) {
       console.error('❌ Error in searchTwilioNumbers:', error);
       throw error;
