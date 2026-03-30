@@ -20,6 +20,18 @@ export const config = {
   stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
   stripePriceStarter: process.env.STRIPE_PRICE_STARTER || 'price_starter_placeholder',
   stripePriceGrowth: process.env.STRIPE_PRICE_GROWTH || 'price_growth_placeholder',
-  stripePriceScale: process.env.STRIPE_PRICE_SCALE || 'price_scale_placeholder'
-
-}; 
+  stripePriceScale: process.env.STRIPE_PRICE_SCALE || 'price_scale_placeholder',
+  twilioFrenchBundleSid: 'BUF007aeefc1a71ad9ac096a4d205563b0',
+  twilioFrenchAddressSid: 'ADfa022505e9b0433a23c8b4f6e56cf15a',
+  twilioFrenchBusinessInfo: {
+    businessName: 'AI AGENTS & CO',
+    registrationNumber: '942597915',
+    website: 'https://aiagentsco.tech/',
+    email: 'chafik.sabiry@aiagentsco.tech',
+    street: '229 Rue Saint-Honoré',
+    city: 'Paris',
+    region: 'IDF',
+    country: 'FR',
+    postalCode: '75001'
+  }
+};

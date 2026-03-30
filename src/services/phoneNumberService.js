@@ -432,8 +432,11 @@ class PhoneNumberService {
         friendlyName: 'Gig Number:' + phoneNumber,
       };
 
-      if (bundleSid) purchaseOptions.bundleSid = bundleSid;
-      if (addressSid) purchaseOptions.addressSid = addressSid;
+      const currentBundleSid = bundleSid || (phoneNumber.startsWith('+33') ? config.twilioFrenchBundleSid : null);
+      const currentAddressSid = addressSid || (phoneNumber.startsWith('+33') ? config.twilioFrenchAddressSid : null);
+
+      if (currentBundleSid) purchaseOptions.bundleSid = currentBundleSid;
+      if (currentAddressSid) purchaseOptions.addressSid = currentAddressSid;
 
       purchasedNumber = await this.twilioClient.incomingPhoneNumbers
         .create(purchaseOptions);
