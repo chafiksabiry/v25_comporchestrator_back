@@ -150,17 +150,24 @@ class PhoneNumberService {
   }
 
   async searchTwilioNumbers(searchParams) {
-    const countryCode = (searchParams.countryCode || 'US').toString().toUpperCase();
-    const limit = searchParams.limit || 10;
-
-    // Prepare search options
+    const { countryCode, areaCode, limit } = searchParams;
     const searchOptions = {
-      limit: limit,
+      limit: limit || 10,
       voice: true
     };
 
-    if (searchParams.areaCode) {
-      searchOptions.areaCode = searchParams.areaCode;
+    // Inject regulatory SIDs for France to improve search performance and filter compatible numbers
+    if (countryCode === 'FR') {
+      if (config.twilioFrenchBundleSid) {
+        searchOptions.bundleSid = config.twilioFrenchBundleSid;
+      }
+      if (config.twilioFrenchAddressSid) {
+        searchOptions.addressSid = config.twilioFrenchAddressSid;
+      }
+    }
+
+    if (areaCode) {
+      searchOptions.areaCode = areaCode;
     }
 
     try {
