@@ -165,17 +165,33 @@ class PhoneNumberService {
 
     try {
       // Search local numbers
+      console.log(`📡 Starting Twilio search for ${countryCode} (local)...`);
       const localNumbersPromise = this.twilioClient.availablePhoneNumbers(countryCode)
         .local
-        .list(searchOptions);
+        .list(searchOptions)
+        .then(res => {
+          console.log(`✅ Found ${res.length} local numbers for ${countryCode}`);
+          return res;
+        })
+        .catch(err => {
+          console.error(`❌ Twilio Local search failed for ${countryCode}:`, err.message);
+          return [];
+        });
 
       // For France, we always also search for national and mobile numbers
       let nationalNumbersPromise = Promise.resolve([]);
       let mobileNumbersPromise = Promise.resolve([]);
+      
       if (countryCode === 'FR') {
+        console.log(`📡 Starting additional Twilio searches for France (national & mobile)...`);
+        
         nationalNumbersPromise = this.twilioClient.availablePhoneNumbers(countryCode)
           .national
           .list(searchOptions)
+          .then(res => {
+            console.log(`✅ Found ${res.length} national numbers for FR`);
+            return res;
+          })
           .catch(err => {
             console.error('⚠️ Twilio National numbers not available:', err.message);
             return [];
@@ -184,6 +200,10 @@ class PhoneNumberService {
         mobileNumbersPromise = this.twilioClient.availablePhoneNumbers(countryCode)
           .mobile
           .list(searchOptions)
+          .then(res => {
+            console.log(`✅ Found ${res.length} mobile numbers for FR`);
+            return res;
+          })
           .catch(err => {
             console.error('⚠️ Twilio Mobile numbers not available:', err.message);
             return [];
