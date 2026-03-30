@@ -164,19 +164,29 @@ class PhoneNumberService {
     }
 
     try {
-      // Search local numbers
-      console.log(`📡 Starting Twilio search for ${countryCode} (local)...`);
-      const localNumbersPromise = this.twilioClient.availablePhoneNumbers(countryCode)
-        .local
-        .list(searchOptions)
-        .then(res => {
-          console.log(`✅ Found ${res.length} local numbers for ${countryCode}`);
-          return res;
-        })
-        .catch(err => {
-          console.error(`❌ Twilio Local search failed for ${countryCode}:`, err.message);
+      // Helper function to wrap Twilio promises with a timeout
+      const withTimeout = (promise, name, timeoutMs = 15000) => {
+        return Promise.race([
+          promise,
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error(`Timeout searching ${name}`)), timeoutMs)
+          )
+        ]).catch(err => {
+          console.error(`⚠️ ${name} search failed or timed out:`, err.message);
           return [];
         });
+      };
+
+      // Search local numbers
+      console.log(`📡 Starting Twilio search for ${countryCode} (local)...`);
+      // For FR, local search is often extremely slow without areaCode
+      const localTimeout = (countryCode === 'FR' && !searchParams.areaCode) ? 10000 : 20000;
+      
+      const localNumbersPromise = withTimeout(
+        this.twilioClient.availablePhoneNumbers(countryCode).local.list(searchOptions),
+        'Local',
+        localTimeout
+      );
 
       // For France, we always also search for national and mobile numbers
       let nationalNumbersPromise = Promise.resolve([]);
@@ -185,29 +195,15 @@ class PhoneNumberService {
       if (countryCode === 'FR') {
         console.log(`📡 Starting additional Twilio searches for France (national & mobile)...`);
         
-        nationalNumbersPromise = this.twilioClient.availablePhoneNumbers(countryCode)
-          .national
-          .list(searchOptions)
-          .then(res => {
-            console.log(`✅ Found ${res.length} national numbers for FR`);
-            return res;
-          })
-          .catch(err => {
-            console.error('⚠️ Twilio National numbers not available:', err.message);
-            return [];
-          });
+        nationalNumbersPromise = withTimeout(
+          this.twilioClient.availablePhoneNumbers(countryCode).national.list(searchOptions),
+          'National'
+        );
           
-        mobileNumbersPromise = this.twilioClient.availablePhoneNumbers(countryCode)
-          .mobile
-          .list(searchOptions)
-          .then(res => {
-            console.log(`✅ Found ${res.length} mobile numbers for FR`);
-            return res;
-          })
-          .catch(err => {
-            console.error('⚠️ Twilio Mobile numbers not available:', err.message);
-            return [];
-          });
+        mobileNumbersPromise = withTimeout(
+          this.twilioClient.availablePhoneNumbers(countryCode).mobile.list(searchOptions),
+          'Mobile'
+        );
       }
 
       const [localNumbers, nationalNumbers, mobileNumbers] = await Promise.all([
