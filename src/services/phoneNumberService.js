@@ -150,21 +150,14 @@ class PhoneNumberService {
   }
 
   async searchTwilioNumbers(searchParams) {
-    const { countryCode, areaCode, limit } = searchParams;
+    const countryCode = (searchParams.countryCode || 'US').toString().toUpperCase();
+    const limit = searchParams.limit || 10;
+    const areaCode = searchParams.areaCode;
+
     const searchOptions = {
-      limit: limit || 10,
+      limit: limit,
       voice: true
     };
-
-    // Inject regulatory SIDs for France to improve search performance and filter compatible numbers
-    if (countryCode === 'FR') {
-      if (config.twilioFrenchBundleSid) {
-        searchOptions.bundleSid = config.twilioFrenchBundleSid;
-      }
-      if (config.twilioFrenchAddressSid) {
-        searchOptions.addressSid = config.twilioFrenchAddressSid;
-      }
-    }
 
     if (areaCode) {
       searchOptions.areaCode = areaCode;
@@ -179,7 +172,6 @@ class PhoneNumberService {
             setTimeout(() => reject(new Error(`Timeout searching ${name}`)), timeoutMs)
           )
         ]).catch(err => {
-          // If Twilio returns 404 for a specific type (e.g. Mobile numbers not exist in US), it's fine
           if (err.message.includes('Resource not found') || err.status === 404) {
              return [];
           }
@@ -188,22 +180,29 @@ class PhoneNumberService {
         });
       };
 
-      console.log(`📡 Starting comprehensive Twilio search for ${countryCode}...`);
+      console.log(`📡 Searching Twilio numbers for ${countryCode}...`);
       
+      // We start with Local which is standard for all zones
       const localNumbersPromise = withTimeout(
         this.twilioClient.availablePhoneNumbers(countryCode).local.list(searchOptions),
         'Local'
       );
 
-      const nationalNumbersPromise = withTimeout(
-        this.twilioClient.availablePhoneNumbers(countryCode).national.list(searchOptions),
-        'National'
-      );
+      let nationalNumbersPromise = Promise.resolve([]);
+      let mobileNumbersPromise = Promise.resolve([]);
+      
+      // For FR (and potentially other non-US zones), we also try National/Mobile in parallel
+      if (countryCode !== 'US') {
+        nationalNumbersPromise = withTimeout(
+          this.twilioClient.availablePhoneNumbers(countryCode).national.list(searchOptions),
+          'National'
+        );
           
-      const mobileNumbersPromise = withTimeout(
-        this.twilioClient.availablePhoneNumbers(countryCode).mobile.list(searchOptions),
-        'Mobile'
-      );
+        mobileNumbersPromise = withTimeout(
+          this.twilioClient.availablePhoneNumbers(countryCode).mobile.list(searchOptions),
+          'Mobile'
+        );
+      }
 
       const [localNumbers, nationalNumbers, mobileNumbers] = await Promise.all([
         localNumbersPromise,
