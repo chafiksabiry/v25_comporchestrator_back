@@ -511,7 +511,7 @@ class PhoneNumberService {
       const regulations = await this.twilioClient.numbers.v2.regulatoryCompliance
         .regulations
         .list({
-          isoCountries: isoCountry,
+          isoCountry: isoCountry,
           numberType: numberType,
           limit: 1
         });
