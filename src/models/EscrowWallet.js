@@ -46,13 +46,13 @@ const escrowWalletSchema = new mongoose.Schema({
   balance: {
     type: Number,
     required: true,
-    default: 1250, // Let's seed with some nice starting virtual money so the UI doesn't start at 0
+    default: 0,
     min: 0
   },
   escrow: {
     type: Number,
     required: true,
-    default: 350, // Nice initial seed
+    default: 0,
     min: 0
   },
   contracts: [escrowContractSchema]

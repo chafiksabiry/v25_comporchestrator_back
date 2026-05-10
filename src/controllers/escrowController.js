@@ -13,88 +13,13 @@ export const escrowController = {
       let wallet = await EscrowWallet.findOne({ companyId });
       
       if (!wallet) {
-        // Pre-seed some realistic data for a stunning dashboard presentation
         wallet = new EscrowWallet({
           companyId,
-          balance: 1450.00,
-          escrow: 500.00,
-          contracts: [
-            {
-              gigId: 'gig_solar_001',
-              gigTitle: 'Solar Outbound Campaign',
-              agentId: 'rep_david_88',
-              agentName: 'David Miller',
-              amount: 300.00,
-              status: 'locked',
-              purpose: 'Bi-weekly commission guarantee'
-            },
-            {
-              gigId: 'gig_health_002',
-              gigTitle: 'Inbound Health Inquiries',
-              agentId: 'rep_sarah_77',
-              agentName: 'Sarah Jenkins',
-              amount: 200.00,
-              status: 'locked',
-              purpose: 'Hourly retainer security'
-            },
-            {
-              gigId: 'gig_telecom_003',
-              gigTitle: 'Telecom Lead Qualification',
-              agentId: 'rep_john_99',
-              agentName: 'John Doe',
-              amount: 150.00,
-              status: 'released',
-              purpose: 'Milestone payout 1'
-            }
-          ]
+          balance: 0,
+          escrow: 0,
+          contracts: []
         });
         await wallet.save();
-
-        // Pre-seed realistic transactions as well
-        const initialTransactions = [
-          {
-            companyId,
-            type: 'deposit',
-            amount: 2100.00,
-            status: 'completed',
-            description: 'Stripe Credit Card Deposit (Visa ending in 4242)',
-            referenceId: 'ch_stripe_demo_111'
-          },
-          {
-            companyId,
-            type: 'escrow_lock',
-            amount: 300.00,
-            status: 'completed',
-            description: 'Escrow lock for Solar Outbound Campaign (David Miller)',
-            referenceId: wallet.contracts[0]._id.toString()
-          },
-          {
-            companyId,
-            type: 'escrow_lock',
-            amount: 200.00,
-            status: 'completed',
-            description: 'Escrow lock for Inbound Health Inquiries (Sarah Jenkins)',
-            referenceId: wallet.contracts[1]._id.toString()
-          },
-          {
-            companyId,
-            type: 'escrow_lock',
-            amount: 150.00,
-            status: 'completed',
-            description: 'Escrow lock for Telecom Lead Qualification (John Doe)',
-            referenceId: wallet.contracts[2]._id.toString()
-          },
-          {
-            companyId,
-            type: 'escrow_release',
-            amount: 150.00,
-            status: 'completed',
-            description: 'Released escrow to John Doe for Telecom Lead Qualification',
-            referenceId: wallet.contracts[2]._id.toString()
-          }
-        ];
-
-        await EscrowTransaction.insertMany(initialTransactions);
       }
 
       res.status(200).json({ success: true, data: wallet });
