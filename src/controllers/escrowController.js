@@ -42,13 +42,15 @@ export const escrowController = {
       let wallet = await EscrowWallet.findOne({ companyId });
       
       if (!wallet) {
-        wallet = new EscrowWallet({
-          companyId,
-          balance: 0,
-          escrow: 0,
-          contracts: []
+        return res.status(200).json({
+          success: true,
+          data: {
+            companyId,
+            balance: 0,
+            escrow: 0,
+            contracts: []
+          }
         });
-        await wallet.save();
       }
 
       res.status(200).json({ success: true, data: wallet });
@@ -82,14 +84,7 @@ export const escrowController = {
     }
 
     try {
-      let wallet = await EscrowWallet.findOne({ companyId });
-      if (!wallet) {
-        wallet = new EscrowWallet({ companyId, balance: 0, escrow: 0 });
-      }
-
-      // DO NOT add to balance yet! The deposit must be in 'pending' status until verified in the DB
-      // wallet.balance += parseFloat(amount);
-      await wallet.save();
+      const wallet = await EscrowWallet.findOne({ companyId });
 
       const transaction = new EscrowTransaction({
         companyId,
@@ -102,7 +97,11 @@ export const escrowController = {
       });
       await transaction.save();
 
-      res.status(200).json({ success: true, data: wallet, transaction });
+      res.status(200).json({
+        success: true,
+        data: wallet || { companyId, balance: 0, escrow: 0, contracts: [] },
+        transaction
+      });
     } catch (err) {
       console.error('Error during deposit:', err);
       res.status(500).json({ error: 'Failed to process deposit' });

@@ -2,7 +2,8 @@ import mongoose from 'mongoose';
 
 const escrowTransactionSchema = new mongoose.Schema({
   companyId: {
-    type: String,
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
     required: true,
     index: true
   },

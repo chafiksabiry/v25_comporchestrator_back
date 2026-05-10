@@ -38,7 +38,8 @@ const escrowContractSchema = new mongoose.Schema({
 
 const escrowWalletSchema = new mongoose.Schema({
   companyId: {
-    type: String,
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
     required: true,
     unique: true,
     index: true
