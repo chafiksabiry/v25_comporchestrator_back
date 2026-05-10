@@ -156,10 +156,22 @@ export const escrowController = {
       wallet.balance -= parseFloat(amount);
       wallet.escrow += parseFloat(amount);
 
+      const castToObjectId = (idStr) => {
+        if (!idStr || typeof idStr !== 'string' || idStr.trim() === '') return undefined;
+        try {
+          return mongoose.Types.ObjectId.isValid(idStr) ? new mongoose.Types.ObjectId(idStr) : undefined;
+        } catch (err) {
+          return undefined;
+        }
+      };
+
+      const parsedGigId = castToObjectId(gigId);
+      const parsedAgentId = castToObjectId(agentId);
+
       const contract = {
-        gigId,
+        gigId: parsedGigId,
         gigTitle,
-        agentId,
+        agentId: parsedAgentId,
         agentName,
         amount: parseFloat(amount),
         status: 'locked',

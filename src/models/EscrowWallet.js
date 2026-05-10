@@ -2,7 +2,8 @@ import mongoose from 'mongoose';
 
 const escrowContractSchema = new mongoose.Schema({
   gigId: {
-    type: String,
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Gig',
     required: false
   },
   gigTitle: {
@@ -10,7 +11,8 @@ const escrowContractSchema = new mongoose.Schema({
     required: false
   },
   agentId: {
-    type: String,
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Agent',
     required: false
   },
   agentName: {
