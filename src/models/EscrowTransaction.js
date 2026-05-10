@@ -28,6 +28,11 @@ const escrowTransactionSchema = new mongoose.Schema({
   referenceId: {
     type: String,
     required: false
+  },
+  credited: {
+    type: Boolean,
+    required: false,
+    default: false
   }
 }, {
   timestamps: true

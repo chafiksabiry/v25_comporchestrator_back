@@ -1,6 +1,34 @@
 import EscrowWallet from '../models/EscrowWallet.js';
 import EscrowTransaction from '../models/EscrowTransaction.js';
 
+async function reconcilePendingTransactions(companyId) {
+  try {
+    const pendingCompletedTransactions = await EscrowTransaction.find({
+      companyId,
+      type: 'deposit',
+      status: 'completed',
+      credited: { $ne: true }
+    });
+
+    if (pendingCompletedTransactions.length > 0) {
+      let wallet = await EscrowWallet.findOne({ companyId });
+      if (!wallet) {
+        wallet = new EscrowWallet({ companyId, balance: 0, escrow: 0, contracts: [] });
+      }
+
+      for (const tx of pendingCompletedTransactions) {
+        wallet.balance += tx.amount;
+        tx.credited = true;
+        await tx.save();
+      }
+
+      await wallet.save();
+    }
+  } catch (err) {
+    console.error('Error during transaction reconciliation:', err);
+  }
+}
+
 export const escrowController = {
   // Get wallet status (creates default + demo data if not exists)
   getWallet: async (req, res) => {
@@ -10,6 +38,7 @@ export const escrowController = {
     }
 
     try {
+      await reconcilePendingTransactions(companyId);
       let wallet = await EscrowWallet.findOne({ companyId });
       
       if (!wallet) {
@@ -58,14 +87,16 @@ export const escrowController = {
         wallet = new EscrowWallet({ companyId, balance: 0, escrow: 0 });
       }
 
-      wallet.balance += parseFloat(amount);
+      // DO NOT add to balance yet! The deposit must be in 'pending' status until verified in the DB
+      // wallet.balance += parseFloat(amount);
       await wallet.save();
 
       const transaction = new EscrowTransaction({
         companyId,
         type: 'deposit',
         amount: parseFloat(amount),
-        status: 'completed',
+        status: 'pending',
+        credited: false,
         description: description || `Instant Balance Top-up`,
         referenceId: 'ch_topup_' + Math.random().toString(36).substring(2, 9).toUpperCase()
       });
@@ -86,6 +117,7 @@ export const escrowController = {
     }
 
     try {
+      await reconcilePendingTransactions(companyId);
       const wallet = await EscrowWallet.findOne({ companyId });
       if (!wallet || wallet.balance < amount) {
         return res.status(400).json({ error: 'Insufficient balance' });
@@ -119,6 +151,7 @@ export const escrowController = {
     }
 
     try {
+      await reconcilePendingTransactions(companyId);
       const wallet = await EscrowWallet.findOne({ companyId });
       if (!wallet || wallet.balance < amount) {
         return res.status(400).json({ error: 'Insufficient balance to lock escrow funds. Please top-up your balance first.' });
