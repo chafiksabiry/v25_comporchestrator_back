@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import EscrowWallet from '../models/EscrowWallet.js';
 import EscrowTransaction from '../models/EscrowTransaction.js';
 
@@ -91,9 +92,7 @@ export const escrowController = {
         type: 'deposit',
         amount: parseFloat(amount),
         status: 'pending',
-        credited: false,
-        description: description || `Instant Balance Top-up`,
-        referenceId: 'ch_topup_' + Math.random().toString(36).substring(2, 9).toUpperCase()
+        credited: false
       });
       await transaction.save();
 
@@ -129,9 +128,7 @@ export const escrowController = {
         companyId,
         type: 'withdrawal',
         amount: parseFloat(amount),
-        status: 'completed',
-        description: `Refund withdrawal to bank account`,
-        referenceId: 'wd_draw_' + Math.random().toString(36).substring(2, 9).toUpperCase()
+        status: 'completed'
       });
       await transaction.save();
 
@@ -178,9 +175,7 @@ export const escrowController = {
         companyId,
         type: 'escrow_lock',
         amount: parseFloat(amount),
-        status: 'completed',
-        description: `Locked $${amount} in escrow for ${agentName || 'Agent'} (${gigTitle || 'Gig'})`,
-        referenceId: savedContract._id.toString()
+        status: 'completed'
       });
       await transaction.save();
 
@@ -223,9 +218,7 @@ export const escrowController = {
         companyId,
         type: 'escrow_release',
         amount: contract.amount,
-        status: 'completed',
-        description: `Released $${contract.amount} escrow funds to agent ${contract.agentName || 'assigned'}`,
-        referenceId: contractId
+        status: 'completed'
       });
       await transaction.save();
 
@@ -269,9 +262,7 @@ export const escrowController = {
         companyId,
         type: 'escrow_refund',
         amount: contract.amount,
-        status: 'completed',
-        description: `Refunded $${contract.amount} escrow funds back to available balance`,
-        referenceId: contractId
+        status: 'completed'
       });
       await transaction.save();
 
@@ -279,6 +270,71 @@ export const escrowController = {
     } catch (err) {
       console.error('Error refunding escrow funds:', err);
       res.status(500).json({ error: 'Failed to refund escrow funds' });
+    }
+  },
+
+  // Get Gigs and Enrolled Representatives
+  getGigsAndReps: async (req, res) => {
+    const { companyId } = req.params;
+    if (!companyId) {
+      return res.status(400).json({ error: 'companyId is required' });
+    }
+
+    try {
+      const db = mongoose.connection.db;
+      
+      const companyObjectId = mongoose.Types.ObjectId.isValid(companyId) 
+        ? new mongoose.Types.ObjectId(companyId) 
+        : companyId;
+
+      const gigs = await db.collection('gigs').find({
+        $or: [
+          { companyId: companyObjectId },
+          { companyId: companyId }
+        ]
+      }).toArray();
+
+      const result = [];
+
+      for (const gig of gigs) {
+        const enrolledReps = [];
+        if (gig.agents && Array.isArray(gig.agents)) {
+          for (const agentObj of gig.agents) {
+            if (agentObj.status === 'enrolled') {
+              const agentId = agentObj.agentId;
+              const agentIdObj = mongoose.Types.ObjectId.isValid(agentId)
+                ? new mongoose.Types.ObjectId(agentId)
+                : agentId;
+
+              const agentDoc = await db.collection('agents').findOne({
+                $or: [
+                  { _id: agentIdObj },
+                  { _id: agentId }
+                ]
+              });
+
+              if (agentDoc) {
+                let name = agentDoc.personalInfo?.name || agentDoc.personalInfo?.email || 'Unnamed Agent';
+                enrolledReps.push({
+                  agentId: agentId.toString(),
+                  name
+                });
+              }
+            }
+          }
+        }
+
+        result.push({
+          gigId: gig._id.toString(),
+          title: gig.title || 'Untitled Gig',
+          enrolledReps
+        });
+      }
+
+      res.status(200).json({ success: true, data: result });
+    } catch (err) {
+      console.error('Error fetching gigs and reps:', err);
+      res.status(500).json({ error: 'Failed to fetch gigs and enrolled representatives' });
     }
   }
 };

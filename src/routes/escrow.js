@@ -10,5 +10,6 @@ router.post('/withdraw', escrowController.withdraw);
 router.post('/lock', escrowController.lockFunds);
 router.post('/release/:contractId', escrowController.releaseFunds);
 router.post('/refund/:contractId', escrowController.refundFunds);
+router.get('/gigs-and-reps/:companyId', escrowController.getGigsAndReps);
 
 export const escrowRoutes = router;

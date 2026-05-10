@@ -22,14 +22,6 @@ const escrowTransactionSchema = new mongoose.Schema({
     enum: ['pending', 'completed', 'failed'],
     default: 'completed'
   },
-  description: {
-    type: String,
-    required: true
-  },
-  referenceId: {
-    type: String,
-    required: false
-  },
   credited: {
     type: Boolean,
     required: false,
