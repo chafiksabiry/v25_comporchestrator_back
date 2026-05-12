@@ -556,9 +556,9 @@ export const escrowController = {
           startTime: call.startTime,
           createdAt: call.createdAt || call.startTime || null,
           status: call.status || 'completed',
-          validByCompany: transaction ? transaction.validByCompany : null,
-          validByReps: transaction ? transaction.validByReps : null,
-          valid: transaction ? transaction.valid : null,
+          validByCompany: transaction ? transaction.validByCompany : (call.validByCompany !== undefined ? call.validByCompany : null),
+          validByReps: transaction ? transaction.validByReps : (call.validByReps !== undefined ? call.validByReps : null),
+          valid: transaction ? transaction.valid : (call.valid !== undefined ? call.valid : null),
           price: call.price || 0,
           recording_url: call.recording_url || call.recording_url_cloudinary || null,
           recording_url_cloudinary: call.recording_url_cloudinary || null,
@@ -615,6 +615,19 @@ export const escrowController = {
       });
 
       const isApprove = action === 'approve';
+
+      // Update calls collection document directly too!
+      await db.collection('calls').updateOne(
+        { _id: callIdObj },
+        {
+          $set: {
+            validByCompany: isApprove,
+            validByReps: true, // Auto-reps valid for admin actions
+            valid: isApprove,
+            updatedAt: new Date()
+          }
+        }
+      );
 
       if (!transaction) {
         // Create matching Transaction doc
