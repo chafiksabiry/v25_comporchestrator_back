@@ -78,8 +78,8 @@ async function reconcileCallCharges(companyId) {
 
       const hasCharge = existingCharges.some(tx => tx.callId === callIdStr);
       if (!hasCharge) {
-        // Determine duration in minutes (ceiling of duration in seconds)
-        const durationInMinutes = Math.ceil((call.duration || 60) / 60);
+        // Determine duration in minutes (precise float from actual seconds)
+        const durationInMinutes = Number(((call.duration || 0) / 60).toFixed(4));
 
         // Deduct from wallet
         wallet.minutes = Math.max(0, wallet.minutes - durationInMinutes);
