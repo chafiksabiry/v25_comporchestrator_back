@@ -52,6 +52,12 @@ const escrowWalletSchema = new mongoose.Schema({
     default: 0,
     min: 0
   },
+  minutes: {
+    type: Number,
+    required: true,
+    default: 0,
+    min: 0
+  },
   escrow: {
     type: Number,
     required: true,

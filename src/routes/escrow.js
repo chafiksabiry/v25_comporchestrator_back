@@ -7,6 +7,7 @@ router.get('/wallet/:companyId', escrowController.getWallet);
 router.get('/transactions/:companyId', escrowController.getTransactions);
 router.post('/deposit', escrowController.deposit);
 router.post('/withdraw', escrowController.withdraw);
+router.post('/buy-minutes', escrowController.buyMinutes);
 router.post('/lock', escrowController.lockFunds);
 router.post('/release/:contractId', escrowController.releaseFunds);
 router.post('/refund/:contractId', escrowController.refundFunds);

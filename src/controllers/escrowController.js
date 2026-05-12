@@ -14,7 +14,7 @@ async function reconcilePendingTransactions(companyId) {
     if (pendingCompletedTransactions.length > 0) {
       let wallet = await EscrowWallet.findOne({ companyId });
       if (!wallet) {
-        wallet = new EscrowWallet({ companyId, balance: 0, escrow: 0, contracts: [] });
+        wallet = new EscrowWallet({ companyId, balance: 0, minutes: 0, escrow: 0, contracts: [] });
       }
 
       for (const tx of pendingCompletedTransactions) {
@@ -48,6 +48,7 @@ export const escrowController = {
           data: {
             companyId,
             balance: 0,
+            minutes: 0,
             escrow: 0,
             contracts: []
           }
@@ -87,7 +88,7 @@ export const escrowController = {
     try {
       let wallet = await EscrowWallet.findOne({ companyId });
       if (!wallet) {
-        wallet = new EscrowWallet({ companyId, balance: 0, escrow: 0, contracts: [] });
+        wallet = new EscrowWallet({ companyId, balance: 0, minutes: 0, escrow: 0, contracts: [] });
       }
 
       wallet.balance += parseFloat(amount);
@@ -145,6 +146,45 @@ export const escrowController = {
     }
   },
 
+  // Purchase calling minutes using Euro balance (1 EUR = 1 Minute)
+  buyMinutes: async (req, res) => {
+    const { companyId, amount } = req.body;
+    if (!companyId || !amount || amount <= 0) {
+      return res.status(400).json({ error: 'companyId and positive minutes volume are required' });
+    }
+
+    try {
+      await reconcilePendingTransactions(companyId);
+      let wallet = await EscrowWallet.findOne({ companyId });
+      if (!wallet) {
+        wallet = new EscrowWallet({ companyId, balance: 0, minutes: 0, escrow: 0, contracts: [] });
+      }
+
+      const cost = parseFloat(amount); // 1 Euro per minute
+      if (wallet.balance < cost) {
+        return res.status(400).json({ error: 'Solde disponible insuffisant en Euros (€) pour acheter ces minutes.' });
+      }
+
+      wallet.balance -= cost;
+      wallet.minutes += cost;
+      await wallet.save();
+
+      const transaction = new EscrowTransaction({
+        companyId,
+        type: 'buy_minutes',
+        amount: cost,
+        status: 'completed',
+        credited: true
+      });
+      await transaction.save();
+
+      res.status(200).json({ success: true, data: wallet, transaction });
+    } catch (err) {
+      console.error('Error during minutes purchase:', err);
+      res.status(500).json({ error: 'Failed to process minutes purchase' });
+    }
+  },
+
   // Lock funds under a new escrow contract
   lockFunds: async (req, res) => {
     const { companyId, amount, gigId, gigTitle, agentId, agentName, purpose } = req.body;
@@ -155,11 +195,11 @@ export const escrowController = {
     try {
       await reconcilePendingTransactions(companyId);
       const wallet = await EscrowWallet.findOne({ companyId });
-      if (!wallet || wallet.balance < amount) {
-        return res.status(400).json({ error: 'Insufficient balance to lock escrow funds. Please top-up your balance first.' });
+      if (!wallet || wallet.minutes < amount) {
+        return res.status(400).json({ error: 'Nombre de minutes disponibles insuffisant pour établir ce séquestre. Veuillez d\'abord acheter des minutes.' });
       }
 
-      wallet.balance -= parseFloat(amount);
+      wallet.minutes -= parseFloat(amount);
       wallet.escrow += parseFloat(amount);
 
       const castToObjectId = (idStr) => {
@@ -273,7 +313,7 @@ export const escrowController = {
 
       contract.status = 'refunded';
       wallet.escrow -= contract.amount;
-      wallet.balance += contract.amount;
+      wallet.minutes += contract.amount;
       await wallet.save();
 
       const transaction = new EscrowTransaction({
@@ -516,18 +556,18 @@ export const escrowController = {
         transaction.valid = (transaction.validByReps === true && isApprove);
       }
 
-      // If approved, reduce credits (escrow) from company's EscrowWallet
+      // If approved, reduce minutes from company's EscrowWallet
       let wallet = await EscrowWallet.findOne({ companyId });
       if (!wallet) {
-        wallet = new EscrowWallet({ companyId, balance: 0, escrow: 0, contracts: [] });
+        wallet = new EscrowWallet({ companyId, balance: 0, minutes: 0, escrow: 0, contracts: [] });
       }
 
       if (isApprove) {
         // Calculate minutes to deduct (ceiling of duration in seconds divided by 60)
         const durationInMinutes = Math.ceil((call.duration || 60) / 60);
         
-        // Deduct from credits (wallet.escrow)
-        wallet.escrow = Math.max(0, wallet.escrow - durationInMinutes);
+        // Deduct from available minutes
+        wallet.minutes = Math.max(0, wallet.minutes - durationInMinutes);
         await wallet.save();
 
         // Save log to EscrowTransaction history
