@@ -11,5 +11,7 @@ router.post('/lock', escrowController.lockFunds);
 router.post('/release/:contractId', escrowController.releaseFunds);
 router.post('/refund/:contractId', escrowController.refundFunds);
 router.get('/gigs-and-reps/:companyId', escrowController.getGigsAndReps);
+router.get('/calls/:companyId', escrowController.getCompanyCallsAndTransactions);
+router.post('/calls/approve/:callId', escrowController.approveOrRefuseCallTransaction);
 
 export const escrowRoutes = router;

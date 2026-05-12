@@ -85,20 +85,26 @@ export const escrowController = {
     }
 
     try {
-      const wallet = await EscrowWallet.findOne({ companyId });
+      let wallet = await EscrowWallet.findOne({ companyId });
+      if (!wallet) {
+        wallet = new EscrowWallet({ companyId, balance: 0, escrow: 0, contracts: [] });
+      }
+
+      wallet.balance += parseFloat(amount);
+      await wallet.save();
 
       const transaction = new EscrowTransaction({
         companyId,
         type: 'deposit',
         amount: parseFloat(amount),
-        status: 'pending',
-        credited: false
+        status: 'completed',
+        credited: true
       });
       await transaction.save();
 
       res.status(200).json({
         success: true,
-        data: wallet || { companyId, balance: 0, escrow: 0, contracts: [] },
+        data: wallet,
         transaction
       });
     } catch (err) {
@@ -347,6 +353,198 @@ export const escrowController = {
     } catch (err) {
       console.error('Error fetching gigs and reps:', err);
       res.status(500).json({ error: 'Failed to fetch gigs and enrolled representatives' });
+    }
+  },
+
+  // Get calls and transactions for a company
+  getCompanyCallsAndTransactions: async (req, res) => {
+    const { companyId } = req.params;
+    if (!companyId) {
+      return res.status(400).json({ error: 'companyId is required' });
+    }
+
+    try {
+      const db = mongoose.connection.db;
+      
+      const companyObjectId = mongoose.Types.ObjectId.isValid(companyId) 
+        ? new mongoose.Types.ObjectId(companyId) 
+        : companyId;
+
+      const calls = await db.collection('calls').find({
+        $or: [
+          { companyId: companyObjectId },
+          { companyId: companyId }
+        ]
+      }).sort({ startTime: -1 }).toArray();
+
+      const result = [];
+
+      for (const call of calls) {
+        // Find transaction associated with this call
+        const callIdObj = call._id;
+        const transaction = await db.collection('transactions').findOne({
+          $or: [
+            { call: callIdObj },
+            { call: callIdObj.toString() }
+          ]
+        });
+
+        // Find Agent Name
+        let agentName = 'Agent';
+        if (call.agent) {
+          const agentIdObj = mongoose.Types.ObjectId.isValid(call.agent)
+            ? new mongoose.Types.ObjectId(call.agent)
+            : call.agent;
+          const agentDoc = await db.collection('agents').findOne({
+            $or: [
+              { _id: agentIdObj },
+              { _id: call.agent }
+            ]
+          });
+          if (agentDoc) {
+            agentName = agentDoc.personalInfo?.name || agentDoc.personalInfo?.email || 'Unnamed Agent';
+          }
+        }
+
+        // Find Lead Name
+        let leadName = 'Lead';
+        if (call.lead) {
+          const leadIdObj = mongoose.Types.ObjectId.isValid(call.lead)
+            ? new mongoose.Types.ObjectId(call.lead)
+            : call.lead;
+          const leadDoc = await db.collection('leads').findOne({
+            $or: [
+              { _id: leadIdObj },
+              { _id: call.lead }
+            ]
+          });
+          if (leadDoc) {
+            leadName = leadDoc.name || `${leadDoc.First_Name || ''} ${leadDoc.Last_Name || ''}`.trim() || leadDoc.email || 'Unnamed Lead';
+          }
+        }
+
+        result.push({
+          callId: call._id.toString(),
+          agent: agentName,
+          lead: leadName,
+          direction: call.direction || 'outbound',
+          duration: call.duration || 0, // seconds
+          startTime: call.startTime,
+          status: call.status || 'completed',
+          validByCompany: transaction ? transaction.validByCompany : null,
+          validByReps: transaction ? transaction.validByReps : null,
+          valid: transaction ? transaction.valid : null,
+          price: call.price || 0
+        });
+      }
+
+      res.status(200).json({ success: true, data: result });
+    } catch (err) {
+      console.error('Error fetching company calls and transactions:', err);
+      res.status(500).json({ error: 'Failed to fetch company calls' });
+    }
+  },
+
+  // Approve or refuse a call transaction
+  approveOrRefuseCallTransaction: async (req, res) => {
+    const { callId } = req.params;
+    const { companyId, action } = req.body; // action: 'approve' or 'refuse'
+
+    if (!callId || !companyId || !action) {
+      return res.status(400).json({ error: 'callId, companyId, and action are required' });
+    }
+
+    try {
+      const db = mongoose.connection.db;
+      
+      const callIdObj = mongoose.Types.ObjectId.isValid(callId)
+        ? new mongoose.Types.ObjectId(callId)
+        : callId;
+
+      const companyIdObj = mongoose.Types.ObjectId.isValid(companyId)
+        ? new mongoose.Types.ObjectId(companyId)
+        : companyId;
+
+      // Find call doc
+      const call = await db.collection('calls').findOne({
+        $or: [
+          { _id: callIdObj },
+          { _id: callId }
+        ]
+      });
+
+      if (!call) {
+        return res.status(404).json({ error: 'Call not found' });
+      }
+
+      // Find or create transaction associated with call
+      let transaction = await db.collection('transactions').findOne({
+        $or: [
+          { call: callIdObj },
+          { call: callIdObj.toString() }
+        ]
+      });
+
+      const isApprove = action === 'approve';
+
+      if (!transaction) {
+        // Create matching Transaction doc
+        const newTx = {
+          call: callIdObj,
+          agent: call.agent,
+          lead: call.lead,
+          gigId: call.gigId,
+          companyId: companyIdObj,
+          validByReps: true, // Auto-reps valid for admin actions
+          validByCompany: isApprove,
+          valid: isApprove,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        };
+        const insertRes = await db.collection('transactions').insertOne(newTx);
+        transaction = { _id: insertRes.insertedId, ...newTx };
+      } else {
+        const updateDoc = {
+          $set: {
+            validByCompany: isApprove,
+            valid: (transaction.validByReps === true && isApprove),
+            updatedAt: new Date()
+          }
+        };
+        await db.collection('transactions').updateOne({ _id: transaction._id }, updateDoc);
+        transaction.validByCompany = isApprove;
+        transaction.valid = (transaction.validByReps === true && isApprove);
+      }
+
+      // If approved, reduce credits (escrow) from company's EscrowWallet
+      let wallet = await EscrowWallet.findOne({ companyId });
+      if (!wallet) {
+        wallet = new EscrowWallet({ companyId, balance: 0, escrow: 0, contracts: [] });
+      }
+
+      if (isApprove) {
+        // Calculate minutes to deduct (ceiling of duration in seconds divided by 60)
+        const durationInMinutes = Math.ceil((call.duration || 60) / 60);
+        
+        // Deduct from credits (wallet.escrow)
+        wallet.escrow = Math.max(0, wallet.escrow - durationInMinutes);
+        await wallet.save();
+
+        // Save log to EscrowTransaction history
+        const escrowTx = new EscrowTransaction({
+          companyId,
+          type: 'call_charge',
+          amount: durationInMinutes,
+          status: 'completed',
+          description: `Call validation charge for lead ${call.lead || 'unknown'}`
+        });
+        await escrowTx.save();
+      }
+
+      res.status(200).json({ success: true, data: { wallet, transaction } });
+    } catch (err) {
+      console.error('Error approving/refusing call transaction:', err);
+      res.status(500).json({ error: 'Failed to process transaction approval' });
     }
   }
 };
