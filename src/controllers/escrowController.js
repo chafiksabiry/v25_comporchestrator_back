@@ -594,9 +594,31 @@ export const escrowController = {
           startTime: call.startTime,
           createdAt: call.createdAt || call.startTime || null,
           status: call.status || 'completed',
-          validByCompany: transaction ? transaction.validByCompany : (call.validByCompany !== undefined ? call.validByCompany : null),
-          validByReps: transaction ? transaction.validByReps : (call.validByReps !== undefined ? call.validByReps : null),
-          valid: transaction ? transaction.valid : (call.valid !== undefined ? call.valid : null),
+          validByCompany: (() => {
+            if (transaction && transaction.validByCompany !== undefined) return transaction.validByCompany;
+            if (call.validByCompany !== undefined && call.validByCompany !== null) return call.validByCompany;
+            if (call.companyValidation === 'approved') return true;
+            if (call.companyValidation === 'rejected') return false;
+            return null;
+          })(),
+          validByReps: (() => {
+            if (transaction && transaction.validByReps !== undefined) return transaction.validByReps;
+            if (call.validByReps !== undefined && call.validByReps !== null) return call.validByReps;
+            if (call.agentValidation === 'approved') return true;
+            if (call.agentValidation === 'rejected') return false;
+            return null;
+          })(),
+          valid: (() => {
+            if (transaction && transaction.valid !== undefined) return transaction.valid;
+            if (call.valid !== undefined && call.valid !== null) return call.valid;
+            const companyOk = (transaction?.validByCompany !== undefined) 
+              ? transaction.validByCompany 
+              : (call.validByCompany !== undefined && call.validByCompany !== null ? call.validByCompany : (call.companyValidation === 'approved' ? true : (call.companyValidation === 'rejected' ? false : null)));
+            const repsOk = (transaction?.validByReps !== undefined) 
+              ? transaction.validByReps 
+              : (call.validByReps !== undefined && call.validByReps !== null ? call.validByReps : (call.agentValidation === 'approved' ? true : (call.agentValidation === 'rejected' ? false : null)));
+            return (companyOk === true && repsOk === true);
+          })(),
           price: call.price || 0,
           recording_url: call.recording_url || call.recording_url_cloudinary || null,
           recording_url_cloudinary: call.recording_url_cloudinary || null,
@@ -662,6 +684,8 @@ export const escrowController = {
             validByCompany: isApprove,
             validByReps: true, // Auto-reps valid for admin actions
             valid: isApprove,
+            companyValidation: isApprove ? 'approved' : 'rejected',
+            agentValidation: 'approved',
             updatedAt: new Date()
           }
         }
