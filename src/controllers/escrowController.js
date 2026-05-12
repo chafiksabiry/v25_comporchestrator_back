@@ -37,73 +37,87 @@ async function reconcileCallCharges(companyId) {
       ? new mongoose.Types.ObjectId(companyId)
       : companyId;
 
-    // Find all calls of the company
-    const calls = await db.collection('calls').find({
+    let wallet = await EscrowWallet.findOne({ companyId });
+    if (!wallet) {
+      wallet = new EscrowWallet({ companyId, balance: 0, minutes: 0, escrow: 0, contracts: [] });
+    }
+
+    let walletUpdated = false;
+
+    // 1. Fetch all calls of the company that are approved by both company and agent
+    const validatedCalls = await db.collection('calls').find({
       $or: [
         { companyId: companyObjectId },
         { companyId: companyId }
-      ]
+      ],
+      companyValidation: 'approved',
+      agentValidation: 'approved'
     }).toArray();
 
-    if (calls.length > 0) {
-      let wallet = await EscrowWallet.findOne({ companyId });
-      if (!wallet) {
-        wallet = new EscrowWallet({ companyId, balance: 0, minutes: 0, escrow: 0, contracts: [] });
+    const validatedCallIds = new Set(validatedCalls.map(c => c._id.toString()));
+
+    // 2. Fetch all existing call_charge transactions for this company
+    const existingCharges = await EscrowTransaction.find({
+      companyId,
+      type: 'call_charge'
+    });
+
+    // 3. Clean up transactions for calls that are no longer validated/approved (and refund minutes)
+    for (const tx of existingCharges) {
+      if (tx.callId && !validatedCallIds.has(tx.callId)) {
+        console.log(`Refunding ${tx.amount} minutes for unvalidated call: ${tx.callId}`);
+        wallet.minutes += tx.amount;
+        walletUpdated = true;
+        await EscrowTransaction.deleteOne({ _id: tx._id });
       }
+    }
 
-      let walletUpdated = false;
+    // 4. Charge validated calls that haven't been charged yet
+    for (const call of validatedCalls) {
+      const callIdStr = call._id.toString();
 
-      for (const call of calls) {
-        const callIdStr = call._id.toString();
+      const hasCharge = existingCharges.some(tx => tx.callId === callIdStr);
+      if (!hasCharge) {
+        // Determine duration in minutes (ceiling of duration in seconds)
+        const durationInMinutes = Math.ceil((call.duration || 60) / 60);
 
-        // Check if this call has already been charged
-        const existingTx = await EscrowTransaction.findOne({
+        // Deduct from wallet
+        wallet.minutes = Math.max(0, wallet.minutes - durationInMinutes);
+        walletUpdated = true;
+
+        // Find agent name for the description
+        let agentName = 'Agent';
+        if (call.agent) {
+          const agentIdObj = mongoose.Types.ObjectId.isValid(call.agent)
+            ? new mongoose.Types.ObjectId(call.agent)
+            : call.agent;
+          const agentDoc = await db.collection('agents').findOne({
+            $or: [
+              { _id: agentIdObj },
+              { _id: call.agent }
+            ]
+          });
+          if (agentDoc) {
+            agentName = agentDoc.personalInfo?.name || agentDoc.personalInfo?.email || 'Unnamed Agent';
+          }
+        }
+
+        // Save call_charge transaction
+        const escrowTx = new EscrowTransaction({
           companyId,
           type: 'call_charge',
-          callId: callIdStr
+          amount: durationInMinutes,
+          status: 'completed',
+          callId: callIdStr,
+          description: `Consommation d'appel par ${agentName}`
         });
-
-        if (!existingTx) {
-          // Determine duration in minutes (ceiling of duration in seconds)
-          const durationInMinutes = Math.ceil((call.duration || 60) / 60);
-
-          // Deduct from wallet
-          wallet.minutes = Math.max(0, wallet.minutes - durationInMinutes);
-          walletUpdated = true;
-
-          // Find agent name for the description
-          let agentName = 'Agent';
-          if (call.agent) {
-            const agentIdObj = mongoose.Types.ObjectId.isValid(call.agent)
-              ? new mongoose.Types.ObjectId(call.agent)
-              : call.agent;
-            const agentDoc = await db.collection('agents').findOne({
-              $or: [
-                { _id: agentIdObj },
-                { _id: call.agent }
-              ]
-            });
-            if (agentDoc) {
-              agentName = agentDoc.personalInfo?.name || agentDoc.personalInfo?.email || 'Unnamed Agent';
-            }
-          }
-
-          // Save call_charge transaction
-          const escrowTx = new EscrowTransaction({
-            companyId,
-            type: 'call_charge',
-            amount: durationInMinutes,
-            status: 'completed',
-            callId: callIdStr,
-            description: `Consommation d'appel par ${agentName}`
-          });
-          await escrowTx.save();
-        }
+        await escrowTx.save();
+        console.log(`Charged ${durationInMinutes} minutes for newly validated call: ${callIdStr}`);
       }
+    }
 
-      if (walletUpdated) {
-        await wallet.save();
-      }
+    if (walletUpdated) {
+      await wallet.save();
     }
   } catch (err) {
     console.error('Error during call charges reconciliation:', err);
