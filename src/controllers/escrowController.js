@@ -550,14 +550,20 @@ export const escrowController = {
           callId: call._id.toString(),
           agent: agentName,
           lead: leadName,
+          leadObj: { First_Name: leadName, Last_Name: '' },
           direction: call.direction || 'outbound',
           duration: call.duration || 0, // seconds
           startTime: call.startTime,
+          createdAt: call.createdAt || call.startTime || null,
           status: call.status || 'completed',
           validByCompany: transaction ? transaction.validByCompany : null,
           validByReps: transaction ? transaction.validByReps : null,
           valid: transaction ? transaction.valid : null,
-          price: call.price || 0
+          price: call.price || 0,
+          recording_url: call.recording_url || call.recording_url_cloudinary || null,
+          recording_url_cloudinary: call.recording_url_cloudinary || null,
+          transcript: call.transcript || [],
+          ai_call_score: call.ai_call_score || null,
         });
       }
 
