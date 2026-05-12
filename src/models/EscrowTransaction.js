@@ -26,6 +26,15 @@ const escrowTransactionSchema = new mongoose.Schema({
     type: Boolean,
     required: false,
     default: false
+  },
+  callId: {
+    type: String,
+    required: false,
+    index: true
+  },
+  description: {
+    type: String,
+    required: false
   }
 }, {
   timestamps: true

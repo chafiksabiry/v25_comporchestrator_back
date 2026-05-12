@@ -30,6 +30,86 @@ async function reconcilePendingTransactions(companyId) {
   }
 }
 
+async function reconcileCallCharges(companyId) {
+  try {
+    const db = mongoose.connection.db;
+    const companyObjectId = mongoose.Types.ObjectId.isValid(companyId)
+      ? new mongoose.Types.ObjectId(companyId)
+      : companyId;
+
+    // Find all calls of the company
+    const calls = await db.collection('calls').find({
+      $or: [
+        { companyId: companyObjectId },
+        { companyId: companyId }
+      ]
+    }).toArray();
+
+    if (calls.length > 0) {
+      let wallet = await EscrowWallet.findOne({ companyId });
+      if (!wallet) {
+        wallet = new EscrowWallet({ companyId, balance: 0, minutes: 0, escrow: 0, contracts: [] });
+      }
+
+      let walletUpdated = false;
+
+      for (const call of calls) {
+        const callIdStr = call._id.toString();
+
+        // Check if this call has already been charged
+        const existingTx = await EscrowTransaction.findOne({
+          companyId,
+          type: 'call_charge',
+          callId: callIdStr
+        });
+
+        if (!existingTx) {
+          // Determine duration in minutes (ceiling of duration in seconds)
+          const durationInMinutes = Math.ceil((call.duration || 60) / 60);
+
+          // Deduct from wallet
+          wallet.minutes = Math.max(0, wallet.minutes - durationInMinutes);
+          walletUpdated = true;
+
+          // Find agent name for the description
+          let agentName = 'Agent';
+          if (call.agent) {
+            const agentIdObj = mongoose.Types.ObjectId.isValid(call.agent)
+              ? new mongoose.Types.ObjectId(call.agent)
+              : call.agent;
+            const agentDoc = await db.collection('agents').findOne({
+              $or: [
+                { _id: agentIdObj },
+                { _id: call.agent }
+              ]
+            });
+            if (agentDoc) {
+              agentName = agentDoc.personalInfo?.name || agentDoc.personalInfo?.email || 'Unnamed Agent';
+            }
+          }
+
+          // Save call_charge transaction
+          const escrowTx = new EscrowTransaction({
+            companyId,
+            type: 'call_charge',
+            amount: durationInMinutes,
+            status: 'completed',
+            callId: callIdStr,
+            description: `Consommation d'appel par ${agentName}`
+          });
+          await escrowTx.save();
+        }
+      }
+
+      if (walletUpdated) {
+        await wallet.save();
+      }
+    }
+  } catch (err) {
+    console.error('Error during call charges reconciliation:', err);
+  }
+}
+
 export const escrowController = {
   // Get wallet status (creates default + demo data if not exists)
   getWallet: async (req, res) => {
@@ -40,6 +120,7 @@ export const escrowController = {
 
     try {
       await reconcilePendingTransactions(companyId);
+      await reconcileCallCharges(companyId);
       let wallet = await EscrowWallet.findOne({ companyId });
       
       if (!wallet) {
@@ -70,6 +151,7 @@ export const escrowController = {
     }
 
     try {
+      await reconcileCallCharges(companyId);
       const transactions = await EscrowTransaction.find({ companyId }).sort({ createdAt: -1 });
       res.status(200).json({ success: true, data: transactions });
     } catch (err) {
@@ -194,6 +276,7 @@ export const escrowController = {
 
     try {
       await reconcilePendingTransactions(companyId);
+      await reconcileCallCharges(companyId);
       const wallet = await EscrowWallet.findOne({ companyId });
       if (!wallet || wallet.minutes < amount) {
         return res.status(400).json({ error: 'Nombre de minutes disponibles insuffisant pour établir ce séquestre. Veuillez d\'abord acheter des minutes.' });
@@ -556,29 +639,10 @@ export const escrowController = {
         transaction.valid = (transaction.validByReps === true && isApprove);
       }
 
-      // If approved, reduce minutes from company's EscrowWallet
+      // Fetch the reconciled wallet status
       let wallet = await EscrowWallet.findOne({ companyId });
       if (!wallet) {
         wallet = new EscrowWallet({ companyId, balance: 0, minutes: 0, escrow: 0, contracts: [] });
-      }
-
-      if (isApprove) {
-        // Calculate minutes to deduct (ceiling of duration in seconds divided by 60)
-        const durationInMinutes = Math.ceil((call.duration || 60) / 60);
-        
-        // Deduct from available minutes
-        wallet.minutes = Math.max(0, wallet.minutes - durationInMinutes);
-        await wallet.save();
-
-        // Save log to EscrowTransaction history
-        const escrowTx = new EscrowTransaction({
-          companyId,
-          type: 'call_charge',
-          amount: durationInMinutes,
-          status: 'completed',
-          description: `Call validation charge for lead ${call.lead || 'unknown'}`
-        });
-        await escrowTx.save();
       }
 
       res.status(200).json({ success: true, data: { wallet, transaction } });
