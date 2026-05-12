@@ -534,7 +534,8 @@ export const escrowController = {
         $or: [
           { companyId: companyObjectId },
           { companyId: companyId }
-        ]
+        ],
+        transactionOccurred: true
       }).sort({ startTime: -1 }).toArray();
 
       const result = [];
