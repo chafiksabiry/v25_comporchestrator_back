@@ -7,6 +7,12 @@ const agentWithdrawalSchema = new mongoose.Schema({
     required: true,
     index: true
   },
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    required: false,
+    index: true
+  },
   amount: {
     type: Number,
     required: true,

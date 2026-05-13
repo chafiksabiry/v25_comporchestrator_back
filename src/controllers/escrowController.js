@@ -845,7 +845,7 @@ export const escrowController = {
   },
 
   requestAgentWithdrawal: async (req, res) => {
-    const { agentId, amount, method, methodDetails, description } = req.body;
+    const { agentId, amount, method, methodDetails, description, companyId } = req.body;
     if (!agentId || !amount || amount <= 0 || !method) {
       return res.status(400).json({ error: 'agentId, positive amount, and method are required' });
     }
@@ -860,8 +860,14 @@ export const escrowController = {
 
       // 2. Create withdrawal record
       const reference = `WTH-${Math.floor(100000 + Math.random() * 900000)}-${Date.now().toString().slice(-4)}`;
+      
+      const parsedCompanyId = companyId && mongoose.Types.ObjectId.isValid(companyId) 
+        ? new mongoose.Types.ObjectId(companyId) 
+        : undefined;
+
       const withdrawal = new AgentWithdrawal({
         agentId,
+        companyId: parsedCompanyId,
         amount: parseFloat(amount),
         method,
         methodDetails,
@@ -878,6 +884,74 @@ export const escrowController = {
     } catch (err) {
       console.error('Error requesting withdrawal:', err);
       res.status(500).json({ error: 'Failed to request withdrawal' });
+    }
+  },
+
+  // Company-side Agent Withdrawal Management
+  getAgentWithdrawalsForCompany: async (req, res) => {
+    const { companyId } = req.params;
+    if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+
+    try {
+      const companyObjectId = mongoose.Types.ObjectId.isValid(companyId) ? new mongoose.Types.ObjectId(companyId) : companyId;
+      
+      // Find withdrawals linked to this company or agents enrolled in this company's gigs
+      // For now, let's look for withdrawals specifically tagged with this companyId
+      const withdrawals = await AgentWithdrawal.find({ 
+        companyId: companyObjectId,
+        status: 'pending'
+      }).sort({ createdAt: -1 });
+
+      const db = mongoose.connection.db;
+      const result = [];
+
+      for (const w of withdrawals) {
+        const agentDoc = await db.collection('agents').findOne({ _id: w.agentId });
+        result.push({
+          ...w.toObject(),
+          agentName: agentDoc?.personalInfo?.name || 'Unknown Agent',
+          agentEmail: agentDoc?.personalInfo?.email || ''
+        });
+      }
+
+      res.status(200).json({ success: true, data: result });
+    } catch (err) {
+      console.error('Error fetching agent withdrawals for company:', err);
+      res.status(500).json({ error: 'Failed to fetch agent withdrawals' });
+    }
+  },
+
+  approveOrRefuseAgentWithdrawal: async (req, res) => {
+    const { withdrawalId } = req.params;
+    const { action, companyId } = req.body; // action: 'approve' or 'refuse'
+
+    if (!withdrawalId || !action) {
+      return res.status(400).json({ error: 'withdrawalId and action are required' });
+    }
+
+    try {
+      const withdrawal = await AgentWithdrawal.findById(withdrawalId);
+      if (!withdrawal) {
+        return res.status(404).json({ error: 'Withdrawal request not found' });
+      }
+
+      if (action === 'approve') {
+        withdrawal.status = 'completed';
+        withdrawal.description = (withdrawal.description || '') + ' (Approuvé par la compagnie)';
+      } else {
+        withdrawal.status = 'failed';
+        withdrawal.description = (withdrawal.description || '') + ' (Refusé par la compagnie)';
+      }
+
+      await withdrawal.save();
+
+      // Trigger reconciliation for the agent to update their wallet (moving pending to completed/removed)
+      await reconcileAgentEarnings(withdrawal.agentId);
+
+      res.status(200).json({ success: true, data: withdrawal });
+    } catch (err) {
+      console.error('Error approving/refusing agent withdrawal:', err);
+      res.status(500).json({ error: 'Failed to process withdrawal action' });
     }
   }
 };

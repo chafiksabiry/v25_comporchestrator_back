@@ -20,4 +20,8 @@ router.get('/agent/wallet/:agentId', escrowController.getAgentWallet);
 router.get('/agent/withdrawals/:agentId', escrowController.getAgentWithdrawals);
 router.post('/agent/withdraw', escrowController.requestAgentWithdrawal);
 
+// Company side management of agent withdrawals
+router.get('/company/agent-withdrawals/:companyId', escrowController.getAgentWithdrawalsForCompany);
+router.post('/company/agent-withdrawals/approve/:withdrawalId', escrowController.approveOrRefuseAgentWithdrawal);
+
 export const escrowRoutes = router;
