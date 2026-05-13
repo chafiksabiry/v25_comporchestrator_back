@@ -15,4 +15,9 @@ router.get('/gigs-and-reps/:companyId', escrowController.getGigsAndReps);
 router.get('/calls/:companyId', escrowController.getCompanyCallsAndTransactions);
 router.post('/calls/approve/:callId', escrowController.approveOrRefuseCallTransaction);
 
+// Agent Payouts / Withdrawals
+router.get('/agent/wallet/:agentId', escrowController.getAgentWallet);
+router.get('/agent/withdrawals/:agentId', escrowController.getAgentWithdrawals);
+router.post('/agent/withdraw', escrowController.requestAgentWithdrawal);
+
 export const escrowRoutes = router;

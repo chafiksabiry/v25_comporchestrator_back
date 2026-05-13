@@ -1,6 +1,8 @@
 import mongoose from 'mongoose';
 import EscrowWallet from '../models/EscrowWallet.js';
 import EscrowTransaction from '../models/EscrowTransaction.js';
+import AgentWallet from '../models/AgentWallet.js';
+import AgentWithdrawal from '../models/AgentWithdrawal.js';
 
 async function reconcilePendingTransactions(companyId) {
   try {
@@ -144,6 +146,75 @@ async function reconcileCallCharges(companyId) {
     }
   } catch (err) {
     console.error('Error during call charges reconciliation:', err);
+  }
+}
+
+async function reconcileAgentEarnings(agentId) {
+  try {
+    const db = mongoose.connection.db;
+    const agentObjectId = mongoose.Types.ObjectId.isValid(agentId)
+      ? new mongoose.Types.ObjectId(agentId)
+      : agentId;
+
+    let wallet = await AgentWallet.findOne({ agentId });
+    if (!wallet) {
+      wallet = new AgentWallet({ agentId, availableBalance: 0, pendingWithdrawals: 0, lifetimeEarnings: 0 });
+    }
+
+    // 1. Fetch all calls involving this agent that are fully validated
+    // (validByCompany: true, validByReps: true)
+    const calls = await db.collection('calls').find({
+      agent: agentObjectId,
+      companyValidation: 'approved',
+      agentValidation: 'approved'
+    }).toArray();
+
+    let totalEarnings = 0;
+    
+    // Calculate total earned from calls
+    for (const call of calls) {
+      // Find Gig data to get commission rates
+      const gigId = call.lead?.gigId || call.gigId;
+      if (gigId) {
+        const gigObjectId = mongoose.Types.ObjectId.isValid(gigId) ? new mongoose.Types.ObjectId(gigId) : gigId;
+        const gig = await db.collection('gigs').findOne({ _id: gigObjectId });
+        
+        if (gig) {
+          const callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 4.00;
+          totalEarnings += callRate;
+          
+          // Check if there's a signed transaction (sale)
+          const transaction = await db.collection('transactions').findOne({
+            call: call._id,
+            valid: true
+          });
+          
+          if (transaction) {
+            const txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 30.00;
+            totalEarnings += txRate;
+          }
+        }
+      }
+    }
+
+    // 2. Fetch all completed withdrawals
+    const withdrawals = await AgentWithdrawal.find({
+      agentId,
+      status: { $in: ['completed', 'pending', 'processing'] }
+    });
+    const totalWithdrawnOrPending = withdrawals.reduce((sum, w) => sum + w.amount, 0);
+    const pendingAmount = withdrawals.filter(w => ['pending', 'processing'].includes(w.status)).reduce((sum, w) => sum + w.amount, 0);
+
+    // 3. Update wallet
+    wallet.lifetimeEarnings = totalEarnings;
+    wallet.availableBalance = Math.max(0, totalEarnings - totalWithdrawnOrPending);
+    wallet.pendingWithdrawals = pendingAmount;
+    
+    await wallet.save();
+    return wallet;
+  } catch (err) {
+    console.error('Error reconciling agent earnings:', err);
+    throw err;
   }
 }
 
@@ -729,6 +800,70 @@ export const escrowController = {
     } catch (err) {
       console.error('Error approving/refusing call transaction:', err);
       res.status(500).json({ error: 'Failed to process transaction approval' });
+    }
+  },
+
+  // Agent Specific Methods
+  getAgentWallet: async (req, res) => {
+    const { agentId } = req.params;
+    if (!agentId) return res.status(400).json({ error: 'agentId is required' });
+
+    try {
+      const wallet = await reconcileAgentEarnings(agentId);
+      res.status(200).json({ success: true, data: wallet });
+    } catch (err) {
+      console.error('Error fetching agent wallet:', err);
+      res.status(500).json({ error: 'Failed to fetch agent wallet' });
+    }
+  },
+
+  getAgentWithdrawals: async (req, res) => {
+    const { agentId } = req.params;
+    if (!agentId) return res.status(400).json({ error: 'agentId is required' });
+
+    try {
+      const withdrawals = await AgentWithdrawal.find({ agentId }).sort({ createdAt: -1 });
+      res.status(200).json({ success: true, data: withdrawals });
+    } catch (err) {
+      console.error('Error fetching agent withdrawals:', err);
+      res.status(500).json({ error: 'Failed to fetch agent withdrawals' });
+    }
+  },
+
+  requestAgentWithdrawal: async (req, res) => {
+    const { agentId, amount, method, methodDetails, description } = req.body;
+    if (!agentId || !amount || amount <= 0 || !method) {
+      return res.status(400).json({ error: 'agentId, positive amount, and method are required' });
+    }
+
+    try {
+      // 1. Reconcile first to ensure balance is accurate
+      const wallet = await reconcileAgentEarnings(agentId);
+
+      if (wallet.availableBalance < amount) {
+        return res.status(400).json({ error: 'Insufficient available balance' });
+      }
+
+      // 2. Create withdrawal record
+      const reference = `WTH-${Math.floor(100000 + Math.random() * 900000)}-${Date.now().toString().slice(-4)}`;
+      const withdrawal = new AgentWithdrawal({
+        agentId,
+        amount: parseFloat(amount),
+        method,
+        methodDetails,
+        description: description || `Retrait via ${method}`,
+        reference,
+        status: 'pending'
+      });
+      await withdrawal.save();
+
+      // 3. Reconcile again to update wallet state (deduct available, add pending)
+      const updatedWallet = await reconcileAgentEarnings(agentId);
+
+      res.status(200).json({ success: true, data: updatedWallet, withdrawal });
+    } catch (err) {
+      console.error('Error requesting withdrawal:', err);
+      res.status(500).json({ error: 'Failed to request withdrawal' });
     }
   }
 };
