@@ -161,17 +161,16 @@ async function reconcileAgentEarnings(agentId) {
       wallet = new AgentWallet({ agentId, availableBalance: 0, pendingWithdrawals: 0, lifetimeEarnings: 0 });
     }
 
-    // 1. Fetch all calls involving this agent that are fully validated
-    // (validByCompany: true, validByReps: true)
+    // 1. Fetch all calls involving this agent
     const calls = await db.collection('calls').find({
-      agent: agentObjectId,
-      companyValidation: 'approved',
-      agentValidation: 'approved'
+      agent: agentObjectId
     }).toArray();
 
-    let totalEarnings = 0;
+    let totalEarned = 0;
+    let totalPending = 0;
+    let pendingCount = 0;
     
-    // Calculate total earned from calls
+    // Calculate total from calls
     for (const call of calls) {
       // Find Gig data to get commission rates
       const gigId = call.lead?.gigId || call.gigId;
@@ -181,37 +180,52 @@ async function reconcileAgentEarnings(agentId) {
         
         if (gig) {
           const callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 4.00;
-          totalEarnings += callRate;
-          
-          // Check if there's a signed transaction (sale)
+          const txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 30.00;
+
+          // Call Commission logic
+          if (call.companyValidation === 'approved' && call.agentValidation === 'approved') {
+            totalEarned += callRate;
+          } else if (call.companyValidation === 'pending' || !call.companyValidation) {
+            totalPending += callRate;
+            pendingCount++;
+          }
+
+          // Transaction Commission logic
           const transaction = await db.collection('transactions').findOne({
-            call: call._id,
-            valid: true
+            call: call._id
           });
-          
-          if (transaction) {
-            const txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 30.00;
-            totalEarnings += txRate;
+
+          const hasSale = transaction?.validByReps === true || call.transactionOccurred === true;
+          if (hasSale) {
+            if (transaction?.validByCompany === true) {
+              totalEarned += txRate;
+            } else if (transaction?.validByCompany === null || transaction?.validByCompany === undefined || !transaction.validByCompany) {
+              // If it's not approved yet by company, it's pending
+              totalPending += txRate;
+              pendingCount++;
+            }
           }
         }
       }
     }
 
-    // 2. Fetch all completed withdrawals
+    // 2. Fetch all withdrawals
     const withdrawals = await AgentWithdrawal.find({
       agentId,
       status: { $in: ['completed', 'pending', 'processing'] }
     });
-    const totalWithdrawnOrPending = withdrawals.reduce((sum, w) => sum + w.amount, 0);
-    const pendingAmount = withdrawals.filter(w => ['pending', 'processing'].includes(w.status)).reduce((sum, w) => sum + w.amount, 0);
+    const totalWithdrawnOrProcessing = withdrawals.reduce((sum, w) => sum + w.amount, 0);
+    const pendingWithdrawalAmount = withdrawals.filter(w => ['pending', 'processing'].includes(w.status)).reduce((sum, w) => sum + w.amount, 0);
 
     // 3. Update wallet
-    wallet.lifetimeEarnings = totalEarnings;
-    wallet.availableBalance = Math.max(0, totalEarnings - totalWithdrawnOrPending);
-    wallet.pendingWithdrawals = pendingAmount;
+    wallet.lifetimeEarnings = totalEarned;
+    wallet.availableBalance = Math.max(0, totalEarned - totalWithdrawnOrProcessing);
+    wallet.pendingWithdrawals = pendingWithdrawalAmount;
+    wallet.pendingCommissions = totalPending;
+    wallet.pendingCount = pendingCount; // We can add this too or just use it in response
     
     await wallet.save();
-    return wallet;
+    return { ...wallet.toObject(), pendingCount };
   } catch (err) {
     console.error('Error reconciling agent earnings:', err);
     throw err;

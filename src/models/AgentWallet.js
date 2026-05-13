@@ -20,6 +20,12 @@ const agentWalletSchema = new mongoose.Schema({
     default: 0,
     min: 0
   },
+  pendingCommissions: {
+    type: Number,
+    required: true,
+    default: 0,
+    min: 0
+  },
   lifetimeEarnings: {
     type: Number,
     required: true,
