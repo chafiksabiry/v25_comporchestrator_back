@@ -865,6 +865,10 @@ export const escrowController = {
             if (call.companyValidation === 'rejected') return false;
             return null;
           })(),
+          validByAI: (() => {
+            if (transaction && transaction.validByAI !== undefined) return transaction.validByAI;
+            return null;
+          })(),
           validByReps: (() => {
             if (transaction && transaction.validByReps !== undefined) return transaction.validByReps;
             if (call.validByReps !== undefined && call.validByReps !== null) return call.validByReps;
