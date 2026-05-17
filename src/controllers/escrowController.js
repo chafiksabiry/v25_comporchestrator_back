@@ -89,27 +89,9 @@ async function reconcileCallCharges(companyId) {
         // If minutes are sufficient, deduct from minutes.
         // Otherwise, consume all minutes, and check if Euro balance can cover.
         // If Euro balance is 0 or insufficient, let minutes go negative so we don't leave minutes at 0.
+        // Deduct directly from minutes, allowing it to go negative
         const currentMins = wallet.minutes || 0;
-        if (currentMins >= durationInMinutes) {
-          wallet.minutes = Number((currentMins - durationInMinutes).toFixed(4));
-        } else {
-          const remainingToDeduct = durationInMinutes - currentMins;
-          wallet.minutes = 0;
-
-          const currentBalance = wallet.balance || 0;
-          if (currentBalance > 0) {
-            if (currentBalance >= remainingToDeduct) {
-              wallet.balance = Number((currentBalance - remainingToDeduct).toFixed(4));
-            } else {
-              const finalRemaining = remainingToDeduct - currentBalance;
-              wallet.balance = 0;
-              wallet.minutes = Number((-finalRemaining).toFixed(4));
-            }
-          } else {
-            // Cash balance (solde) is 0! Deduct directly from minutes so it goes negative
-            wallet.minutes = Number((-remainingToDeduct).toFixed(4));
-          }
-        }
+        wallet.minutes = Number((currentMins - durationInMinutes).toFixed(4));
         walletUpdated = true;
 
         // Find agent name for the description
