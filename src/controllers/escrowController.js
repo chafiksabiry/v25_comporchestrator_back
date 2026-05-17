@@ -49,14 +49,13 @@ async function reconcileCallCharges(companyId) {
 
     let walletUpdated = false;
 
-    // 1. Fetch all calls of the company that are approved by both company and agent
+    // 1. Fetch all calls of the company that are validated by AI
     const validatedCalls = await db.collection('calls').find({
       $or: [
         { companyId: companyObjectId },
         { companyId: companyId }
       ],
-      companyValidation: 'approved',
-      agentValidation: 'approved'
+      validByAI: true
     }).toArray();
 
     const validatedCallIds = new Set(validatedCalls.map(c => c._id.toString()));
@@ -185,10 +184,10 @@ async function reconcileAgentEarnings(agentId) {
           const callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 4.00;
           const txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 30.00;
 
-          // Call Commission logic (70% for agent)
-          if (call.companyValidation === 'approved' && call.agentValidation === 'approved') {
+          // Call Commission logic (70% for agent) - Only rely on validByAI
+          if (call.validByAI === true) {
             totalEarned += callRate * 0.7;
-          } else if (call.companyValidation === 'pending' || !call.companyValidation) {
+          } else if (call.validByAI === null || call.validByAI === undefined) {
             totalPending += callRate * 0.7;
             pendingCount++;
           }
