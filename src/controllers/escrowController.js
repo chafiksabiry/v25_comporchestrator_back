@@ -3,6 +3,8 @@ import EscrowWallet from '../models/EscrowWallet.js';
 import EscrowTransaction from '../models/EscrowTransaction.js';
 import AgentWallet from '../models/AgentWallet.js';
 import AgentWithdrawal from '../models/AgentWithdrawal.js';
+import HarxWallet from '../models/HarxWallet.js';
+import HarxCommission from '../models/HarxCommission.js';
 
 async function reconcilePendingTransactions(companyId) {
   try {
@@ -182,15 +184,15 @@ async function reconcileAgentEarnings(agentId) {
           const callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 4.00;
           const txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 30.00;
 
-          // Call Commission logic
+          // Call Commission logic (70% for agent)
           if (call.companyValidation === 'approved' && call.agentValidation === 'approved') {
-            totalEarned += callRate;
+            totalEarned += callRate * 0.7;
           } else if (call.companyValidation === 'pending' || !call.companyValidation) {
-            totalPending += callRate;
+            totalPending += callRate * 0.7;
             pendingCount++;
           }
 
-          // Transaction Commission logic
+          // Transaction Commission logic (70% for agent)
           const transaction = await db.collection('transactions').findOne({
             call: call._id
           });
@@ -198,10 +200,10 @@ async function reconcileAgentEarnings(agentId) {
           const hasSale = transaction?.validByReps === true || call.transactionOccurred === true;
           if (hasSale) {
             if (transaction?.validByCompany === true) {
-              totalEarned += txRate;
+              totalEarned += txRate * 0.7;
             } else if (transaction?.validByCompany === null || transaction?.validByCompany === undefined || !transaction.validByCompany) {
               // If it's not approved yet by company, it's pending
-              totalPending += txRate;
+              totalPending += txRate * 0.7;
               pendingCount++;
             }
           }
@@ -222,13 +224,180 @@ async function reconcileAgentEarnings(agentId) {
     wallet.availableBalance = Math.max(0, totalEarned - totalWithdrawnOrProcessing);
     wallet.pendingWithdrawals = pendingWithdrawalAmount;
     wallet.pendingCommissions = totalPending;
-    wallet.pendingCount = pendingCount; // We can add this too or just use it in response
+    wallet.pendingCount = pendingCount;
     
     await wallet.save();
     return { ...wallet.toObject(), pendingCount };
   } catch (err) {
     console.error('Error reconciling agent earnings:', err);
     throw err;
+  }
+}
+
+async function reconcileHarxEarnings() {
+  try {
+    const db = mongoose.connection.db;
+    
+    // Fetch all calls
+    const calls = await db.collection('calls').find({}).toArray();
+
+    for (const call of calls) {
+      const gigId = call.lead?.gigId || call.gigId;
+      if (gigId) {
+        const gigObjectId = mongoose.Types.ObjectId.isValid(gigId) ? new mongoose.Types.ObjectId(gigId) : gigId;
+        const gig = await db.collection('gigs').findOne({ _id: gigObjectId });
+        
+        if (gig) {
+          const callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 4.00;
+          const txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 30.00;
+
+          const callIdStr = call._id.toString();
+
+          // Call Commission logic (30% for HARX)
+          if (call.companyValidation === 'approved' && call.agentValidation === 'approved') {
+            const amount = callRate * 0.3;
+            const existing = await HarxCommission.findOne({ callId: callIdStr, type: 'call_commission' });
+            if (!existing) {
+              await new HarxCommission({
+                type: 'call_commission',
+                amount,
+                callId: callIdStr,
+                agentId: call.agent?.toString(),
+                companyId: call.companyId,
+                description: `30% commission sur appel validé`
+              }).save();
+            }
+          }
+
+          // Transaction Commission logic (30% for HARX)
+          const transaction = await db.collection('transactions').findOne({
+            call: call._id
+          });
+
+          const hasSale = transaction?.validByReps === true || call.transactionOccurred === true;
+          if (hasSale && transaction?.validByCompany === true) {
+            const amount = txRate * 0.3;
+            const existing = await HarxCommission.findOne({ transactionId: transaction._id.toString(), type: 'transaction_commission' });
+            if (!existing) {
+              await new HarxCommission({
+                type: 'transaction_commission',
+                amount,
+                callId: callIdStr,
+                transactionId: transaction._id.toString(),
+                agentId: call.agent?.toString(),
+                companyId: call.companyId,
+                description: `30% commission sur transaction validée`
+              }).save();
+            }
+          }
+        }
+      }
+    }
+
+    // Sum up ALL commissions
+    const allCommissions = await HarxCommission.find({});
+    const totalHarx = allCommissions.reduce((sum, c) => sum + c.amount, 0);
+
+    let wallet = await HarxWallet.findOne();
+    if (!wallet) {
+      wallet = new HarxWallet({ balance: 0, lifetimeEarnings: 0 });
+    }
+
+    wallet.lifetimeEarnings = totalHarx;
+    wallet.balance = totalHarx; // Assuming no withdrawals for now
+    
+    await wallet.save();
+  } catch (err) {
+    console.error('Error reconciling Harx earnings:', err);
+  }
+}
+
+async function reconcileCompanyRewards(companyId) {
+  try {
+    const db = mongoose.connection.db;
+    const companyObjectId = mongoose.Types.ObjectId.isValid(companyId)
+      ? new mongoose.Types.ObjectId(companyId)
+      : companyId;
+
+    let wallet = await EscrowWallet.findOne({ companyId });
+    if (!wallet) {
+      wallet = new EscrowWallet({ companyId, balance: 0, minutes: 0, escrow: 0, contracts: [] });
+    }
+
+    // Fetch all approved calls for this company
+    const calls = await db.collection('calls').find({
+      $or: [
+        { companyId: companyObjectId },
+        { companyId: companyId }
+      ],
+      companyValidation: 'approved',
+      agentValidation: 'approved'
+    }).toArray();
+
+    // Fetch existing reward charges to avoid double charging
+    const existingCharges = await EscrowTransaction.find({
+      companyId,
+      type: 'reward_charge'
+    });
+
+    let walletUpdated = false;
+
+    for (const call of calls) {
+      const callIdStr = call._id.toString();
+      const hasCharge = existingCharges.some(tx => tx.callId === callIdStr);
+
+      if (!hasCharge) {
+        const gigId = call.lead?.gigId || call.gigId;
+        if (gigId) {
+          const gigObjectId = mongoose.Types.ObjectId.isValid(gigId) ? new mongoose.Types.ObjectId(gigId) : gigId;
+          const gig = await db.collection('gigs').findOne({ _id: gigObjectId });
+          
+          if (gig) {
+            const callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 4.00;
+            const txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 30.00;
+
+            let totalRewardToDeduct = callRate;
+
+            // Check if transaction is also approved
+            const transaction = await db.collection('transactions').findOne({
+              call: call._id
+            });
+
+            const hasSale = transaction?.validByReps === true || call.transactionOccurred === true;
+            if (hasSale && transaction?.validByCompany === true) {
+              totalRewardToDeduct += txRate;
+            }
+
+            // Deduct from wallet balance (Euros)
+            if (wallet.balance >= totalRewardToDeduct) {
+              wallet.balance = Number((wallet.balance - totalRewardToDeduct).toFixed(4));
+            } else {
+              // If insufficient balance, let it go negative or handle as needed!
+              wallet.balance = Number((wallet.balance - totalRewardToDeduct).toFixed(4));
+            }
+            walletUpdated = true;
+
+            // Save reward_charge transaction
+            const escrowTx = new EscrowTransaction({
+              companyId,
+              type: 'reward_charge',
+              amount: totalRewardToDeduct,
+              status: 'completed',
+              callId: callIdStr,
+              description: `Frais de récompense pour appel et transaction`
+            });
+            await escrowTx.save();
+            console.log(`Charged ${totalRewardToDeduct}€ for approved call/tx: ${callIdStr}`);
+          }
+        }
+      }
+    }
+
+    if (walletUpdated) {
+      await wallet.save();
+    }
+  } catch (err) {
+    console.error('Error reconciling company rewards:', err);
   }
 }
 
@@ -243,6 +412,8 @@ export const escrowController = {
     try {
       await reconcilePendingTransactions(companyId);
       await reconcileCallCharges(companyId);
+      await reconcileCompanyRewards(companyId);
+      await reconcileHarxEarnings();
       let wallet = await EscrowWallet.findOne({ companyId });
       
       if (!wallet) {
@@ -381,6 +552,15 @@ export const escrowController = {
         credited: true
       });
       await transaction.save();
+
+      // Log HARX commission
+      const harxComm = new HarxCommission({
+        type: 'minute_purchase',
+        amount: cost,
+        companyId,
+        description: `Achat de ${cost} minutes`
+      });
+      await harxComm.save();
 
       res.status(200).json({ success: true, data: wallet, transaction });
     } catch (err) {
@@ -952,6 +1132,16 @@ export const escrowController = {
     } catch (err) {
       console.error('Error approving/refusing agent withdrawal:', err);
       res.status(500).json({ error: 'Failed to process withdrawal action' });
+    }
+  },
+
+  getHarxCommissions: async (req, res) => {
+    try {
+      const commissions = await HarxCommission.find({}).sort({ createdAt: -1 });
+      res.status(200).json({ success: true, data: commissions });
+    } catch (err) {
+      console.error('Error fetching Harx commissions:', err);
+      res.status(500).json({ error: 'Failed to fetch Harx commissions' });
     }
   }
 };
