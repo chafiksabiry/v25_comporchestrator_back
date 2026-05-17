@@ -32,6 +32,12 @@ const escrowTransactionSchema = new mongoose.Schema({
     required: false,
     index: true
   },
+  commission_rep: { type: Number, default: 0 },
+  commission_harx: { type: Number, default: 0 },
+  total: { type: Number, default: 0 },
+  minutes: { type: Number, default: 0 },
+  transaction_detected: { type: Boolean, default: false },
+  transaction_price: { type: Number, default: 0 },
   description: {
     type: String,
     required: false

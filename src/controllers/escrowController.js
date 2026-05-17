@@ -92,6 +92,24 @@ async function reconcileCallCharges(companyId) {
         // Deduct directly from minutes, allowing it to go negative
         const currentMins = wallet.minutes || 0;
         wallet.minutes = Number((currentMins - durationInMinutes).toFixed(4));
+        
+        const repCallComm = call.repCallCommission || 0;
+        const platformCallComm = call.platformCallCommission || 0;
+        const totalCallComm = repCallComm + platformCallComm;
+        
+        const repTransComm = call.repTransactionCommission || 0;
+        const platformTransComm = call.platformTransactionCommission || 0;
+        const totalTransComm = repTransComm + platformTransComm;
+        
+        const transactionDetected = call.ai_call_score?.transaction_detected || false;
+        const transPrice = call.transaction_price || 0;
+        
+        // Deduct commissions from balance
+        wallet.balance = Number(((wallet.balance || 0) - totalCallComm).toFixed(2));
+        if (transactionDetected) {
+          wallet.balance = Number((wallet.balance - totalTransComm).toFixed(2));
+        }
+        
         walletUpdated = true;
 
         // Find agent name for the description
@@ -118,6 +136,12 @@ async function reconcileCallCharges(companyId) {
           amount: durationInMinutes,
           status: 'completed',
           callId: callIdStr,
+          commission_rep: repCallComm,
+          commission_harx: platformCallComm,
+          total: totalCallComm + (transactionDetected ? totalTransComm : 0),
+          minutes: durationInMinutes,
+          transaction_detected: transactionDetected,
+          transaction_price: transactionDetected ? transPrice : 0,
           description: `Consommation d'appel par ${agentName}`
         });
         await escrowTx.save();
