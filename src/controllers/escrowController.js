@@ -1147,6 +1147,29 @@ export const escrowController = {
     }
   },
 
+  triggerReconciliation: async (req, res) => {
+    try {
+      const { companyId } = req.params;
+      if (!companyId) {
+        return res.status(400).json({ error: 'Company ID is required' });
+      }
+
+      await reconcilePendingTransactions(companyId);
+      await reconcileCallCharges(companyId);
+      await reconcileCompanyRewards(companyId);
+      await reconcileHarxEarnings();
+
+      // Broadcast update via WebSocket
+      const { broadcastUpdate } = await import('../websocket/escrowUpdates.js');
+      broadcastUpdate(companyId, { type: 'reconciliation_complete' });
+
+      res.status(200).json({ success: true, message: 'Reconciliation triggered' });
+    } catch (err) {
+      console.error('Error triggering reconciliation:', err);
+      res.status(500).json({ error: 'Failed to trigger reconciliation' });
+    }
+  },
+
   getHarxCommissions: async (req, res) => {
     try {
       const commissions = await HarxCommission.find({}).sort({ createdAt: -1 });

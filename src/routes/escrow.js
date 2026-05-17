@@ -15,6 +15,7 @@ router.get('/gigs-and-reps/:companyId', escrowController.getGigsAndReps);
 router.get('/calls/:companyId', escrowController.getCompanyCallsAndTransactions);
 router.post('/calls/approve/:callId', escrowController.approveOrRefuseCallTransaction);
 router.get('/harx/commissions', escrowController.getHarxCommissions);
+router.post('/reconcile/:companyId', escrowController.triggerReconciliation);
 
 // Agent Payouts / Withdrawals
 router.get('/agent/wallet/:agentId', escrowController.getAgentWallet);
