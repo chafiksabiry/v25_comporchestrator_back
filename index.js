@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import { config } from './src/config/env.js';
 import express from 'express';
+import http from 'http';
+import { setupEscrowWebSocket } from './src/websocket/escrowUpdates.js';
 import mongoose from 'mongoose';
 import { requirementRoutes } from './src/routes/requirement.js';
 import { addressRoutes } from './src/routes/address.js';
@@ -73,8 +75,14 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something broke!' });
 });
 
+// Create HTTP server
+const server = http.createServer(app);
+
+// Set up WebSocket
+setupEscrowWebSocket(server);
+
 // Start server
-const server = app.listen(config.port, () => {
+server.listen(config.port, () => {
   console.log(`✅ Server v1.0.1 is running on port ${config.port}`);
 });
 

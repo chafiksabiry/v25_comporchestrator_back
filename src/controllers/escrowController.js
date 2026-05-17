@@ -5,6 +5,7 @@ import AgentWallet from '../models/AgentWallet.js';
 import AgentWithdrawal from '../models/AgentWithdrawal.js';
 import HarxWallet from '../models/HarxWallet.js';
 import HarxCommission from '../models/HarxCommission.js';
+import { broadcastUpdate } from '../websocket/escrowUpdates.js';
 
 async function reconcilePendingTransactions(companyId) {
   try {
@@ -833,6 +834,8 @@ export const escrowController = {
 
         // Find Lead Name
         let leadName = 'Lead';
+        let callRate = 0;
+        let txRate = 0;
         if (call.lead) {
           const leadIdObj = mongoose.Types.ObjectId.isValid(call.lead)
             ? new mongoose.Types.ObjectId(call.lead)
@@ -845,6 +848,14 @@ export const escrowController = {
           });
           if (leadDoc) {
             leadName = leadDoc.name || `${leadDoc.First_Name || ''} ${leadDoc.Last_Name || ''}`.trim() || leadDoc.email || 'Unnamed Lead';
+            if (leadDoc.gigId) {
+              const gigIdObj = mongoose.Types.ObjectId.isValid(leadDoc.gigId) ? new mongoose.Types.ObjectId(leadDoc.gigId) : leadDoc.gigId;
+              const gig = await db.collection('gigs').findOne({ _id: gigIdObj });
+              if (gig) {
+                callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 0;
+                txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 0;
+              }
+            }
           }
         }
 
@@ -858,6 +869,8 @@ export const escrowController = {
           startTime: call.startTime,
           createdAt: call.createdAt || call.startTime || null,
           status: call.status || 'completed',
+          repCallCommission: callRate * 0.7,
+          repTransactionCommission: txRate * 0.7,
           validByCompany: (() => {
             if (transaction && transaction.validByCompany !== undefined) return transaction.validByCompany;
             if (call.validByCompany !== undefined && call.validByCompany !== null) return call.validByCompany;
@@ -987,6 +1000,20 @@ export const escrowController = {
         transaction.validByCompany = isApprove;
         transaction.valid = (transaction.validByReps === true && isApprove);
       }
+
+      // Trigger reconciliation for the agent and HARX to update wallets
+      if (isApprove && call.agent) {
+        await reconcileAgentEarnings(call.agent);
+        await reconcileHarxEarnings();
+      }
+
+      // Broadcast update to connected clients
+      broadcastUpdate({
+        type: 'escrow_update',
+        companyId: companyId,
+        callId: callId,
+        action: action
+      });
 
       // Fetch the reconciled wallet status
       let wallet = await EscrowWallet.findOne({ companyId });

@@ -25,7 +25,8 @@
     "multer": "^2.0.2",
     "stripe": "^21.0.1",
     "telnyx": "^1.25.5",
-    "twilio": "^5.7.0"
+    "twilio": "^5.7.0",
+    "ws": "^8.20.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
