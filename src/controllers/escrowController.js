@@ -797,9 +797,26 @@ export const escrowController = {
           }
         }
 
+        let destinationCountry = 'US';
+        if (gig.destination_zone) {
+          const zoneIdObj = mongoose.Types.ObjectId.isValid(gig.destination_zone)
+            ? new mongoose.Types.ObjectId(gig.destination_zone)
+            : gig.destination_zone;
+          const zoneDoc = await db.collection('zones').findOne({
+            $or: [
+              { _id: zoneIdObj },
+              { _id: gig.destination_zone }
+            ]
+          });
+          if (zoneDoc && zoneDoc.cca2) {
+            destinationCountry = zoneDoc.cca2;
+          }
+        }
+
         result.push({
           gigId: gig._id.toString(),
           title: gig.title || 'Untitled Gig',
+          destinationCountry,
           enrolledReps
         });
       }
