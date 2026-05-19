@@ -57,6 +57,39 @@ app.use((req, res, next) => {
 });
 app.use(express.urlencoded({ extended: true }));
 
+// Map and Validate companyId / agentId parameters to prevent Mongoose CastErrors
+app.use((req, res, next) => {
+  if (req.body && req.body.companyId === 'demo_company_id') {
+    req.body.companyId = '6a0bfd35d605ccca8b51e13b';
+  }
+  if (req.query && req.query.companyId === 'demo_company_id') {
+    req.query.companyId = '6a0bfd35d605ccca8b51e13b';
+  }
+  next();
+});
+
+app.param('companyId', (req, res, next, value) => {
+  if (value === 'demo_company_id') {
+    req.params.companyId = '6a0bfd35d605ccca8b51e13b';
+    return next();
+  }
+  if (!mongoose.Types.ObjectId.isValid(value)) {
+    return res.status(400).json({ error: 'Invalid companyId format' });
+  }
+  next();
+});
+
+app.param('agentId', (req, res, next, value) => {
+  if (value === 'demo_company_id') {
+    req.params.agentId = '6a0bfd35d605ccca8b51e13b';
+    return next();
+  }
+  if (!mongoose.Types.ObjectId.isValid(value)) {
+    return res.status(400).json({ error: 'Invalid agentId format' });
+  }
+  next();
+});
+
 // Routes API
 app.use('/api/requirements', requirementRoutes);
 app.use('/api/addresses', addressRoutes);
