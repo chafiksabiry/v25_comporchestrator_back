@@ -11,6 +11,8 @@ import { phoneNumberRoutes } from './src/routes/phoneNumber.js';
 import { telnyxRequirementGroupRoutes } from './src/routes/telnyxRequirementGroup.js';
 import { subscriptionRoutes } from './src/routes/subscription.js';
 import { escrowRoutes } from './src/routes/escrow.js';
+import { walletCompanyRoutes } from './src/routes/walletCompany.js';
+import { minutesCompanyRoutes } from './src/routes/minutesCompany.js';
 
 const app = express();
 
@@ -63,6 +65,8 @@ app.use('/api/requirement-groups', telnyxRequirementGroupRoutes);
 app.use('/api/phone-numbers', phoneNumberRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/escrow', escrowRoutes);
+app.use('/api/wallet-company', walletCompanyRoutes);
+app.use('/api/minutes-company', minutesCompanyRoutes);
 
 // Health check to verify deployment
 app.get('/api/health', (req, res) => {

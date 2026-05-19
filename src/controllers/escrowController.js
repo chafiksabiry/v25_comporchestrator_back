@@ -420,22 +420,45 @@ export const escrowController = {
       await reconcileCallCharges(companyId);
       await reconcileCompanyRewards(companyId);
       await reconcileHarxEarnings();
-      let wallet = await EscrowWallet.findOne({ companyId });
-      
-      if (!wallet) {
-        return res.status(200).json({
-          success: true,
-          data: {
-            companyId,
-            balance: 0,
-            minutes: 0,
-            escrow: 0,
-            contracts: []
-          }
-        });
+
+      // Query new collections
+      const WalletCompany = mongoose.model('WalletCompany');
+      const MinutesCompany = mongoose.model('MinutesCompany');
+
+      let walletCompany = await WalletCompany.findOne({ companyId });
+      if (!walletCompany) {
+        walletCompany = new WalletCompany({ companyId, balance: 0 });
+        await walletCompany.save();
       }
 
-      res.status(200).json({ success: true, data: wallet });
+      let minutesCompany = await MinutesCompany.findOne({ companyId });
+      if (!minutesCompany) {
+        minutesCompany = new MinutesCompany({ companyId, minutes: 0 });
+        await minutesCompany.save();
+      }
+
+      // Also get the old wallet for backwards compatibility of Escrow / Contracts
+      let wallet = await EscrowWallet.findOne({ companyId });
+      if (!wallet) {
+        wallet = new EscrowWallet({ companyId, balance: walletCompany.balance, minutes: minutesCompany.minutes, escrow: 0, contracts: [] });
+        await wallet.save();
+      } else {
+        // Sync new balances into legacy model
+        wallet.balance = walletCompany.balance;
+        wallet.minutes = minutesCompany.minutes;
+        await wallet.save();
+      }
+
+      res.status(200).json({
+        success: true,
+        data: {
+          companyId,
+          balance: walletCompany.balance,
+          minutes: minutesCompany.minutes,
+          escrow: wallet.escrow || 0,
+          contracts: wallet.contracts || []
+        }
+      });
     } catch (err) {
       console.error('Error fetching/initializing escrow wallet:', err);
       res.status(500).json({ error: 'Failed to fetch escrow wallet status' });
@@ -527,7 +550,7 @@ export const escrowController = {
     }
   },
 
-  // Purchase calling minutes using Euro balance (1 EUR = 1 Minute)
+  // Purchase calling minutes using Direct Stripe/PayPal Payment (1 EUR = 1 Minute)
   buyMinutes: async (req, res) => {
     const { companyId, amount } = req.body;
     if (!companyId || !amount || amount <= 0) {
@@ -542,11 +565,7 @@ export const escrowController = {
       }
 
       const cost = parseFloat(amount); // 1 Euro per minute
-      if (wallet.balance < cost) {
-        return res.status(400).json({ error: 'Solde disponible insuffisant en Euros (€) pour acheter ces minutes.' });
-      }
-
-      wallet.balance -= cost;
+      // Direct Stripe/PayPal payment: credit calling minutes directly
       wallet.minutes += cost;
       await wallet.save();
 
@@ -555,7 +574,8 @@ export const escrowController = {
         type: 'buy_minutes',
         amount: cost,
         status: 'completed',
-        credited: true
+        credited: true,
+        description: `Recharge de ${cost} minutes (Paiement direct Stripe/PayPal)`
       });
       await transaction.save();
 
@@ -564,7 +584,7 @@ export const escrowController = {
         type: 'minute_purchase',
         amount: cost,
         companyId,
-        description: `Achat de ${cost} minutes`
+        description: `Recharge directe de ${cost} minutes (Stripe/PayPal)`
       });
       await harxComm.save();
 
