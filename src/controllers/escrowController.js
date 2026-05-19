@@ -798,6 +798,9 @@ export const escrowController = {
         }
 
         let destinationCountry = 'US';
+        console.log(`[getGigsAndReps] --------------------------------------------`);
+        console.log(`[getGigsAndReps] Processing gig: "${gig.title}" (ID: ${gig._id})`);
+        console.log(`[getGigsAndReps] gig.destination_zone value:`, gig.destination_zone);
         if (gig.destination_zone) {
           const zoneIdObj = mongoose.Types.ObjectId.isValid(gig.destination_zone)
             ? new mongoose.Types.ObjectId(gig.destination_zone)
@@ -808,10 +811,17 @@ export const escrowController = {
               { _id: gig.destination_zone }
             ]
           });
+          console.log(`[getGigsAndReps] Found zoneDoc:`, zoneDoc);
           if (zoneDoc && zoneDoc.cca2) {
             destinationCountry = zoneDoc.cca2;
+          } else {
+            console.log(`[getGigsAndReps] zoneDoc is missing or cca2 is undefined inside zoneDoc`);
           }
+        } else {
+          console.log(`[getGigsAndReps] No destination_zone configured on this gig`);
         }
+        console.log(`[getGigsAndReps] Resolved destinationCountry:`, destinationCountry);
+        console.log(`[getGigsAndReps] --------------------------------------------`);
 
         result.push({
           gigId: gig._id.toString(),
