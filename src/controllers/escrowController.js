@@ -449,13 +449,17 @@ export const escrowController = {
         await wallet.save();
       }
 
+      // Query active phone numbers count for the company
+      const PhoneNumber = mongoose.model('PhoneNumber');
+      const linesCount = await PhoneNumber.countDocuments({ companyId });
+
       res.status(200).json({
         success: true,
         data: {
           companyId,
           balance: walletCompany.balance,
           minutes: minutesCompany.minutes,
-          escrow: wallet.escrow || 0,
+          escrow: linesCount,
           contracts: wallet.contracts || []
         }
       });
