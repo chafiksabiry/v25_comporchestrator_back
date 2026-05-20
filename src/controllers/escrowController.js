@@ -7,6 +7,7 @@ import HarxWallet from '../models/HarxWallet.js';
 import HarxCommission from '../models/HarxCommission.js';
 import MinutesCompany from '../models/MinutesCompany.js';
 import WalletCompany from '../models/WalletCompany.js';
+import WalletCompanyEntry from '../models/WalletCompanyEntry.js';
 import RepTransaction from '../models/RepTransaction.js';
 import { broadcastUpdate } from '../websocket/escrowUpdates.js';
 
@@ -643,26 +644,44 @@ export const escrowController = {
 
   // Deposit money — WalletCompany is the authoritative balance.
   deposit: async (req, res) => {
-    const { companyId, amount } = req.body;
+    const { companyId, amount, method, providerRef } = req.body;
     if (!companyId || !amount || amount <= 0) {
       return res.status(400).json({ error: 'companyId and positive amount are required' });
     }
 
     try {
+      const value = Number(parseFloat(amount).toFixed(2));
       const wallet = await WalletCompany.findOneAndUpdate(
         { companyId },
-        { $inc: { balance: parseFloat(amount) } },
+        { $inc: { balance: value } },
         { new: true, upsert: true, setDefaultsOnInsert: true }
       );
 
       const transaction = new EscrowTransaction({
         companyId,
         type: 'deposit',
-        amount: parseFloat(amount),
+        amount: value,
         status: 'completed',
         credited: true
       });
       await transaction.save();
+
+      // Mirror into the WalletCompanyEntry ledger so the frontend can show
+      // the deposit history alongside the RepTransaction debits.
+      try {
+        await WalletCompanyEntry.create({
+          companyId,
+          type: 'deposit',
+          direction: 'credit',
+          amount: value,
+          balanceAfter: wallet.balance,
+          status: 'completed',
+          description: `Dépôt de ${value.toFixed(2)} €${method ? ` via ${method}` : ''}`,
+          meta: { method: method || null, providerRef: providerRef || null }
+        });
+      } catch (logErr) {
+        console.warn('WalletCompanyEntry log failed (escrow deposit):', logErr.message);
+      }
 
       res.status(200).json({ success: true, data: wallet, transaction });
     } catch (err) {
@@ -685,16 +704,31 @@ export const escrowController = {
         return res.status(400).json({ error: 'Insufficient balance' });
       }
 
-      wallet.balance = Number((wallet.balance - parseFloat(amount)).toFixed(2));
+      const value = Number(parseFloat(amount).toFixed(2));
+      wallet.balance = Number((wallet.balance - value).toFixed(2));
       await wallet.save();
 
       const transaction = new EscrowTransaction({
         companyId,
         type: 'withdrawal',
-        amount: parseFloat(amount),
+        amount: value,
         status: 'completed'
       });
       await transaction.save();
+
+      try {
+        await WalletCompanyEntry.create({
+          companyId,
+          type: 'withdrawal',
+          direction: 'debit',
+          amount: value,
+          balanceAfter: wallet.balance,
+          status: 'completed',
+          description: `Retrait de ${value.toFixed(2)} €`
+        });
+      } catch (logErr) {
+        console.warn('WalletCompanyEntry log failed (escrow withdraw):', logErr.message);
+      }
 
       res.status(200).json({ success: true, data: wallet, transaction });
     } catch (err) {

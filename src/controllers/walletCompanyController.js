@@ -1,4 +1,5 @@
 import WalletCompany from '../models/WalletCompany.js';
+import WalletCompanyEntry from '../models/WalletCompanyEntry.js';
 import AgentWithdrawal from '../models/AgentWithdrawal.js';
 import mongoose from 'mongoose';
 
@@ -20,7 +21,7 @@ export const walletCompanyController = {
   },
 
   deposit: async (req, res) => {
-    const { companyId, amount } = req.body;
+    const { companyId, amount, method, providerRef, description } = req.body;
     if (!companyId || !amount || amount <= 0) {
       return res.status(400).json({ error: 'companyId and positive amount are required' });
     }
@@ -29,8 +30,25 @@ export const walletCompanyController = {
       if (!wallet) {
         wallet = new WalletCompany({ companyId, balance: 0 });
       }
-      wallet.balance = Number((wallet.balance + parseFloat(amount)).toFixed(2));
+      const value = Number(parseFloat(amount).toFixed(2));
+      wallet.balance = Number((wallet.balance + value).toFixed(2));
       await wallet.save();
+
+      // Append to the ledger so the frontend can show the deposit history.
+      try {
+        await WalletCompanyEntry.create({
+          companyId,
+          type: 'deposit',
+          direction: 'credit',
+          amount: value,
+          balanceAfter: wallet.balance,
+          status: 'completed',
+          description: description || `Dépôt de ${value.toFixed(2)} €${method ? ` via ${method}` : ''}`,
+          meta: { method: method || null, providerRef: providerRef || null }
+        });
+      } catch (logErr) {
+        console.warn('WalletCompanyEntry log failed (deposit):', logErr.message);
+      }
 
       res.status(200).json({ success: true, data: wallet });
     } catch (err) {
@@ -40,7 +58,7 @@ export const walletCompanyController = {
   },
 
   withdraw: async (req, res) => {
-    const { companyId, amount } = req.body;
+    const { companyId, amount, description } = req.body;
     if (!companyId || !amount || amount <= 0) {
       return res.status(400).json({ error: 'companyId and positive amount are required' });
     }
@@ -52,13 +70,71 @@ export const walletCompanyController = {
       if (wallet.balance < amount) {
         return res.status(400).json({ error: 'Insufficient balance' });
       }
-      wallet.balance = Number((wallet.balance - parseFloat(amount)).toFixed(2));
+      const value = Number(parseFloat(amount).toFixed(2));
+      wallet.balance = Number((wallet.balance - value).toFixed(2));
       await wallet.save();
+
+      try {
+        await WalletCompanyEntry.create({
+          companyId,
+          type: 'withdrawal',
+          direction: 'debit',
+          amount: value,
+          balanceAfter: wallet.balance,
+          status: 'completed',
+          description: description || `Retrait de ${value.toFixed(2)} €`
+        });
+      } catch (logErr) {
+        console.warn('WalletCompanyEntry log failed (withdrawal):', logErr.message);
+      }
 
       res.status(200).json({ success: true, data: wallet });
     } catch (err) {
       console.error('Error during withdrawal:', err);
       res.status(500).json({ error: 'Failed to withdraw funds' });
+    }
+  },
+
+  // History of every cash movement on the company's wallet (deposits,
+  // withdrawals, refunds, manual adjustments). The frontend merges this
+  // with the RepTransaction ledger to show a full timeline.
+  getEntries: async (req, res) => {
+    const { companyId } = req.params;
+    if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    try {
+      const { type, direction, status, limit = 200 } = req.query;
+      const filter = { companyId };
+      if (type) filter.type = type;
+      if (direction) filter.direction = direction;
+      if (status) filter.status = status;
+
+      const entries = await WalletCompanyEntry.find(filter)
+        .sort({ createdAt: -1 })
+        .limit(Math.min(Number(limit) || 200, 500))
+        .lean();
+
+      const totals = entries.reduce(
+        (acc, e) => {
+          if (e.direction === 'credit') acc.credit += e.amount || 0;
+          else acc.debit += e.amount || 0;
+          return acc;
+        },
+        { credit: 0, debit: 0 }
+      );
+
+      res.status(200).json({
+        success: true,
+        data: entries,
+        totals: {
+          credit: Number(totals.credit.toFixed(2)),
+          debit: Number(totals.debit.toFixed(2)),
+          net: Number((totals.credit - totals.debit).toFixed(2)),
+          count: entries.length
+        }
+      });
+    } catch (err) {
+      console.error('Error fetching wallet entries:', err);
+      res.status(500).json({ error: 'Failed to fetch wallet entries' });
     }
   },
 
