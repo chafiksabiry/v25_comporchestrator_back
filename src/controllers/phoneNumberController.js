@@ -259,6 +259,7 @@ class PhoneNumberController {
 
       let checkoutUrl;
       let paypalOrderId;
+      let paypalApproveUrl;
 
       if (provider === 'paypal') {
         if (!paypalService.isConfigured()) {
@@ -269,15 +270,31 @@ class PhoneNumberController {
           });
         }
 
+        const frontendBase = (process.env.FRONTEND_BASE_URL || req.headers.origin || 'https://harx25pageslinks.netlify.app').replace(/\/$/, '');
+        const returnUrl = `${frontendBase}/paypal/return?paymentId=${payment._id}`;
+        const cancelUrl = `${frontendBase}/paypal/cancel?paymentId=${payment._id}`;
+
         const paypalOrder = await paypalService.createOrder({
           amountCents: payment.amount,
           currency: payment.currency,
           description: `HARX — Ligne ${phoneNumber}`,
-          customId: payment._id
+          customId: payment._id,
+          returnUrl,
+          cancelUrl
         });
 
         paypalOrderId = paypalOrder.id;
+        paypalApproveUrl = paypalOrder.approveUrl;
+        if (!paypalApproveUrl) {
+          await PhoneNumberPayment.findByIdAndDelete(payment._id);
+          return res.status(502).json({
+            error: 'PayPal order missing approval URL',
+            message: 'La commande PayPal a été créée sans URL d\'approbation.'
+          });
+        }
+
         payment.providerRef = paypalOrderId;
+        payment.checkoutUrl = paypalApproveUrl;
         await payment.save();
       } else if (provider === 'stripe' && process.env.STRIPE_SECRET_KEY) {
         // TODO: Stripe Checkout Session
@@ -296,7 +313,8 @@ class PhoneNumberController {
         provider: payment.provider,
         checkoutUrl,
         paypalOrderId,
-        paypalClientId: provider === 'paypal' ? paypalService.getClientId() : undefined
+        paypalApproveUrl,
+        paypalMode: provider === 'paypal' ? paypalService.getMode() : undefined
       });
     } catch (error) {
       console.error('Error initializing line checkout:', error);

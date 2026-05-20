@@ -47,9 +47,9 @@ async function getAccessToken() {
 
 /**
  * Create a PayPal Checkout order (intent CAPTURE).
- * @returns {Promise<{ id: string, status: string }>}
+ * Returns the raw PayPal payload, augmented with a convenient `approveUrl`.
  */
-async function createOrder({ amountCents, currency, description, customId }) {
+async function createOrder({ amountCents, currency, description, customId, returnUrl, cancelUrl }) {
   const token = await getAccessToken();
   const value = (amountCents / 100).toFixed(2);
 
@@ -66,7 +66,15 @@ async function createOrder({ amountCents, currency, description, customId }) {
             value
           }
         }
-      ]
+      ],
+      application_context: {
+        brand_name: 'HARX',
+        user_action: 'PAY_NOW',
+        landing_page: 'LOGIN',
+        shipping_preference: 'NO_SHIPPING',
+        return_url: returnUrl,
+        cancel_url: cancelUrl
+      }
     },
     {
       headers: {
@@ -77,7 +85,11 @@ async function createOrder({ amountCents, currency, description, customId }) {
     }
   );
 
-  return data;
+  const approveLink = Array.isArray(data?.links)
+    ? data.links.find((l) => l.rel === 'approve')
+    : null;
+
+  return { ...data, approveUrl: approveLink?.href || null };
 }
 
 /**
