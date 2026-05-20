@@ -1341,6 +1341,139 @@ export const escrowController = {
     }
   },
 
+  // Company-side ledger: list every RepTransaction booked under this company
+  // (one row per validated call / sale / bonus). Used by the company wallet
+  // panel to display the real commission history — not the raw call list.
+  // Enriched with call / gig / rep info so the table is rendered in one trip.
+  getCompanyRepTransactions: async (req, res) => {
+    const { companyId } = req.params;
+    if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+
+    try {
+      const companyObjectId = mongoose.Types.ObjectId.isValid(companyId)
+        ? new mongoose.Types.ObjectId(companyId)
+        : companyId;
+
+      const { type, status, limit = 200 } = req.query;
+      const filter = { companyId: companyObjectId };
+      if (type) filter.type = type;
+      if (status) filter.status = status;
+
+      const rows = await RepTransaction.find(filter)
+        .sort({ createdAt: -1 })
+        .limit(Math.min(Number(limit) || 200, 500))
+        .lean();
+
+      const db = mongoose.connection.db;
+      const toId = (id) => (id && id.toString ? id.toString() : id);
+      const callIds = [...new Set(rows.map(r => r.callId).filter(Boolean).map(toId))];
+      const gigIds = [...new Set(rows.map(r => r.gigId).filter(Boolean).map(toId))];
+      const repIds = [...new Set(rows.map(r => r.repId).filter(Boolean).map(toId))];
+
+      const [callDocs, gigDocs, repDocs] = await Promise.all([
+        callIds.length
+          ? db.collection('calls').find({
+              _id: { $in: callIds.map(id => new mongoose.Types.ObjectId(id)) }
+            }).toArray()
+          : [],
+        gigIds.length
+          ? db.collection('gigs').find({
+              _id: { $in: gigIds.map(id => new mongoose.Types.ObjectId(id)) }
+            }).toArray()
+          : [],
+        repIds.length
+          ? db.collection('agents').find({
+              _id: { $in: repIds.map(id => new mongoose.Types.ObjectId(id)) }
+            }).toArray()
+          : []
+      ]);
+
+      // Resolve leads tied to the underlying calls (one batch query).
+      const leadRefs = [...new Set(
+        callDocs.map(c => c.lead).filter(Boolean).map(toId)
+      )];
+      const leadDocs = leadRefs.length
+        ? await db.collection('leads').find({
+            _id: { $in: leadRefs.map(id => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id) }
+          }).toArray()
+        : [];
+      const leadMap = new Map(leadDocs.map(l => [l._id.toString(), l]));
+
+      const callMap = new Map(callDocs.map(c => [c._id.toString(), c]));
+      const gigMap = new Map(gigDocs.map(g => [g._id.toString(), g]));
+      const repMap = new Map(repDocs.map(a => [a._id.toString(), a]));
+
+      const enriched = rows.map(row => {
+        const callDoc = row.callId ? callMap.get(row.callId.toString()) : null;
+        const gigDoc = row.gigId ? gigMap.get(row.gigId.toString()) : null;
+        const repDoc = row.repId ? repMap.get(row.repId.toString()) : null;
+        const leadDoc = callDoc && callDoc.lead ? leadMap.get(callDoc.lead.toString()) : null;
+        const leadName = leadDoc
+          ? (leadDoc.name || `${leadDoc.First_Name || ''} ${leadDoc.Last_Name || ''}`.trim() || leadDoc.email || 'Lead')
+          : 'Lead';
+        return {
+          ...row,
+          call: callDoc ? {
+            _id: callDoc._id,
+            sid: callDoc.sid,
+            duration: callDoc.duration,
+            startTime: callDoc.startTime,
+            direction: callDoc.direction,
+            to: callDoc.to,
+            from: callDoc.from,
+            recording_url_cloudinary: callDoc.recording_url_cloudinary,
+            recording_url: callDoc.recording_url,
+            transcript: callDoc.transcript,
+            ai_call_score: callDoc.ai_call_score,
+            validByAI: callDoc.validByAI,
+            transactionOccurred: callDoc.transactionOccurred,
+            lead: leadName,
+            leadObj: { First_Name: leadName, Last_Name: '' }
+          } : null,
+          gig: gigDoc ? {
+            _id: gigDoc._id,
+            title: gigDoc.title || gigDoc.name
+          } : null,
+          rep: repDoc ? {
+            _id: repDoc._id,
+            firstName: repDoc.firstName,
+            lastName: repDoc.lastName,
+            email: repDoc.email,
+            phone: repDoc.phone
+          } : null
+        };
+      });
+
+      const totals = enriched.reduce(
+        (acc, r) => {
+          acc.amount += r.amount || 0;
+          acc.repShare += r.repShare || 0;
+          acc.harxShare += r.harxShare || 0;
+          acc.countByType[r.type] = (acc.countByType[r.type] || 0) + 1;
+          acc.countByStatus[r.status] = (acc.countByStatus[r.status] || 0) + 1;
+          return acc;
+        },
+        { amount: 0, repShare: 0, harxShare: 0, countByType: {}, countByStatus: {} }
+      );
+
+      res.status(200).json({
+        success: true,
+        data: enriched,
+        totals: {
+          amount: Number(totals.amount.toFixed(2)),
+          repShare: Number(totals.repShare.toFixed(2)),
+          harxShare: Number(totals.harxShare.toFixed(2)),
+          countByType: totals.countByType,
+          countByStatus: totals.countByStatus,
+          count: enriched.length
+        }
+      });
+    } catch (err) {
+      console.error('Error fetching company rep transactions:', err);
+      res.status(500).json({ error: 'Failed to fetch company rep transactions' });
+    }
+  },
+
   // Award a manual bonus to a rep (tied to gig + company). Same 70/30 split,
   // same WalletCompany debit, fully idempotent on the provided bonusId.
   awardRepBonus: async (req, res) => {

@@ -26,6 +26,9 @@ router.post('/agent/withdraw', escrowController.requestAgentWithdrawal);
 router.get('/agent/transactions/:agentId', escrowController.getAgentTransactions);
 router.post('/agent/bonus', escrowController.awardRepBonus);
 
+// Company-side ledger: list every RepTransaction tied to this company
+router.get('/company/rep-transactions/:companyId', escrowController.getCompanyRepTransactions);
+
 // Company side management of agent withdrawals
 router.get('/company/agent-withdrawals/:companyId', escrowController.getAgentWithdrawalsForCompany);
 router.post('/company/agent-withdrawals/approve/:withdrawalId', escrowController.approveOrRefuseAgentWithdrawal);
