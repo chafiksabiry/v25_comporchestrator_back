@@ -16,6 +16,7 @@ router.post('/purchase', phoneNumberController.purchaseNumber.bind(phoneNumberCo
 router.post('/purchase/twilio', phoneNumberController.purchaseTwilioNumber.bind(phoneNumberController));
 
 // Stripe / PayPal checkout for a phone line (NOT linked to WalletCompany)
+router.get('/checkout/config', phoneNumberController.getCheckoutConfig.bind(phoneNumberController));
 router.post('/checkout/init', phoneNumberController.initLineCheckout.bind(phoneNumberController));
 router.post('/checkout/confirm', phoneNumberController.confirmLineCheckout.bind(phoneNumberController));
 

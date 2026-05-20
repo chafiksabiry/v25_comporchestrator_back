@@ -1,4 +1,5 @@
 import { phoneNumberService } from '../services/phoneNumberService.js';
+import { paypalService } from '../services/paypalService.js';
 import { config } from '../config/env.js';
 import telnyx from 'telnyx';
 import mongoose from 'mongoose';
@@ -256,23 +257,33 @@ class PhoneNumberController {
         status: 'pending'
       });
 
-      // 💳 Real Stripe / PayPal session creation should happen here.
-      // Until SDK keys are wired in `process.env`, we expose a stub
-      // checkout URL that the frontend recognizes and walks through a
-      // simulated confirmation step. The DB record + audit trail are
-      // already real.
       let checkoutUrl;
-      if (provider === 'stripe' && process.env.STRIPE_SECRET_KEY) {
-        // TODO: create a Stripe Checkout Session and set checkoutUrl.
-        checkoutUrl = undefined;
-      } else if (provider === 'paypal' && process.env.PAYPAL_CLIENT_SECRET) {
-        // TODO: create a PayPal order and set checkoutUrl.
-        checkoutUrl = undefined;
-      } else {
-        checkoutUrl = `internal://stub-checkout/${payment._id}`;
-      }
+      let paypalOrderId;
 
-      if (checkoutUrl) {
+      if (provider === 'paypal') {
+        if (!paypalService.isConfigured()) {
+          await PhoneNumberPayment.findByIdAndDelete(payment._id);
+          return res.status(503).json({
+            error: 'PayPal not configured',
+            message: 'Définissez PAYPAL_CLIENT_ID et PAYPAL_CLIENT_SECRET sur le serveur.'
+          });
+        }
+
+        const paypalOrder = await paypalService.createOrder({
+          amountCents: payment.amount,
+          currency: payment.currency,
+          description: `HARX — Ligne ${phoneNumber}`,
+          customId: payment._id
+        });
+
+        paypalOrderId = paypalOrder.id;
+        payment.providerRef = paypalOrderId;
+        await payment.save();
+      } else if (provider === 'stripe' && process.env.STRIPE_SECRET_KEY) {
+        // TODO: Stripe Checkout Session
+        checkoutUrl = undefined;
+      } else if (provider === 'stripe') {
+        checkoutUrl = `internal://stub-checkout/${payment._id}`;
         payment.checkoutUrl = checkoutUrl;
         await payment.save();
       }
@@ -283,7 +294,9 @@ class PhoneNumberController {
         amount: payment.amount,
         currency: payment.currency,
         provider: payment.provider,
-        checkoutUrl
+        checkoutUrl,
+        paypalOrderId,
+        paypalClientId: provider === 'paypal' ? paypalService.getClientId() : undefined
       });
     } catch (error) {
       console.error('Error initializing line checkout:', error);
@@ -314,18 +327,70 @@ class PhoneNumberController {
         return res.status(409).json({ error: `Payment is already ${payment.status}` });
       }
 
-      // 🔐 In a real Stripe / PayPal integration we would verify the
-      // server-side payment status against the provider here using
-      // `providerRef`. With stub mode (no SDK keys) we trust the client.
-      payment.status = 'succeeded';
-      if (providerRef) payment.providerRef = providerRef;
-      await payment.save();
+      if (payment.provider === 'paypal') {
+        const orderId = providerRef || payment.providerRef;
+        if (!orderId) {
+          return res.status(400).json({ error: 'PayPal order ID (providerRef) is required' });
+        }
+
+        let capture;
+        try {
+          capture = await paypalService.captureOrder(orderId);
+        } catch (paypalErr) {
+          const detail = paypalErr?.response?.data?.details?.[0]?.description
+            || paypalErr?.response?.data?.message
+            || paypalErr.message;
+          console.error('PayPal capture failed:', paypalErr?.response?.data || paypalErr.message);
+          payment.status = 'failed';
+          payment.failureReason = detail;
+          await payment.save();
+          return res.status(402).json({
+            error: 'PayPal capture failed',
+            message: detail
+          });
+        }
+
+        if (capture.status !== 'COMPLETED') {
+          return res.status(402).json({
+            error: 'PayPal payment not completed',
+            message: `Order status: ${capture.status}`
+          });
+        }
+
+        payment.status = 'succeeded';
+        payment.providerRef = orderId;
+        await payment.save();
+      } else {
+        // Stripe stub — real verification via Stripe API when STRIPE_SECRET_KEY is set.
+        payment.status = 'succeeded';
+        if (providerRef) payment.providerRef = providerRef;
+        await payment.save();
+      }
 
       res.json({ success: true, payment });
     } catch (error) {
       console.error('Error confirming line checkout:', error);
       res.status(500).json({ error: 'Failed to confirm checkout', message: error.message });
     }
+  }
+
+  /** Public checkout config for the telephony payment modal. */
+  async getCheckoutConfig(req, res) {
+    res.json({
+      success: true,
+      paypal: {
+        enabled: paypalService.isConfigured(),
+        clientId: paypalService.getClientId(),
+        mode: paypalService.getMode()
+      },
+      stripe: {
+        enabled: Boolean(process.env.STRIPE_SECRET_KEY)
+      },
+      pricing: {
+        amountCents: DEFAULT_LINE_SETUP_FEE_CENTS,
+        currency: DEFAULT_LINE_CURRENCY
+      }
+    });
   }
 
   async getAllNumbers(req, res) {
