@@ -5,6 +5,9 @@ const router = express.Router();
 
 router.get('/plans', subscriptionController.getPlans);
 router.get('/current/:companyId', subscriptionController.getCurrentSubscription);
+router.get('/checkout/config', subscriptionController.getCheckoutConfig);
+router.post('/checkout/init', subscriptionController.initPopupCheckout);
+router.post('/checkout/confirm', subscriptionController.confirmPopupCheckout);
 router.post('/checkout', subscriptionController.createCheckoutSession);
 router.post('/webhook', express.raw({type: 'application/json'}), subscriptionController.handleWebhook);
 

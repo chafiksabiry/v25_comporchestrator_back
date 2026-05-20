@@ -13,7 +13,7 @@ const companyPaymentSchema = new mongoose.Schema({
   purpose: {
     type: String,
     required: true,
-    enum: ['wallet_deposit', 'minutes_purchase'],
+    enum: ['wallet_deposit', 'minutes_purchase', 'subscription_upgrade'],
     index: true
   },
   provider: {
@@ -52,7 +52,9 @@ const companyPaymentSchema = new mongoose.Schema({
     index: true
   },
   failureReason: { type: String },
-  fulfilledAt: { type: Date }
+  fulfilledAt: { type: Date },
+  /** planId, userId, stripePriceId, planName for subscription_upgrade */
+  meta: { type: mongoose.Schema.Types.Mixed }
 }, { timestamps: true });
 
 companyPaymentSchema.index({ companyId: 1, purpose: 1, status: 1, createdAt: -1 });

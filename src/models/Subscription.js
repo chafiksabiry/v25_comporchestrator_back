@@ -16,14 +16,22 @@ const subscriptionSchema = new mongoose.Schema({
     ref: 'SubscriptionPlan',
     required: true
   },
+  provider: {
+    type: String,
+    enum: ['stripe', 'paypal'],
+    default: 'stripe'
+  },
   stripeSubscriptionId: {
     type: String,
-    required: true,
+    sparse: true,
     unique: true
   },
   stripeCustomerId: {
+    type: String
+  },
+  providerRef: {
     type: String,
-    required: true
+    sparse: true
   },
   status: {
     type: String,

@@ -1,7 +1,22 @@
 import mongoose from 'mongoose';
 import { SubscriptionPlan } from '../models/SubscriptionPlan.js';
 import { Subscription } from '../models/Subscription.js';
+import CompanyPayment from '../models/CompanyPayment.js';
 import { stripeService } from '../services/stripeService.js';
+import { paypalService } from '../services/paypalService.js';
+import {
+  resolvePlanByPriceId,
+  activateCompanySubscription,
+  activateFromStripeCheckoutSession
+} from '../services/subscriptionFulfillment.js';
+
+function returnBase() {
+  return (
+    process.env.STRIPE_RETURN_BASE_URL
+    || process.env.PAYPAL_RETURN_BASE_URL
+    || 'https://harxv25comporchestratorfront.netlify.app'
+  ).replace(/\/$/, '');
+}
 
 export const subscriptionController = {
   getPlans: async (req, res) => {
@@ -48,6 +63,207 @@ export const subscriptionController = {
       res.json({ success: true, data: subscription });
     } catch (error) {
       res.status(500).json({ error: 'Error fetching subscription' });
+    }
+  },
+
+  getCheckoutConfig(req, res) {
+    res.json({
+      success: true,
+      paypal: {
+        enabled: paypalService.isConfigured(),
+        clientId: paypalService.getClientId(),
+        mode: paypalService.getMode()
+      },
+      stripe: {
+        enabled: stripeService.isConfigured()
+      }
+    });
+  },
+
+  /** Popup checkout init — Stripe subscription or PayPal (first month). */
+  initPopupCheckout: async (req, res) => {
+    try {
+      const { userId, companyId, priceId, planName, provider } = req.body;
+      if (!userId || !companyId || !priceId || !provider) {
+        return res.status(400).json({ error: 'userId, companyId, priceId and provider are required' });
+      }
+      if (!['stripe', 'paypal'].includes(provider)) {
+        return res.status(400).json({ error: "provider must be 'stripe' or 'paypal'" });
+      }
+
+      const resolved = await resolvePlanByPriceId(priceId);
+      if (!resolved) {
+        return res.status(404).json({ error: 'Plan not found for this priceId' });
+      }
+      const { plan, amountCents, currency } = resolved;
+
+      const payment = await CompanyPayment.create({
+        companyId: new mongoose.Types.ObjectId(companyId),
+        purpose: 'subscription_upgrade',
+        provider,
+        amount: amountCents,
+        currency,
+        status: 'pending',
+        meta: {
+          userId: String(userId),
+          companyId: String(companyId),
+          stripePriceId: priceId,
+          planId: plan._id,
+          planName: planName || plan.name
+        }
+      });
+
+      let checkoutUrl;
+      let paypalOrderId;
+      let paypalApproveUrl;
+
+      if (provider === 'paypal') {
+        if (!paypalService.isConfigured()) {
+          await CompanyPayment.findByIdAndDelete(payment._id);
+          return res.status(503).json({ error: 'PayPal not configured', message: 'Définissez PAYPAL_* sur le serveur.' });
+        }
+        const base = returnBase();
+        const returnUrl = `${base}/paypal-return.html?paymentId=${payment._id}`;
+        const cancelUrl = `${base}/paypal-cancel.html?paymentId=${payment._id}`;
+        const order = await paypalService.createOrder({
+          amountCents,
+          currency,
+          description: `HARX — Abonnement ${plan.name}`,
+          customId: payment._id,
+          returnUrl,
+          cancelUrl
+        });
+        paypalOrderId = order.id;
+        paypalApproveUrl = order.approveUrl;
+        if (!paypalApproveUrl) {
+          await CompanyPayment.findByIdAndDelete(payment._id);
+          return res.status(502).json({ error: 'PayPal approval URL missing' });
+        }
+        payment.providerRef = paypalOrderId;
+        payment.checkoutUrl = paypalApproveUrl;
+        await payment.save();
+        checkoutUrl = paypalApproveUrl;
+      } else {
+        if (!stripeService.isConfigured()) {
+          await CompanyPayment.findByIdAndDelete(payment._id);
+          return res.status(503).json({ error: 'Stripe not configured', message: 'Définissez STRIPE_SECRET_KEY.' });
+        }
+        const base = returnBase();
+        const successUrl = `${base}/stripe-return.html?paymentId=${payment._id}&session_id={CHECKOUT_SESSION_ID}`;
+        const cancelUrl = `${base}/stripe-cancel.html?paymentId=${payment._id}`;
+        const session = await stripeService.createCheckoutSession(
+          userId,
+          priceId,
+          successUrl,
+          cancelUrl,
+          { companyId: String(companyId), paymentId: String(payment._id) }
+        );
+        checkoutUrl = session.url;
+        payment.providerRef = session.id;
+        payment.checkoutUrl = checkoutUrl;
+        await payment.save();
+      }
+
+      res.status(201).json({
+        success: true,
+        paymentId: payment._id,
+        provider,
+        checkoutUrl,
+        paypalOrderId,
+        paypalApproveUrl,
+        planName: plan.name,
+        amountEuros: amountCents / 100
+      });
+    } catch (error) {
+      console.error('[subscriptions/checkout/init]', error);
+      res.status(500).json({ error: 'Failed to initialize subscription checkout', message: error.message });
+    }
+  },
+
+  confirmPopupCheckout: async (req, res) => {
+    try {
+      const { paymentId, providerRef } = req.body;
+      if (!paymentId || !mongoose.Types.ObjectId.isValid(paymentId)) {
+        return res.status(400).json({ error: 'Valid paymentId is required' });
+      }
+
+      const payment = await CompanyPayment.findById(paymentId);
+      if (!payment || payment.purpose !== 'subscription_upgrade') {
+        return res.status(404).json({ error: 'Subscription payment not found' });
+      }
+
+      if (payment.status === 'succeeded' && payment.fulfilledAt) {
+        return res.json({ success: true, payment, alreadyFulfilled: true });
+      }
+
+      const meta = payment.meta || {};
+      const { userId, companyId, stripePriceId } = meta;
+      const resolved = await resolvePlanByPriceId(stripePriceId);
+      if (!resolved?.plan) {
+        return res.status(404).json({ error: 'Plan not found' });
+      }
+
+      if (payment.provider === 'paypal') {
+        const orderId = providerRef || payment.providerRef;
+        if (!orderId) {
+          return res.status(400).json({ error: 'PayPal order ID required' });
+        }
+        let capture;
+        try {
+          capture = await paypalService.captureOrder(orderId);
+        } catch (paypalErr) {
+          return res.status(402).json({
+            error: 'PayPal capture failed',
+            message: paypalErr.message
+          });
+        }
+        if (capture.status !== 'COMPLETED') {
+          return res.status(402).json({ error: 'PayPal payment not completed' });
+        }
+        payment.status = 'succeeded';
+        payment.providerRef = orderId;
+        await payment.save();
+
+        const activation = await activateCompanySubscription({
+          userId,
+          companyId,
+          plan: resolved.plan,
+          provider: 'paypal',
+          providerRef: orderId,
+          status: 'active'
+        });
+        payment.fulfilledAt = new Date();
+        await payment.save();
+        return res.json({ success: true, payment, activation });
+      }
+
+      const sessionId = providerRef || payment.providerRef;
+      if (!sessionId) {
+        return res.status(400).json({ error: 'Stripe session ID required' });
+      }
+      const session = await stripeService.retrieveSession(sessionId);
+      if (session.payment_status !== 'paid' && session.status !== 'complete') {
+        return res.status(402).json({
+          error: 'Stripe payment not completed',
+          message: session.payment_status || session.status
+        });
+      }
+
+      payment.status = 'succeeded';
+      payment.providerRef = session.id;
+      await payment.save();
+
+      const activation = await activateFromStripeCheckoutSession({
+        ...session,
+        client_reference_id: userId,
+        metadata: { companyId: String(companyId) }
+      });
+      payment.fulfilledAt = new Date();
+      await payment.save();
+      res.json({ success: true, payment, activation });
+    } catch (error) {
+      console.error('[subscriptions/checkout/confirm]', error);
+      res.status(500).json({ error: 'Failed to confirm subscription checkout', message: error.message });
     }
   },
 
@@ -111,64 +327,9 @@ export const subscriptionController = {
 async function handleCheckoutSessionCompleted(session) {
   const userId = session.client_reference_id;
   const companyId = session.metadata?.companyId;
-  const stripeSubscriptionId = session.subscription;
-  
   console.log(`🔔 Webhook: Checkout Completed for User: ${userId}, Company: ${companyId}`);
-  
   try {
-    const stripeSubscription = await stripeService.getSubscription(stripeSubscriptionId);
-    const priceId = stripeSubscription.items.data[0].price.id;
-    console.log(`📡 Stripe Price ID found: ${priceId}`);
-
-    const plan = await SubscriptionPlan.findOne({ stripePriceId: priceId });
-    if (!plan) {
-      console.error(`❌ Plan not found in database for price ID: ${priceId}`);
-      return;
-    }
-
-    console.log(`✅ Plan found in DB: ${plan.name}`);
-
-    const periodStart = stripeSubscription.current_period_start ? new Date(stripeSubscription.current_period_start * 1000) : new Date();
-    const periodEnd = stripeSubscription.current_period_end ? new Date(stripeSubscription.current_period_end * 1000) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-    
-    console.log(`⏳ Subscription status: ${stripeSubscription.status}, End: ${periodEnd}`);
-
-    await Subscription.findOneAndUpdate(
-      { userId },
-      {
-        userId,
-        companyId,
-        planId: plan._id,
-        stripeSubscriptionId,
-        stripeCustomerId: session.customer,
-        status: stripeSubscription.status,
-        currentPeriodStart: periodStart,
-        currentPeriodEnd: periodEnd,
-      },
-      { upsert: true, new: true }
-    );
-
-    // Synchronize with Company document
-    if (companyId) {
-      // Déterminer le type (standard/premium) de manière robuste
-      const nameLower = plan.name.toLowerCase();
-      const companySubscriptionType = nameLower.includes('starter') ? 'standard' : 'premium';
-      const planId = plan._id;
-
-      console.log(`📝 Syncing Company ${companyId} to ${companySubscriptionType} (ID: ${planId})`);
-
-      const updateResult = await mongoose.connection.db.collection('companies').updateOne(
-        { _id: new mongoose.Types.ObjectId(companyId) },
-        { 
-          $set: { 
-            subscription: companySubscriptionType,
-            planId: planId 
-          } 
-        }
-      );
-      
-      console.log(`✨ Company Update Result: modifiedCount=${updateResult.modifiedCount}`);
-    }
+    await activateFromStripeCheckoutSession(session);
   } catch (error) {
     console.error('❌ Error in handleCheckoutSessionCompleted:', error);
   }
