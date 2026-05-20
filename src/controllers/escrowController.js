@@ -798,6 +798,8 @@ export const escrowController = {
         }
 
         let destinationCountry = 'US';
+
+
         console.log(`[getGigsAndReps] --------------------------------------------`);
         console.log(`[getGigsAndReps] Processing gig: "${gig.title}" (ID: ${gig._id})`);
         console.log(`[getGigsAndReps] gig.destination_zone value:`, gig.destination_zone);
