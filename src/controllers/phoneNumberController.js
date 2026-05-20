@@ -270,9 +270,15 @@ class PhoneNumberController {
           });
         }
 
-        const frontendBase = (process.env.FRONTEND_BASE_URL || req.headers.origin || 'https://harx25pageslinks.netlify.app').replace(/\/$/, '');
-        const returnUrl = `${frontendBase}/paypal/return?paymentId=${payment._id}`;
-        const cancelUrl = `${frontendBase}/paypal/cancel?paymentId=${payment._id}`;
+        // Static return pages live on the orchestrator MF host (not the qiankun shell).
+        const returnBase = (
+          process.env.PAYPAL_RETURN_BASE_URL
+          || process.env.FRONTEND_BASE_URL
+          || req.headers.origin
+          || 'https://harxv25comporchestratorfront.netlify.app'
+        ).replace(/\/$/, '');
+        const returnUrl = `${returnBase}/paypal-return.html?paymentId=${payment._id}`;
+        const cancelUrl = `${returnBase}/paypal-cancel.html?paymentId=${payment._id}`;
 
         const paypalOrder = await paypalService.createOrder({
           amountCents: payment.amount,
@@ -317,8 +323,27 @@ class PhoneNumberController {
         paypalMode: provider === 'paypal' ? paypalService.getMode() : undefined
       });
     } catch (error) {
-      console.error('Error initializing line checkout:', error);
-      res.status(500).json({ error: 'Failed to initialize checkout', message: error.message });
+      if (payment?._id) {
+        try {
+          await PhoneNumberPayment.findByIdAndDelete(payment._id);
+        } catch (_) {
+          /* ignore cleanup errors */
+        }
+      }
+
+      const code = error?.code;
+      const message = error?.message || 'Failed to initialize checkout';
+
+      if (code === 'PAYPAL_NOT_CONFIGURED' || code === 'PAYPAL_INVALID_CREDENTIALS' || code === 'PAYPAL_AUTH_FAILED') {
+        console.error('[checkout/init] PayPal credentials:', message);
+        return res.status(503).json({
+          error: 'PayPal authentication failed',
+          message
+        });
+      }
+
+      console.error('Error initializing line checkout:', message);
+      res.status(500).json({ error: 'Failed to initialize checkout', message });
     }
   }
 
@@ -355,15 +380,18 @@ class PhoneNumberController {
         try {
           capture = await paypalService.captureOrder(orderId);
         } catch (paypalErr) {
-          const detail = paypalErr?.response?.data?.details?.[0]?.description
+          const detail = paypalErr?.message
+            || paypalErr?.response?.data?.details?.[0]?.description
             || paypalErr?.response?.data?.message
-            || paypalErr.message;
+            || 'PayPal capture failed';
           console.error('PayPal capture failed:', paypalErr?.response?.data || paypalErr.message);
-          payment.status = 'failed';
-          payment.failureReason = detail;
-          await payment.save();
+          if (paypalErr?.code !== 'PAYPAL_NOT_APPROVED') {
+            payment.status = 'failed';
+            payment.failureReason = detail;
+            await payment.save();
+          }
           return res.status(402).json({
-            error: 'PayPal capture failed',
+            error: paypalErr?.code === 'PAYPAL_NOT_APPROVED' ? 'PayPal not approved' : 'PayPal capture failed',
             message: detail
           });
         }
