@@ -9,7 +9,18 @@ const escrowTransactionSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['deposit', 'withdrawal', 'escrow_lock', 'escrow_release', 'escrow_refund', 'buy_minutes', 'call_charge'],
+    enum: [
+      'deposit',
+      'withdrawal',
+      'escrow_lock',
+      'escrow_release',
+      'escrow_refund',
+      'buy_minutes',
+      'call_charge',
+      'reward_charge',
+      'transaction_charge',
+      'bonus_charge'
+    ],
     required: true
   },
   amount: {

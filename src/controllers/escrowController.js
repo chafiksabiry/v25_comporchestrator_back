@@ -6,7 +6,211 @@ import AgentWithdrawal from '../models/AgentWithdrawal.js';
 import HarxWallet from '../models/HarxWallet.js';
 import HarxCommission from '../models/HarxCommission.js';
 import MinutesCompany from '../models/MinutesCompany.js';
+import WalletCompany from '../models/WalletCompany.js';
+import RepTransaction from '../models/RepTransaction.js';
 import { broadcastUpdate } from '../websocket/escrowUpdates.js';
+
+// 70/30 split enforced server-side. Single source of truth.
+const REP_SHARE = 0.7;
+const HARX_SHARE = 0.3;
+
+/**
+ * Idempotently book a rep transaction (validated call, sale or bonus) and
+ * debit the company euro wallet (WalletCompany) for the gross amount.
+ *
+ * Side effects (all idempotent — a unique index on (type, sourceId) guarantees
+ * each call/sale/bonus can only be booked once):
+ *   1. Insert a RepTransaction row with amount + 70% rep + 30% HARX.
+ *   2. Decrement WalletCompany.balance by the gross amount.
+ *   3. Mirror the new balance into legacy EscrowWallet.balance.
+ *   4. Write an EscrowTransaction ledger row for the company audit trail.
+ *   5. Write a HarxCommission row for the 30% HARX cut.
+ *
+ * Returns the persisted RepTransaction document, or `null` if the booking
+ * was a no-op (duplicate / invalid input).
+ */
+async function bookRepTransaction({
+  type,
+  sourceId,
+  repId,
+  companyId,
+  gigId,
+  callId,
+  transactionDocId,
+  amount,
+  description,
+  meta
+}) {
+  if (!type || !sourceId || !repId || !companyId) return null;
+  const grossAmount = Number(amount || 0);
+  if (!(grossAmount > 0)) return null;
+
+  const repShare = Number((grossAmount * REP_SHARE).toFixed(4));
+  const harxShare = Number((grossAmount * HARX_SHARE).toFixed(4));
+
+  // 1. Idempotent insert. Duplicate key on (type, sourceId) means already booked.
+  let repTx;
+  try {
+    repTx = await RepTransaction.create({
+      type,
+      sourceId: String(sourceId),
+      repId,
+      companyId,
+      gigId,
+      callId,
+      transactionDocId,
+      amount: grossAmount,
+      repShare,
+      harxShare,
+      status: 'earned',
+      description,
+      meta
+    });
+  } catch (err) {
+    if (err && err.code === 11000) {
+      // Already booked — return the existing row so callers can stay idempotent.
+      return await RepTransaction.findOne({ type, sourceId: String(sourceId) });
+    }
+    throw err;
+  }
+
+  // 2. Debit company wallet (WalletCompany is the authoritative euro balance).
+  const debitedWallet = await WalletCompany.findOneAndUpdate(
+    { companyId },
+    { $inc: { balance: -grossAmount } },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  );
+
+  // 3. Mirror to legacy EscrowWallet so older readers stay consistent.
+  EscrowWallet.findOneAndUpdate(
+    { companyId },
+    { $set: { balance: Math.max(0, debitedWallet?.balance ?? 0) } }
+  ).catch((mirrorErr) => console.warn('[bookRepTransaction] EscrowWallet mirror skipped:', mirrorErr.message));
+
+  // 4. Company-side audit row.
+  const escrowTypeByRep = {
+    call_validated: 'reward_charge',
+    transaction: 'transaction_charge',
+    bonus: 'bonus_charge'
+  };
+  try {
+    await new EscrowTransaction({
+      companyId,
+      type: escrowTypeByRep[type] || 'reward_charge',
+      amount: grossAmount,
+      status: 'completed',
+      callId: callId ? String(callId) : undefined,
+      commission_rep: repShare,
+      commission_harx: harxShare,
+      total: grossAmount,
+      description: description || `RepTransaction ${type} #${repTx._id}`
+    }).save();
+  } catch (auditErr) {
+    console.warn('[bookRepTransaction] EscrowTransaction audit skipped:', auditErr.message);
+  }
+
+  // 5. HARX 30% commission row.
+  const harxTypeByRep = {
+    call_validated: 'call_commission',
+    transaction: 'transaction_commission',
+    bonus: 'bonus_commission'
+  };
+  try {
+    await new HarxCommission({
+      type: harxTypeByRep[type] || 'call_commission',
+      amount: harxShare,
+      agentId: String(repId),
+      callId: callId ? String(callId) : undefined,
+      transactionId: transactionDocId ? String(transactionDocId) : undefined,
+      bonusId: type === 'bonus' ? String(sourceId) : undefined,
+      companyId: String(companyId),
+      description: description || `30% HARX cut on ${type}`
+    }).save();
+  } catch (harxErr) {
+    console.warn('[bookRepTransaction] HarxCommission write skipped:', harxErr.message);
+  }
+
+  return repTx;
+}
+
+/**
+ * Resolve gig commission rates for a given call. Falls back to historical
+ * defaults so we never crash if a gig is mis-configured.
+ */
+async function resolveGigRates(call) {
+  const db = mongoose.connection.db;
+  const gigId = call?.lead?.gigId || call?.gigId;
+  let callRate = 4.0;
+  let txRate = 30.0;
+  let gigDoc = null;
+
+  if (gigId) {
+    const gigObjectId = mongoose.Types.ObjectId.isValid(gigId)
+      ? new mongoose.Types.ObjectId(gigId)
+      : gigId;
+    gigDoc = await db.collection('gigs').findOne({ _id: gigObjectId });
+    if (gigDoc) {
+      callRate = gigDoc.commission?.commission_per_call || gigDoc.rewardPerCall || callRate;
+      txRate = gigDoc.commission?.transactionCommission || gigDoc.rewardPerSale || txRate;
+    }
+  }
+
+  return { callRate, txRate, gig: gigDoc, gigId: gigId || null };
+}
+
+/**
+ * After a call/sale is approved by the company, atomically book the rep
+ * earnings rows (one for the call, optionally one for the sale) and debit
+ * the company wallet accordingly. Each booking is idempotent.
+ */
+async function bookEarningsForApprovedCall(call, transaction) {
+  if (!call || !call.agent) return { call: null, transaction: null };
+
+  const companyIdRaw = call.companyId;
+  if (!companyIdRaw) return { call: null, transaction: null };
+
+  const companyId = mongoose.Types.ObjectId.isValid(companyIdRaw)
+    ? new mongoose.Types.ObjectId(companyIdRaw)
+    : companyIdRaw;
+
+  const repId = mongoose.Types.ObjectId.isValid(call.agent)
+    ? new mongoose.Types.ObjectId(call.agent)
+    : call.agent;
+
+  const { callRate, txRate, gigId } = await resolveGigRates(call);
+  const gigObjectId = gigId && mongoose.Types.ObjectId.isValid(gigId)
+    ? new mongoose.Types.ObjectId(gigId)
+    : gigId || undefined;
+
+  const callRow = await bookRepTransaction({
+    type: 'call_validated',
+    sourceId: String(call._id),
+    repId,
+    companyId,
+    gigId: gigObjectId,
+    callId: call._id,
+    amount: callRate,
+    description: `Appel validé — commission ${callRate}€ (70% rep / 30% HARX)`
+  });
+
+  let txRow = null;
+  const hasSale = transaction?.validByReps === true || call.transactionOccurred === true;
+  if (hasSale && transaction?.validByCompany === true) {
+    txRow = await bookRepTransaction({
+      type: 'transaction',
+      sourceId: String(transaction._id || call._id),
+      repId,
+      companyId,
+      gigId: gigObjectId,
+      callId: call._id,
+      transactionDocId: transaction._id,
+      amount: txRate,
+      description: `Transaction commerciale validée — commission ${txRate}€ (70% rep / 30% HARX)`
+    });
+  }
+
+  return { call: callRow, transaction: txRow };
+}
 
 // Idempotently deduct a single call's duration from the company's minute
 // balance. Runs regardless of AI validation status: as soon as a call is
@@ -264,50 +468,59 @@ async function reconcileAgentEarnings(agentId) {
       wallet = new AgentWallet({ agentId, availableBalance: 0, pendingWithdrawals: 0, lifetimeEarnings: 0 });
     }
 
-    // 1. Fetch all calls involving this agent
+    // 1. EARNED = sum of repShare across all booked RepTransactions for this rep.
+    //    These are the only real, money-in-the-bank rows (validated by company).
+    const earnedRows = await RepTransaction.find({ repId: agentObjectId, status: 'earned' }).lean();
+    let totalEarned = earnedRows.reduce((sum, row) => sum + (row.repShare || 0), 0);
+
+    // 2. PENDING = potential earnings on calls that have NOT yet been booked
+    //    (i.e. no RepTransaction row exists for them yet).
     const calls = await db.collection('calls').find({
       agent: agentObjectId
     }).toArray();
 
-    let totalEarned = 0;
+    const bookedCallIds = new Set(
+      earnedRows
+        .filter(r => r.type === 'call_validated' && r.callId)
+        .map(r => r.callId.toString())
+    );
+    const bookedTxSourceIds = new Set(
+      earnedRows
+        .filter(r => r.type === 'transaction')
+        .map(r => r.sourceId)
+    );
+
     let totalPending = 0;
     let pendingCount = 0;
 
-    // Calculate total from calls
     for (const call of calls) {
-      // Find Gig data to get commission rates
+      const callIdStr = call._id.toString();
       const gigId = call.lead?.gigId || call.gigId;
-      if (gigId) {
-        const gigObjectId = mongoose.Types.ObjectId.isValid(gigId) ? new mongoose.Types.ObjectId(gigId) : gigId;
-        const gig = await db.collection('gigs').findOne({ _id: gigObjectId });
+      if (!gigId) continue;
 
-        if (gig) {
-          const callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 4.00;
-          const txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 30.00;
+      const gigObjectId = mongoose.Types.ObjectId.isValid(gigId) ? new mongoose.Types.ObjectId(gigId) : gigId;
+      const gig = await db.collection('gigs').findOne({ _id: gigObjectId });
+      if (!gig) continue;
 
-          // Call Commission logic (70% for agent) - Only rely on validByAI
-          if (call.validByAI === true) {
-            totalEarned += callRate * 0.7;
-          } else if (call.validByAI === null || call.validByAI === undefined) {
-            totalPending += callRate * 0.7;
-            pendingCount++;
-          }
+      const callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 4.00;
+      const txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 30.00;
 
-          // Transaction Commission logic (70% for agent)
-          const transaction = await db.collection('transactions').findOne({
-            call: call._id
-          });
+      // Call commission (70%) — pending until the company approves the call.
+      if (!bookedCallIds.has(callIdStr)) {
+        if (call.validByAI === true || call.validByAI === null || call.validByAI === undefined) {
+          totalPending += callRate * REP_SHARE;
+          pendingCount++;
+        }
+      }
 
-          const hasSale = transaction?.validByReps === true || call.transactionOccurred === true;
-          if (hasSale) {
-            if (transaction?.validByCompany === true) {
-              totalEarned += txRate * 0.7;
-            } else if (transaction?.validByCompany === null || transaction?.validByCompany === undefined || !transaction.validByCompany) {
-              // If it's not approved yet by company, it's pending
-              totalPending += txRate * 0.7;
-              pendingCount++;
-            }
-          }
+      // Sale commission (70%) — pending while the company has not yet approved the sale.
+      const transaction = await db.collection('transactions').findOne({ call: call._id });
+      const hasSale = transaction?.validByReps === true || call.transactionOccurred === true;
+      if (hasSale) {
+        const txSourceId = String(transaction?._id || call._id);
+        if (!bookedTxSourceIds.has(txSourceId) && transaction?.validByCompany !== true) {
+          totalPending += txRate * REP_SHARE;
+          pendingCount++;
         }
       }
     }
@@ -1162,8 +1375,16 @@ export const escrowController = {
         transaction.valid = (transaction.validByReps === true && isApprove);
       }
 
-      // Trigger reconciliation for the agent and HARX to update wallets
+      // Book the rep earnings (idempotent) and debit WalletCompany.balance.
+      // 70/30 split is enforced inside bookRepTransaction.
+      let bookedRepTx = { call: null, transaction: null };
       if (isApprove && call.agent) {
+        try {
+          bookedRepTx = await bookEarningsForApprovedCall(call, transaction);
+        } catch (bookErr) {
+          console.error('[approveOrRefuseCallTransaction] booking failed:', bookErr);
+        }
+        // Keep legacy reconciliations in sync (pending totals, HarxWallet aggregate, etc.)
         await reconcileAgentEarnings(call.agent);
         await reconcileHarxEarnings();
       }
@@ -1176,16 +1397,161 @@ export const escrowController = {
         action: action
       });
 
-      // Fetch the reconciled wallet status
+      // Return the authoritative WalletCompany balance + legacy mirror.
+      const walletCompanyDoc = await WalletCompany.findOne({ companyId: companyIdObj })
+        || await WalletCompany.findOne({ companyId });
       let wallet = await EscrowWallet.findOne({ companyId });
       if (!wallet) {
         wallet = new EscrowWallet({ companyId, balance: 0, minutes: 0, escrow: 0, contracts: [] });
       }
 
-      res.status(200).json({ success: true, data: { wallet, transaction } });
+      res.status(200).json({
+        success: true,
+        data: {
+          wallet,
+          walletCompany: walletCompanyDoc,
+          transaction,
+          repTransactions: bookedRepTx
+        }
+      });
     } catch (err) {
       console.error('Error approving/refusing call transaction:', err);
       res.status(500).json({ error: 'Failed to process transaction approval' });
+    }
+  },
+
+  // List the rep's transactions (validated calls, sales, bonuses).
+  // Enriched with call/gig/company info so the rep dashboard can render
+  // a full history in one round-trip.
+  getAgentTransactions: async (req, res) => {
+    const { agentId } = req.params;
+    if (!agentId) return res.status(400).json({ error: 'agentId is required' });
+
+    try {
+      const repId = mongoose.Types.ObjectId.isValid(agentId)
+        ? new mongoose.Types.ObjectId(agentId)
+        : agentId;
+
+      const { type, status, limit = 200 } = req.query;
+      const filter = { repId };
+      if (type) filter.type = type;
+      if (status) filter.status = status;
+
+      const rows = await RepTransaction.find(filter)
+        .sort({ createdAt: -1 })
+        .limit(Math.min(Number(limit) || 200, 500))
+        .lean();
+
+      const db = mongoose.connection.db;
+      const callIds = [...new Set(rows.map(r => r.callId).filter(Boolean).map(id => id.toString()))];
+      const gigIds = [...new Set(rows.map(r => r.gigId).filter(Boolean).map(id => id.toString()))];
+
+      const callDocs = callIds.length
+        ? await db.collection('calls').find({
+            _id: { $in: callIds.map(id => new mongoose.Types.ObjectId(id)) }
+          }).toArray()
+        : [];
+      const gigDocs = gigIds.length
+        ? await db.collection('gigs').find({
+            _id: { $in: gigIds.map(id => new mongoose.Types.ObjectId(id)) }
+          }).toArray()
+        : [];
+
+      const callMap = new Map(callDocs.map(c => [c._id.toString(), c]));
+      const gigMap = new Map(gigDocs.map(g => [g._id.toString(), g]));
+
+      const enriched = rows.map(row => {
+        const callDoc = row.callId ? callMap.get(row.callId.toString()) : null;
+        const gigDoc = row.gigId ? gigMap.get(row.gigId.toString()) : null;
+        return {
+          ...row,
+          call: callDoc ? {
+            _id: callDoc._id,
+            sid: callDoc.sid,
+            duration: callDoc.duration,
+            startTime: callDoc.startTime,
+            direction: callDoc.direction,
+            to: callDoc.to,
+            from: callDoc.from
+          } : null,
+          gig: gigDoc ? {
+            _id: gigDoc._id,
+            title: gigDoc.title || gigDoc.name,
+            commission_per_call: gigDoc.commission?.commission_per_call || gigDoc.rewardPerCall,
+            transactionCommission: gigDoc.commission?.transactionCommission || gigDoc.rewardPerSale
+          } : null
+        };
+      });
+
+      const totals = enriched.reduce(
+        (acc, r) => {
+          acc.amount += r.amount || 0;
+          acc.repShare += r.repShare || 0;
+          acc.harxShare += r.harxShare || 0;
+          acc.countByType[r.type] = (acc.countByType[r.type] || 0) + 1;
+          return acc;
+        },
+        { amount: 0, repShare: 0, harxShare: 0, countByType: {} }
+      );
+
+      res.status(200).json({
+        success: true,
+        data: enriched,
+        totals: {
+          amount: Number(totals.amount.toFixed(2)),
+          repShare: Number(totals.repShare.toFixed(2)),
+          harxShare: Number(totals.harxShare.toFixed(2)),
+          countByType: totals.countByType,
+          count: enriched.length
+        }
+      });
+    } catch (err) {
+      console.error('Error fetching rep transactions:', err);
+      res.status(500).json({ error: 'Failed to fetch rep transactions' });
+    }
+  },
+
+  // Award a manual bonus to a rep (tied to gig + company). Same 70/30 split,
+  // same WalletCompany debit, fully idempotent on the provided bonusId.
+  awardRepBonus: async (req, res) => {
+    const { agentId, companyId, gigId, amount, bonusId, description } = req.body;
+    if (!agentId || !companyId || !(Number(amount) > 0)) {
+      return res.status(400).json({ error: 'agentId, companyId and positive amount are required' });
+    }
+
+    try {
+      const repObjectId = mongoose.Types.ObjectId.isValid(agentId)
+        ? new mongoose.Types.ObjectId(agentId)
+        : agentId;
+      const companyObjectId = mongoose.Types.ObjectId.isValid(companyId)
+        ? new mongoose.Types.ObjectId(companyId)
+        : companyId;
+      const gigObjectId = gigId && mongoose.Types.ObjectId.isValid(gigId)
+        ? new mongoose.Types.ObjectId(gigId)
+        : undefined;
+
+      const finalBonusId = String(bonusId || `BONUS-${Date.now()}-${Math.floor(Math.random() * 1e6)}`);
+
+      const repTx = await bookRepTransaction({
+        type: 'bonus',
+        sourceId: finalBonusId,
+        repId: repObjectId,
+        companyId: companyObjectId,
+        gigId: gigObjectId,
+        amount: Number(amount),
+        description: description || `Bonus accordé — ${amount}€ (70% rep / 30% HARX)`
+      });
+
+      if (!repTx) {
+        return res.status(409).json({ error: 'Bonus already booked or invalid input' });
+      }
+
+      await reconcileAgentEarnings(repObjectId).catch(() => null);
+
+      res.status(200).json({ success: true, data: repTx });
+    } catch (err) {
+      console.error('Error awarding rep bonus:', err);
+      res.status(500).json({ error: 'Failed to award bonus' });
     }
   },
 
