@@ -8,7 +8,7 @@ import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
 
 // Default checkout pricing for a phone line (overridable via env).
 // Stored in cents (EUR) — 100 = 1.00€.
-const DEFAULT_LINE_SETUP_FEE_CENTS = parseInt(process.env.PHONE_LINE_SETUP_FEE_CENTS || '500', 10); // 5.00€
+const DEFAULT_LINE_SETUP_FEE_CENTS = parseInt(process.env.PHONE_LINE_SETUP_FEE_CENTS || '100', 10); // 1.00€
 const DEFAULT_LINE_CURRENCY = (process.env.PHONE_LINE_CURRENCY || 'EUR').toUpperCase();
 
 class PhoneNumberController {
