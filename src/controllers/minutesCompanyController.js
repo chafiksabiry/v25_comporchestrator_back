@@ -21,9 +21,9 @@ export const minutesCompanyController = {
         success: true,
         data: {
           companyId,
-          minutes: wallet.minutes,
-          purchasedMinutes: wallet.purchasedMinutes,
-          consumedSeconds: wallet.consumedSeconds
+          minutes: typeof wallet.minutes === 'number' ? wallet.minutes : 0,
+          purchasedMinutes: typeof wallet.purchasedMinutes === 'number' ? wallet.purchasedMinutes : 0,
+          consumedSeconds: typeof wallet.consumedSeconds === 'number' ? wallet.consumedSeconds : 0
         }
       });
     } catch (err) {
@@ -76,17 +76,30 @@ export const minutesCompanyController = {
 
     const durationSeconds = Number(duration || 0);
     if (durationSeconds <= 0) {
-      // Nothing to deduct but ack so caller doesn't retry needlessly
       return res.status(200).json({ success: true, charged: false, reason: 'No duration' });
     }
 
     try {
+      // Ensure the wallet exists (avoids upsert collisions on unique companyId)
       let wallet = await MinutesCompany.findOne({ companyId });
       if (!wallet) {
-        wallet = new MinutesCompany({ companyId, minutes: 0 });
+        wallet = await MinutesCompany.create({ companyId, minutes: 0 });
       }
 
-      if (wallet.chargedCallSids?.includes(callSid)) {
+      const durationMinutes = Number((durationSeconds / 60).toFixed(4));
+      const updated = await MinutesCompany.findOneAndUpdate(
+        { companyId, chargedCallSids: { $ne: callSid } },
+        {
+          $inc: {
+            minutes: -durationMinutes,
+            consumedSeconds: durationSeconds
+          },
+          $addToSet: { chargedCallSids: callSid }
+        },
+        { new: true }
+      );
+
+      if (!updated) {
         return res.status(200).json({
           success: true,
           charged: false,
@@ -95,26 +108,15 @@ export const minutesCompanyController = {
         });
       }
 
-      const durationMinutes = Number((durationSeconds / 60).toFixed(4));
-      wallet.minutes = Number(((wallet.minutes || 0) - durationMinutes).toFixed(4));
-      wallet.consumedSeconds = Number((wallet.consumedSeconds || 0) + durationSeconds);
-      wallet.chargedCallSids = [...(wallet.chargedCallSids || []), callSid];
-      await wallet.save();
-
-      try {
-        let oldWallet = await EscrowWallet.findOne({ companyId });
-        if (oldWallet) {
-          oldWallet.minutes = wallet.minutes;
-          await oldWallet.save();
-        }
-      } catch (syncErr) {
-        console.warn('EscrowWallet sync skipped:', syncErr.message);
-      }
+      EscrowWallet.findOneAndUpdate(
+        { companyId },
+        { $set: { minutes: updated.minutes } }
+      ).catch((syncErr) => console.warn('EscrowWallet sync skipped:', syncErr.message));
 
       res.status(200).json({
         success: true,
         charged: true,
-        data: { minutes: wallet.minutes }
+        data: { minutes: updated.minutes }
       });
     } catch (err) {
       console.error('Error charging call minutes:', err);

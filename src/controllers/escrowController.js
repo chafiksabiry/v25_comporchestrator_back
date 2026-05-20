@@ -8,69 +8,114 @@ import HarxCommission from '../models/HarxCommission.js';
 import MinutesCompany from '../models/MinutesCompany.js';
 import { broadcastUpdate } from '../websocket/escrowUpdates.js';
 
-// Idempotently deduct a call's duration from the company's minute balance.
-// Runs regardless of AI validation status: as soon as a call is completed,
-// the minutes are removed from MinutesCompany.minutes.
+// Idempotently deduct a single call's duration from the company's minute
+// balance. Runs regardless of AI validation status: as soon as a call is
+// completed, the minutes are removed from MinutesCompany.minutes.
 // Returns true when the call was newly charged, false when it was already counted.
 export async function chargeCallMinutes(companyId, call) {
   if (!companyId || !call) return false;
   const durationSeconds = Number(call.duration || 0);
   if (durationSeconds <= 0) return false;
 
-  // Use the SID when available (uniqueness guaranteed on the Call model),
-  // otherwise fall back to the Mongo _id.
   const callKey = String(call.sid || call._id || '');
   if (!callKey) return false;
 
+  // Ensure wallet exists first (avoids upsert collisions on unique companyId)
   let wallet = await MinutesCompany.findOne({ companyId });
   if (!wallet) {
-    wallet = new MinutesCompany({ companyId, minutes: 0 });
+    wallet = await MinutesCompany.create({ companyId, minutes: 0 });
   }
 
-  if (wallet.chargedCallSids?.includes(callKey)) {
-    return false;
-  }
-
+  // Atomic conditional update: only matches when callKey is NOT already in
+  // chargedCallSids. Returns null when the call was previously charged.
   const durationMinutes = Number((durationSeconds / 60).toFixed(4));
-  wallet.minutes = Number(((wallet.minutes || 0) - durationMinutes).toFixed(4));
-  wallet.consumedSeconds = Number((wallet.consumedSeconds || 0) + durationSeconds);
-  wallet.chargedCallSids = [...(wallet.chargedCallSids || []), callKey];
-  await wallet.save();
+  const updated = await MinutesCompany.findOneAndUpdate(
+    { companyId, chargedCallSids: { $ne: callKey } },
+    {
+      $inc: {
+        minutes: -durationMinutes,
+        consumedSeconds: durationSeconds
+      },
+      $addToSet: { chargedCallSids: callKey }
+    },
+    { new: true }
+  );
 
-  // Mirror to legacy EscrowWallet so older surfaces stay in sync
-  try {
-    let legacy = await EscrowWallet.findOne({ companyId });
-    if (legacy) {
-      legacy.minutes = wallet.minutes;
-      await legacy.save();
-    }
-  } catch (syncErr) {
-    console.warn('[chargeCallMinutes] EscrowWallet sync skipped:', syncErr.message);
-  }
+  if (!updated) return false;
+
+  // Mirror to legacy EscrowWallet without blocking the main flow
+  EscrowWallet.findOneAndUpdate(
+    { companyId },
+    { $set: { minutes: updated.minutes } }
+  ).catch((err) => console.warn('[chargeCallMinutes] EscrowWallet sync skipped:', err.message));
 
   return true;
 }
 
-// Replay every call for a company and ensure each completed one was deducted
-// once from MinutesCompany. No AI validation required - duration alone drives
-// the deduction. Safe to call repeatedly thanks to chargedCallSids.
+// Replay all completed calls for a company and ensure each one was deducted
+// from MinutesCompany. No AI validation required. Uses a single read + single
+// bulk update for performance (was O(N) write per call, now O(1) write).
 export async function syncMinutesFromCalls(companyId) {
   if (!companyId) return;
-  const db = mongoose.connection.db;
-  const companyObjectId = mongoose.Types.ObjectId.isValid(companyId)
-    ? new mongoose.Types.ObjectId(companyId)
-    : companyId;
+  try {
+    const db = mongoose.connection.db;
+    const companyObjectId = mongoose.Types.ObjectId.isValid(companyId)
+      ? new mongoose.Types.ObjectId(companyId)
+      : companyId;
 
-  const calls = await db.collection('calls').find({
-    $or: [
-      { companyId: companyObjectId },
-      { companyId: companyId }
-    ],
-    duration: { $gt: 0 }
-  }).toArray();
+    let wallet = await MinutesCompany.findOne({ companyId });
+    if (!wallet) {
+      wallet = await MinutesCompany.create({ companyId, minutes: 0 });
+    }
 
-  for (const call of calls) {
-    await chargeCallMinutes(companyId, call);
+    const alreadyCharged = new Set(wallet.chargedCallSids || []);
+
+    // Only project the fields we need to keep the query light
+    const calls = await db.collection('calls').find(
+      {
+        $or: [
+          { companyId: companyObjectId },
+          { companyId: companyId }
+        ],
+        duration: { $gt: 0 }
+      },
+      { projection: { sid: 1, duration: 1 } }
+    ).toArray();
+
+    let addedSeconds = 0;
+    const newKeys = [];
+    for (const c of calls) {
+      const key = String(c.sid || c._id || '');
+      if (!key || alreadyCharged.has(key)) continue;
+      const secs = Number(c.duration || 0);
+      if (secs <= 0) continue;
+      addedSeconds += secs;
+      newKeys.push(key);
+    }
+
+    if (newKeys.length === 0) return;
+
+    const addedMinutes = Number((addedSeconds / 60).toFixed(4));
+    const updated = await MinutesCompany.findOneAndUpdate(
+      { companyId },
+      {
+        $inc: {
+          minutes: -addedMinutes,
+          consumedSeconds: addedSeconds
+        },
+        $addToSet: { chargedCallSids: { $each: newKeys } }
+      },
+      { new: true }
+    );
+
+    if (updated) {
+      EscrowWallet.findOneAndUpdate(
+        { companyId },
+        { $set: { minutes: updated.minutes } }
+      ).catch((err) => console.warn('[syncMinutesFromCalls] EscrowWallet sync skipped:', err.message));
+    }
+  } catch (err) {
+    console.error('[syncMinutesFromCalls] error:', err.message);
   }
 }
 
