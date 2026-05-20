@@ -42,6 +42,16 @@ app.use((req, res, next) => {
   next();
 });
 
+// Database connection health check middleware
+app.use((req, res, next) => {
+  if (mongoose.connection.readyState !== 1 || !mongoose.connection.db) {
+    return res.status(503).json({
+      error: "Base de données non connectée. Veuillez réessayer dans quelques instants."
+    });
+  }
+  next();
+});
+
 // Middleware
 app.use((req, res, next) => {
   // Exclure les webhooks du parsing JSON global pour permettre l'accès au raw body (Stripe, Telnyx, etc.)
