@@ -32,18 +32,6 @@ export const walletCompanyController = {
       wallet.balance = Number((wallet.balance + parseFloat(amount)).toFixed(2));
       await wallet.save();
 
-      // Trigger WebSockets or sync with backward compatible model if needed
-      try {
-        const EscrowWallet = mongoose.model('EscrowWallet');
-        let oldWallet = await EscrowWallet.findOne({ companyId });
-        if (oldWallet) {
-          oldWallet.balance = wallet.balance;
-          await oldWallet.save();
-        }
-      } catch (syncErr) {
-        console.warn('EscrowWallet sync skipped:', syncErr.message);
-      }
-
       res.status(200).json({ success: true, data: wallet });
     } catch (err) {
       console.error('Error during deposit:', err);
@@ -66,18 +54,6 @@ export const walletCompanyController = {
       }
       wallet.balance = Number((wallet.balance - parseFloat(amount)).toFixed(2));
       await wallet.save();
-
-      // Sync with backward compatible model
-      try {
-        const EscrowWallet = mongoose.model('EscrowWallet');
-        let oldWallet = await EscrowWallet.findOne({ companyId });
-        if (oldWallet) {
-          oldWallet.balance = wallet.balance;
-          await oldWallet.save();
-        }
-      } catch (syncErr) {
-        console.warn('EscrowWallet sync skipped:', syncErr.message);
-      }
 
       res.status(200).json({ success: true, data: wallet });
     } catch (err) {

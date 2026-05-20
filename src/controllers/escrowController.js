@@ -18,13 +18,15 @@ const HARX_SHARE = 0.3;
  * Idempotently book a rep transaction (validated call, sale or bonus) and
  * debit the company euro wallet (WalletCompany) for the gross amount.
  *
+ * WalletCompany.balance is the SINGLE source of truth for the company's euros.
+ * The legacy EscrowWallet collection is no longer written to.
+ *
  * Side effects (all idempotent — a unique index on (type, sourceId) guarantees
  * each call/sale/bonus can only be booked once):
  *   1. Insert a RepTransaction row with amount + 70% rep + 30% HARX.
  *   2. Decrement WalletCompany.balance by the gross amount.
- *   3. Mirror the new balance into legacy EscrowWallet.balance.
- *   4. Write an EscrowTransaction ledger row for the company audit trail.
- *   5. Write a HarxCommission row for the 30% HARX cut.
+ *   3. Write an EscrowTransaction ledger row for the company audit trail.
+ *   4. Write a HarxCommission row for the 30% HARX cut.
  *
  * Returns the persisted RepTransaction document, or `null` if the booking
  * was a no-op (duplicate / invalid input).
@@ -74,20 +76,14 @@ async function bookRepTransaction({
     throw err;
   }
 
-  // 2. Debit company wallet (WalletCompany is the authoritative euro balance).
-  const debitedWallet = await WalletCompany.findOneAndUpdate(
+  // 2. Debit company wallet — WalletCompany is the SINGLE source of truth.
+  await WalletCompany.findOneAndUpdate(
     { companyId },
     { $inc: { balance: -grossAmount } },
     { new: true, upsert: true, setDefaultsOnInsert: true }
   );
 
-  // 3. Mirror to legacy EscrowWallet so older readers stay consistent.
-  EscrowWallet.findOneAndUpdate(
-    { companyId },
-    { $set: { balance: Math.max(0, debitedWallet?.balance ?? 0) } }
-  ).catch((mirrorErr) => console.warn('[bookRepTransaction] EscrowWallet mirror skipped:', mirrorErr.message));
-
-  // 4. Company-side audit row.
+  // 3. Company-side audit row.
   const escrowTypeByRep = {
     call_validated: 'reward_charge',
     transaction: 'transaction_charge',
@@ -109,7 +105,7 @@ async function bookRepTransaction({
     console.warn('[bookRepTransaction] EscrowTransaction audit skipped:', auditErr.message);
   }
 
-  // 5. HARX 30% commission row.
+  // 4. HARX 30% commission row.
   const harxTypeByRep = {
     call_validated: 'call_commission',
     transaction: 'transaction_commission',
@@ -247,12 +243,6 @@ export async function chargeCallMinutes(companyId, call) {
 
   if (!updated) return false;
 
-  // Mirror to legacy EscrowWallet without blocking the main flow
-  EscrowWallet.findOneAndUpdate(
-    { companyId },
-    { $set: { minutes: updated.minutes } }
-  ).catch((err) => console.warn('[chargeCallMinutes] EscrowWallet sync skipped:', err.message));
-
   return true;
 }
 
@@ -300,7 +290,7 @@ export async function syncMinutesFromCalls(companyId) {
     if (newKeys.length === 0) return;
 
     const addedMinutes = Number((addedSeconds / 60).toFixed(4));
-    const updated = await MinutesCompany.findOneAndUpdate(
+    await MinutesCompany.findOneAndUpdate(
       { companyId },
       {
         $inc: {
@@ -311,13 +301,6 @@ export async function syncMinutesFromCalls(companyId) {
       },
       { new: true }
     );
-
-    if (updated) {
-      EscrowWallet.findOneAndUpdate(
-        { companyId },
-        { $set: { minutes: updated.minutes } }
-      ).catch((err) => console.warn('[syncMinutesFromCalls] EscrowWallet sync skipped:', err.message));
-    }
   } catch (err) {
     console.error('[syncMinutesFromCalls] error:', err.message);
   }
@@ -333,13 +316,13 @@ async function reconcilePendingTransactions(companyId) {
     });
 
     if (pendingCompletedTransactions.length > 0) {
-      let wallet = await EscrowWallet.findOne({ companyId });
+      let wallet = await WalletCompany.findOne({ companyId });
       if (!wallet) {
-        wallet = new EscrowWallet({ companyId, balance: 0, minutes: 0, escrow: 0, contracts: [] });
+        wallet = new WalletCompany({ companyId, balance: 0 });
       }
 
       for (const tx of pendingCompletedTransactions) {
-        wallet.balance += tx.amount;
+        wallet.balance = Number((wallet.balance + tx.amount).toFixed(2));
         tx.credited = true;
         await tx.save();
       }
@@ -351,106 +334,16 @@ async function reconcilePendingTransactions(companyId) {
   }
 }
 
+/**
+ * Lightweight reconciliation: only re-syncs minutes from completed calls.
+ * Commissions are NEVER auto-debited here anymore — they are debited from
+ * WalletCompany explicitly when the company approves a call (see
+ * `bookEarningsForApprovedCall`). The legacy `EscrowWallet` collection is no
+ * longer written to.
+ */
 async function reconcileCallCharges(companyId) {
   try {
-    const db = mongoose.connection.db;
-    const companyObjectId = mongoose.Types.ObjectId.isValid(companyId)
-      ? new mongoose.Types.ObjectId(companyId)
-      : companyId;
-
-    let wallet = await EscrowWallet.findOne({ companyId });
-    if (!wallet) {
-      wallet = new EscrowWallet({ companyId, balance: 0, minutes: 0, escrow: 0, contracts: [] });
-    }
-
-    // 1. MINUTE DEDUCTION (no AI validation required).
-    //    As soon as a call has a duration, it is deducted from MinutesCompany.
-    //    Idempotency is guaranteed by chargedCallSids inside chargeCallMinutes.
     await syncMinutesFromCalls(companyId);
-
-    // 2. Mirror the authoritative remaining minutes into legacy EscrowWallet
-    const minutesWallet = await MinutesCompany.findOne({ companyId });
-    if (minutesWallet) {
-      wallet.minutes = minutesWallet.minutes;
-    }
-
-    let walletUpdated = true;
-
-    // 3. COMMISSIONS still require AI validation.
-    //    They are booked into the Euro balance only after the AI has validated the call.
-    const validatedCalls = await db.collection('calls').find({
-      $or: [
-        { companyId: companyObjectId },
-        { companyId: companyId }
-      ],
-      validByAI: true
-    }).toArray();
-
-    const existingCharges = await EscrowTransaction.find({
-      companyId,
-      type: 'call_charge'
-    });
-
-    for (const call of validatedCalls) {
-      const callIdStr = call._id.toString();
-      if (existingCharges.some(tx => tx.callId === callIdStr)) continue;
-
-      const durationInMinutes = Number(((call.duration || 0) / 60).toFixed(4));
-
-      const repCallComm = call.repCallCommission || 0;
-      const platformCallComm = call.platformCallCommission || 0;
-      const totalCallComm = repCallComm + platformCallComm;
-
-      const repTransComm = call.repTransactionCommission || 0;
-      const platformTransComm = call.platformTransactionCommission || 0;
-      const totalTransComm = repTransComm + platformTransComm;
-
-      const transactionDetected = call.ai_call_score?.transaction_detected || false;
-      const transPrice = call.transaction_price || 0;
-
-      wallet.balance = Number(((wallet.balance || 0) - totalCallComm).toFixed(2));
-      if (transactionDetected) {
-        wallet.balance = Number((wallet.balance - totalTransComm).toFixed(2));
-      }
-      walletUpdated = true;
-
-      let agentName = 'Agent';
-      if (call.agent) {
-        const agentIdObj = mongoose.Types.ObjectId.isValid(call.agent)
-          ? new mongoose.Types.ObjectId(call.agent)
-          : call.agent;
-        const agentDoc = await db.collection('agents').findOne({
-          $or: [
-            { _id: agentIdObj },
-            { _id: call.agent }
-          ]
-        });
-        if (agentDoc) {
-          agentName = agentDoc.personalInfo?.name || agentDoc.personalInfo?.email || 'Unnamed Agent';
-        }
-      }
-
-      const escrowTx = new EscrowTransaction({
-        companyId,
-        type: 'call_charge',
-        amount: durationInMinutes,
-        status: 'completed',
-        callId: callIdStr,
-        commission_rep: repCallComm,
-        commission_harx: platformCallComm,
-        total: totalCallComm + (transactionDetected ? totalTransComm : 0),
-        minutes: durationInMinutes,
-        transaction_detected: transactionDetected,
-        transaction_price: transactionDetected ? transPrice : 0,
-        description: `Commissions IA validées pour appel par ${agentName}`
-      });
-      await escrowTx.save();
-      console.log(`AI-validated commissions booked for call ${callIdStr}`);
-    }
-
-    if (walletUpdated) {
-      await wallet.save();
-    }
   } catch (err) {
     console.error('Error during call charges reconciliation:', err);
   }
@@ -626,93 +519,13 @@ async function reconcileHarxEarnings() {
   }
 }
 
-async function reconcileCompanyRewards(companyId) {
-  try {
-    const db = mongoose.connection.db;
-    const companyObjectId = mongoose.Types.ObjectId.isValid(companyId)
-      ? new mongoose.Types.ObjectId(companyId)
-      : companyId;
-
-    let wallet = await EscrowWallet.findOne({ companyId });
-    if (!wallet) {
-      wallet = new EscrowWallet({ companyId, balance: 0, minutes: 0, escrow: 0, contracts: [] });
-    }
-
-    // Fetch all approved calls for this company
-    const calls = await db.collection('calls').find({
-      $or: [
-        { companyId: companyObjectId },
-        { companyId: companyId }
-      ],
-      companyValidation: 'approved',
-      agentValidation: 'approved'
-    }).toArray();
-
-    // Fetch existing reward charges to avoid double charging
-    const existingCharges = await EscrowTransaction.find({
-      companyId,
-      type: 'reward_charge'
-    });
-
-    let walletUpdated = false;
-
-    for (const call of calls) {
-      const callIdStr = call._id.toString();
-      const hasCharge = existingCharges.some(tx => tx.callId === callIdStr);
-
-      if (!hasCharge) {
-        const gigId = call.lead?.gigId || call.gigId;
-        if (gigId) {
-          const gigObjectId = mongoose.Types.ObjectId.isValid(gigId) ? new mongoose.Types.ObjectId(gigId) : gigId;
-          const gig = await db.collection('gigs').findOne({ _id: gigObjectId });
-
-          if (gig) {
-            const callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 4.00;
-            const txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 30.00;
-
-            let totalRewardToDeduct = callRate;
-
-            // Check if transaction is also approved
-            const transaction = await db.collection('transactions').findOne({
-              call: call._id
-            });
-
-            const hasSale = transaction?.validByReps === true || call.transactionOccurred === true;
-            if (hasSale && transaction?.validByCompany === true) {
-              totalRewardToDeduct += txRate;
-            }
-
-            // Deduct from wallet balance (Euros)
-            if (wallet.balance >= totalRewardToDeduct) {
-              wallet.balance = Number((wallet.balance - totalRewardToDeduct).toFixed(4));
-            } else {
-              // If insufficient balance, let it go negative or handle as needed!
-              wallet.balance = Number((wallet.balance - totalRewardToDeduct).toFixed(4));
-            }
-            walletUpdated = true;
-
-            // Save reward_charge transaction
-            const escrowTx = new EscrowTransaction({
-              companyId,
-              type: 'reward_charge',
-              amount: totalRewardToDeduct,
-              status: 'completed',
-              callId: callIdStr,
-              description: `Frais de récompense pour appel et transaction`
-            });
-            await escrowTx.save();
-            console.log(`Charged ${totalRewardToDeduct}€ for approved call/tx: ${callIdStr}`);
-          }
-        }
-      }
-    }
-
-    if (walletUpdated) {
-      await wallet.save();
-    }
-  } catch (err) {
-    console.error('Error reconciling company rewards:', err);
-  }
+/**
+ * Deprecated. Reward debits now flow exclusively through `bookEarningsForApprovedCall`,
+ * which writes to WalletCompany + RepTransaction in one atomic, idempotent step.
+ * Kept as a no-op so existing callers (`triggerReconciliation`, `getWallet`) stay safe.
+ */
+async function reconcileCompanyRewards(_companyId) {
+  return;
 }
 
 export const escrowController = {
@@ -729,33 +542,19 @@ export const escrowController = {
       await reconcileCompanyRewards(companyId);
       await reconcileHarxEarnings();
 
-      const WalletCompany = mongoose.model('WalletCompany');
-
+      // WalletCompany is now the single authoritative source for the euro balance.
       let walletCompany = await WalletCompany.findOne({ companyId });
       if (!walletCompany) {
         walletCompany = new WalletCompany({ companyId, balance: 0 });
         await walletCompany.save();
       }
 
-      // Authoritative remaining minutes after reconcileCallCharges has
-      // deducted every completed call (AI validation NOT required).
       let minutesCompany = await MinutesCompany.findOne({ companyId });
       if (!minutesCompany) {
         minutesCompany = new MinutesCompany({ companyId, minutes: 0 });
         await minutesCompany.save();
       }
       const remainingMinutes = minutesCompany.minutes;
-
-      // Legacy wallet for backwards compatibility of Escrow / Contracts
-      let wallet = await EscrowWallet.findOne({ companyId });
-      if (!wallet) {
-        wallet = new EscrowWallet({ companyId, balance: walletCompany.balance, minutes: remainingMinutes, escrow: 0, contracts: [] });
-        await wallet.save();
-      } else {
-        wallet.balance = walletCompany.balance;
-        wallet.minutes = remainingMinutes;
-        await wallet.save();
-      }
 
       const PhoneNumber = mongoose.model('PhoneNumber');
       const linesCount = await PhoneNumber.countDocuments({ companyId });
@@ -767,12 +566,12 @@ export const escrowController = {
           balance: walletCompany.balance,
           minutes: remainingMinutes,
           escrow: linesCount,
-          contracts: wallet.contracts || []
+          contracts: []
         }
       });
     } catch (err) {
-      console.error('Error fetching/initializing escrow wallet:', err);
-      res.status(500).json({ error: 'Failed to fetch escrow wallet status' });
+      console.error('Error fetching wallet:', err);
+      res.status(500).json({ error: 'Failed to fetch wallet status' });
     }
   },
 
@@ -793,21 +592,19 @@ export const escrowController = {
     }
   },
 
-  // Deposit money into wallet balance
+  // Deposit money — WalletCompany is the authoritative balance.
   deposit: async (req, res) => {
-    const { companyId, amount, description } = req.body;
+    const { companyId, amount } = req.body;
     if (!companyId || !amount || amount <= 0) {
       return res.status(400).json({ error: 'companyId and positive amount are required' });
     }
 
     try {
-      let wallet = await EscrowWallet.findOne({ companyId });
-      if (!wallet) {
-        wallet = new EscrowWallet({ companyId, balance: 0, minutes: 0, escrow: 0, contracts: [] });
-      }
-
-      wallet.balance += parseFloat(amount);
-      await wallet.save();
+      const wallet = await WalletCompany.findOneAndUpdate(
+        { companyId },
+        { $inc: { balance: parseFloat(amount) } },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      );
 
       const transaction = new EscrowTransaction({
         companyId,
@@ -818,18 +615,14 @@ export const escrowController = {
       });
       await transaction.save();
 
-      res.status(200).json({
-        success: true,
-        data: wallet,
-        transaction
-      });
+      res.status(200).json({ success: true, data: wallet, transaction });
     } catch (err) {
       console.error('Error during deposit:', err);
       res.status(500).json({ error: 'Failed to process deposit' });
     }
   },
 
-  // Withdraw money from wallet balance
+  // Withdraw from WalletCompany.balance
   withdraw: async (req, res) => {
     const { companyId, amount } = req.body;
     if (!companyId || !amount || amount <= 0) {
@@ -838,12 +631,12 @@ export const escrowController = {
 
     try {
       await reconcilePendingTransactions(companyId);
-      const wallet = await EscrowWallet.findOne({ companyId });
-      if (!wallet || wallet.balance < amount) {
+      const wallet = await WalletCompany.findOne({ companyId });
+      if (!wallet || wallet.balance < parseFloat(amount)) {
         return res.status(400).json({ error: 'Insufficient balance' });
       }
 
-      wallet.balance -= parseFloat(amount);
+      wallet.balance = Number((wallet.balance - parseFloat(amount)).toFixed(2));
       await wallet.save();
 
       const transaction = new EscrowTransaction({
@@ -881,14 +674,6 @@ export const escrowController = {
       minutesWallet.minutes = Number((minutesWallet.minutes + cost).toFixed(2));
       minutesWallet.purchasedMinutes = Number(((minutesWallet.purchasedMinutes || 0) + cost).toFixed(2));
       await minutesWallet.save();
-
-      // Mirror to legacy EscrowWallet so older consumers keep working
-      let wallet = await EscrowWallet.findOne({ companyId });
-      if (!wallet) {
-        wallet = new EscrowWallet({ companyId, balance: 0, minutes: 0, escrow: 0, contracts: [] });
-      }
-      wallet.minutes = minutesWallet.minutes;
-      await wallet.save();
 
       const transaction = new EscrowTransaction({
         companyId,
@@ -1397,18 +1182,14 @@ export const escrowController = {
         action: action
       });
 
-      // Return the authoritative WalletCompany balance + legacy mirror.
-      const walletCompanyDoc = await WalletCompany.findOne({ companyId: companyIdObj })
-        || await WalletCompany.findOne({ companyId });
-      let wallet = await EscrowWallet.findOne({ companyId });
-      if (!wallet) {
-        wallet = new EscrowWallet({ companyId, balance: 0, minutes: 0, escrow: 0, contracts: [] });
-      }
+      // Return the authoritative WalletCompany balance.
+      const walletCompanyDoc =
+        (await WalletCompany.findOne({ companyId: companyIdObj })) ||
+        (await WalletCompany.findOne({ companyId }));
 
       res.status(200).json({
         success: true,
         data: {
-          wallet,
           walletCompany: walletCompanyDoc,
           transaction,
           repTransactions: bookedRepTx

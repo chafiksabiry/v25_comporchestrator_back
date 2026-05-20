@@ -1,5 +1,4 @@
 import MinutesCompany from '../models/MinutesCompany.js';
-import EscrowWallet from '../models/EscrowWallet.js';
 import { syncMinutesFromCalls } from './escrowController.js';
 
 export const minutesCompanyController = {
@@ -46,17 +45,6 @@ export const minutesCompanyController = {
       wallet.minutes = Number((wallet.minutes + purchased).toFixed(2));
       wallet.purchasedMinutes = Number(((wallet.purchasedMinutes || 0) + purchased).toFixed(2));
       await wallet.save();
-
-      // Keep legacy EscrowWallet in sync
-      try {
-        let oldWallet = await EscrowWallet.findOne({ companyId });
-        if (oldWallet) {
-          oldWallet.minutes = wallet.minutes;
-          await oldWallet.save();
-        }
-      } catch (syncErr) {
-        console.warn('EscrowWallet sync skipped:', syncErr.message);
-      }
 
       res.status(200).json({ success: true, data: wallet });
     } catch (err) {
@@ -107,11 +95,6 @@ export const minutesCompanyController = {
           data: { minutes: wallet.minutes }
         });
       }
-
-      EscrowWallet.findOneAndUpdate(
-        { companyId },
-        { $set: { minutes: updated.minutes } }
-      ).catch((syncErr) => console.warn('EscrowWallet sync skipped:', syncErr.message));
 
       res.status(200).json({
         success: true,
