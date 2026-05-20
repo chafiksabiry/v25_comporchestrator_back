@@ -4,13 +4,13 @@ import dotenv from 'dotenv';
 dotenv.config({ silent: true });
 
 export const config = {
-  port: process.env.PORT || 3003,
-  nodeEnv: process.env.NODE_ENV || 'development',
-  mongodbUri: process.env.MONGODB_URI || 'mongodb://harx:gcZ62rl8hoME@38.242.208.242:27018/V25_CompanySearchWizard',
+  port: process.env.PORT,
+  nodeEnv: process.env.NODE_ENV,
+  mongodbUri: process.env.MONGODB_URI,
   telnyxApiKey: process.env.TELNYX_API_KEY,
   telnyxPublicKey: process.env.TELNYX_PUBLIC_KEY,
   telnyxConnectionId: process.env.TELNYX_CONNECTION_ID,
-  baseUrl: process.env.BASE_URL || 'http://localhost:3000',
+  baseUrl: process.env.BASE_URL,
   webhookSecret: process.env.TELNYX_WEBHOOK_SECRET,
   // Délai d'expiration pour les requirement groups (90 jours par défaut)
   requirementGroupExpiration: parseInt(process.env.REQUIREMENT_GROUP_EXPIRATION) || 90 * 24 * 60 * 60 * 1000,
