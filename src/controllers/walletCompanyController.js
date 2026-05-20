@@ -1,5 +1,6 @@
 import WalletCompany from '../models/WalletCompany.js';
 import WalletCompanyEntry from '../models/WalletCompanyEntry.js';
+import EscrowTransaction from '../models/EscrowTransaction.js';
 import AgentWithdrawal from '../models/AgentWithdrawal.js';
 import mongoose from 'mongoose';
 
@@ -96,24 +97,96 @@ export const walletCompanyController = {
   },
 
   // History of every cash movement on the company's wallet (deposits,
-  // withdrawals, refunds, manual adjustments). The frontend merges this
-  // with the RepTransaction ledger to show a full timeline.
+  // withdrawals, refunds, manual adjustments).
+  //
+  // Sources merged:
+  //   1. `WalletCompanyEntry` — the new authoritative ledger (written by
+  //      every deposit/withdraw since the ledger was introduced).
+  //   2. `EscrowTransaction` — legacy rows of type=deposit/withdrawal that
+  //      were created BEFORE the ledger existed. We pick them up so the
+  //      frontend can display the full history without a migration script.
+  //
+  // Rows from `EscrowTransaction` that have a matching `WalletCompanyEntry`
+  // (same companyId + amount + createdAt within 5s) are dropped to avoid
+  // duplicates when both writes happen back-to-back (deposit path goes
+  // through both models today).
   getEntries: async (req, res) => {
     const { companyId } = req.params;
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
     try {
       const { type, direction, status, limit = 200 } = req.query;
-      const filter = { companyId };
-      if (type) filter.type = type;
-      if (direction) filter.direction = direction;
-      if (status) filter.status = status;
+      const maxLimit = Math.min(Number(limit) || 200, 500);
 
-      const entries = await WalletCompanyEntry.find(filter)
+      // 1) New ledger rows
+      const newFilter = { companyId };
+      if (type) newFilter.type = type;
+      if (direction) newFilter.direction = direction;
+      if (status) newFilter.status = status;
+
+      const newEntries = await WalletCompanyEntry.find(newFilter)
         .sort({ createdAt: -1 })
-        .limit(Math.min(Number(limit) || 200, 500))
+        .limit(maxLimit)
         .lean();
 
-      const totals = entries.reduce(
+      // 2) Legacy rows — only deposits/withdrawals (commissions live in
+      // RepTransaction now and must NOT leak into this view).
+      const companyObjectId = mongoose.Types.ObjectId.isValid(companyId)
+        ? new mongoose.Types.ObjectId(companyId)
+        : companyId;
+      const legacyFilter = {
+        $or: [
+          { companyId: companyObjectId },
+          { companyId: String(companyId) }
+        ],
+        type: { $in: ['deposit', 'withdrawal'] }
+      };
+      if (status) legacyFilter.status = status;
+
+      const legacyRows = await EscrowTransaction.find(legacyFilter)
+        .sort({ createdAt: -1 })
+        .limit(maxLimit)
+        .lean();
+
+      // Build a fingerprint set from the new ledger so we can dedupe.
+      const fingerprint = (companyIdStr, type, amount, createdAt) =>
+        `${companyIdStr}|${type}|${Number(amount).toFixed(2)}|${Math.floor(new Date(createdAt).getTime() / 5000)}`;
+      const newFingerprints = new Set(
+        newEntries.map(e => fingerprint(String(e.companyId), e.type, e.amount, e.createdAt))
+      );
+
+      // Project each legacy row into the same shape as WalletCompanyEntry.
+      const projectedLegacy = legacyRows
+        .map(row => ({
+          _id: row._id,
+          companyId: row.companyId,
+          type: row.type,
+          direction: row.type === 'withdrawal' ? 'debit' : 'credit',
+          amount: row.amount,
+          currency: 'EUR',
+          balanceAfter: null, // unknown for legacy rows
+          status: row.status || 'completed',
+          description: row.description
+            || `${row.type === 'withdrawal' ? 'Retrait' : 'Dépôt'} de ${Number(row.amount).toFixed(2)} €`,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
+          meta: { legacy: true, source: 'EscrowTransaction' }
+        }))
+        .filter(row => {
+          // Drop if already mirrored into the new ledger.
+          const fp = fingerprint(String(row.companyId), row.type, row.amount, row.createdAt);
+          if (newFingerprints.has(fp)) return false;
+          // Apply optional type/direction query filters.
+          if (type && row.type !== type) return false;
+          if (direction && row.direction !== direction) return false;
+          return true;
+        });
+
+      // Merge + re-sort + cap
+      const merged = [...newEntries, ...projectedLegacy]
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, maxLimit);
+
+      const totals = merged.reduce(
         (acc, e) => {
           if (e.direction === 'credit') acc.credit += e.amount || 0;
           else acc.debit += e.amount || 0;
@@ -124,12 +197,12 @@ export const walletCompanyController = {
 
       res.status(200).json({
         success: true,
-        data: entries,
+        data: merged,
         totals: {
           credit: Number(totals.credit.toFixed(2)),
           debit: Number(totals.debit.toFixed(2)),
           net: Number((totals.credit - totals.debit).toFixed(2)),
-          count: entries.length
+          count: merged.length
         }
       });
     } catch (err) {
