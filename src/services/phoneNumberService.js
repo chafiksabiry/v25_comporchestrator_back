@@ -191,6 +191,11 @@ class PhoneNumberService {
       }));
     } catch (error) {
       console.error('❌ Error in searchTwilioNumbers:', error);
+      if (error.status === 403 || error.message?.includes('403') || error.message?.includes('Forbidden')) {
+        const friendlyError = new Error(`Twilio Forbidden (403): Activez les Geo Permissions pour "${countryCode}" dans Twilio Console (Voice > Settings > Geo Permissions). La recherche de numéros en France (FR) requiert également un Regulatory Bundle approuvé.`);
+        friendlyError.status = 403;
+        throw friendlyError;
+      }
       throw error;
     }
   }

@@ -33,7 +33,7 @@ class PhoneNumberController {
       res.json(numbers);
     } catch (error) {
       console.error('Error searching Twilio phone numbers:', error);
-      res.status(500).json({ error: 'Failed to search Twilio phone numbers' });
+      res.status(error.status || 500).json({ error: error.message || 'Failed to search Twilio phone numbers' });
     }
   }
 
