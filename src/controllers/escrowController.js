@@ -805,17 +805,17 @@ export const escrowController = {
           const zoneIdObj = mongoose.Types.ObjectId.isValid(gig.destination_zone)
             ? new mongoose.Types.ObjectId(gig.destination_zone)
             : gig.destination_zone;
-          const zoneDoc = await db.collection('zones').findOne({
+          const countryDoc = await db.collection('countries').findOne({
             $or: [
               { _id: zoneIdObj },
               { _id: gig.destination_zone }
             ]
           });
-          console.log(`[getGigsAndReps] Found zoneDoc:`, zoneDoc);
-          if (zoneDoc && zoneDoc.cca2) {
-            destinationCountry = zoneDoc.cca2;
+          console.log(`[getGigsAndReps] Found countryDoc:`, countryDoc);
+          if (countryDoc && countryDoc.cca2) {
+            destinationCountry = countryDoc.cca2;
           } else {
-            console.log(`[getGigsAndReps] zoneDoc is missing or cca2 is undefined inside zoneDoc`);
+            console.log(`[getGigsAndReps] countryDoc is missing or cca2 is undefined inside countryDoc`);
           }
         } else {
           console.log(`[getGigsAndReps] No destination_zone configured on this gig`);
