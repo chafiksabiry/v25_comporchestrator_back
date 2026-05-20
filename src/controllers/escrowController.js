@@ -155,9 +155,21 @@ async function resolveGigRates(call) {
 }
 
 /**
- * After a call/sale is approved by the company, atomically book the rep
- * earnings rows (one for the call, optionally one for the sale) and debit
- * the company wallet accordingly. Each booking is idempotent.
+ * Once a call is validated (by the AI, the company button or any other path),
+ * atomically book the rep earnings rows (one for the call, optionally one for
+ * the sale) and debit the company wallet accordingly. Each booking is
+ * idempotent on (type, sourceId), so callers don't have to worry about
+ * double-billing.
+ *
+ * Trigger semantics:
+ *   - Call commission (4€)  -> booked as soon as we reach this function. The
+ *     authoritative validation flag is `validByAI === true` upstream, but any
+ *     other "this call is valid" signal works too (manual company approve,
+ *     reconcile backfill, etc.).
+ *   - Sale commission (30€) -> booked when a Transaction doc exists with
+ *     `validByReps === true` (or `call.transactionOccurred === true`). The
+ *     company no longer has to manually approve the sale — AI validation is
+ *     the single source of truth.
  */
 async function bookEarningsForApprovedCall(call, transaction) {
   if (!call || !call.agent) return { call: null, transaction: null };
@@ -186,20 +198,20 @@ async function bookEarningsForApprovedCall(call, transaction) {
     gigId: gigObjectId,
     callId: call._id,
     amount: callRate,
-    description: `Appel validé — commission ${callRate}€ (70% rep / 30% HARX)`
+    description: `Appel validé par l'IA — commission ${callRate}€ (70% rep / 30% HARX)`
   });
 
   let txRow = null;
   const hasSale = transaction?.validByReps === true || call.transactionOccurred === true;
-  if (hasSale && transaction?.validByCompany === true) {
+  if (hasSale) {
     txRow = await bookRepTransaction({
       type: 'transaction',
-      sourceId: String(transaction._id || call._id),
+      sourceId: String(transaction?._id || call._id),
       repId,
       companyId,
       gigId: gigObjectId,
       callId: call._id,
-      transactionDocId: transaction._id,
+      transactionDocId: transaction?._id,
       amount: txRate,
       description: `Transaction commerciale validée — commission ${txRate}€ (70% rep / 30% HARX)`
     });
@@ -398,20 +410,21 @@ async function reconcileAgentEarnings(agentId) {
       const callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 4.00;
       const txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 30.00;
 
-      // Call commission (70%) — pending until the company approves the call.
-      if (!bookedCallIds.has(callIdStr)) {
-        if (call.validByAI === true || call.validByAI === null || call.validByAI === undefined) {
-          totalPending += callRate * REP_SHARE;
-          pendingCount++;
-        }
+      // Call commission (70%) — pending until the AI marks the call as valid.
+      //   - validByAI === true  -> booked once reconcileCompanyRewards runs.
+      //   - validByAI == null   -> still pending (AI hasn't scored yet).
+      //   - validByAI === false -> not pending (rejected by AI).
+      if (!bookedCallIds.has(callIdStr) && call.validByAI !== false) {
+        totalPending += callRate * REP_SHARE;
+        pendingCount++;
       }
 
-      // Sale commission (70%) — pending while the company has not yet approved the sale.
+      // Sale commission (70%) — pending until the rep flags the sale + AI doesn't reject.
       const transaction = await db.collection('transactions').findOne({ call: call._id });
       const hasSale = transaction?.validByReps === true || call.transactionOccurred === true;
-      if (hasSale) {
+      if (hasSale && call.validByAI !== false) {
         const txSourceId = String(transaction?._id || call._id);
-        if (!bookedTxSourceIds.has(txSourceId) && transaction?.validByCompany !== true) {
+        if (!bookedTxSourceIds.has(txSourceId)) {
           totalPending += txRate * REP_SHARE;
           pendingCount++;
         }
@@ -520,12 +533,69 @@ async function reconcileHarxEarnings() {
 }
 
 /**
- * Deprecated. Reward debits now flow exclusively through `bookEarningsForApprovedCall`,
- * which writes to WalletCompany + RepTransaction in one atomic, idempotent step.
- * Kept as a no-op so existing callers (`triggerReconciliation`, `getWallet`) stay safe.
+ * Backfill rep earnings + WalletCompany debit for every call this company owns
+ * that has been validated by the AI (`validByAI === true`) but for which no
+ * RepTransaction row exists yet.
+ *
+ * AI validation is the single trigger: as soon as the AI marks a call as valid,
+ * the company wallet is automatically debited and the rep earns the 70% cut.
+ * No manual company action is required.
+ *
+ * Every booking is idempotent (unique index on RepTransaction.{type, sourceId}),
+ * so this can safely run on every wallet fetch.
  */
-async function reconcileCompanyRewards(_companyId) {
-  return;
+async function reconcileCompanyRewards(companyId) {
+  if (!companyId) return;
+  try {
+    const db = mongoose.connection.db;
+    const companyObjectId = mongoose.Types.ObjectId.isValid(companyId)
+      ? new mongoose.Types.ObjectId(companyId)
+      : companyId;
+
+    // Every call this company owns that the AI has marked as valid.
+    const aiValidatedCalls = await db.collection('calls').find({
+      $and: [
+        {
+          $or: [
+            { companyId: companyObjectId },
+            { companyId: String(companyId) }
+          ]
+        },
+        { validByAI: true }
+      ]
+    }).toArray();
+
+    if (!aiValidatedCalls.length) return;
+
+    // Skip calls already booked as `call_validated`.
+    const callIds = aiValidatedCalls.map(c => String(c._id));
+    const alreadyBooked = await RepTransaction.find({
+      type: 'call_validated',
+      sourceId: { $in: callIds }
+    }).select('sourceId').lean();
+    const bookedSet = new Set(alreadyBooked.map(r => String(r.sourceId)));
+
+    for (const call of aiValidatedCalls) {
+      if (bookedSet.has(String(call._id))) continue;
+      if (!call.agent) continue;
+
+      // Pull a matching transaction (sale) if it exists so we can also book the tx commission.
+      const transaction = await db.collection('transactions').findOne({
+        $or: [
+          { call: call._id },
+          { call: String(call._id) }
+        ]
+      });
+
+      try {
+        await bookEarningsForApprovedCall(call, transaction);
+      } catch (err) {
+        console.error('[reconcileCompanyRewards] booking failed for call', String(call._id), err.message);
+      }
+    }
+  } catch (err) {
+    console.error('Error during reconcileCompanyRewards:', err);
+  }
 }
 
 export const escrowController = {
