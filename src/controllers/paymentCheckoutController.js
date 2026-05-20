@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import CompanyPayment from '../models/CompanyPayment.js';
 import { paypalService } from '../services/paypalService.js';
+import { stripeService } from '../services/stripeService.js';
 import { fulfillMinutesPurchase, fulfillWalletDeposit } from '../services/paymentFulfillment.js';
 
 const CURRENCY = (process.env.PAYMENT_CURRENCY || 'EUR').toUpperCase();
@@ -9,6 +10,15 @@ const MINUTES_UNIT_PRICE_CENTS = parseInt(process.env.MINUTES_UNIT_PRICE_CENTS |
 function paypalReturnBase() {
   return (
     process.env.PAYPAL_RETURN_BASE_URL
+    || 'https://harxv25comporchestratorfront.netlify.app'
+  ).replace(/\/$/, '');
+}
+
+// Static return pages for Stripe live on the same Netlify host as PayPal pages.
+function stripeReturnBase() {
+  return (
+    process.env.STRIPE_RETURN_BASE_URL
+    || process.env.PAYPAL_RETURN_BASE_URL
     || 'https://harxv25comporchestratorfront.netlify.app'
   ).replace(/\/$/, '');
 }
@@ -68,7 +78,7 @@ export const paymentCheckoutController = {
         mode: paypalService.getMode()
       },
       stripe: {
-        enabled: Boolean(process.env.STRIPE_SECRET_KEY)
+        enabled: stripeService.isConfigured()
       },
       pricing: {
         currency: CURRENCY,
@@ -154,12 +164,47 @@ export const paymentCheckoutController = {
         payment.providerRef = paypalOrderId;
         payment.checkoutUrl = paypalApproveUrl;
         await payment.save();
-      } else if (provider === 'stripe' && process.env.STRIPE_SECRET_KEY) {
-        checkoutUrl = undefined; // TODO: Stripe Checkout Session
       } else if (provider === 'stripe') {
-        checkoutUrl = `internal://stub-checkout/${payment._id}`;
-        payment.checkoutUrl = checkoutUrl;
-        await payment.save();
+        if (!stripeService.isConfigured()) {
+          await CompanyPayment.findByIdAndDelete(payment._id);
+          return res.status(503).json({
+            error: 'Stripe not configured',
+            message: 'Définissez STRIPE_SECRET_KEY sur le serveur.'
+          });
+        }
+
+        const returnBase = stripeReturnBase();
+        const successUrl = `${returnBase}/stripe-return.html?paymentId=${payment._id}&session_id={CHECKOUT_SESSION_ID}`;
+        const cancelUrl = `${returnBase}/stripe-cancel.html?paymentId=${payment._id}`;
+
+        const productName =
+          purpose === 'wallet_deposit'
+            ? `HARX — Crédit portefeuille ${(amountCents / 100).toFixed(2)} €`
+            : `HARX — ${quantity} minutes d'appel`;
+
+        try {
+          const session = await stripeService.createOneShotCheckoutSession({
+            amountCents,
+            currency: CURRENCY,
+            productName,
+            successUrl,
+            cancelUrl,
+            clientReferenceId: payment._id,
+            metadata: { purpose, companyId: String(companyId) }
+          });
+
+          checkoutUrl = session.url;
+          payment.providerRef = session.id;
+          payment.checkoutUrl = checkoutUrl;
+          await payment.save();
+        } catch (stripeErr) {
+          await CompanyPayment.findByIdAndDelete(payment._id);
+          console.error('[payments/checkout/init] Stripe error:', stripeErr.message);
+          return res.status(502).json({
+            error: 'Stripe checkout creation failed',
+            message: stripeErr.message
+          });
+        }
       }
 
       res.status(201).json({
@@ -244,6 +289,35 @@ export const paymentCheckoutController = {
 
         payment.status = 'succeeded';
         payment.providerRef = orderId;
+        await payment.save();
+      } else if (payment.provider === 'stripe') {
+        const sessionId = providerRef || payment.providerRef;
+        if (!sessionId) {
+          return res.status(400).json({ error: 'Stripe session ID (providerRef) is required' });
+        }
+
+        let session;
+        try {
+          session = await stripeService.retrieveSession(sessionId);
+        } catch (stripeErr) {
+          payment.status = 'failed';
+          payment.failureReason = stripeErr.message;
+          await payment.save();
+          return res.status(502).json({
+            error: 'Stripe session retrieval failed',
+            message: stripeErr.message
+          });
+        }
+
+        if (session.payment_status !== 'paid' && session.status !== 'complete') {
+          return res.status(402).json({
+            error: 'Stripe payment not completed',
+            message: `Session status: ${session.payment_status || session.status}`
+          });
+        }
+
+        payment.status = 'succeeded';
+        payment.providerRef = session.id;
         await payment.save();
       } else {
         payment.status = 'succeeded';

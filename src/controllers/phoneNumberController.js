@@ -1,5 +1,6 @@
 import { phoneNumberService } from '../services/phoneNumberService.js';
 import { paypalService } from '../services/paypalService.js';
+import { stripeService } from '../services/stripeService.js';
 import { config } from '../config/env.js';
 import telnyx from 'telnyx';
 import mongoose from 'mongoose';
@@ -300,13 +301,46 @@ class PhoneNumberController {
         payment.providerRef = paypalOrderId;
         payment.checkoutUrl = paypalApproveUrl;
         await payment.save();
-      } else if (provider === 'stripe' && process.env.STRIPE_SECRET_KEY) {
-        // TODO: Stripe Checkout Session
-        checkoutUrl = undefined;
       } else if (provider === 'stripe') {
-        checkoutUrl = `internal://stub-checkout/${payment._id}`;
-        payment.checkoutUrl = checkoutUrl;
-        await payment.save();
+        if (!stripeService.isConfigured()) {
+          await PhoneNumberPayment.findByIdAndDelete(payment._id);
+          return res.status(503).json({
+            error: 'Stripe not configured',
+            message: 'Définissez STRIPE_SECRET_KEY sur le serveur.'
+          });
+        }
+
+        const returnBase = (
+          process.env.STRIPE_RETURN_BASE_URL
+          || process.env.PAYPAL_RETURN_BASE_URL
+          || 'https://harxv25comporchestratorfront.netlify.app'
+        ).replace(/\/$/, '');
+        const successUrl = `${returnBase}/stripe-return.html?paymentId=${payment._id}&session_id={CHECKOUT_SESSION_ID}`;
+        const cancelUrl = `${returnBase}/stripe-cancel.html?paymentId=${payment._id}`;
+
+        try {
+          const session = await stripeService.createOneShotCheckoutSession({
+            amountCents: payment.amount,
+            currency: payment.currency,
+            productName: `HARX — Ligne ${phoneNumber}`,
+            successUrl,
+            cancelUrl,
+            clientReferenceId: payment._id,
+            metadata: { purpose: 'phone_line', companyId: String(companyId) }
+          });
+
+          checkoutUrl = session.url;
+          payment.providerRef = session.id;
+          payment.checkoutUrl = checkoutUrl;
+          await payment.save();
+        } catch (stripeErr) {
+          await PhoneNumberPayment.findByIdAndDelete(payment._id);
+          console.error('[checkout/init] Stripe error:', stripeErr.message);
+          return res.status(502).json({
+            error: 'Stripe checkout creation failed',
+            message: stripeErr.message
+          });
+        }
       }
 
       res.status(201).json({
@@ -404,8 +438,33 @@ class PhoneNumberController {
         payment.status = 'succeeded';
         payment.providerRef = orderId;
         await payment.save();
+      } else if (payment.provider === 'stripe') {
+        const sessionId = providerRef || payment.providerRef;
+        if (!sessionId) {
+          return res.status(400).json({ error: 'Stripe session ID (providerRef) is required' });
+        }
+        let session;
+        try {
+          session = await stripeService.retrieveSession(sessionId);
+        } catch (stripeErr) {
+          payment.status = 'failed';
+          payment.failureReason = stripeErr.message;
+          await payment.save();
+          return res.status(502).json({
+            error: 'Stripe session retrieval failed',
+            message: stripeErr.message
+          });
+        }
+        if (session.payment_status !== 'paid' && session.status !== 'complete') {
+          return res.status(402).json({
+            error: 'Stripe payment not completed',
+            message: `Session status: ${session.payment_status || session.status}`
+          });
+        }
+        payment.status = 'succeeded';
+        payment.providerRef = session.id;
+        await payment.save();
       } else {
-        // Stripe stub — real verification via Stripe API when STRIPE_SECRET_KEY is set.
         payment.status = 'succeeded';
         if (providerRef) payment.providerRef = providerRef;
         await payment.save();
@@ -428,7 +487,7 @@ class PhoneNumberController {
         mode: paypalService.getMode()
       },
       stripe: {
-        enabled: Boolean(process.env.STRIPE_SECRET_KEY)
+        enabled: stripeService.isConfigured()
       },
       pricing: {
         amountCents: DEFAULT_LINE_SETUP_FEE_CENTS,
