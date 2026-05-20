@@ -270,11 +270,9 @@ class PhoneNumberController {
           });
         }
 
-        // Static return pages live on the orchestrator MF host (not the qiankun shell).
+        // Return pages must be real static HTML (orchestrator MF). FRONTEND_BASE_URL is the qiankun shell and has no /paypal-return.html.
         const returnBase = (
           process.env.PAYPAL_RETURN_BASE_URL
-          || process.env.FRONTEND_BASE_URL
-          || req.headers.origin
           || 'https://harxv25comporchestratorfront.netlify.app'
         ).replace(/\/$/, '');
         const returnUrl = `${returnBase}/paypal-return.html?paymentId=${payment._id}`;
