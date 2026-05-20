@@ -15,18 +15,19 @@ const REP_SHARE = 0.7;
 const HARX_SHARE = 0.3;
 
 /**
- * Idempotently book a rep transaction (validated call, sale or bonus) and
- * debit the company euro wallet (WalletCompany) for the gross amount.
+ * Idempotently book a rep transaction (validated call, sale or bonus).
  *
- * WalletCompany.balance is the SINGLE source of truth for the company's euros.
- * The legacy EscrowWallet collection is no longer written to.
+ * RepTransaction is the SINGLE ledger for commissions. Both wallets are
+ * derived from it:
+ *   - WalletCompany.balance is decremented here (gross debit).
+ *   - AgentWallet (rep) is recomputed from RepTransaction.repShare in
+ *     `reconcileAgentEarnings`.
  *
- * Side effects (all idempotent — a unique index on (type, sourceId) guarantees
- * each call/sale/bonus can only be booked once):
+ * Side effects (all idempotent — the unique index on (type, sourceId)
+ * guarantees each call/sale/bonus can only be booked once):
  *   1. Insert a RepTransaction row with amount + 70% rep + 30% HARX.
  *   2. Decrement WalletCompany.balance by the gross amount.
- *   3. Write an EscrowTransaction ledger row for the company audit trail.
- *   4. Write a HarxCommission row for the 30% HARX cut.
+ *   3. Write a HarxCommission row for the 30% HARX cut (HARX-wallet input).
  *
  * Returns the persisted RepTransaction document, or `null` if the booking
  * was a no-op (duplicate / invalid input).
@@ -83,29 +84,7 @@ async function bookRepTransaction({
     { new: true, upsert: true, setDefaultsOnInsert: true }
   );
 
-  // 3. Company-side audit row.
-  const escrowTypeByRep = {
-    call_validated: 'reward_charge',
-    transaction: 'transaction_charge',
-    bonus: 'bonus_charge'
-  };
-  try {
-    await new EscrowTransaction({
-      companyId,
-      type: escrowTypeByRep[type] || 'reward_charge',
-      amount: grossAmount,
-      status: 'completed',
-      callId: callId ? String(callId) : undefined,
-      commission_rep: repShare,
-      commission_harx: harxShare,
-      total: grossAmount,
-      description: description || `RepTransaction ${type} #${repTx._id}`
-    }).save();
-  } catch (auditErr) {
-    console.warn('[bookRepTransaction] EscrowTransaction audit skipped:', auditErr.message);
-  }
-
-  // 4. HARX 30% commission row.
+  // 3. HARX 30% commission row.
   const harxTypeByRep = {
     call_validated: 'call_commission',
     transaction: 'transaction_commission',
