@@ -92,24 +92,24 @@ async function reconcileCallCharges(companyId) {
         // Deduct directly from minutes, allowing it to go negative
         const currentMins = wallet.minutes || 0;
         wallet.minutes = Number((currentMins - durationInMinutes).toFixed(4));
-        
+
         const repCallComm = call.repCallCommission || 0;
         const platformCallComm = call.platformCallCommission || 0;
         const totalCallComm = repCallComm + platformCallComm;
-        
+
         const repTransComm = call.repTransactionCommission || 0;
         const platformTransComm = call.platformTransactionCommission || 0;
         const totalTransComm = repTransComm + platformTransComm;
-        
+
         const transactionDetected = call.ai_call_score?.transaction_detected || false;
         const transPrice = call.transaction_price || 0;
-        
+
         // Deduct commissions from balance
         wallet.balance = Number(((wallet.balance || 0) - totalCallComm).toFixed(2));
         if (transactionDetected) {
           wallet.balance = Number((wallet.balance - totalTransComm).toFixed(2));
         }
-        
+
         walletUpdated = true;
 
         // Find agent name for the description
@@ -177,7 +177,7 @@ async function reconcileAgentEarnings(agentId) {
     let totalEarned = 0;
     let totalPending = 0;
     let pendingCount = 0;
-    
+
     // Calculate total from calls
     for (const call of calls) {
       // Find Gig data to get commission rates
@@ -185,7 +185,7 @@ async function reconcileAgentEarnings(agentId) {
       if (gigId) {
         const gigObjectId = mongoose.Types.ObjectId.isValid(gigId) ? new mongoose.Types.ObjectId(gigId) : gigId;
         const gig = await db.collection('gigs').findOne({ _id: gigObjectId });
-        
+
         if (gig) {
           const callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 4.00;
           const txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 30.00;
@@ -231,7 +231,7 @@ async function reconcileAgentEarnings(agentId) {
     wallet.pendingWithdrawals = pendingWithdrawalAmount;
     wallet.pendingCommissions = totalPending;
     wallet.pendingCount = pendingCount;
-    
+
     await wallet.save();
     return { ...wallet.toObject(), pendingCount };
   } catch (err) {
@@ -243,7 +243,7 @@ async function reconcileAgentEarnings(agentId) {
 async function reconcileHarxEarnings() {
   try {
     const db = mongoose.connection.db;
-    
+
     // Fetch all calls
     const calls = await db.collection('calls').find({}).toArray();
 
@@ -252,7 +252,7 @@ async function reconcileHarxEarnings() {
       if (gigId) {
         const gigObjectId = mongoose.Types.ObjectId.isValid(gigId) ? new mongoose.Types.ObjectId(gigId) : gigId;
         const gig = await db.collection('gigs').findOne({ _id: gigObjectId });
-        
+
         if (gig) {
           const callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 4.00;
           const txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 30.00;
@@ -311,7 +311,7 @@ async function reconcileHarxEarnings() {
 
     wallet.lifetimeEarnings = totalHarx;
     wallet.balance = totalHarx; // Assuming no withdrawals for now
-    
+
     await wallet.save();
   } catch (err) {
     console.error('Error reconciling Harx earnings:', err);
@@ -357,7 +357,7 @@ async function reconcileCompanyRewards(companyId) {
         if (gigId) {
           const gigObjectId = mongoose.Types.ObjectId.isValid(gigId) ? new mongoose.Types.ObjectId(gigId) : gigId;
           const gig = await db.collection('gigs').findOne({ _id: gigObjectId });
-          
+
           if (gig) {
             const callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 4.00;
             const txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 30.00;
@@ -755,9 +755,9 @@ export const escrowController = {
 
     try {
       const db = mongoose.connection.db;
-      
-      const companyObjectId = mongoose.Types.ObjectId.isValid(companyId) 
-        ? new mongoose.Types.ObjectId(companyId) 
+
+      const companyObjectId = mongoose.Types.ObjectId.isValid(companyId)
+        ? new mongoose.Types.ObjectId(companyId)
         : companyId;
 
       const gigs = await db.collection('gigs').find({
@@ -798,6 +798,8 @@ export const escrowController = {
         }
 
         let destinationCountry = 'US';
+
+
         console.log(`[getGigsAndReps] --------------------------------------------`);
         console.log(`[getGigsAndReps] Processing gig: "${gig.title}" (ID: ${gig._id})`);
         console.log(`[getGigsAndReps] gig.destination_zone value:`, gig.destination_zone);
@@ -847,9 +849,9 @@ export const escrowController = {
 
     try {
       const db = mongoose.connection.db;
-      
-      const companyObjectId = mongoose.Types.ObjectId.isValid(companyId) 
-        ? new mongoose.Types.ObjectId(companyId) 
+
+      const companyObjectId = mongoose.Types.ObjectId.isValid(companyId)
+        ? new mongoose.Types.ObjectId(companyId)
         : companyId;
 
       const calls = await db.collection('calls').find({
@@ -948,11 +950,11 @@ export const escrowController = {
           valid: (() => {
             if (transaction && transaction.valid !== undefined) return transaction.valid;
             if (call.valid !== undefined && call.valid !== null) return call.valid;
-            const companyOk = (transaction?.validByCompany !== undefined) 
-              ? transaction.validByCompany 
+            const companyOk = (transaction?.validByCompany !== undefined)
+              ? transaction.validByCompany
               : (call.validByCompany !== undefined && call.validByCompany !== null ? call.validByCompany : (call.companyValidation === 'approved' ? true : (call.companyValidation === 'rejected' ? false : null)));
-            const repsOk = (transaction?.validByReps !== undefined) 
-              ? transaction.validByReps 
+            const repsOk = (transaction?.validByReps !== undefined)
+              ? transaction.validByReps
               : (call.validByReps !== undefined && call.validByReps !== null ? call.validByReps : (call.agentValidation === 'approved' ? true : (call.agentValidation === 'rejected' ? false : null)));
             return (companyOk === true && repsOk === true);
           })(),
@@ -982,7 +984,7 @@ export const escrowController = {
 
     try {
       const db = mongoose.connection.db;
-      
+
       const callIdObj = mongoose.Types.ObjectId.isValid(callId)
         ? new mongoose.Types.ObjectId(callId)
         : callId;
@@ -1127,9 +1129,9 @@ export const escrowController = {
 
       // 2. Create withdrawal record
       const reference = `WTH-${Math.floor(100000 + Math.random() * 900000)}-${Date.now().toString().slice(-4)}`;
-      
-      const parsedCompanyId = companyId && mongoose.Types.ObjectId.isValid(companyId) 
-        ? new mongoose.Types.ObjectId(companyId) 
+
+      const parsedCompanyId = companyId && mongoose.Types.ObjectId.isValid(companyId)
+        ? new mongoose.Types.ObjectId(companyId)
         : undefined;
 
       const withdrawal = new AgentWithdrawal({
@@ -1161,10 +1163,10 @@ export const escrowController = {
 
     try {
       const companyObjectId = mongoose.Types.ObjectId.isValid(companyId) ? new mongoose.Types.ObjectId(companyId) : companyId;
-      
+
       // Find withdrawals linked to this company or agents enrolled in this company's gigs
       // For now, let's look for withdrawals specifically tagged with this companyId
-      const withdrawals = await AgentWithdrawal.find({ 
+      const withdrawals = await AgentWithdrawal.find({
         companyId: companyObjectId,
         status: 'pending'
       }).sort({ createdAt: -1 });
