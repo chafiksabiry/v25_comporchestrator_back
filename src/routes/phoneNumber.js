@@ -12,8 +12,12 @@ router.get('/search/twilio', phoneNumberController.searchTwilioNumbers.bind(phon
 // Purchase a phone number (Telnyx)
 router.post('/purchase', phoneNumberController.purchaseNumber.bind(phoneNumberController));
 
-// Purchase a phone number (Twilio)
+// Purchase a phone number (Twilio) — requires a succeeded payment (`paymentId`)
 router.post('/purchase/twilio', phoneNumberController.purchaseTwilioNumber.bind(phoneNumberController));
+
+// Stripe / PayPal checkout for a phone line (NOT linked to WalletCompany)
+router.post('/checkout/init', phoneNumberController.initLineCheckout.bind(phoneNumberController));
+router.post('/checkout/confirm', phoneNumberController.confirmLineCheckout.bind(phoneNumberController));
 
 // Twilio Regulatory Compliance Routes
 import multer from 'multer';

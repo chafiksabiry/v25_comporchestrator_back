@@ -1414,15 +1414,25 @@ export const escrowController = {
 
   requestAgentWithdrawal: async (req, res) => {
     const { agentId, amount, method, methodDetails, description, companyId } = req.body;
+    const MIN_WITHDRAWAL_AMOUNT = 1000;
     if (!agentId || !amount || amount <= 0 || !method) {
       return res.status(400).json({ error: 'agentId, positive amount, and method are required' });
+    }
+
+    const parsedAmount = parseFloat(amount);
+    if (Number.isNaN(parsedAmount) || parsedAmount < MIN_WITHDRAWAL_AMOUNT) {
+      return res.status(400).json({
+        error: `Le montant minimum de retrait est de ${MIN_WITHDRAWAL_AMOUNT}€.`,
+        code: 'MIN_WITHDRAWAL_NOT_MET',
+        minAmount: MIN_WITHDRAWAL_AMOUNT
+      });
     }
 
     try {
       // 1. Reconcile first to ensure balance is accurate
       const wallet = await reconcileAgentEarnings(agentId);
 
-      if (wallet.availableBalance < amount) {
+      if (wallet.availableBalance < parsedAmount) {
         return res.status(400).json({ error: 'Insufficient available balance' });
       }
 
@@ -1436,7 +1446,7 @@ export const escrowController = {
       const withdrawal = new AgentWithdrawal({
         agentId,
         companyId: parsedCompanyId,
-        amount: parseFloat(amount),
+        amount: parsedAmount,
         method,
         methodDetails,
         description: description || `Retrait via ${method}`,

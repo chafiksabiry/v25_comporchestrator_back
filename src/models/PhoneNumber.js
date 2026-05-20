@@ -75,6 +75,23 @@ const phoneNumberSchema = new mongoose.Schema({
     message: String,
     timestamp: Date
   },
+  // Price actually paid by the company to acquire this line (Stripe / PayPal).
+  // Stored in major units (e.g. 5.00 for 5.00€). Independent from the wallet.
+  price: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  currency: {
+    type: String,
+    default: 'EUR',
+    uppercase: true
+  },
+  paymentRef: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PhoneNumberPayment',
+    sparse: true
+  },
   createdAt: {
     type: Date,
     default: Date.now

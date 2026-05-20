@@ -1,6 +1,13 @@
 import { phoneNumberService } from '../services/phoneNumberService.js';
 import { config } from '../config/env.js';
 import telnyx from 'telnyx';
+import mongoose from 'mongoose';
+import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
+
+// Default checkout pricing for a phone line (overridable via env).
+// Stored in cents (EUR) — 100 = 1.00€.
+const DEFAULT_LINE_SETUP_FEE_CENTS = parseInt(process.env.PHONE_LINE_SETUP_FEE_CENTS || '500', 10); // 5.00€
+const DEFAULT_LINE_CURRENCY = (process.env.PHONE_LINE_CURRENCY || 'EUR').toUpperCase();
 
 class PhoneNumberController {
   async searchNumbers(req, res) {
@@ -133,20 +140,64 @@ class PhoneNumberController {
       console.log("📥 Received purchaseTwilioNumber request");
       console.log("📦 req.body:", JSON.stringify(req.body, null, 2));
 
-      const { phoneNumber, gigId, companyId, bundleSid, addressSid } = req.body;
+      const { phoneNumber, gigId, companyId, bundleSid, addressSid, paymentId } = req.body;
       console.log("phoneNumber", phoneNumber);
+
+      // Gate the purchase behind a confirmed Stripe / PayPal payment.
+      // This keeps the company wallet (€ commissions) completely separate
+      // from phone line spend.
+      if (!paymentId || !mongoose.Types.ObjectId.isValid(paymentId)) {
+        return res.status(402).json({
+          error: 'Payment required',
+          message: 'A confirmed payment (Stripe or PayPal) is required to provision a phone line.'
+        });
+      }
+      const payment = await PhoneNumberPayment.findById(paymentId);
+      if (!payment || payment.status !== 'succeeded') {
+        return res.status(402).json({
+          error: 'Payment not completed',
+          message: 'No succeeded payment matches this purchase request.'
+        });
+      }
+      if (payment.phoneNumber !== phoneNumber) {
+        return res.status(400).json({
+          error: 'Payment / number mismatch',
+          message: 'The payment was not authorized for this exact phone number.'
+        });
+      }
 
       // Multi-number support: we allow multiple phone numbers per gig now.
       // Removed the 'existingNumber' check.
+
+      // Convert the Stripe / PayPal amount (stored in cents) to major units
+      // for persistence on the PhoneNumber document (e.g. 500 -> 5.00€).
+      const paidPrice = payment.amount > 0 ? payment.amount / 100 : 0;
 
       const newNumber = await phoneNumberService.purchaseTwilioNumber(
         phoneNumber,
         config.baseUrl,
         gigId,
         companyId,
-        { bundleSid, addressSid }
+        {
+          bundleSid,
+          addressSid,
+          price: paidPrice,
+          currency: payment.currency,
+          paymentRef: payment._id
+        }
       );
       console.log("newNumber", newNumber);
+
+      // Backlink the payment to the provisioned PhoneNumber doc for audit.
+      try {
+        if (newNumber?._id) {
+          payment.phoneNumberRef = newNumber._id;
+          await payment.save();
+        }
+      } catch (linkErr) {
+        console.warn('Could not backlink payment -> phone number:', linkErr.message);
+      }
+
       res.json(newNumber);
     } catch (error) {
       console.error('Error purchasing Twilio phone number:', error);
@@ -170,6 +221,110 @@ class PhoneNumberController {
         error: 'Failed to purchase Twilio phone number',
         message: error.message
       });
+    }
+  }
+
+  /**
+   * Create a pending payment for a phone line.
+   * Returns { paymentId, amount, currency, checkoutUrl? } so the client
+   * can either redirect to a Stripe Checkout Session / PayPal order, or
+   * — when no provider SDK is configured server-side — fall back to a
+   * client-side simulated confirmation.
+   *
+   * No wallet (`WalletCompany`) interaction here; this is fully separate.
+   */
+  async initLineCheckout(req, res) {
+    try {
+      const { phoneNumber, gigId, companyId, provider } = req.body;
+      if (!phoneNumber || !companyId || !provider) {
+        return res.status(400).json({ error: 'phoneNumber, companyId and provider are required' });
+      }
+      if (!['stripe', 'paypal'].includes(provider)) {
+        return res.status(400).json({ error: "provider must be either 'stripe' or 'paypal'" });
+      }
+      if (!mongoose.Types.ObjectId.isValid(companyId)) {
+        return res.status(400).json({ error: 'Invalid companyId' });
+      }
+
+      const payment = await PhoneNumberPayment.create({
+        companyId: new mongoose.Types.ObjectId(companyId),
+        gigId: gigId && mongoose.Types.ObjectId.isValid(gigId) ? new mongoose.Types.ObjectId(gigId) : undefined,
+        phoneNumber,
+        provider,
+        amount: DEFAULT_LINE_SETUP_FEE_CENTS,
+        currency: DEFAULT_LINE_CURRENCY,
+        status: 'pending'
+      });
+
+      // 💳 Real Stripe / PayPal session creation should happen here.
+      // Until SDK keys are wired in `process.env`, we expose a stub
+      // checkout URL that the frontend recognizes and walks through a
+      // simulated confirmation step. The DB record + audit trail are
+      // already real.
+      let checkoutUrl;
+      if (provider === 'stripe' && process.env.STRIPE_SECRET_KEY) {
+        // TODO: create a Stripe Checkout Session and set checkoutUrl.
+        checkoutUrl = undefined;
+      } else if (provider === 'paypal' && process.env.PAYPAL_CLIENT_SECRET) {
+        // TODO: create a PayPal order and set checkoutUrl.
+        checkoutUrl = undefined;
+      } else {
+        checkoutUrl = `internal://stub-checkout/${payment._id}`;
+      }
+
+      if (checkoutUrl) {
+        payment.checkoutUrl = checkoutUrl;
+        await payment.save();
+      }
+
+      res.status(201).json({
+        success: true,
+        paymentId: payment._id,
+        amount: payment.amount,
+        currency: payment.currency,
+        provider: payment.provider,
+        checkoutUrl
+      });
+    } catch (error) {
+      console.error('Error initializing line checkout:', error);
+      res.status(500).json({ error: 'Failed to initialize checkout', message: error.message });
+    }
+  }
+
+  /**
+   * Confirm a phone line payment (called from the frontend after the
+   * Stripe / PayPal popup resolves, or by a provider webhook). Marks
+   * the payment as `succeeded`. The actual line provisioning is still
+   * done by `purchaseTwilioNumber`, which now requires this payment.
+   */
+  async confirmLineCheckout(req, res) {
+    try {
+      const { paymentId, providerRef } = req.body;
+      if (!paymentId || !mongoose.Types.ObjectId.isValid(paymentId)) {
+        return res.status(400).json({ error: 'Valid paymentId is required' });
+      }
+      const payment = await PhoneNumberPayment.findById(paymentId);
+      if (!payment) {
+        return res.status(404).json({ error: 'Payment not found' });
+      }
+      if (payment.status === 'succeeded') {
+        return res.status(200).json({ success: true, payment });
+      }
+      if (payment.status === 'failed' || payment.status === 'refunded') {
+        return res.status(409).json({ error: `Payment is already ${payment.status}` });
+      }
+
+      // 🔐 In a real Stripe / PayPal integration we would verify the
+      // server-side payment status against the provider here using
+      // `providerRef`. With stub mode (no SDK keys) we trust the client.
+      payment.status = 'succeeded';
+      if (providerRef) payment.providerRef = providerRef;
+      await payment.save();
+
+      res.json({ success: true, payment });
+    } catch (error) {
+      console.error('Error confirming line checkout:', error);
+      res.status(500).json({ error: 'Failed to confirm checkout', message: error.message });
     }
   }
 

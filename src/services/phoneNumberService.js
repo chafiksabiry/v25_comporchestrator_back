@@ -370,7 +370,7 @@ class PhoneNumberService {
     }
   }
 
-  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId, { bundleSid, addressSid, type } = {}) {
+  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId, { bundleSid, addressSid, type, price, currency, paymentRef } = {}) {
     if (!gigId || !companyId) {
       throw new Error('gigId and companyId are required to purchase a phone number');
     }
@@ -415,6 +415,10 @@ class PhoneNumberService {
       },
       gigId,
       companyId,
+      // Price actually paid via Stripe / PayPal (NOT debited from the wallet).
+      price: typeof price === 'number' ? price : 0,
+      currency: typeof currency === 'string' && currency ? currency.toUpperCase() : 'EUR',
+      ...(paymentRef ? { paymentRef } : {}),
       metadata: {
         type: type // Save the original type (local, national, mobile)
       }
