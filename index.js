@@ -13,6 +13,7 @@ import { subscriptionRoutes } from './src/routes/subscription.js';
 import { escrowRoutes } from './src/routes/escrow.js';
 import { walletCompanyRoutes } from './src/routes/walletCompany.js';
 import { minutesCompanyRoutes } from './src/routes/minutesCompany.js';
+import { paymentCheckoutRoutes } from './src/routes/paymentCheckout.js';
 
 const app = express();
 
@@ -110,6 +111,7 @@ app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/escrow', escrowRoutes);
 app.use('/api/wallet-company', walletCompanyRoutes);
 app.use('/api/minutes-company', minutesCompanyRoutes);
+app.use('/api/payments/checkout', paymentCheckoutRoutes);
 
 // Health check to verify deployment
 app.get('/api/health', (req, res) => {
