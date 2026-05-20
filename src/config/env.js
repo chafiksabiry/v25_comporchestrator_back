@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 dotenv.config({ silent: true });
 
 export const config = {
-  port: process.env.PORT,
+  port: process.env.PORT || 3003,
   nodeEnv: process.env.NODE_ENV,
   mongodbUri: process.env.MONGODB_URI,
   telnyxApiKey: process.env.TELNYX_API_KEY,

@@ -5,7 +5,74 @@ import AgentWallet from '../models/AgentWallet.js';
 import AgentWithdrawal from '../models/AgentWithdrawal.js';
 import HarxWallet from '../models/HarxWallet.js';
 import HarxCommission from '../models/HarxCommission.js';
+import MinutesCompany from '../models/MinutesCompany.js';
 import { broadcastUpdate } from '../websocket/escrowUpdates.js';
+
+// Idempotently deduct a call's duration from the company's minute balance.
+// Runs regardless of AI validation status: as soon as a call is completed,
+// the minutes are removed from MinutesCompany.minutes.
+// Returns true when the call was newly charged, false when it was already counted.
+export async function chargeCallMinutes(companyId, call) {
+  if (!companyId || !call) return false;
+  const durationSeconds = Number(call.duration || 0);
+  if (durationSeconds <= 0) return false;
+
+  // Use the SID when available (uniqueness guaranteed on the Call model),
+  // otherwise fall back to the Mongo _id.
+  const callKey = String(call.sid || call._id || '');
+  if (!callKey) return false;
+
+  let wallet = await MinutesCompany.findOne({ companyId });
+  if (!wallet) {
+    wallet = new MinutesCompany({ companyId, minutes: 0 });
+  }
+
+  if (wallet.chargedCallSids?.includes(callKey)) {
+    return false;
+  }
+
+  const durationMinutes = Number((durationSeconds / 60).toFixed(4));
+  wallet.minutes = Number(((wallet.minutes || 0) - durationMinutes).toFixed(4));
+  wallet.consumedSeconds = Number((wallet.consumedSeconds || 0) + durationSeconds);
+  wallet.chargedCallSids = [...(wallet.chargedCallSids || []), callKey];
+  await wallet.save();
+
+  // Mirror to legacy EscrowWallet so older surfaces stay in sync
+  try {
+    let legacy = await EscrowWallet.findOne({ companyId });
+    if (legacy) {
+      legacy.minutes = wallet.minutes;
+      await legacy.save();
+    }
+  } catch (syncErr) {
+    console.warn('[chargeCallMinutes] EscrowWallet sync skipped:', syncErr.message);
+  }
+
+  return true;
+}
+
+// Replay every call for a company and ensure each completed one was deducted
+// once from MinutesCompany. No AI validation required - duration alone drives
+// the deduction. Safe to call repeatedly thanks to chargedCallSids.
+export async function syncMinutesFromCalls(companyId) {
+  if (!companyId) return;
+  const db = mongoose.connection.db;
+  const companyObjectId = mongoose.Types.ObjectId.isValid(companyId)
+    ? new mongoose.Types.ObjectId(companyId)
+    : companyId;
+
+  const calls = await db.collection('calls').find({
+    $or: [
+      { companyId: companyObjectId },
+      { companyId: companyId }
+    ],
+    duration: { $gt: 0 }
+  }).toArray();
+
+  for (const call of calls) {
+    await chargeCallMinutes(companyId, call);
+  }
+}
 
 async function reconcilePendingTransactions(companyId) {
   try {
@@ -47,9 +114,21 @@ async function reconcileCallCharges(companyId) {
       wallet = new EscrowWallet({ companyId, balance: 0, minutes: 0, escrow: 0, contracts: [] });
     }
 
-    let walletUpdated = false;
+    // 1. MINUTE DEDUCTION (no AI validation required).
+    //    As soon as a call has a duration, it is deducted from MinutesCompany.
+    //    Idempotency is guaranteed by chargedCallSids inside chargeCallMinutes.
+    await syncMinutesFromCalls(companyId);
 
-    // 1. Fetch all calls of the company that are validated by AI
+    // 2. Mirror the authoritative remaining minutes into legacy EscrowWallet
+    const minutesWallet = await MinutesCompany.findOne({ companyId });
+    if (minutesWallet) {
+      wallet.minutes = minutesWallet.minutes;
+    }
+
+    let walletUpdated = true;
+
+    // 3. COMMISSIONS still require AI validation.
+    //    They are booked into the Euro balance only after the AI has validated the call.
     const validatedCalls = await db.collection('calls').find({
       $or: [
         { companyId: companyObjectId },
@@ -58,95 +137,66 @@ async function reconcileCallCharges(companyId) {
       validByAI: true
     }).toArray();
 
-    const validatedCallIds = new Set(validatedCalls.map(c => c._id.toString()));
-
-    // 2. Fetch all existing call_charge transactions for this company
     const existingCharges = await EscrowTransaction.find({
       companyId,
       type: 'call_charge'
     });
 
-    // 3. Clean up transactions for calls that are no longer validated/approved (and refund minutes)
-    for (const tx of existingCharges) {
-      if (tx.callId && !validatedCallIds.has(tx.callId)) {
-        console.log(`Refunding ${tx.amount} minutes for unvalidated call: ${tx.callId}`);
-        wallet.minutes += tx.amount;
-        walletUpdated = true;
-        await EscrowTransaction.deleteOne({ _id: tx._id });
-      }
-    }
-
-    // 4. Charge validated calls that haven't been charged yet
     for (const call of validatedCalls) {
       const callIdStr = call._id.toString();
+      if (existingCharges.some(tx => tx.callId === callIdStr)) continue;
 
-      const hasCharge = existingCharges.some(tx => tx.callId === callIdStr);
-      if (!hasCharge) {
-        // Determine duration in minutes (precise float from actual seconds)
-        const durationInMinutes = Number(((call.duration || 0) / 60).toFixed(4));
+      const durationInMinutes = Number(((call.duration || 0) / 60).toFixed(4));
 
-        // Deduct from wallet
-        // If minutes are sufficient, deduct from minutes.
-        // Otherwise, consume all minutes, and check if Euro balance can cover.
-        // If Euro balance is 0 or insufficient, let minutes go negative so we don't leave minutes at 0.
-        // Deduct directly from minutes, allowing it to go negative
-        const currentMins = wallet.minutes || 0;
-        wallet.minutes = Number((currentMins - durationInMinutes).toFixed(4));
+      const repCallComm = call.repCallCommission || 0;
+      const platformCallComm = call.platformCallCommission || 0;
+      const totalCallComm = repCallComm + platformCallComm;
 
-        const repCallComm = call.repCallCommission || 0;
-        const platformCallComm = call.platformCallCommission || 0;
-        const totalCallComm = repCallComm + platformCallComm;
+      const repTransComm = call.repTransactionCommission || 0;
+      const platformTransComm = call.platformTransactionCommission || 0;
+      const totalTransComm = repTransComm + platformTransComm;
 
-        const repTransComm = call.repTransactionCommission || 0;
-        const platformTransComm = call.platformTransactionCommission || 0;
-        const totalTransComm = repTransComm + platformTransComm;
+      const transactionDetected = call.ai_call_score?.transaction_detected || false;
+      const transPrice = call.transaction_price || 0;
 
-        const transactionDetected = call.ai_call_score?.transaction_detected || false;
-        const transPrice = call.transaction_price || 0;
-
-        // Deduct commissions from balance
-        wallet.balance = Number(((wallet.balance || 0) - totalCallComm).toFixed(2));
-        if (transactionDetected) {
-          wallet.balance = Number((wallet.balance - totalTransComm).toFixed(2));
-        }
-
-        walletUpdated = true;
-
-        // Find agent name for the description
-        let agentName = 'Agent';
-        if (call.agent) {
-          const agentIdObj = mongoose.Types.ObjectId.isValid(call.agent)
-            ? new mongoose.Types.ObjectId(call.agent)
-            : call.agent;
-          const agentDoc = await db.collection('agents').findOne({
-            $or: [
-              { _id: agentIdObj },
-              { _id: call.agent }
-            ]
-          });
-          if (agentDoc) {
-            agentName = agentDoc.personalInfo?.name || agentDoc.personalInfo?.email || 'Unnamed Agent';
-          }
-        }
-
-        // Save call_charge transaction
-        const escrowTx = new EscrowTransaction({
-          companyId,
-          type: 'call_charge',
-          amount: durationInMinutes,
-          status: 'completed',
-          callId: callIdStr,
-          commission_rep: repCallComm,
-          commission_harx: platformCallComm,
-          total: totalCallComm + (transactionDetected ? totalTransComm : 0),
-          minutes: durationInMinutes,
-          transaction_detected: transactionDetected,
-          transaction_price: transactionDetected ? transPrice : 0,
-          description: `Consommation d'appel par ${agentName}`
-        });
-        await escrowTx.save();
-        console.log(`Charged ${durationInMinutes} minutes for newly validated call: ${callIdStr}`);
+      wallet.balance = Number(((wallet.balance || 0) - totalCallComm).toFixed(2));
+      if (transactionDetected) {
+        wallet.balance = Number((wallet.balance - totalTransComm).toFixed(2));
       }
+      walletUpdated = true;
+
+      let agentName = 'Agent';
+      if (call.agent) {
+        const agentIdObj = mongoose.Types.ObjectId.isValid(call.agent)
+          ? new mongoose.Types.ObjectId(call.agent)
+          : call.agent;
+        const agentDoc = await db.collection('agents').findOne({
+          $or: [
+            { _id: agentIdObj },
+            { _id: call.agent }
+          ]
+        });
+        if (agentDoc) {
+          agentName = agentDoc.personalInfo?.name || agentDoc.personalInfo?.email || 'Unnamed Agent';
+        }
+      }
+
+      const escrowTx = new EscrowTransaction({
+        companyId,
+        type: 'call_charge',
+        amount: durationInMinutes,
+        status: 'completed',
+        callId: callIdStr,
+        commission_rep: repCallComm,
+        commission_harx: platformCallComm,
+        total: totalCallComm + (transactionDetected ? totalTransComm : 0),
+        minutes: durationInMinutes,
+        transaction_detected: transactionDetected,
+        transaction_price: transactionDetected ? transPrice : 0,
+        description: `Commissions IA validées pour appel par ${agentName}`
+      });
+      await escrowTx.save();
+      console.log(`AI-validated commissions booked for call ${callIdStr}`);
     }
 
     if (walletUpdated) {
@@ -421,9 +471,7 @@ export const escrowController = {
       await reconcileCompanyRewards(companyId);
       await reconcileHarxEarnings();
 
-      // Query new collections
       const WalletCompany = mongoose.model('WalletCompany');
-      const MinutesCompany = mongoose.model('MinutesCompany');
 
       let walletCompany = await WalletCompany.findOne({ companyId });
       if (!walletCompany) {
@@ -431,25 +479,26 @@ export const escrowController = {
         await walletCompany.save();
       }
 
+      // Authoritative remaining minutes after reconcileCallCharges has
+      // deducted every completed call (AI validation NOT required).
       let minutesCompany = await MinutesCompany.findOne({ companyId });
       if (!minutesCompany) {
         minutesCompany = new MinutesCompany({ companyId, minutes: 0 });
         await minutesCompany.save();
       }
+      const remainingMinutes = minutesCompany.minutes;
 
-      // Also get the old wallet for backwards compatibility of Escrow / Contracts
+      // Legacy wallet for backwards compatibility of Escrow / Contracts
       let wallet = await EscrowWallet.findOne({ companyId });
       if (!wallet) {
-        wallet = new EscrowWallet({ companyId, balance: walletCompany.balance, minutes: minutesCompany.minutes, escrow: 0, contracts: [] });
+        wallet = new EscrowWallet({ companyId, balance: walletCompany.balance, minutes: remainingMinutes, escrow: 0, contracts: [] });
         await wallet.save();
       } else {
-        // Sync new balances into legacy model
         wallet.balance = walletCompany.balance;
-        wallet.minutes = minutesCompany.minutes;
+        wallet.minutes = remainingMinutes;
         await wallet.save();
       }
 
-      // Query active phone numbers count for the company
       const PhoneNumber = mongoose.model('PhoneNumber');
       const linesCount = await PhoneNumber.countDocuments({ companyId });
 
@@ -458,7 +507,7 @@ export const escrowController = {
         data: {
           companyId,
           balance: walletCompany.balance,
-          minutes: minutesCompany.minutes,
+          minutes: remainingMinutes,
           escrow: linesCount,
           contracts: wallet.contracts || []
         }
@@ -563,14 +612,24 @@ export const escrowController = {
 
     try {
       await reconcilePendingTransactions(companyId);
+
+      const cost = parseFloat(amount); // 1 Euro per minute
+
+      // Credit MinutesCompany (source of truth)
+      let minutesWallet = await MinutesCompany.findOne({ companyId });
+      if (!minutesWallet) {
+        minutesWallet = new MinutesCompany({ companyId, minutes: 0 });
+      }
+      minutesWallet.minutes = Number((minutesWallet.minutes + cost).toFixed(2));
+      minutesWallet.purchasedMinutes = Number(((minutesWallet.purchasedMinutes || 0) + cost).toFixed(2));
+      await minutesWallet.save();
+
+      // Mirror to legacy EscrowWallet so older consumers keep working
       let wallet = await EscrowWallet.findOne({ companyId });
       if (!wallet) {
         wallet = new EscrowWallet({ companyId, balance: 0, minutes: 0, escrow: 0, contracts: [] });
       }
-
-      const cost = parseFloat(amount); // 1 Euro per minute
-      // Direct Stripe/PayPal payment: credit calling minutes directly
-      wallet.minutes += cost;
+      wallet.minutes = minutesWallet.minutes;
       await wallet.save();
 
       const transaction = new EscrowTransaction({
@@ -583,7 +642,6 @@ export const escrowController = {
       });
       await transaction.save();
 
-      // Log HARX commission
       const harxComm = new HarxCommission({
         type: 'minute_purchase',
         amount: cost,

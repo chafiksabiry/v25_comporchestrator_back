@@ -8,11 +8,29 @@ const minutesCompanySchema = new mongoose.Schema({
     unique: true,
     index: true
   },
+  // Remaining minutes balance.
+  // Auto-decreases when calls are made (AI validation NOT required).
+  // Allowed to go negative to display overconsumption.
   minutes: {
     type: Number,
     required: true,
-    default: 0,
-    min: 0
+    default: 0
+  },
+  // Lifetime totals for auditing / display
+  purchasedMinutes: {
+    type: Number,
+    required: true,
+    default: 0
+  },
+  consumedSeconds: {
+    type: Number,
+    required: true,
+    default: 0
+  },
+  // Track which call SIDs have already been deducted to guarantee idempotency
+  chargedCallSids: {
+    type: [String],
+    default: []
   }
 }, {
   timestamps: true
