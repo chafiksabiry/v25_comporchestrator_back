@@ -82,6 +82,7 @@ export const stripeService = {
         mode: 'subscription',
         success_url: successUrl,
         cancel_url: cancelUrl,
+        redirect_on_completion: 'always',
         client_reference_id: userId.toString(),
         metadata: {
           userId: userId.toString(),
@@ -100,6 +101,26 @@ export const stripeService = {
       console.error('Error creating Stripe checkout session:', error);
       throw error;
     }
+  },
+
+  /**
+   * Create an EMBEDDED Stripe Checkout Session (UI rendered inside HARX as a modal).
+   * No redirect: the front uses onComplete + confirm endpoint.
+   */
+  createEmbeddedSubscriptionSession: async (userId, priceId, metadata = {}) => {
+    return getStripe().checkout.sessions.create({
+      ui_mode: 'embedded',
+      mode: 'subscription',
+      payment_method_types: ['card'],
+      line_items: [{ price: priceId, quantity: 1 }],
+      redirect_on_completion: 'never',
+      client_reference_id: userId.toString(),
+      metadata: { userId: userId.toString(), ...metadata },
+      subscription_data: {
+        trial_period_days: 7,
+        metadata: { userId: userId.toString(), ...metadata },
+      },
+    });
   },
 
   handleWebhook: async (signature, rawBody) => {

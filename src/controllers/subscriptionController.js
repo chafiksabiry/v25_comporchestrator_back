@@ -18,6 +18,38 @@ function returnBase() {
   ).replace(/\/$/, '');
 }
 
+function sanitizeReturnUrl(url, fallback) {
+  if (!url || typeof url !== 'string') return fallback;
+  try {
+    const parsed = new URL(url);
+    const allowed = new Set([
+      new URL(returnBase()).origin,
+      'https://harx25pageslinks.netlify.app',
+      'http://localhost:5183',
+      'http://127.0.0.1:5183',
+      'http://localhost:3000',
+    ]);
+    if (process.env.STRIPE_RETURN_ALLOWED_ORIGINS) {
+      process.env.STRIPE_RETURN_ALLOWED_ORIGINS.split(',').forEach((o) => {
+        const trimmed = o.trim();
+        if (!trimmed) return;
+        try {
+          const origin = trimmed.startsWith('http')
+            ? new URL(trimmed).origin
+            : new URL(`https://${trimmed}`).origin;
+          allowed.add(origin);
+        } catch {
+          /* skip invalid entry */
+        }
+      });
+    }
+    if (allowed.has(parsed.origin)) return url;
+  } catch {
+    /* invalid URL */
+  }
+  return fallback;
+}
+
 export const subscriptionController = {
   getPlans: async (req, res) => {
     try {
@@ -83,7 +115,7 @@ export const subscriptionController = {
   /** Popup checkout init — Stripe subscription or PayPal (first month). */
   initPopupCheckout: async (req, res) => {
     try {
-      const { userId, companyId, priceId, planName, provider } = req.body;
+      const { userId, companyId, priceId, planName, provider, returnUrl, apiBaseUrl, uiMode } = req.body;
       if (!userId || !companyId || !priceId || !provider) {
         return res.status(400).json({ error: 'userId, companyId, priceId and provider are required' });
       }
@@ -148,15 +180,47 @@ export const subscriptionController = {
           await CompanyPayment.findByIdAndDelete(payment._id);
           return res.status(503).json({ error: 'Stripe not configured', message: 'Définissez STRIPE_SECRET_KEY.' });
         }
+        const metadata = { companyId: String(companyId), paymentId: String(payment._id) };
+
+        if (uiMode === 'embedded') {
+          const session = await stripeService.createEmbeddedSubscriptionSession(
+            userId,
+            priceId,
+            metadata
+          );
+          payment.providerRef = session.id;
+          payment.checkoutUrl = '';
+          payment.meta = { ...payment.meta, stripeSessionId: session.id };
+          await payment.save();
+
+          return res.status(201).json({
+            success: true,
+            paymentId: payment._id,
+            provider,
+            uiMode: 'embedded',
+            clientSecret: session.client_secret,
+            sessionId: session.id,
+            planName: plan.name,
+            amountEuros: amountCents / 100
+          });
+        }
+
         const base = returnBase();
-        const successUrl = `${base}/stripe-return.html?paymentId=${payment._id}&session_id={CHECKOUT_SESSION_ID}`;
-        const cancelUrl = `${base}/stripe-cancel.html?paymentId=${payment._id}`;
+        const returnTo = sanitizeReturnUrl(returnUrl, `${base}/`);
+        const apiBase = (apiBaseUrl || `${base}/api`).replace(/\/$/, '');
+        const successQuery = new URLSearchParams({
+          paymentId: String(payment._id),
+          returnTo,
+          apiBase,
+        });
+        const successUrl = `${base}/stripe-return.html?${successQuery.toString()}&session_id={CHECKOUT_SESSION_ID}`;
+        const cancelUrl = `${base}/stripe-cancel.html?paymentId=${payment._id}&returnTo=${encodeURIComponent(returnTo)}`;
         const session = await stripeService.createCheckoutSession(
           userId,
           priceId,
           successUrl,
           cancelUrl,
-          { companyId: String(companyId), paymentId: String(payment._id) }
+          metadata
         );
         checkoutUrl = session.url;
         payment.providerRef = session.id;
