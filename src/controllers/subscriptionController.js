@@ -53,30 +53,39 @@ function sanitizeReturnUrl(url, fallback) {
 export const subscriptionController = {
   getPlans: async (req, res) => {
     try {
-      // 1. Récupérer les plans réels depuis Stripe
-      const stripePrices = await stripeService.getPublicPlans();
-      
-      // 2. Récupérer les métadonnées (features, description) depuis la base de données
-      const dbPlans = await SubscriptionPlan.find();
-      
-      // 3. Fusionner les données : Prix/Nom de Stripe + Features/Description de la DB
-      const mergedPlans = stripePrices.map(stripePrice => {
-        const dbPlan = dbPlans.find(p => p.stripePriceId === stripePrice.id);
-        
-        return {
-          _id: dbPlan ? dbPlan._id : stripePrice.id,
-          name: stripePrice.product.name, // Le nom réel dans Stripe (ex: "STARTERs")
-          price: stripePrice.unit_amount / 100, // Le prix réel dans Stripe
-          currency: stripePrice.currency,
-          stripePriceId: stripePrice.id,
-          description: dbPlan ? dbPlan.description : stripePrice.product.description || '',
-          features: dbPlan ? dbPlan.features : [],
-          isPopular: dbPlan ? dbPlan.isPopular : false
-        };
-      });
+      // 1. La DB est la source de vérité : seuls les plans listés ici sont publiés.
+      const dbPlans = await SubscriptionPlan.find({ stripePriceId: { $exists: true, $ne: '' } });
 
-      // Trier par prix croissant
-      mergedPlans.sort((a, b) => a.price - b.price);
+      // 2. Métadonnées Stripe (prix actuel, nom produit) pour les plans connus.
+      let stripePrices = [];
+      try {
+        stripePrices = await stripeService.getPublicPlans();
+      } catch (err) {
+        console.warn('[subscriptions/plans] Stripe lookup failed, using DB only:', err.message);
+      }
+
+      const seen = new Set();
+      const mergedPlans = dbPlans
+        .map((dbPlan) => {
+          if (!dbPlan.stripePriceId || seen.has(dbPlan.stripePriceId)) return null;
+          seen.add(dbPlan.stripePriceId);
+
+          const stripePrice = stripePrices.find((p) => p.id === dbPlan.stripePriceId);
+          const fallbackPrice = Number(dbPlan.price) || 0;
+
+          return {
+            _id: dbPlan._id,
+            name: stripePrice?.product?.name || dbPlan.name,
+            price: stripePrice ? stripePrice.unit_amount / 100 : fallbackPrice,
+            currency: stripePrice?.currency || dbPlan.currency || 'eur',
+            stripePriceId: dbPlan.stripePriceId,
+            description: dbPlan.description || stripePrice?.product?.description || '',
+            features: Array.isArray(dbPlan.features) ? dbPlan.features : [],
+            isPopular: Boolean(dbPlan.isPopular),
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.price - b.price);
 
       res.json(mergedPlans);
     } catch (error) {
