@@ -242,7 +242,11 @@ export const subscriptionController = {
         return res.status(400).json({ error: 'Stripe session ID required' });
       }
       const session = await stripeService.retrieveSession(sessionId);
-      if (session.payment_status !== 'paid' && session.status !== 'complete') {
+      const sessionOk =
+        session.status === 'complete'
+        || session.payment_status === 'paid'
+        || session.payment_status === 'no_payment_required';
+      if (!sessionOk) {
         return res.status(402).json({
           error: 'Stripe payment not completed',
           message: session.payment_status || session.status
