@@ -501,6 +501,141 @@ class PhoneNumberController {
     });
   }
 
+  /**
+   * List "orphan" PhoneNumberPayment records for a company: payments that
+   * are marked `succeeded` but for which the Twilio purchase never ran (no
+   * `phoneNumberRef` set yet). The frontend uses this to detect interrupted
+   * checkouts (e.g. popup-mode flow where the parent dashboard navigated
+   * away before `purchase/twilio` could fire) and offer a one-click retry.
+   */
+  async listOrphanLinePayments(req, res) {
+    try {
+      const { companyId } = req.params;
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) {
+        return res.status(400).json({ error: 'Invalid companyId' });
+      }
+
+      const orphans = await PhoneNumberPayment.find({
+        companyId: new mongoose.Types.ObjectId(companyId),
+        status: 'succeeded',
+        $or: [
+          { phoneNumberRef: { $exists: false } },
+          { phoneNumberRef: null }
+        ]
+      })
+        .sort({ createdAt: -1 })
+        .lean();
+
+      res.json({
+        success: true,
+        count: orphans.length,
+        orphans: orphans.map((p) => ({
+          paymentId: String(p._id),
+          phoneNumber: p.phoneNumber,
+          gigId: p.gigId ? String(p.gigId) : null,
+          provider: p.provider,
+          amount: p.amount,
+          currency: p.currency,
+          createdAt: p.createdAt,
+          providerRef: p.providerRef
+        }))
+      });
+    } catch (error) {
+      console.error('Error listing orphan line payments:', error);
+      res.status(500).json({ error: 'Failed to list orphan payments', message: error.message });
+    }
+  }
+
+  /**
+   * Recover an orphan succeeded PhoneNumberPayment by running the Twilio
+   * provisioning step. Idempotent: if the payment is already linked to a
+   * provisioned PhoneNumber, we return it as-is. The Twilio service itself
+   * also rejects duplicate purchases of the same number for the same gig.
+   *
+   * Body: { paymentId, bundleSid?, addressSid? }
+   */
+  async recoverLinePayment(req, res) {
+    try {
+      const { paymentId, bundleSid, addressSid } = req.body || {};
+      if (!paymentId || !mongoose.Types.ObjectId.isValid(paymentId)) {
+        return res.status(400).json({ error: 'paymentId is required' });
+      }
+
+      const payment = await PhoneNumberPayment.findById(paymentId);
+      if (!payment) {
+        return res.status(404).json({ error: 'Payment not found' });
+      }
+      if (payment.status !== 'succeeded') {
+        return res.status(400).json({
+          error: 'Payment not succeeded',
+          message: `Payment status is '${payment.status}', cannot recover.`
+        });
+      }
+      if (payment.phoneNumberRef) {
+        return res.json({
+          success: true,
+          alreadyProvisioned: true,
+          phoneNumberRef: String(payment.phoneNumberRef),
+          paymentId: String(payment._id)
+        });
+      }
+      if (!payment.phoneNumber || !payment.companyId) {
+        return res.status(400).json({
+          error: 'Payment missing phoneNumber or companyId',
+          message: 'Cannot recover this payment record — it is missing required fields.'
+        });
+      }
+
+      const paidPrice = payment.amount > 0 ? payment.amount / 100 : 0;
+      const newNumber = await phoneNumberService.purchaseTwilioNumber(
+        payment.phoneNumber,
+        config.baseUrl,
+        payment.gigId ? String(payment.gigId) : undefined,
+        String(payment.companyId),
+        {
+          bundleSid,
+          addressSid,
+          price: paidPrice,
+          currency: payment.currency,
+          paymentRef: payment._id
+        }
+      );
+
+      try {
+        if (newNumber?._id) {
+          payment.phoneNumberRef = newNumber._id;
+          await payment.save();
+        }
+      } catch (linkErr) {
+        console.warn('Could not backlink recovered payment -> phone number:', linkErr.message);
+      }
+
+      console.log(
+        `♻️ Recovered orphan line payment: payment=${payment._id} phone=${payment.phoneNumber}`
+      );
+      res.json({ success: true, recovered: true, paymentId: String(payment._id), data: newNumber });
+    } catch (error) {
+      console.error('Error recovering orphan line payment:', error);
+      if (error.message && error.message.includes('already exists')) {
+        return res.status(409).json({ error: 'Conflict', message: error.message });
+      }
+      if (error.code === 21404) {
+        return res.status(400).json({
+          error: 'Twilio Trial Limit Reached',
+          message: 'Trial accounts are allowed only one Twilio number.'
+        });
+      }
+      if (error.code === 21649) {
+        return res.status(400).json({
+          error: 'Regulatory Bundle Required',
+          message: 'This phone number requires regulatory documentation.',
+          moreInfo: error.moreInfo
+        });
+      }
+      res.status(500).json({ error: 'Failed to recover orphan payment', message: error.message });
+    }
+  }
+
   async getAllNumbers(req, res) {
     try {
       const numbers = await phoneNumberService.getAllPhoneNumbers();

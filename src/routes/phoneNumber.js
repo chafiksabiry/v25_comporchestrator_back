@@ -20,6 +20,17 @@ router.get('/checkout/config', phoneNumberController.getCheckoutConfig.bind(phon
 router.post('/checkout/init', phoneNumberController.initLineCheckout.bind(phoneNumberController));
 router.post('/checkout/confirm', phoneNumberController.confirmLineCheckout.bind(phoneNumberController));
 
+// Recovery: list & re-provision PhoneNumberPayments that were paid but never
+// reached `purchase/twilio` (e.g. popup-mode flow interrupted by a redirect).
+router.get(
+  '/checkout/orphans/:companyId',
+  phoneNumberController.listOrphanLinePayments.bind(phoneNumberController)
+);
+router.post(
+  '/checkout/recover',
+  phoneNumberController.recoverLinePayment.bind(phoneNumberController)
+);
+
 // Twilio Regulatory Compliance Routes
 import multer from 'multer';
 const upload = multer({ storage: multer.memoryStorage() });
