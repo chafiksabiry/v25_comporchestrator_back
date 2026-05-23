@@ -41,6 +41,14 @@ class PhoneNumberController {
       });
       res.json(numbers);
     } catch (error) {
+      if (error.code === 'REGULATORY_BUNDLE_REQUIRED') {
+        return res.status(200).json({
+          numbers: [],
+          regulatoryBlocked: true,
+          message: error.message,
+          countryCode: error.countryCode
+        });
+      }
       console.error('Error searching Twilio phone numbers:', error);
       res.status(error.status || 500).json({ error: error.message || 'Failed to search Twilio phone numbers' });
     }

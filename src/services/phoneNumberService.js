@@ -153,6 +153,28 @@ class PhoneNumberService {
     const countryCode = (searchParams.countryCode || 'US').toString().toUpperCase();
     const limit = searchParams.limit || 10;
     const areaCode = searchParams.areaCode;
+    const numberType = 'local';
+
+    // Countries like FR require an approved Twilio Regulatory Bundle before
+    // any number can be purchased. Skip the Twilio inventory search when we
+    // cannot actually provision — avoids showing numbers the user can pay for
+    // but never activate (Twilio error 21649).
+    const bundleRequired = await this.isRegulatoryBundleRequired(countryCode, numberType);
+    if (bundleRequired) {
+      const bundleSid = this.getBundleSidForCountry(countryCode);
+      const approved = await this.isBundleApproved(bundleSid);
+      if (!approved) {
+        console.log(
+          `⛔ Twilio search skipped for ${countryCode}: regulatory bundle required but not approved (bundle=${bundleSid || 'missing'})`
+        );
+        const err = new Error(
+          `Les numéros ${countryCode} nécessitent un Regulatory Bundle Twilio approuvé. Soumettez vos documents dans la console Twilio ou choisissez un pays sans régulation.`
+        );
+        err.code = 'REGULATORY_BUNDLE_REQUIRED';
+        err.countryCode = countryCode;
+        throw err;
+      }
+    }
 
     const searchOptions = {
       limit: limit,
@@ -191,12 +213,56 @@ class PhoneNumberService {
       }));
     } catch (error) {
       console.error('❌ Error in searchTwilioNumbers:', error);
+      if (error.code === 'REGULATORY_BUNDLE_REQUIRED') {
+        throw error;
+      }
       if (error.status === 403 || error.message?.includes('403') || error.message?.includes('Forbidden')) {
         const friendlyError = new Error(`Twilio Forbidden (403): Activez les Geo Permissions pour "${countryCode}" dans Twilio Console (Voice > Settings > Geo Permissions). La recherche de numéros en France (FR) requiert également un Regulatory Bundle approuvé.`);
         friendlyError.status = 403;
         throw friendlyError;
       }
       throw error;
+    }
+  }
+
+  /** ISO country → configured Regulatory Bundle SID (if any). */
+  getBundleSidForCountry(isoCountry) {
+    const cc = String(isoCountry || '').toUpperCase();
+    if (cc === 'FR') return config.twilioFrenchBundleSid || null;
+    return null;
+  }
+
+  /**
+   * True when Twilio mandates regulatory compliance docs for this country/type.
+   */
+  async isRegulatoryBundleRequired(isoCountry, numberType = 'local') {
+    try {
+      const regulations = await this.twilioClient.numbers.v2.regulatoryCompliance
+        .regulations
+        .list({
+          isoCountry: String(isoCountry || '').toUpperCase(),
+          numberType,
+          limit: 1
+        });
+      return Array.isArray(regulations) && regulations.length > 0;
+    } catch (error) {
+      console.warn(`[telephony] could not fetch regulations for ${isoCountry}:`, error.message);
+      // Fail open for unknown errors so non-regulated countries still work.
+      return false;
+    }
+  }
+
+  /** True only when the bundle exists on Twilio and status is twilio-approved. */
+  async isBundleApproved(bundleSid) {
+    if (!bundleSid) return false;
+    try {
+      const bundle = await this.twilioClient.numbers.v2.regulatoryCompliance
+        .bundles(bundleSid)
+        .fetch();
+      return bundle?.status === 'twilio-approved';
+    } catch (error) {
+      console.warn(`[telephony] bundle ${bundleSid} not approved or not found:`, error.message);
+      return false;
     }
   }
 

@@ -35,8 +35,8 @@ export const config = {
   stripePriceStarter: process.env.STRIPE_PRICE_STARTER || 'price_starter_placeholder',
   stripePriceGrowth: process.env.STRIPE_PRICE_GROWTH || 'price_growth_placeholder',
   stripePriceScale: process.env.STRIPE_PRICE_SCALE || 'price_scale_placeholder',
-  twilioFrenchBundleSid: 'BUf007aeefc1a71ad9ac096a4d205563b0',
-  twilioFrenchAddressSid: 'ADfa022505e9b0433a23c8b4f6e56cf15a',
+  twilioFrenchBundleSid: process.env.TWILIO_FRENCH_BUNDLE_SID || 'BUf007aeefc1a71ad9ac096a4d205563b0',
+  twilioFrenchAddressSid: process.env.TWILIO_FRENCH_ADDRESS_SID || 'ADfa022505e9b0433a23c8b4f6e56cf15a',
   twilioFrenchBusinessInfo: {
     businessName: 'AI AGENTS & CO',
     registrationNumber: '942597915',
