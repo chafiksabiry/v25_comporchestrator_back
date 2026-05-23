@@ -233,6 +233,37 @@ class PhoneNumberService {
   }
 
   /**
+   * Best-effort ISO country code guess from an E.164 phone number. Used as
+   * a pre-payment gate to detect numbers that need a Twilio Regulatory
+   * Bundle before the customer is charged. This is a small static prefix
+   * map covering the countries we support — extend as needed. Returns null
+   * if the prefix is unknown so the caller can fall through (we do not want
+   * to block payments for countries we haven't mapped yet).
+   */
+  guessCountryFromE164(phoneNumber) {
+    const raw = String(phoneNumber || '').replace(/[^\d+]/g, '');
+    if (!raw.startsWith('+')) return null;
+    // Order matters: longer prefixes must be tested first.
+    const prefixes = [
+      ['+1', 'US'],
+      ['+33', 'FR'],
+      ['+44', 'GB'],
+      ['+49', 'DE'],
+      ['+34', 'ES'],
+      ['+39', 'IT'],
+      ['+31', 'NL'],
+      ['+32', 'BE'],
+      ['+41', 'CH'],
+      ['+352', 'LU'],
+      ['+212', 'MA']
+    ].sort((a, b) => b[0].length - a[0].length);
+    for (const [prefix, iso] of prefixes) {
+      if (raw.startsWith(prefix)) return iso;
+    }
+    return null;
+  }
+
+  /**
    * True when Twilio mandates regulatory compliance docs for this country/type.
    */
   async isRegulatoryBundleRequired(isoCountry, numberType = 'local') {

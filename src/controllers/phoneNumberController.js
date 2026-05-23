@@ -256,6 +256,33 @@ class PhoneNumberController {
         return res.status(400).json({ error: 'Invalid companyId' });
       }
 
+      // Pre-payment regulatory gate: refuse to charge the customer for a
+      // number that Twilio will reject at provisioning time (error 21649).
+      // We map the E.164 prefix → ISO country, then ask the service whether
+      // a Regulatory Bundle is required for that country and, if so, whether
+      // we have an approved one. This MUST run BEFORE we create the
+      // PhoneNumberPayment / Stripe session — otherwise the user pays for a
+      // number that can never be activated.
+      const isoCountry = phoneNumberService.guessCountryFromE164(phoneNumber);
+      if (isoCountry) {
+        const bundleRequired = await phoneNumberService.isRegulatoryBundleRequired(
+          isoCountry,
+          'local'
+        );
+        if (bundleRequired) {
+          const bundleSid = phoneNumberService.getBundleSidForCountry(isoCountry);
+          const approved = await phoneNumberService.isBundleApproved(bundleSid);
+          if (!approved) {
+            return res.status(409).json({
+              error: 'Regulatory Bundle Required',
+              code: 'REGULATORY_BUNDLE_REQUIRED',
+              countryCode: isoCountry,
+              message: `Les numéros ${isoCountry} nécessitent un Regulatory Bundle Twilio approuvé. Soumettez vos documents dans la console Twilio ou choisissez un pays sans régulation.`
+            });
+          }
+        }
+      }
+
       const payment = await PhoneNumberPayment.create({
         companyId: new mongoose.Types.ObjectId(companyId),
         gigId: gigId && mongoose.Types.ObjectId.isValid(gigId) ? new mongoose.Types.ObjectId(gigId) : undefined,
