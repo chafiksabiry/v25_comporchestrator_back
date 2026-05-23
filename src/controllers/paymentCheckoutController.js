@@ -23,6 +23,48 @@ function stripeReturnBase() {
   ).replace(/\/$/, '');
 }
 
+// Public API base URL injected into the Stripe success URL so that
+// stripe-return.html can call back to the orchestrator's /payments/checkout/confirm.
+function publicApiBase() {
+  return (
+    process.env.PUBLIC_API_BASE_URL
+    || process.env.API_BASE_URL
+    || 'https://harxv25comporchestrator.up.railway.app/api'
+  ).replace(/\/$/, '');
+}
+
+function sanitizePaymentReturnUrl(url, fallback) {
+  if (!url || typeof url !== 'string') return fallback;
+  try {
+    const parsed = new URL(url);
+    const allowed = new Set([
+      new URL(stripeReturnBase()).origin,
+      'https://harx25pageslinks.netlify.app',
+      'http://localhost:5183',
+      'http://127.0.0.1:5183',
+      'http://localhost:3000',
+    ]);
+    if (process.env.STRIPE_RETURN_ALLOWED_ORIGINS) {
+      process.env.STRIPE_RETURN_ALLOWED_ORIGINS.split(',').forEach((o) => {
+        const trimmed = o.trim();
+        if (!trimmed) return;
+        try {
+          const origin = trimmed.startsWith('http')
+            ? new URL(trimmed).origin
+            : new URL(`https://${trimmed}`).origin;
+          allowed.add(origin);
+        } catch {
+          /* skip invalid entry */
+        }
+      });
+    }
+    if (allowed.has(parsed.origin)) return url;
+  } catch {
+    /* invalid URL */
+  }
+  return fallback;
+}
+
 function computeAmountCents(purpose, { amountEuros, minutes }) {
   if (purpose === 'wallet_deposit') {
     const euros = Number(amountEuros);
@@ -90,7 +132,7 @@ export const paymentCheckoutController = {
 
   async initCheckout(req, res) {
     try {
-      const { companyId, purpose, provider, amountEuros, minutes } = req.body;
+      const { companyId, purpose, provider, amountEuros, minutes, returnUrl, apiBaseUrl } = req.body;
 
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) {
         return res.status(400).json({ error: 'Valid companyId is required' });
@@ -174,8 +216,16 @@ export const paymentCheckoutController = {
         }
 
         const returnBase = stripeReturnBase();
-        const successUrl = `${returnBase}/stripe-return.html?paymentId=${payment._id}&session_id={CHECKOUT_SESSION_ID}`;
-        const cancelUrl = `${returnBase}/stripe-cancel.html?paymentId=${payment._id}`;
+        const returnTo = sanitizePaymentReturnUrl(returnUrl, `${returnBase}/`);
+        const apiBase = ((apiBaseUrl && String(apiBaseUrl)) || publicApiBase()).replace(/\/$/, '');
+        const successQuery = new URLSearchParams({
+          paymentId: String(payment._id),
+          flow: 'payment',
+          returnTo,
+          apiBase
+        });
+        const successUrl = `${returnBase}/stripe-return.html?${successQuery.toString()}&session_id={CHECKOUT_SESSION_ID}`;
+        const cancelUrl = `${returnBase}/stripe-cancel.html?paymentId=${payment._id}&returnTo=${encodeURIComponent(returnTo)}`;
 
         const productName =
           purpose === 'wallet_deposit'

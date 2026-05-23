@@ -9,12 +9,21 @@ import {
   activateCompanySubscription,
   activateFromStripeCheckoutSession
 } from '../services/subscriptionFulfillment.js';
+import { fulfillStripeCheckoutSessionPayment } from '../services/paymentFulfillment.js';
 
 function returnBase() {
   return (
     process.env.STRIPE_RETURN_BASE_URL
     || process.env.PAYPAL_RETURN_BASE_URL
     || 'https://harxv25comporchestratorfront.netlify.app'
+  ).replace(/\/$/, '');
+}
+
+function publicApiBase() {
+  return (
+    process.env.PUBLIC_API_BASE_URL
+    || process.env.API_BASE_URL
+    || 'https://harxv25comporchestrator.up.railway.app/api'
   ).replace(/\/$/, '');
 }
 
@@ -216,9 +225,10 @@ export const subscriptionController = {
 
         const base = returnBase();
         const returnTo = sanitizeReturnUrl(returnUrl, `${base}/`);
-        const apiBase = (apiBaseUrl || `${base}/api`).replace(/\/$/, '');
+        const apiBase = ((apiBaseUrl && String(apiBaseUrl)) || publicApiBase()).replace(/\/$/, '');
         const successQuery = new URLSearchParams({
           paymentId: String(payment._id),
+          flow: 'subscription',
           returnTo,
           apiBase,
         });
@@ -404,9 +414,35 @@ export const subscriptionController = {
 async function handleCheckoutSessionCompleted(session) {
   const userId = session.client_reference_id;
   const companyId = session.metadata?.companyId;
-  console.log(`🔔 Webhook: Checkout Completed for User: ${userId}, Company: ${companyId}`);
+  const purpose = session.metadata?.purpose;
+  console.log(
+    `🔔 Webhook: checkout.session.completed user=${userId} company=${companyId} mode=${session.mode} purpose=${purpose || 'n/a'} session=${session.id}`
+  );
+
   try {
-    await activateFromStripeCheckoutSession(session);
+    if (session.mode === 'subscription') {
+      if (!session.subscription) {
+        console.warn(
+          `[webhook] Subscription-mode session ${session.id} has no subscription id — skipping.`
+        );
+        return;
+      }
+      await activateFromStripeCheckoutSession(session);
+      return;
+    }
+
+    if (session.mode === 'payment') {
+      console.log(`💰 Processing one-time payment checkout (session ${session.id})`);
+      await fulfillStripeCheckoutSessionPayment(session);
+      return;
+    }
+
+    if (session.mode === 'setup') {
+      console.log(`🔧 Setup-intent session ${session.id} completed — no fulfillment needed.`);
+      return;
+    }
+
+    console.log(`⚠️ Unknown session mode '${session.mode}' for session ${session.id}`);
   } catch (error) {
     console.error('❌ Error in handleCheckoutSessionCompleted:', error);
   }

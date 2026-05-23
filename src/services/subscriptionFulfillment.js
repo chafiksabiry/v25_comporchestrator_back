@@ -97,8 +97,21 @@ export async function activateFromStripeCheckoutSession(session) {
   const companyId = session.metadata?.companyId;
   const stripeSubscriptionId = session.subscription;
 
+  // Defensive guard: only subscription-mode sessions can activate a subscription.
+  // One-shot payments (mode=payment) and setup intents (mode=setup) reach this
+  // helper if a caller forgets to dispatch by session.mode — log and skip instead
+  // of throwing so the webhook does not 500.
+  if (session?.mode && session.mode !== 'subscription') {
+    console.log(
+      `[subscriptions] Skipping activation: session ${session.id} mode=${session.mode}`
+    );
+    return null;
+  }
   if (!stripeSubscriptionId) {
-    throw new Error('Stripe session has no subscription id');
+    console.log(
+      `[subscriptions] Skipping activation: session ${session.id} has no subscription id (mode=${session.mode || 'unknown'})`
+    );
+    return null;
   }
 
   const stripeSubscription = await stripeService.getSubscription(stripeSubscriptionId);
