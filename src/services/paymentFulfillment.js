@@ -1,5 +1,6 @@
 import CompanyPayment from '../models/CompanyPayment.js';
 import MinutesCompany from '../models/MinutesCompany.js';
+import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
 import WalletCompany from '../models/WalletCompany.js';
 import WalletCompanyEntry from '../models/WalletCompanyEntry.js';
 
@@ -58,8 +59,12 @@ export async function fulfillMinutesPurchase(payment) {
 
 /**
  * Fulfill a one-shot Stripe Checkout Session (mode='payment') from a webhook.
- * Idempotent: if the matching CompanyPayment is already fulfilled, returns early.
- * Looks the payment up by providerRef = session.id, then by metadata.paymentId.
+ * Dispatches by `session.metadata.purpose`:
+ *   - 'phone_line'                 → PhoneNumberPayment (status only; provisioning runs later)
+ *   - 'wallet_deposit'             → CompanyPayment + fulfillWalletDeposit
+ *   - 'minutes_purchase'           → CompanyPayment + fulfillMinutesPurchase
+ *   - anything else                → CompanyPayment fallback (purpose read from the row)
+ * All branches are idempotent.
  */
 export async function fulfillStripeCheckoutSessionPayment(session) {
   if (!session || session.mode !== 'payment') {
@@ -69,6 +74,18 @@ export async function fulfillStripeCheckoutSessionPayment(session) {
     return { skipped: true, reason: `session not paid yet (status=${session.payment_status || session.status})` };
   }
 
+  const purpose = session.metadata?.purpose;
+  if (purpose === 'phone_line') {
+    return fulfillStripePhoneLineSession(session);
+  }
+  return fulfillStripeCompanyPaymentSession(session);
+}
+
+/**
+ * Fulfill a one-shot Stripe Checkout Session for a wallet deposit / minutes pack.
+ * Stored in the `CompanyPayment` model.
+ */
+async function fulfillStripeCompanyPaymentSession(session) {
   const paymentIdMeta = session.metadata?.paymentId || session.client_reference_id;
   let payment = null;
   if (session.id) {
@@ -101,7 +118,7 @@ export async function fulfillStripeCheckoutSessionPayment(session) {
   } else if (payment.purpose === 'minutes_purchase') {
     result = await fulfillMinutesPurchase(payment);
   } else {
-    console.warn(`[payments] Unknown purpose '${payment.purpose}' for payment ${payment._id}`);
+    console.warn(`[payments] Unknown CompanyPayment purpose '${payment.purpose}' for payment ${payment._id}`);
     return { skipped: true, reason: `unknown purpose ${payment.purpose}` };
   }
 
@@ -112,4 +129,44 @@ export async function fulfillStripeCheckoutSessionPayment(session) {
     `✅ One-time Stripe payment fulfilled: payment=${payment._id} purpose=${payment.purpose} session=${session.id}`
   );
   return { fulfilled: true, paymentId: String(payment._id), purpose: payment.purpose, result };
+}
+
+/**
+ * Fulfill a one-shot Stripe Checkout Session for a phone-line setup fee.
+ * Stored in the `PhoneNumberPayment` model. Marks the payment as succeeded;
+ * the actual line provisioning is performed later by `purchaseTwilioNumber`,
+ * which checks that a succeeded PhoneNumberPayment exists.
+ */
+export async function fulfillStripePhoneLineSession(session) {
+  const paymentIdMeta = session.metadata?.paymentId || session.client_reference_id;
+  let payment = null;
+  if (session.id) {
+    payment = await PhoneNumberPayment.findOne({ providerRef: session.id });
+  }
+  if (!payment && paymentIdMeta) {
+    try {
+      payment = await PhoneNumberPayment.findById(paymentIdMeta);
+    } catch {
+      payment = null;
+    }
+  }
+  if (!payment) {
+    console.warn(`[payments] No PhoneNumberPayment found for Stripe session ${session.id}`);
+    return { skipped: true, reason: 'phone-line payment record not found' };
+  }
+  if (payment.status === 'succeeded') {
+    return { skipped: true, reason: 'already succeeded', paymentId: String(payment._id) };
+  }
+  if (payment.status === 'refunded' || payment.status === 'failed') {
+    return { skipped: true, reason: `payment is ${payment.status}`, paymentId: String(payment._id) };
+  }
+
+  payment.status = 'succeeded';
+  payment.providerRef = session.id || payment.providerRef;
+  await payment.save();
+
+  console.log(
+    `✅ Phone-line Stripe payment fulfilled: payment=${payment._id} phone=${payment.phoneNumber} session=${session.id}`
+  );
+  return { fulfilled: true, paymentId: String(payment._id), purpose: 'phone_line' };
 }

@@ -237,7 +237,7 @@ class PhoneNumberController {
    */
   async initLineCheckout(req, res) {
     try {
-      const { phoneNumber, gigId, companyId, provider } = req.body;
+      const { phoneNumber, gigId, companyId, provider, returnUrl, apiBaseUrl } = req.body;
       if (!phoneNumber || !companyId || !provider) {
         return res.status(400).json({ error: 'phoneNumber, companyId and provider are required' });
       }
@@ -315,8 +315,21 @@ class PhoneNumberController {
           || process.env.PAYPAL_RETURN_BASE_URL
           || 'https://harxv25comporchestratorfront.netlify.app'
         ).replace(/\/$/, '');
-        const successUrl = `${returnBase}/stripe-return.html?paymentId=${payment._id}&session_id={CHECKOUT_SESSION_ID}`;
-        const cancelUrl = `${returnBase}/stripe-cancel.html?paymentId=${payment._id}`;
+        const apiBase = ((apiBaseUrl && String(apiBaseUrl)) || (
+          process.env.PUBLIC_API_BASE_URL
+          || process.env.API_BASE_URL
+          || 'https://harxv25comporchestrator.up.railway.app/api'
+        )).replace(/\/$/, '');
+        const returnTo = (returnUrl && typeof returnUrl === 'string') ? returnUrl : `${returnBase}/`;
+        const successQuery = new URLSearchParams({
+          paymentId: String(payment._id),
+          flow: 'payment',
+          confirmPath: '/phone-numbers/checkout/confirm',
+          returnTo,
+          apiBase
+        });
+        const successUrl = `${returnBase}/stripe-return.html?${successQuery.toString()}&session_id={CHECKOUT_SESSION_ID}`;
+        const cancelUrl = `${returnBase}/stripe-cancel.html?paymentId=${payment._id}&returnTo=${encodeURIComponent(returnTo)}`;
 
         try {
           const session = await stripeService.createOneShotCheckoutSession({
@@ -326,7 +339,7 @@ class PhoneNumberController {
             successUrl,
             cancelUrl,
             clientReferenceId: payment._id,
-            metadata: { purpose: 'phone_line', companyId: String(companyId) }
+            metadata: { purpose: 'phone_line', companyId: String(companyId), paymentId: String(payment._id) }
           });
 
           checkoutUrl = session.url;
