@@ -3,6 +3,7 @@ import CompanyPayment from '../models/CompanyPayment.js';
 import { paypalService } from '../services/paypalService.js';
 import { stripeService } from '../services/stripeService.js';
 import { fulfillMinutesPurchase, fulfillWalletDeposit } from '../services/paymentFulfillment.js';
+import { config } from '../config/env.js';
 
 const CURRENCY = (process.env.PAYMENT_CURRENCY || 'EUR').toUpperCase();
 const MINUTES_UNIT_PRICE_CENTS = parseInt(process.env.MINUTES_UNIT_PRICE_CENTS || '100', 10); // 1 min = 1 €
@@ -26,11 +27,7 @@ function stripeReturnBase() {
 // Public API base URL injected into the Stripe success URL so that
 // stripe-return.html can call back to the orchestrator's /payments/checkout/confirm.
 function publicApiBase() {
-  return (
-    process.env.PUBLIC_API_BASE_URL
-    || process.env.API_BASE_URL
-    || 'https://harxv25comporchestrator.up.railway.app/api'
-  ).replace(/\/$/, '');
+  return config.publicApiBaseUrl;
 }
 
 function sanitizePaymentReturnUrl(url, fallback) {

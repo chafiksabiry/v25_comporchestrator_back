@@ -18,6 +18,17 @@ export const config = {
   twilioAuthToken: process.env.TWILIO_AUTH_TOKEN,
   stripeSecretKey: process.env.STRIPE_SECRET_KEY,
   stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+  /** Public API base injected into stripe-return.html (?apiBase=). Must include /api. */
+  publicApiBaseUrl: (
+    process.env.PUBLIC_API_BASE_URL
+    || process.env.API_BASE_URL
+    || 'https://v25comporchestratorback-production.up.railway.app/api'
+  ).replace(/\/$/, ''),
+  stripeReturnBaseUrl: (
+    process.env.STRIPE_RETURN_BASE_URL
+    || process.env.PAYPAL_RETURN_BASE_URL
+    || 'https://harxv25comporchestratorfront.netlify.app'
+  ).replace(/\/$/, ''),
   paypalClientId: process.env.PAYPAL_CLIENT_ID,
   paypalClientSecret: process.env.PAYPAL_CLIENT_SECRET,
   paypalMode: (process.env.PAYPAL_MODE || 'sandbox').toLowerCase(),

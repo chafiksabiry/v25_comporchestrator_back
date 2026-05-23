@@ -10,6 +10,7 @@ import {
   activateFromStripeCheckoutSession
 } from '../services/subscriptionFulfillment.js';
 import { fulfillStripeCheckoutSessionPayment } from '../services/paymentFulfillment.js';
+import { config } from '../config/env.js';
 
 function returnBase() {
   return (
@@ -20,11 +21,7 @@ function returnBase() {
 }
 
 function publicApiBase() {
-  return (
-    process.env.PUBLIC_API_BASE_URL
-    || process.env.API_BASE_URL
-    || 'https://harxv25comporchestrator.up.railway.app/api'
-  ).replace(/\/$/, '');
+  return config.publicApiBaseUrl;
 }
 
 function sanitizeReturnUrl(url, fallback) {

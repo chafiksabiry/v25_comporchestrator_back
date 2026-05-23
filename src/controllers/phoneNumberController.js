@@ -310,16 +310,8 @@ class PhoneNumberController {
           });
         }
 
-        const returnBase = (
-          process.env.STRIPE_RETURN_BASE_URL
-          || process.env.PAYPAL_RETURN_BASE_URL
-          || 'https://harxv25comporchestratorfront.netlify.app'
-        ).replace(/\/$/, '');
-        const apiBase = ((apiBaseUrl && String(apiBaseUrl)) || (
-          process.env.PUBLIC_API_BASE_URL
-          || process.env.API_BASE_URL
-          || 'https://harxv25comporchestrator.up.railway.app/api'
-        )).replace(/\/$/, '');
+        const returnBase = config.stripeReturnBaseUrl;
+        const apiBase = ((apiBaseUrl && String(apiBaseUrl)) || config.publicApiBaseUrl).replace(/\/$/, '');
         const returnTo = (returnUrl && typeof returnUrl === 'string') ? returnUrl : `${returnBase}/`;
         const successQuery = new URLSearchParams({
           paymentId: String(payment._id),
