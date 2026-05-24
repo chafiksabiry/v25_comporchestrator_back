@@ -5,11 +5,16 @@ import { config } from '../config/env.js';
 import telnyx from 'telnyx';
 import mongoose from 'mongoose';
 import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
+import { PhoneNumber } from '../models/PhoneNumber.js';
 
 // Default checkout pricing for a phone line (overridable via env).
 // Stored in cents (EUR) — 100 = 1.00€.
 const DEFAULT_LINE_SETUP_FEE_CENTS = parseInt(process.env.PHONE_LINE_SETUP_FEE_CENTS || '100', 10); // 1.00€
 const DEFAULT_LINE_CURRENCY = (process.env.PHONE_LINE_CURRENCY || 'EUR').toUpperCase();
+
+// First phone line per company is a free 15-day trial — no payment required.
+const TRIAL_DURATION_DAYS = parseInt(process.env.PHONE_LINE_TRIAL_DAYS || '15', 10);
+const TRIAL_DURATION_MS = TRIAL_DURATION_DAYS * 24 * 60 * 60 * 1000;
 
 class PhoneNumberController {
   async searchNumbers(req, res) {
@@ -145,6 +150,50 @@ class PhoneNumberController {
     }
   }
 
+  /**
+   * Returns whether the given company can still claim the free 15-day phone
+   * line trial. The trial is consumed by the very first PhoneNumber doc
+   * persisted for the company (whatever its provider).
+   */
+  async getTrialEligibility(req, res) {
+    try {
+      const { companyId } = req.params;
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) {
+        return res.status(400).json({ error: 'Invalid companyId' });
+      }
+
+      const existingCount = await PhoneNumber.countDocuments({ companyId });
+      const eligible = existingCount === 0;
+
+      let activeTrial = null;
+      if (!eligible) {
+        const trialDoc = await PhoneNumber.findOne({
+          companyId,
+          isTrial: true,
+          trialExpiresAt: { $gt: new Date() },
+        })
+          .select('phoneNumber trialExpiresAt')
+          .lean();
+        if (trialDoc) {
+          activeTrial = {
+            phoneNumber: trialDoc.phoneNumber,
+            expiresAt: trialDoc.trialExpiresAt,
+          };
+        }
+      }
+
+      res.json({
+        eligible,
+        trialDurationDays: TRIAL_DURATION_DAYS,
+        existingNumbers: existingCount,
+        activeTrial,
+      });
+    } catch (error) {
+      console.error('Error checking trial eligibility:', error);
+      res.status(500).json({ error: 'Failed to check trial eligibility' });
+    }
+  }
+
   async purchaseTwilioNumber(req, res) {
     try {
       console.log("📥 Received purchaseTwilioNumber request");
@@ -153,35 +202,48 @@ class PhoneNumberController {
       const { phoneNumber, gigId, companyId, bundleSid, addressSid, paymentId } = req.body;
       console.log("phoneNumber", phoneNumber);
 
-      // Gate the purchase behind a confirmed Stripe / PayPal payment.
-      // This keeps the company wallet (€ commissions) completely separate
-      // from phone line spend.
-      if (!paymentId || !mongoose.Types.ObjectId.isValid(paymentId)) {
-        return res.status(402).json({
-          error: 'Payment required',
-          message: 'A confirmed payment (Stripe or PayPal) is required to provision a phone line.'
-        });
-      }
-      const payment = await PhoneNumberPayment.findById(paymentId);
-      if (!payment || payment.status !== 'succeeded') {
-        return res.status(402).json({
-          error: 'Payment not completed',
-          message: 'No succeeded payment matches this purchase request.'
-        });
-      }
-      if (payment.phoneNumber !== phoneNumber) {
-        return res.status(400).json({
-          error: 'Payment / number mismatch',
-          message: 'The payment was not authorized for this exact phone number.'
-        });
+      // ──────────────────────────────────────────────────────────────────
+      // Free trial gate: the FIRST phone number per company is provisioned
+      // for free for 15 days (no Stripe/PayPal needed). Eligibility is based
+      // on the absence of any existing PhoneNumber document for this company.
+      // ──────────────────────────────────────────────────────────────────
+      let isTrial = false;
+      let payment = null;
+
+      if (companyId && mongoose.Types.ObjectId.isValid(companyId)) {
+        const existingCount = await PhoneNumber.countDocuments({ companyId });
+        isTrial = existingCount === 0;
       }
 
-      // Multi-number support: we allow multiple phone numbers per gig now.
-      // Removed the 'existingNumber' check.
+      if (!isTrial) {
+        // Past the trial: enforce the standard Stripe / PayPal payment gate.
+        if (!paymentId || !mongoose.Types.ObjectId.isValid(paymentId)) {
+          return res.status(402).json({
+            error: 'Payment required',
+            message: 'A confirmed payment (Stripe or PayPal) is required to provision a phone line.'
+          });
+        }
+        payment = await PhoneNumberPayment.findById(paymentId);
+        if (!payment || payment.status !== 'succeeded') {
+          return res.status(402).json({
+            error: 'Payment not completed',
+            message: 'No succeeded payment matches this purchase request.'
+          });
+        }
+        if (payment.phoneNumber !== phoneNumber) {
+          return res.status(400).json({
+            error: 'Payment / number mismatch',
+            message: 'The payment was not authorized for this exact phone number.'
+          });
+        }
+      } else {
+        console.log(`🎁 First phone line for company ${companyId} — granting ${TRIAL_DURATION_DAYS}-day free trial.`);
+      }
 
       // Convert the Stripe / PayPal amount (stored in cents) to major units
       // for persistence on the PhoneNumber document (e.g. 500 -> 5.00€).
-      const paidPrice = payment.amount > 0 ? payment.amount / 100 : 0;
+      const paidPrice = !isTrial && payment?.amount > 0 ? payment.amount / 100 : 0;
+      const trialExpiresAt = isTrial ? new Date(Date.now() + TRIAL_DURATION_MS) : null;
 
       const newNumber = await phoneNumberService.purchaseTwilioNumber(
         phoneNumber,
@@ -192,20 +254,24 @@ class PhoneNumberController {
           bundleSid,
           addressSid,
           price: paidPrice,
-          currency: payment.currency,
-          paymentRef: payment._id
+          currency: !isTrial && payment?.currency ? payment.currency : DEFAULT_LINE_CURRENCY,
+          paymentRef: !isTrial ? payment?._id : undefined,
+          isTrial,
+          trialExpiresAt,
         }
       );
       console.log("newNumber", newNumber);
 
       // Backlink the payment to the provisioned PhoneNumber doc for audit.
-      try {
-        if (newNumber?._id) {
-          payment.phoneNumberRef = newNumber._id;
-          await payment.save();
+      if (!isTrial && payment) {
+        try {
+          if (newNumber?._id) {
+            payment.phoneNumberRef = newNumber._id;
+            await payment.save();
+          }
+        } catch (linkErr) {
+          console.warn('Could not backlink payment -> phone number:', linkErr.message);
         }
-      } catch (linkErr) {
-        console.warn('Could not backlink payment -> phone number:', linkErr.message);
       }
 
       res.json(newNumber);

@@ -92,6 +92,18 @@ const phoneNumberSchema = new mongoose.Schema({
     ref: 'PhoneNumberPayment',
     sparse: true
   },
+  // Each company is entitled to ONE free phone line as a 15-day trial.
+  // No Stripe/PayPal is required for that very first provisioning.
+  // After the trial expires (or starting from the 2nd number), the regular
+  // payment-gated flow applies.
+  isTrial: {
+    type: Boolean,
+    default: false
+  },
+  trialExpiresAt: {
+    type: Date,
+    default: null
+  },
   createdAt: {
     type: Date,
     default: Date.now

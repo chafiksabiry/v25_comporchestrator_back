@@ -13,7 +13,11 @@ router.get('/search/twilio', phoneNumberController.searchTwilioNumbers.bind(phon
 router.post('/purchase', phoneNumberController.purchaseNumber.bind(phoneNumberController));
 
 // Purchase a phone number (Twilio) — requires a succeeded payment (`paymentId`)
+// unless the company is eligible for the free 15-day trial (first number ever).
 router.post('/purchase/twilio', phoneNumberController.purchaseTwilioNumber.bind(phoneNumberController));
+
+// Check whether a company is still eligible for the free 15-day trial line.
+router.get('/trial/eligibility/:companyId', phoneNumberController.getTrialEligibility.bind(phoneNumberController));
 
 // Stripe / PayPal checkout for a phone line (NOT linked to WalletCompany)
 router.get('/checkout/config', phoneNumberController.getCheckoutConfig.bind(phoneNumberController));

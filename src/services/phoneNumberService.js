@@ -467,7 +467,7 @@ class PhoneNumberService {
     }
   }
 
-  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId, { bundleSid, addressSid, type, price, currency, paymentRef } = {}) {
+  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId, { bundleSid, addressSid, type, price, currency, paymentRef, isTrial, trialExpiresAt } = {}) {
     if (!gigId || !companyId) {
       throw new Error('gigId and companyId are required to purchase a phone number');
     }
@@ -516,8 +516,11 @@ class PhoneNumberService {
       price: typeof price === 'number' ? price : 0,
       currency: typeof currency === 'string' && currency ? currency.toUpperCase() : 'EUR',
       ...(paymentRef ? { paymentRef } : {}),
+      isTrial: Boolean(isTrial),
+      ...(trialExpiresAt ? { trialExpiresAt } : {}),
       metadata: {
-        type: type // Save the original type (local, national, mobile)
+        type: type, // Save the original type (local, national, mobile)
+        ...(isTrial ? { trial: { granted: true, expiresAt: trialExpiresAt } } : {})
       }
     };
 
