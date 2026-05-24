@@ -61,6 +61,42 @@ async function retrieveSession(sessionId) {
   });
 }
 
+/**
+ * Refund a one-shot Checkout Session in full. Used when the downstream
+ * provisioning fails after the customer has already been charged (e.g.
+ * Twilio rejects the number with regulatory error 21649). Throws if
+ * Stripe cannot identify a captured PaymentIntent for the session.
+ *
+ * @param {string} sessionId  Stripe Checkout Session id (cs_...).
+ * @param {object} [opts]
+ * @param {string} [opts.reason]  Free-form reason saved on the refund.
+ * @returns {Promise<import('stripe').Stripe.Refund>}
+ */
+async function refundCheckoutSession(sessionId, { reason } = {}) {
+  if (!sessionId) {
+    const err = new Error('sessionId is required to issue a refund.');
+    err.code = 'STRIPE_REFUND_NO_SESSION';
+    throw err;
+  }
+
+  const session = await retrieveSession(sessionId);
+  const paymentIntentId = typeof session.payment_intent === 'string'
+    ? session.payment_intent
+    : session.payment_intent?.id;
+
+  if (!paymentIntentId) {
+    const err = new Error(`Stripe session ${sessionId} has no PaymentIntent to refund.`);
+    err.code = 'STRIPE_REFUND_NO_PAYMENT_INTENT';
+    throw err;
+  }
+
+  return getStripe().refunds.create({
+    payment_intent: paymentIntentId,
+    reason: 'requested_by_customer',
+    metadata: reason ? { reason } : undefined
+  });
+}
+
 function isConfigured() {
   return Boolean(config.stripeSecretKey);
 }
@@ -69,6 +105,7 @@ export const stripeService = {
   isConfigured,
   createOneShotCheckoutSession,
   retrieveSession,
+  refundCheckoutSession,
   createCheckoutSession: async (userId, priceId, successUrl, cancelUrl, metadata = {}) => {
     try {
       const session = await getStripe().checkout.sessions.create({

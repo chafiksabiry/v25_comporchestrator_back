@@ -198,7 +198,23 @@ class PhoneNumberService {
 
       console.log(`✅ Found ${numbers.length} numbers for ${countryCode}`);
 
-      return numbers.map(number => ({
+      // Twilio's "local" search bucket sometimes returns numbers that legally
+      // require a DIFFERENT regulatory bundle than the one we have approved
+      // (e.g. for FR, +33 9 numbers are non-geographic and need a separate
+      // bundle from the standard local one). Surface only the prefixes that
+      // are actually compatible with our approved bundle — otherwise the user
+      // pays for a line Twilio will refuse (error 21649).
+      const compatible = numbers.filter((n) =>
+        this.isCompatibleWithLocalBundle(n.phoneNumber, countryCode)
+      );
+
+      if (compatible.length !== numbers.length) {
+        console.log(
+          `🛡️  Filtered out ${numbers.length - compatible.length} ${countryCode} numbers incompatible with the local Regulatory Bundle.`
+        );
+      }
+
+      return compatible.map((number) => ({
         phoneNumber: number.phoneNumber,
         friendlyName: number.friendlyName,
         locality: number.locality,
@@ -223,6 +239,38 @@ class PhoneNumberService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Returns true when the E.164 number is purchasable with the *standard local*
+   * Regulatory Bundle for that country. Used to filter Twilio search results
+   * so the user never sees numbers whose provisioning will be refused with
+   * error 21649 ("Bundle does not have the correct regulation type").
+   *
+   * Country-specific rules:
+   *  - FR : a "local" bundle approves geographic landlines only.
+   *    Geographic numbers start with +33[1-5]. Numbers starting with
+   *    +33 6, +33 7 (mobile), +33 8 (premium) and +33 9 (non-geographic /
+   *    VoIP services) need different bundles. → exclude them.
+   *  - Other configured countries fall back to "compatible" (no extra filter)
+   *    until they prove problematic.
+   */
+  isCompatibleWithLocalBundle(phoneNumber, isoCountry) {
+    const raw = String(phoneNumber || '').replace(/[^\d+]/g, '');
+    const cc = String(isoCountry || '').toUpperCase();
+    if (!raw.startsWith('+')) return true;
+
+    if (cc === 'FR') {
+      // +33 followed by the first national digit
+      const m = raw.match(/^\+33(\d)/);
+      if (!m) return true;
+      const firstDigit = m[1];
+      // Keep only +33 1, 2, 3, 4, 5 (geographic landlines)
+      return ['1', '2', '3', '4', '5'].includes(firstDigit);
+    }
+
+    // No extra filter for other countries yet.
+    return true;
   }
 
   /** ISO country → configured Regulatory Bundle SID (if any). */

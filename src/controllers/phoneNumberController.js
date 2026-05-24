@@ -286,9 +286,22 @@ class PhoneNumberController {
       }
 
       if (error.code === 21649) {
+        // Twilio refused to provision the number because the prepared bundle
+        // does not cover this number's regulation type. The customer has
+        // already been charged via Stripe / PayPal at this point, so we
+        // issue a full refund here to keep the ledger consistent.
+        const refundInfo = await this.refundFailedLinePayment(
+          req.body?.paymentId,
+          'twilio_21649_bundle_regulation_mismatch'
+        );
+
         return res.status(400).json({
           error: 'Regulatory Bundle Required',
-          message: 'This phone number requires regulatory documentation (Identity/Address verification). Please submit the required documents in the Twilio Console or choose a number from a different region.',
+          message: refundInfo.refunded
+            ? "Twilio could not provision this French number with the local Regulatory Bundle (it requires a different regulation type). Your payment was refunded automatically — please pick a geographic landline (starting with +33 1/2/3/4/5)."
+            : "Twilio could not provision this number with the current Regulatory Bundle. Please choose a different number or contact support to refund this payment.",
+          refunded: refundInfo.refunded,
+          refundProvider: refundInfo.provider,
           moreInfo: error.moreInfo
         });
       }
@@ -297,6 +310,42 @@ class PhoneNumberController {
         error: 'Failed to purchase Twilio phone number',
         message: error.message
       });
+    }
+  }
+
+  /**
+   * Attempt to refund the Stripe / PayPal charge linked to `paymentId` and
+   * flip the PhoneNumberPayment row to `refunded`. Safe to call when no
+   * payment exists (free trial path) — returns `{ refunded: false }` and
+   * logs a warning instead of throwing.
+   */
+  async refundFailedLinePayment(paymentId, reason) {
+    if (!paymentId || !mongoose.Types.ObjectId.isValid(paymentId)) {
+      return { refunded: false, provider: null };
+    }
+    try {
+      const payment = await PhoneNumberPayment.findById(paymentId);
+      if (!payment || payment.status !== 'succeeded' || !payment.providerRef) {
+        return { refunded: false, provider: payment?.provider || null };
+      }
+
+      if (payment.provider === 'stripe') {
+        await stripeService.refundCheckoutSession(payment.providerRef, { reason });
+      } else if (payment.provider === 'paypal') {
+        await paypalService.refundOrder(payment.providerRef, { reason });
+      } else {
+        return { refunded: false, provider: payment.provider };
+      }
+
+      payment.status = 'refunded';
+      payment.failureReason = reason;
+      await payment.save();
+
+      console.log(`💸 Auto-refunded ${payment.provider} payment ${payment._id} (reason=${reason})`);
+      return { refunded: true, provider: payment.provider };
+    } catch (refundErr) {
+      console.error('❌ Auto-refund failed:', refundErr.message);
+      return { refunded: false, provider: null, error: refundErr.message };
     }
   }
 
@@ -727,9 +776,17 @@ class PhoneNumberController {
         });
       }
       if (error.code === 21649) {
+        const refundInfo = await this.refundFailedLinePayment(
+          req.body?.paymentId,
+          'twilio_21649_bundle_regulation_mismatch_on_recovery'
+        );
         return res.status(400).json({
           error: 'Regulatory Bundle Required',
-          message: 'This phone number requires regulatory documentation.',
+          message: refundInfo.refunded
+            ? "Twilio could not provision this number — your payment was refunded automatically."
+            : "Twilio could not provision this number with the current Regulatory Bundle.",
+          refunded: refundInfo.refunded,
+          refundProvider: refundInfo.provider,
           moreInfo: error.moreInfo
         });
       }

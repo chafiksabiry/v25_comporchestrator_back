@@ -189,6 +189,40 @@ async function getOrder(orderId) {
   return data;
 }
 
+/**
+ * Refund a previously captured PayPal order in full. Used to compensate
+ * the buyer when the downstream provisioning fails after capture (e.g.
+ * Twilio rejects the number with regulatory error 21649).
+ *
+ * Returns the PayPal refund payload on success.
+ */
+async function refundOrder(orderId, { reason } = {}) {
+  if (!orderId) {
+    const err = new Error('orderId is required to issue a PayPal refund.');
+    err.code = 'PAYPAL_REFUND_NO_ORDER';
+    throw err;
+  }
+  const order = await getOrder(orderId);
+  const captureId = order?.purchase_units?.[0]?.payments?.captures?.[0]?.id;
+  if (!captureId) {
+    const err = new Error(`PayPal order ${orderId} has no captured payment to refund.`);
+    err.code = 'PAYPAL_REFUND_NO_CAPTURE';
+    throw err;
+  }
+  const token = await getAccessToken();
+  const { data } = await axios.post(
+    `${apiBase()}/v2/payments/captures/${captureId}/refund`,
+    reason ? { note_to_payer: reason } : {},
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    }
+  );
+  return data;
+}
+
 export const paypalService = {
   isConfigured() {
     try {
@@ -206,5 +240,6 @@ export const paypalService = {
   },
   createOrder,
   captureOrder,
-  getOrder
+  getOrder,
+  refundOrder
 };
