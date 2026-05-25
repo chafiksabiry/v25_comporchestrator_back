@@ -220,7 +220,8 @@ export async function chargeCallMinutes(companyId, call) {
 
   // Atomic conditional update: only matches when callKey is NOT already in
   // chargedCallSids. Returns null when the call was previously charged.
-  const durationMinutes = Number((durationSeconds / 60).toFixed(4));
+  // Billing rule: any started minute is billed in full (10s → 1 min, 1m02s → 2 min).
+  const durationMinutes = Math.ceil(durationSeconds / 60);
   const updated = await MinutesCompany.findOneAndUpdate(
     { companyId, chargedCallSids: { $ne: callKey } },
     {
@@ -268,7 +269,11 @@ export async function syncMinutesFromCalls(companyId) {
       { projection: { sid: 1, duration: 1 } }
     ).toArray();
 
+    // Billing rule: each call is billed at the ceiling of its duration in
+    // minutes (10s → 1 min, 1m02s → 2 min). We aggregate the per-call ceiling
+    // here so the wallet stays in sync with the per-call invoicing.
     let addedSeconds = 0;
+    let addedMinutes = 0;
     const newKeys = [];
     for (const c of calls) {
       const key = String(c.sid || c._id || '');
@@ -276,12 +281,11 @@ export async function syncMinutesFromCalls(companyId) {
       const secs = Number(c.duration || 0);
       if (secs <= 0) continue;
       addedSeconds += secs;
+      addedMinutes += Math.ceil(secs / 60);
       newKeys.push(key);
     }
 
     if (newKeys.length === 0) return;
-
-    const addedMinutes = Number((addedSeconds / 60).toFixed(4));
     await MinutesCompany.findOneAndUpdate(
       { companyId },
       {

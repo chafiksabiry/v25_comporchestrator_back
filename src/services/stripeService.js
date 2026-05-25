@@ -101,6 +101,90 @@ function isConfigured() {
   return Boolean(config.stripeSecretKey);
 }
 
+/** 'live' | 'test' | 'unknown' */
+function getStripeMode() {
+  const key = String(config.stripeSecretKey || '');
+  if (key.startsWith('sk_live_')) return 'live';
+  if (key.startsWith('sk_test_')) return 'test';
+  return 'unknown';
+}
+
+function isTestLiveMismatchError(err) {
+  const message = String(err?.message || err?.raw?.message || '').toLowerCase();
+  return (
+    message.includes('similar object exists in test mode')
+    || message.includes('similar object exists in live mode')
+    || (message.includes('no such price') && message.includes('live mode key'))
+    || (message.includes('no such price') && message.includes('test mode key'))
+  );
+}
+
+function configuredPriceIdForPlanName(planName) {
+  const key = String(planName || '').trim().toUpperCase();
+  const map = {
+    STARTER: config.stripePriceStarter,
+    GROWTH: config.stripePriceGrowth,
+    SCALE: config.stripePriceScale,
+  };
+  const id = map[key];
+  if (!id || !String(id).startsWith('price_') || id.includes('placeholder')) {
+    return null;
+  }
+  return id;
+}
+
+/**
+ * Ensure priceId exists in the Stripe account matching STRIPE_SECRET_KEY (test vs live).
+ * Falls back to STRIPE_PRICE_* env vars and active Stripe prices by product name.
+ */
+async function resolveSubscriptionPriceId({ priceId, planName }) {
+  const stripe = getStripe();
+  const mode = getStripeMode();
+
+  const tryId = async (candidate) => {
+    if (!candidate || !String(candidate).startsWith('price_')) return null;
+    try {
+      const price = await stripe.prices.retrieve(candidate);
+      if (!price?.active) return null;
+      return candidate;
+    } catch (err) {
+      if (isTestLiveMismatchError(err)) return { mismatch: true, candidate };
+      return null;
+    }
+  };
+
+  let resolved = await tryId(priceId);
+  if (typeof resolved === 'string') return resolved;
+
+  const fromEnv = configuredPriceIdForPlanName(planName);
+  if (fromEnv && fromEnv !== priceId) {
+    resolved = await tryId(fromEnv);
+    if (typeof resolved === 'string') return resolved;
+  }
+
+  const normalized = String(planName || '').trim().toUpperCase();
+  if (normalized) {
+    try {
+      const prices = await stripe.prices.list({ active: true, limit: 100, expand: ['data.product'] });
+      const match = prices.data.find((p) => {
+        const productName = String(p.product?.name || '').toUpperCase();
+        return productName === normalized || productName.includes(normalized);
+      });
+      if (match?.id) return match.id;
+    } catch (err) {
+      console.warn('[stripe] resolveSubscriptionPriceId list failed:', err.message);
+    }
+  }
+
+  const err = new Error(
+    mode === 'live'
+      ? `Le tarif Stripe « ${priceId} » est en mode test. Définissez STRIPE_PRICE_* (live) sur Railway et relancez seedSubscriptionPlans, ou créez les prix en mode live dans Stripe.`
+      : `Le tarif Stripe « ${priceId} » est en mode live alors que STRIPE_SECRET_KEY est en test. Alignez les price_id et la clé Stripe (test/live).`
+  );
+  err.code = 'STRIPE_PRICE_MODE_MISMATCH';
+  throw err;
+}
+
 export const stripeService = {
   isConfigured,
   createOneShotCheckoutSession,
@@ -189,5 +273,9 @@ export const stripeService = {
 
   getSubscription: async (subscriptionId) => {
     return await getStripe().subscriptions.retrieve(subscriptionId);
-  }
+  },
+
+  getStripeMode,
+  isTestLiveMismatchError,
+  resolveSubscriptionPriceId,
 };

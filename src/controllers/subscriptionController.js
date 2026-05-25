@@ -71,25 +71,50 @@ export const subscriptionController = {
       }
 
       const seen = new Set();
-      const mergedPlans = dbPlans
-        .map((dbPlan) => {
-          if (!dbPlan.stripePriceId || seen.has(dbPlan.stripePriceId)) return null;
-          seen.add(dbPlan.stripePriceId);
+      const mergedPlans = (
+        await Promise.all(
+          dbPlans.map(async (dbPlan) => {
+            if (!dbPlan.stripePriceId) return null;
 
-          const stripePrice = stripePrices.find((p) => p.id === dbPlan.stripePriceId);
-          const fallbackPrice = Number(dbPlan.price) || 0;
+            let effectivePriceId = dbPlan.stripePriceId;
+            if (stripeService.isConfigured()) {
+              try {
+                effectivePriceId = await stripeService.resolveSubscriptionPriceId({
+                  priceId: dbPlan.stripePriceId,
+                  planName: dbPlan.name,
+                });
+                if (effectivePriceId !== dbPlan.stripePriceId) {
+                  await SubscriptionPlan.findByIdAndUpdate(dbPlan._id, {
+                    stripePriceId: effectivePriceId,
+                  });
+                }
+              } catch (err) {
+                console.warn(
+                  `[subscriptions/plans] Skip ${dbPlan.name}: ${err.message}`
+                );
+                return null;
+              }
+            }
 
-          return {
-            _id: dbPlan._id,
-            name: stripePrice?.product?.name || dbPlan.name,
-            price: stripePrice ? stripePrice.unit_amount / 100 : fallbackPrice,
-            currency: stripePrice?.currency || dbPlan.currency || 'eur',
-            stripePriceId: dbPlan.stripePriceId,
-            description: dbPlan.description || stripePrice?.product?.description || '',
-            features: Array.isArray(dbPlan.features) ? dbPlan.features : [],
-            isPopular: Boolean(dbPlan.isPopular),
-          };
-        })
+            if (seen.has(effectivePriceId)) return null;
+            seen.add(effectivePriceId);
+
+            const stripePrice = stripePrices.find((p) => p.id === effectivePriceId);
+            const fallbackPrice = Number(dbPlan.price) || 0;
+
+            return {
+              _id: dbPlan._id,
+              name: stripePrice?.product?.name || dbPlan.name,
+              price: stripePrice ? stripePrice.unit_amount / 100 : fallbackPrice,
+              currency: stripePrice?.currency || dbPlan.currency || 'eur',
+              stripePriceId: effectivePriceId,
+              description: dbPlan.description || stripePrice?.product?.description || '',
+              features: Array.isArray(dbPlan.features) ? dbPlan.features : [],
+              isPopular: Boolean(dbPlan.isPopular),
+            };
+          })
+        )
+      )
         .filter(Boolean)
         .sort((a, b) => a.price - b.price);
 
@@ -138,11 +163,22 @@ export const subscriptionController = {
         return res.status(400).json({ error: "provider must be 'stripe' or 'paypal'" });
       }
 
-      const resolved = await resolvePlanByPriceId(priceId);
+      let resolved;
+      try {
+        resolved = await resolvePlanByPriceId(priceId);
+      } catch (err) {
+        if (err?.code === 'STRIPE_PRICE_MODE_MISMATCH') {
+          return res.status(400).json({
+            error: 'stripe_price_mode_mismatch',
+            message: err.message,
+          });
+        }
+        throw err;
+      }
       if (!resolved) {
         return res.status(404).json({ error: 'Plan not found for this priceId' });
       }
-      const { plan, amountCents, currency } = resolved;
+      const { plan, amountCents, currency, stripePriceId: effectivePriceId } = resolved;
 
       const payment = await CompanyPayment.create({
         companyId: new mongoose.Types.ObjectId(companyId),
@@ -154,7 +190,7 @@ export const subscriptionController = {
         meta: {
           userId: String(userId),
           companyId: String(companyId),
-          stripePriceId: priceId,
+          stripePriceId: effectivePriceId,
           planId: plan._id,
           planName: planName || plan.name
         }
@@ -200,7 +236,7 @@ export const subscriptionController = {
         if (uiMode === 'embedded') {
           const session = await stripeService.createEmbeddedSubscriptionSession(
             userId,
-            priceId,
+            effectivePriceId,
             metadata
           );
           payment.providerRef = session.id;
@@ -233,7 +269,7 @@ export const subscriptionController = {
         const cancelUrl = `${base}/stripe-cancel.html?paymentId=${payment._id}&returnTo=${encodeURIComponent(returnTo)}`;
         const session = await stripeService.createCheckoutSession(
           userId,
-          priceId,
+          effectivePriceId,
           successUrl,
           cancelUrl,
           metadata
@@ -256,7 +292,11 @@ export const subscriptionController = {
       });
     } catch (error) {
       console.error('[subscriptions/checkout/init]', error);
-      res.status(500).json({ error: 'Failed to initialize subscription checkout', message: error.message });
+      const status = error?.code === 'STRIPE_PRICE_MODE_MISMATCH' ? 400 : 500;
+      res.status(status).json({
+        error: error?.code || 'Failed to initialize subscription checkout',
+        message: error.message,
+      });
     }
   },
 

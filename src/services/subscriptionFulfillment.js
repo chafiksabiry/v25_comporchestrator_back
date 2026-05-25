@@ -5,19 +5,38 @@ import { stripeService } from './stripeService.js';
 
 export async function resolvePlanByPriceId(priceId) {
   let plan = await SubscriptionPlan.findOne({ stripePriceId: priceId });
+
+  let effectivePriceId = priceId;
+  if (stripeService.isConfigured()) {
+    try {
+      effectivePriceId = await stripeService.resolveSubscriptionPriceId({
+        priceId,
+        planName: plan?.name,
+      });
+      if (effectivePriceId !== priceId && plan) {
+        await SubscriptionPlan.findByIdAndUpdate(plan._id, { stripePriceId: effectivePriceId });
+        plan.stripePriceId = effectivePriceId;
+      }
+    } catch (err) {
+      console.warn('[subscription] resolvePlanByPriceId:', err.message);
+      if (err.code === 'STRIPE_PRICE_MODE_MISMATCH') throw err;
+    }
+  }
+
+  if (!plan) {
+    plan = await SubscriptionPlan.findOne({ stripePriceId: effectivePriceId });
+  }
+
   let amountCents = plan ? Math.round(Number(plan.price) * 100) : null;
   let currency = (plan?.currency || 'eur').toUpperCase();
 
   if (stripeService.isConfigured()) {
     try {
       const prices = await stripeService.getPublicPlans();
-      const sp = prices.find((p) => p.id === priceId);
+      const sp = prices.find((p) => p.id === effectivePriceId);
       if (sp) {
         amountCents = sp.unit_amount;
         currency = (sp.currency || 'eur').toUpperCase();
-        if (!plan) {
-          plan = await SubscriptionPlan.findOne({ stripePriceId: priceId });
-        }
       }
     } catch (err) {
       console.warn('[subscription] Could not fetch Stripe prices:', err.message);
@@ -27,7 +46,7 @@ export async function resolvePlanByPriceId(priceId) {
   if (!plan || amountCents == null) {
     return null;
   }
-  return { plan, amountCents, currency };
+  return { plan, amountCents, currency, stripePriceId: effectivePriceId };
 }
 
 /**

@@ -74,7 +74,8 @@ export const minutesCompanyController = {
         wallet = await MinutesCompany.create({ companyId, minutes: 0 });
       }
 
-      const durationMinutes = Number((durationSeconds / 60).toFixed(4));
+      // Billing rule: any started minute is billed in full (10s → 1 min, 1m02s → 2 min).
+      const durationMinutes = Math.ceil(durationSeconds / 60);
       const updated = await MinutesCompany.findOneAndUpdate(
         { companyId, chargedCallSids: { $ne: callSid } },
         {
