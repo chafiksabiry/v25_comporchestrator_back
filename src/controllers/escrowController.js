@@ -1392,10 +1392,13 @@ export const escrowController = {
         ? new mongoose.Types.ObjectId(companyId)
         : companyId;
 
-      const { type, status, limit = 200 } = req.query;
+      const { type, status, gigId, limit = 200 } = req.query;
       const filter = { companyId: companyObjectId };
       if (type) filter.type = type;
       if (status) filter.status = status;
+      if (gigId && gigId !== 'all' && mongoose.Types.ObjectId.isValid(gigId)) {
+        filter.gigId = new mongoose.Types.ObjectId(gigId);
+      }
 
       const rows = await RepTransaction.find(filter)
         .sort({ createdAt: -1 })
