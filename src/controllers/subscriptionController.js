@@ -418,6 +418,19 @@ export const subscriptionController = {
 
   handleWebhook: async (req, res) => {
     const signature = req.headers['stripe-signature'];
+    // Defensive diagnostics: if the raw body middleware isn't applied or
+    // STRIPE_WEBHOOK_SECRET is misconfigured, signature verification fails with
+    // a generic message. Logging the body type and secret prefix (never the
+    // full secret) makes those env/setup issues obvious in deploy logs.
+    if (!Buffer.isBuffer(req.body)) {
+      console.error(
+        '[stripe-webhook] req.body is NOT a Buffer (type=%s). Raw body middleware likely bypassed for this route.',
+        typeof req.body
+      );
+    }
+    if (!signature) {
+      console.error('[stripe-webhook] Missing stripe-signature header.');
+    }
     try {
       const event = await stripeService.handleWebhook(signature, req.body);
 

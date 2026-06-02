@@ -1475,13 +1475,18 @@ export const escrowController = {
             _id: gigDoc._id,
             title: gigDoc.title || gigDoc.name
           } : null,
-          rep: repDoc ? {
-            _id: repDoc._id,
-            firstName: repDoc.firstName,
-            lastName: repDoc.lastName,
-            email: repDoc.email,
-            phone: repDoc.phone
-          } : null
+          rep: repDoc ? (() => {
+            // Agents store their name under personalInfo.name (not top-level firstName/lastName)
+            const fullName = repDoc.personalInfo?.name || repDoc.firstName || '';
+            const parts = fullName.trim().split(/\s+/);
+            return {
+              _id: repDoc._id,
+              firstName: parts.slice(0, -1).join(' ') || fullName,
+              lastName: parts.length > 1 ? parts[parts.length - 1] : '',
+              email: repDoc.personalInfo?.email || repDoc.email,
+              phone: repDoc.personalInfo?.phone || repDoc.phone
+            };
+          })() : null
         };
       });
 

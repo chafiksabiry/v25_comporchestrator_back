@@ -246,6 +246,21 @@ export const stripeService = {
 
   handleWebhook: async (signature, rawBody) => {
     try {
+      if (!config.stripeWebhookSecret) {
+        throw new Error('STRIPE_WEBHOOK_SECRET is not configured in environment.');
+      }
+      // Log only a short prefix to confirm WHICH secret is loaded without
+      // leaking the credential itself. Makes it trivial to spot test/live or
+      // dashboard-vs-CLI secret mismatches in production logs.
+      const secretPrefix = String(config.stripeWebhookSecret).slice(0, 8);
+      const bodyKind = Buffer.isBuffer(rawBody)
+        ? `Buffer(${rawBody.length})`
+        : typeof rawBody;
+      console.log(
+        '[stripe-webhook] verifying signature (secret=%s…, body=%s)',
+        secretPrefix,
+        bodyKind
+      );
       const event = getStripe().webhooks.constructEvent(
         rawBody,
         signature,
