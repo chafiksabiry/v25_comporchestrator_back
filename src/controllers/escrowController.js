@@ -16,6 +16,46 @@ const REP_SHARE = 0.7;
 const HARX_SHARE = 0.3;
 
 /**
+ * Unified sale-detection rule — must stay aligned with calls-backend AI scoring
+ * (`isValidByAI && transactionDetected`) and the rep wallet UI.
+ */
+function callHasValidatedTransactionSale(call, transaction) {
+  if (!call || call.validByAI !== true) return false;
+
+  const repTxShare = Number(
+    transaction?.repTransactionCommission ?? call?.repTransactionCommission ?? 0
+  );
+  if (repTxShare > 0) return true;
+
+  if (transaction?.validByAI === true) return true;
+  if (transaction?.validByCompany === true) return true;
+  if (transaction?.validByReps === true) return true;
+  if (call.transactionOccurred === true) return true;
+  if (call.callOutcome === 'transaction') return true;
+  if (call.flags?.transactionDetected === true) return true;
+  if (call.ai_call_score?.transaction_detected === true) return true;
+  return false;
+}
+
+/** Prefer denormalised commission fields written at AI scoring time. */
+function resolveCommissionAmounts(call, transaction, { callRate, txRate }) {
+  const callRepShare = Number(call?.repCallCommission);
+  const txRepShare = Number(
+    transaction?.repTransactionCommission ?? call?.repTransactionCommission ?? NaN
+  );
+
+  const callGross = callRepShare > 0 ? callRepShare / REP_SHARE : callRate;
+  const txGross = txRepShare > 0 ? txRepShare / REP_SHARE : txRate;
+
+  return {
+    callGross,
+    txGross,
+    callRepShare: callRepShare > 0 ? callRepShare : callRate * REP_SHARE,
+    txRepShare: txRepShare > 0 ? txRepShare : txRate * REP_SHARE,
+  };
+}
+
+/**
  * Idempotently book a rep transaction (validated call, sale or bonus).
  *
  * RepTransaction is the SINGLE ledger for commissions. Both wallets are
@@ -146,10 +186,8 @@ async function resolveGigRates(call) {
  *     authoritative validation flag is `validByAI === true` upstream, but any
  *     other "this call is valid" signal works too (manual company approve,
  *     reconcile backfill, etc.).
- *   - Sale commission (30€) -> booked when a Transaction doc exists with
- *     `validByReps === true` (or `call.transactionOccurred === true`). The
- *     company no longer has to manually approve the sale — AI validation is
- *     the single source of truth.
+ *   - Sale commission (30€) -> booked when AI (or company/rep) validates the
+ *     sale. Same rule as `callHasValidatedTransactionSale` everywhere.
  */
 async function bookEarningsForApprovedCall(call, transaction) {
   if (!call || !call.agent) return { call: null, transaction: null };
@@ -166,6 +204,7 @@ async function bookEarningsForApprovedCall(call, transaction) {
     : call.agent;
 
   const { callRate, txRate, gigId } = await resolveGigRates(call);
+  const { callGross, txGross } = resolveCommissionAmounts(call, transaction, { callRate, txRate });
   const gigObjectId = gigId && mongoose.Types.ObjectId.isValid(gigId)
     ? new mongoose.Types.ObjectId(gigId)
     : gigId || undefined;
@@ -177,13 +216,12 @@ async function bookEarningsForApprovedCall(call, transaction) {
     companyId,
     gigId: gigObjectId,
     callId: call._id,
-    amount: callRate,
-    description: `Appel validé par l'IA — commission ${callRate}€ (70% rep / 30% HARX)`
+    amount: callGross,
+    description: `Appel validé par l'IA — commission ${callGross}€ (70% rep / 30% HARX)`
   });
 
   let txRow = null;
-  const hasSale = transaction?.validByReps === true || call.transactionOccurred === true;
-  if (hasSale) {
+  if (callHasValidatedTransactionSale(call, transaction)) {
     txRow = await bookRepTransaction({
       type: 'transaction',
       sourceId: String(transaction?._id || call._id),
@@ -192,8 +230,8 @@ async function bookEarningsForApprovedCall(call, transaction) {
       gigId: gigObjectId,
       callId: call._id,
       transactionDocId: transaction?._id,
-      amount: txRate,
-      description: `Transaction commerciale validée — commission ${txRate}€ (70% rep / 30% HARX)`
+      amount: txGross,
+      description: `Transaction commerciale validée — commission ${txGross}€ (70% rep / 30% HARX)`
     });
   }
 
@@ -393,23 +431,25 @@ async function reconcileAgentEarnings(agentId) {
 
       const callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 4.00;
       const txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 30.00;
+      const transaction = await db.collection('transactions').findOne({
+        $or: [{ call: call._id }, { call: callIdStr }]
+      });
+      const { callRepShare, txRepShare } = resolveCommissionAmounts(call, transaction, {
+        callRate,
+        txRate,
+      });
 
-      // Call commission (70%) — pending until the AI marks the call as valid.
-      //   - validByAI === true  -> booked once reconcileCompanyRewards runs.
-      //   - validByAI == null   -> still pending (AI hasn't scored yet).
-      //   - validByAI === false -> not pending (rejected by AI).
+      // Call commission — pending until booked into RepTransaction.
       if (!bookedCallIds.has(callIdStr) && call.validByAI !== false) {
-        totalPending += callRate * REP_SHARE;
+        totalPending += callRepShare;
         pendingCount++;
       }
 
-      // Sale commission (70%) — pending until the rep flags the sale + AI doesn't reject.
-      const transaction = await db.collection('transactions').findOne({ call: call._id });
-      const hasSale = transaction?.validByReps === true || call.transactionOccurred === true;
-      if (hasSale && call.validByAI !== false) {
+      // Sale commission — same eligibility rule as booking + UI.
+      if (callHasValidatedTransactionSale(call, transaction)) {
         const txSourceId = String(transaction?._id || call._id);
         if (!bookedTxSourceIds.has(txSourceId)) {
-          totalPending += txRate * REP_SHARE;
+          totalPending += txRepShare;
           pendingCount++;
         }
       }
@@ -528,6 +568,59 @@ async function reconcileHarxEarnings() {
  * Every booking is idempotent (unique index on RepTransaction.{type, sourceId}),
  * so this can safely run on every wallet fetch.
  */
+/**
+ * Book unbooked AI-validated calls for a single rep. Mirrors
+ * `reconcileCompanyRewards` but scoped to `agentId` so the rep wallet fetch
+ * actually materialises commissions instead of only summing stale ledger rows.
+ */
+async function reconcileAgentRewards(agentId) {
+  if (!agentId) return;
+  try {
+    const db = mongoose.connection.db;
+    const agentObjectId = mongoose.Types.ObjectId.isValid(agentId)
+      ? new mongoose.Types.ObjectId(agentId)
+      : agentId;
+
+    const aiValidatedCalls = await db.collection('calls').find({
+      $and: [
+        {
+          $or: [
+            { agent: agentObjectId },
+            { agent: String(agentId) }
+          ]
+        },
+        { validByAI: true }
+      ]
+    }).toArray();
+
+    if (!aiValidatedCalls.length) return;
+
+    const callIds = aiValidatedCalls.map((c) => String(c._id));
+    const alreadyBooked = await RepTransaction.find({
+      type: 'call_validated',
+      sourceId: { $in: callIds }
+    }).select('sourceId').lean();
+    const bookedSet = new Set(alreadyBooked.map((r) => String(r.sourceId)));
+
+    for (const call of aiValidatedCalls) {
+      if (bookedSet.has(String(call._id))) continue;
+      if (!call.agent || !call.companyId) continue;
+
+      const transaction = await db.collection('transactions').findOne({
+        $or: [{ call: call._id }, { call: String(call._id) }]
+      });
+
+      try {
+        await bookEarningsForApprovedCall(call, transaction);
+      } catch (err) {
+        console.error('[reconcileAgentRewards] booking failed for call', String(call._id), err.message);
+      }
+    }
+  } catch (err) {
+    console.error('Error during reconcileAgentRewards:', err);
+  }
+}
+
 async function reconcileCompanyRewards(companyId) {
   if (!companyId) return;
   try {
@@ -1570,6 +1663,7 @@ export const escrowController = {
     if (!agentId) return res.status(400).json({ error: 'agentId is required' });
 
     try {
+      await reconcileAgentRewards(agentId);
       const wallet = await reconcileAgentEarnings(agentId);
       res.status(200).json({ success: true, data: wallet });
     } catch (err) {
@@ -1608,7 +1702,8 @@ export const escrowController = {
     }
 
     try {
-      // 1. Reconcile first to ensure balance is accurate
+      // 1. Book any missing commissions, then reconcile balance
+      await reconcileAgentRewards(agentId);
       const wallet = await reconcileAgentEarnings(agentId);
 
       if (wallet.availableBalance < parsedAmount) {
