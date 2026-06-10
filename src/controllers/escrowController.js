@@ -189,7 +189,12 @@ async function resolveGigRates(call) {
  *   - Sale commission (30€) -> booked when AI (or company/rep) validates the
  *     sale. Same rule as `callHasValidatedTransactionSale` everywhere.
  */
-async function bookEarningsForApprovedCall(call, transaction) {
+/**
+ * Book whichever commission rows are still missing for this call. Call and
+ * transaction bookings are independent so a backfill can add the 17.50€ sale
+ * row even when the 2.10€ call row was booked before the sale rule was fixed.
+ */
+async function bookMissingEarningsForCall(call, transaction) {
   if (!call || !call.agent) return { call: null, transaction: null };
 
   const companyIdRaw = call.companyId;
@@ -209,33 +214,47 @@ async function bookEarningsForApprovedCall(call, transaction) {
     ? new mongoose.Types.ObjectId(gigId)
     : gigId || undefined;
 
-  const callRow = await bookRepTransaction({
-    type: 'call_validated',
-    sourceId: String(call._id),
-    repId,
-    companyId,
-    gigId: gigObjectId,
-    callId: call._id,
-    amount: callGross,
-    description: `Appel validé par l'IA — commission ${callGross}€ (70% rep / 30% HARX)`
-  });
+  const callSourceId = String(call._id);
+  const txSourceId = String(transaction?._id || call._id);
 
-  let txRow = null;
-  if (callHasValidatedTransactionSale(call, transaction)) {
-    txRow = await bookRepTransaction({
-      type: 'transaction',
-      sourceId: String(transaction?._id || call._id),
+  let callRow = await RepTransaction.findOne({ type: 'call_validated', sourceId: callSourceId });
+  if (!callRow) {
+    callRow = await bookRepTransaction({
+      type: 'call_validated',
+      sourceId: callSourceId,
       repId,
       companyId,
       gigId: gigObjectId,
       callId: call._id,
-      transactionDocId: transaction?._id,
-      amount: txGross,
-      description: `Transaction commerciale validée — commission ${txGross}€ (70% rep / 30% HARX)`
+      amount: callGross,
+      description: `Appel validé par l'IA — commission ${callGross}€ (70% rep / 30% HARX)`
     });
   }
 
+  let txRow = null;
+  if (callHasValidatedTransactionSale(call, transaction)) {
+    txRow = await RepTransaction.findOne({ type: 'transaction', sourceId: txSourceId });
+    if (!txRow) {
+      txRow = await bookRepTransaction({
+        type: 'transaction',
+        sourceId: txSourceId,
+        repId,
+        companyId,
+        gigId: gigObjectId,
+        callId: call._id,
+        transactionDocId: transaction?._id,
+        amount: txGross,
+        description: `Transaction commerciale validée — commission ${txGross}€ (70% rep / 30% HARX)`
+      });
+    }
+  }
+
   return { call: callRow, transaction: txRow };
+}
+
+/** @deprecated alias — always books missing rows only. */
+async function bookEarningsForApprovedCall(call, transaction) {
+  return bookMissingEarningsForCall(call, transaction);
 }
 
 // Idempotently deduct a single call's duration from the company's minute
@@ -593,17 +612,7 @@ async function reconcileAgentRewards(agentId) {
       ]
     }).toArray();
 
-    if (!aiValidatedCalls.length) return;
-
-    const callIds = aiValidatedCalls.map((c) => String(c._id));
-    const alreadyBooked = await RepTransaction.find({
-      type: 'call_validated',
-      sourceId: { $in: callIds }
-    }).select('sourceId').lean();
-    const bookedSet = new Set(alreadyBooked.map((r) => String(r.sourceId)));
-
     for (const call of aiValidatedCalls) {
-      if (bookedSet.has(String(call._id))) continue;
       if (!call.agent || !call.companyId) continue;
 
       const transaction = await db.collection('transactions').findOne({
@@ -611,7 +620,7 @@ async function reconcileAgentRewards(agentId) {
       });
 
       try {
-        await bookEarningsForApprovedCall(call, transaction);
+        await bookMissingEarningsForCall(call, transaction);
       } catch (err) {
         console.error('[reconcileAgentRewards] booking failed for call', String(call._id), err.message);
       }
@@ -642,21 +651,9 @@ async function reconcileCompanyRewards(companyId) {
       ]
     }).toArray();
 
-    if (!aiValidatedCalls.length) return;
-
-    // Skip calls already booked as `call_validated`.
-    const callIds = aiValidatedCalls.map(c => String(c._id));
-    const alreadyBooked = await RepTransaction.find({
-      type: 'call_validated',
-      sourceId: { $in: callIds }
-    }).select('sourceId').lean();
-    const bookedSet = new Set(alreadyBooked.map(r => String(r.sourceId)));
-
     for (const call of aiValidatedCalls) {
-      if (bookedSet.has(String(call._id))) continue;
       if (!call.agent) continue;
 
-      // Pull a matching transaction (sale) if it exists so we can also book the tx commission.
       const transaction = await db.collection('transactions').findOne({
         $or: [
           { call: call._id },
@@ -665,7 +662,7 @@ async function reconcileCompanyRewards(companyId) {
       });
 
       try {
-        await bookEarningsForApprovedCall(call, transaction);
+        await bookMissingEarningsForCall(call, transaction);
       } catch (err) {
         console.error('[reconcileCompanyRewards] booking failed for call', String(call._id), err.message);
       }
