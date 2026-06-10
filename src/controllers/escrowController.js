@@ -1816,9 +1816,8 @@ export const escrowController = {
       await reconcileCompanyRewards(companyId);
       await reconcileHarxEarnings();
 
-      // Broadcast update via WebSocket
-      const { broadcastUpdate } = await import('../websocket/escrowUpdates.js');
-      broadcastUpdate(companyId, { type: 'reconciliation_complete' });
+      // Broadcast update via WebSocket (single-arg payload; clients filter by companyId)
+      broadcastUpdate({ type: 'reconciliation_complete', companyId });
 
       res.status(200).json({ success: true, message: 'Reconciliation triggered' });
     } catch (err) {
