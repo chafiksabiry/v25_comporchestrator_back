@@ -217,6 +217,8 @@ async function bookMissingEarningsForCall(call, transaction) {
   const callSourceId = String(call._id);
   const txSourceId = String(transaction?._id || call._id);
 
+  let bookedSomething = false;
+
   let callRow = await RepTransaction.findOne({ type: 'call_validated', sourceId: callSourceId });
   if (!callRow) {
     callRow = await bookRepTransaction({
@@ -229,6 +231,7 @@ async function bookMissingEarningsForCall(call, transaction) {
       amount: callGross,
       description: `Appel validé par l'IA — commission ${callGross}€ (70% rep / 30% HARX)`
     });
+    if (callRow) bookedSomething = true;
   }
 
   let txRow = null;
@@ -246,6 +249,20 @@ async function bookMissingEarningsForCall(call, transaction) {
         amount: txGross,
         description: `Transaction commerciale validée — commission ${txGross}€ (70% rep / 30% HARX)`
       });
+      if (txRow) bookedSomething = true;
+    }
+  }
+
+  // Notify the rep (and company) in real time that new commissions were booked.
+  if (bookedSomething) {
+    try {
+      broadcastUpdate({
+        type: 'rep_wallet_update',
+        repId: String(repId),
+        companyId: String(companyId),
+      });
+    } catch (wsErr) {
+      console.warn('[bookMissingEarningsForCall] broadcast skipped:', wsErr.message);
     }
   }
 
