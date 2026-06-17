@@ -16,25 +16,26 @@ const REP_SHARE = 0.7;
 const HARX_SHARE = 0.3;
 
 /**
- * Unified sale-detection rule — must stay aligned with calls-backend AI scoring
- * (`isValidByAI && transactionDetected`) and the rep wallet UI.
+ * IA / signaux métier ont détecté une vente potentielle (en attente entreprise).
  */
-function callHasValidatedTransactionSale(call, transaction) {
+function callHasDetectedTransactionSale(call, transaction) {
   if (!call || call.validByAI !== true) return false;
 
-  const repTxShare = Number(
-    transaction?.repTransactionCommission ?? call?.repTransactionCommission ?? 0
-  );
-  if (repTxShare > 0) return true;
-
   if (transaction?.validByAI === true) return true;
-  if (transaction?.validByCompany === true) return true;
   if (transaction?.validByReps === true) return true;
   if (call.transactionOccurred === true) return true;
   if (call.callOutcome === 'transaction') return true;
   if (call.flags?.transactionDetected === true) return true;
   if (call.ai_call_score?.transaction_detected === true) return true;
   return false;
+}
+
+/**
+ * Vente confirmée — commission bookable après validation explicite entreprise.
+ * La décision entreprise prime sur le refus IA.
+ */
+function callHasValidatedTransactionSale(call, transaction) {
+  return !!transaction && transaction.validByCompany === true;
 }
 
 /** Prefer denormalised commission fields written at AI scoring time. */
@@ -186,8 +187,8 @@ async function resolveGigRates(call) {
  *     authoritative validation flag is `validByAI === true` upstream, but any
  *     other "this call is valid" signal works too (manual company approve,
  *     reconcile backfill, etc.).
- *   - Sale commission (30€) -> booked when AI (or company/rep) validates the
- *     sale. Same rule as `callHasValidatedTransactionSale` everywhere.
+ *   - Sale commission (30€) -> booked only after company validates
+ *     (`transaction.validByCompany === true`). Detection IA seule = en attente.
  */
 /**
  * Book whichever commission rows are still missing for this call. Call and
@@ -481,10 +482,10 @@ async function reconcileAgentEarnings(agentId) {
         pendingCount++;
       }
 
-      // Sale commission — same eligibility rule as booking + UI.
-      if (callHasValidatedTransactionSale(call, transaction)) {
+      // Sale commission — pending until company approves and row is booked.
+      if (callHasDetectedTransactionSale(call, transaction)) {
         const txSourceId = String(transaction?._id || call._id);
-        if (!bookedTxSourceIds.has(txSourceId)) {
+        if (!bookedTxSourceIds.has(txSourceId) && transaction?.validByCompany !== false) {
           totalPending += txRepShare;
           pendingCount++;
         }
@@ -1701,7 +1702,7 @@ export const escrowController = {
 
   requestAgentWithdrawal: async (req, res) => {
     const { agentId, amount, method, methodDetails, description, companyId } = req.body;
-    const MIN_WITHDRAWAL_AMOUNT = 1000;
+    const MIN_WITHDRAWAL_AMOUNT = 1;
     if (!agentId || !amount || amount <= 0 || !method) {
       return res.status(400).json({ error: 'agentId, positive amount, and method are required' });
     }
