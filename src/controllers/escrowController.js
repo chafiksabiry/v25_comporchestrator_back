@@ -10,6 +10,13 @@ import WalletCompany from '../models/WalletCompany.js';
 import WalletCompanyEntry from '../models/WalletCompanyEntry.js';
 import RepTransaction from '../models/RepTransaction.js';
 import { broadcastUpdate } from '../websocket/escrowUpdates.js';
+import {
+  RETRACTION_DAYS,
+  computeRetractionEndsAt,
+  isRepShareWithdrawable,
+  isRepShareInRetraction,
+} from '../utils/retraction.js';
+import { clearExpiredRetractions, reverseSaleCommission } from '../services/retractionService.js';
 
 // 70/30 split enforced server-side. Single source of truth.
 const REP_SHARE = 0.7;
@@ -84,7 +91,9 @@ async function bookRepTransaction({
   transactionDocId,
   amount,
   description,
-  meta
+  meta,
+  status = 'earned',
+  withdrawableAt = null,
 }) {
   if (!type || !sourceId || !repId || !companyId) return null;
   const grossAmount = Number(amount || 0);
@@ -107,7 +116,8 @@ async function bookRepTransaction({
       amount: grossAmount,
       repShare,
       harxShare,
-      status: 'earned',
+      status,
+      withdrawableAt: withdrawableAt || undefined,
       description,
       meta
     });
@@ -239,6 +249,11 @@ async function bookMissingEarningsForCall(call, transaction) {
   if (callHasValidatedTransactionSale(call, transaction)) {
     txRow = await RepTransaction.findOne({ type: 'transaction', sourceId: txSourceId });
     if (!txRow) {
+      const signedAt = transaction?.signedAt ? new Date(transaction.signedAt) : new Date();
+      const retractionEndsAt = transaction?.retractionEndsAt
+        ? new Date(transaction.retractionEndsAt)
+        : computeRetractionEndsAt(signedAt);
+
       txRow = await bookRepTransaction({
         type: 'transaction',
         sourceId: txSourceId,
@@ -248,7 +263,14 @@ async function bookMissingEarningsForCall(call, transaction) {
         callId: call._id,
         transactionDocId: transaction?._id,
         amount: txGross,
-        description: `Transaction commerciale validée — commission ${txGross}€ (70% rep / 30% HARX)`
+        status: 'pending_retraction',
+        withdrawableAt: retractionEndsAt,
+        description: `Vente validée — commission ${txGross}€ (rétractation ${RETRACTION_DAYS}j)`,
+        meta: {
+          signedAt,
+          retractionEndsAt,
+          retractionDays: RETRACTION_DAYS,
+        },
       });
       if (txRow) bookedSomething = true;
     }
@@ -422,6 +444,10 @@ async function reconcileCallCharges(companyId) {
 
 async function reconcileAgentEarnings(agentId) {
   try {
+    await clearExpiredRetractions().catch((err) => {
+      console.warn('[reconcileAgentEarnings] clearExpiredRetractions:', err.message);
+    });
+
     const db = mongoose.connection.db;
     const agentObjectId = mongoose.Types.ObjectId.isValid(agentId)
       ? new mongoose.Types.ObjectId(agentId)
@@ -429,30 +455,51 @@ async function reconcileAgentEarnings(agentId) {
 
     let wallet = await AgentWallet.findOne({ agentId });
     if (!wallet) {
-      wallet = new AgentWallet({ agentId, availableBalance: 0, pendingWithdrawals: 0, lifetimeEarnings: 0 });
+      wallet = new AgentWallet({
+        agentId,
+        availableBalance: 0,
+        pendingWithdrawals: 0,
+        lifetimeEarnings: 0,
+        pendingRetraction: 0,
+        pendingCommissions: 0,
+        pendingCount: 0,
+      });
     }
 
-    // 1. EARNED = sum of repShare across all booked RepTransactions for this rep.
-    //    These are the only real, money-in-the-bank rows (validated by company).
-    const earnedRows = await RepTransaction.find({ repId: agentObjectId, status: 'earned' }).lean();
-    let totalEarned = earnedRows.reduce((sum, row) => sum + (row.repShare || 0), 0);
+    const now = new Date();
+    const activeRows = await RepTransaction.find({
+      repId: agentObjectId,
+      status: { $in: ['earned', 'pending_retraction', 'paid'] },
+    }).lean();
 
-    // 2. PENDING = potential earnings on calls that have NOT yet been booked
-    //    (i.e. no RepTransaction row exists for them yet).
+    let totalEarned = 0;
+    let withdrawableEarned = 0;
+    let pendingRetractionAmount = 0;
+
+    for (const row of activeRows) {
+      const share = row.repShare || 0;
+      totalEarned += share;
+      if (isRepShareInRetraction(row, now)) {
+        pendingRetractionAmount += share;
+      } else if (isRepShareWithdrawable(row, now)) {
+        withdrawableEarned += share;
+      }
+    }
+
+    const bookedCallIds = new Set(
+      activeRows
+        .filter((r) => r.type === 'call_validated' && r.callId)
+        .map((r) => r.callId.toString())
+    );
+    const bookedTxSourceIds = new Set(
+      activeRows
+        .filter((r) => r.type === 'transaction')
+        .map((r) => r.sourceId)
+    );
+
     const calls = await db.collection('calls').find({
       agent: agentObjectId
     }).toArray();
-
-    const bookedCallIds = new Set(
-      earnedRows
-        .filter(r => r.type === 'call_validated' && r.callId)
-        .map(r => r.callId.toString())
-    );
-    const bookedTxSourceIds = new Set(
-      earnedRows
-        .filter(r => r.type === 'transaction')
-        .map(r => r.sourceId)
-    );
 
     let totalPending = 0;
     let pendingCount = 0;
@@ -476,13 +523,11 @@ async function reconcileAgentEarnings(agentId) {
         txRate,
       });
 
-      // Call commission — pending until booked into RepTransaction.
       if (!bookedCallIds.has(callIdStr) && call.validByAI !== false) {
         totalPending += callRepShare;
         pendingCount++;
       }
 
-      // Sale commission — pending until company approves and row is booked.
       if (callHasDetectedTransactionSale(call, transaction)) {
         const txSourceId = String(transaction?._id || call._id);
         if (!bookedTxSourceIds.has(txSourceId) && transaction?.validByCompany !== false) {
@@ -492,19 +537,20 @@ async function reconcileAgentEarnings(agentId) {
       }
     }
 
-    // 2. Fetch all withdrawals
     const withdrawals = await AgentWithdrawal.find({
       agentId,
       status: { $in: ['completed', 'pending', 'processing'] }
     });
     const totalWithdrawnOrProcessing = withdrawals.reduce((sum, w) => sum + w.amount, 0);
-    const pendingWithdrawalAmount = withdrawals.filter(w => ['pending', 'processing'].includes(w.status)).reduce((sum, w) => sum + w.amount, 0);
+    const pendingWithdrawalAmount = withdrawals
+      .filter((w) => ['pending', 'processing'].includes(w.status))
+      .reduce((sum, w) => sum + w.amount, 0);
 
-    // 3. Update wallet
     wallet.lifetimeEarnings = totalEarned;
-    wallet.availableBalance = Math.max(0, totalEarned - totalWithdrawnOrProcessing);
+    wallet.availableBalance = Math.max(0, withdrawableEarned - totalWithdrawnOrProcessing);
     wallet.pendingWithdrawals = pendingWithdrawalAmount;
     wallet.pendingCommissions = totalPending;
+    wallet.pendingRetraction = pendingRetractionAmount;
     wallet.pendingCount = pendingCount;
 
     await wallet.save();
@@ -1310,6 +1356,8 @@ export const escrowController = {
       });
 
       const isApprove = action === 'approve';
+      const signedAt = new Date();
+      const retractionEndsAt = computeRetractionEndsAt(signedAt);
 
       // Update calls collection document directly too!
       await db.collection('calls').updateOne(
@@ -1334,25 +1382,36 @@ export const escrowController = {
           lead: call.lead,
           gigId: call.gigId,
           companyId: companyIdObj,
-          validByReps: true, // Auto-reps valid for admin actions
+          validByReps: true,
           validByCompany: isApprove,
           valid: isApprove,
+          signedAt: isApprove ? signedAt : null,
+          retractionEndsAt: isApprove ? retractionEndsAt : null,
+          retractionStatus: isApprove ? 'pending' : null,
           createdAt: new Date(),
           updatedAt: new Date()
         };
         const insertRes = await db.collection('transactions').insertOne(newTx);
         transaction = { _id: insertRes.insertedId, ...newTx };
       } else {
-        const updateDoc = {
-          $set: {
-            validByCompany: isApprove,
-            valid: (transaction.validByReps === true && isApprove),
-            updatedAt: new Date()
-          }
+        const txUpdate = {
+          validByCompany: isApprove,
+          valid: (transaction.validByReps === true && isApprove),
+          updatedAt: new Date()
         };
-        await db.collection('transactions').updateOne({ _id: transaction._id }, updateDoc);
+        if (isApprove) {
+          txUpdate.signedAt = transaction.signedAt || signedAt;
+          txUpdate.retractionEndsAt = transaction.retractionEndsAt || retractionEndsAt;
+          txUpdate.retractionStatus = transaction.retractionStatus || 'pending';
+        }
+        await db.collection('transactions').updateOne({ _id: transaction._id }, { $set: txUpdate });
         transaction.validByCompany = isApprove;
         transaction.valid = (transaction.validByReps === true && isApprove);
+        if (isApprove) {
+          transaction.signedAt = transaction.signedAt || signedAt;
+          transaction.retractionEndsAt = transaction.retractionEndsAt || retractionEndsAt;
+          transaction.retractionStatus = transaction.retractionStatus || 'pending';
+        }
       }
 
       // Book the rep earnings (idempotent) and debit WalletCompany.balance.
@@ -1841,6 +1900,34 @@ export const escrowController = {
     } catch (err) {
       console.error('Error triggering reconciliation:', err);
       res.status(500).json({ error: 'Failed to trigger reconciliation' });
+    }
+  },
+
+  /** Company signals a client retraction on a validated sale. */
+  retractSale: async (req, res) => {
+    const { transactionId } = req.params;
+    const { companyId, reason } = req.body;
+
+    if (!transactionId) {
+      return res.status(400).json({ error: 'transactionId is required' });
+    }
+
+    try {
+      const { repTx } = await reverseSaleCommission({
+        transactionDocId: transactionId,
+        companyId,
+        reason: reason || 'Rétractation client',
+      });
+
+      if (repTx?.repId) {
+        await reconcileAgentEarnings(repTx.repId);
+      }
+
+      res.status(200).json({ success: true, data: repTx });
+    } catch (err) {
+      const status = err.statusCode || 500;
+      if (status >= 500) console.error('Error retracting sale:', err);
+      res.status(status).json({ error: err.message || 'Failed to retract sale' });
     }
   },
 

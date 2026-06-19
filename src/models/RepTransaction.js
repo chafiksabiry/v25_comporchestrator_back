@@ -68,10 +68,13 @@ const repTransactionSchema = new mongoose.Schema({
 
   status: {
     type: String,
-    enum: ['earned', 'paid', 'refused'],
+    enum: ['earned', 'pending_retraction', 'paid', 'refused', 'reversed'],
     default: 'earned',
     index: true
   },
+
+  /** Sale commissions become withdrawable after the retraction window. */
+  withdrawableAt: { type: Date, required: false, index: true },
 
   description: { type: String },
   meta: { type: mongoose.Schema.Types.Mixed }

@@ -31,6 +31,19 @@ const agentWalletSchema = new mongoose.Schema({
     required: true,
     default: 0,
     min: 0
+  },
+  /** Sale commissions booked but still inside the 14-day retraction window. */
+  pendingRetraction: {
+    type: Number,
+    required: true,
+    default: 0,
+    min: 0
+  },
+  pendingCount: {
+    type: Number,
+    required: false,
+    default: 0,
+    min: 0
   }
 }, {
   timestamps: true

@@ -14,6 +14,7 @@ import { escrowRoutes } from './src/routes/escrow.js';
 import { walletCompanyRoutes } from './src/routes/walletCompany.js';
 import { minutesCompanyRoutes } from './src/routes/minutesCompany.js';
 import { paymentCheckoutRoutes } from './src/routes/paymentCheckout.js';
+import { clearExpiredRetractions } from './src/services/retractionService.js';
 
 const app = express();
 
@@ -134,6 +135,14 @@ setupEscrowWebSocket(server);
 server.listen(config.port, () => {
   console.log(`✅ Server v1.0.1 is running on port ${config.port}`);
 });
+
+// Release sale commissions after the 14-day retraction window (hourly).
+const RETRACTION_CRON_MS = 60 * 60 * 1000;
+setInterval(() => {
+  clearExpiredRetractions().catch((err) => {
+    console.warn('[retraction-cron]', err.message);
+  });
+}, RETRACTION_CRON_MS);
 
 // Handle process termination
 process.on('SIGINT', () => {
