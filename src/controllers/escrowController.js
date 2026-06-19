@@ -232,6 +232,25 @@ async function resolveGigRates(call) {
  *   - Sale commission (30€) -> booked only after company validates
  *     (`transaction.validByCompany === true`). Detection IA seule = en attente.
  */
+/** Backfill `transactions` doc when sale commission is booked (IA/company path may skip approveOrRefuse). */
+async function syncTransactionRetractionOnSaleBooked(transaction, { signedAt, retractionEndsAt }) {
+  if (!transaction?._id) return;
+  const db = mongoose.connection.db;
+  const signed = signedAt instanceof Date ? signedAt : new Date(signedAt || Date.now());
+  const ends =
+    retractionEndsAt instanceof Date ? retractionEndsAt : computeRetractionEndsAt(signed);
+
+  const update = {};
+  if (!transaction.signedAt) update.signedAt = signed;
+  if (!transaction.retractionEndsAt) update.retractionEndsAt = ends;
+  if (!transaction.retractionStatus) update.retractionStatus = 'pending';
+  if (Object.keys(update).length === 0) return;
+
+  update.updatedAt = new Date();
+  await db.collection('transactions').updateOne({ _id: transaction._id }, { $set: update });
+  Object.assign(transaction, update);
+}
+
 /**
  * Book whichever commission rows are still missing for this call. Call and
  * transaction bookings are independent so a backfill can add the 17.50€ sale
@@ -304,7 +323,20 @@ async function bookMissingEarningsForCall(call, transaction) {
           retractionDays: RETRACTION_DAYS,
         },
       });
-      if (txRow) bookedSomething = true;
+      if (txRow) {
+        bookedSomething = true;
+        await syncTransactionRetractionOnSaleBooked(transaction, { signedAt, retractionEndsAt });
+      }
+    } else {
+      const signedAt = txRow.meta?.signedAt
+        ? new Date(txRow.meta.signedAt)
+        : txRow.withdrawableAt
+          ? new Date(new Date(txRow.withdrawableAt).getTime() - RETRACTION_DAYS * 24 * 60 * 60 * 1000)
+          : new Date();
+      const retractionEndsAt = txRow.withdrawableAt
+        ? new Date(txRow.withdrawableAt)
+        : computeRetractionEndsAt(signedAt);
+      await syncTransactionRetractionOnSaleBooked(transaction, { signedAt, retractionEndsAt });
     }
   }
 
