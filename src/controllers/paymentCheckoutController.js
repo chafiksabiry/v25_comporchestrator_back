@@ -4,9 +4,13 @@ import { paypalService } from '../services/paypalService.js';
 import { stripeService } from '../services/stripeService.js';
 import { fulfillMinutesPurchase, fulfillWalletDeposit } from '../services/paymentFulfillment.js';
 import { config } from '../config/env.js';
+import {
+  MINUTE_PACKS,
+  MINUTES_CUSTOM_RATE_CENTS,
+  computeMinutesPurchaseCents,
+} from '../config/minutesPricing.js';
 
 const CURRENCY = (process.env.PAYMENT_CURRENCY || 'EUR').toUpperCase();
-const MINUTES_UNIT_PRICE_CENTS = parseInt(process.env.MINUTES_UNIT_PRICE_CENTS || '100', 10); // 1 min = 1 €
 
 function paypalReturnBase() {
   return (
@@ -69,9 +73,7 @@ function computeAmountCents(purpose, { amountEuros, minutes }) {
     return Math.round(euros * 100);
   }
   if (purpose === 'minutes_purchase') {
-    const qty = Number(minutes);
-    if (!Number.isFinite(qty) || qty <= 0) return null;
-    return Math.round(qty * MINUTES_UNIT_PRICE_CENTS);
+    return computeMinutesPurchaseCents(minutes);
   }
   return null;
 }
@@ -121,8 +123,9 @@ export const paymentCheckoutController = {
       },
       pricing: {
         currency: CURRENCY,
-        minutesUnitPriceCents: MINUTES_UNIT_PRICE_CENTS,
-        minutesUnitPriceEuros: MINUTES_UNIT_PRICE_CENTS / 100
+        minutePacks: MINUTE_PACKS,
+        minutesCustomRateCents: MINUTES_CUSTOM_RATE_CENTS,
+        minutesCustomRateEuros: MINUTES_CUSTOM_RATE_CENTS / 100,
       }
     });
   },

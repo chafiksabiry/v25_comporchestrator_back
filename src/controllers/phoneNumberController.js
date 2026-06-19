@@ -9,7 +9,7 @@ import { PhoneNumber } from '../models/PhoneNumber.js';
 
 // Default checkout pricing for a phone line (overridable via env).
 // Stored in cents (EUR) — 100 = 1.00€.
-const DEFAULT_LINE_SETUP_FEE_CENTS = parseInt(process.env.PHONE_LINE_SETUP_FEE_CENTS || '100', 10); // 1.00€
+const DEFAULT_LINE_SETUP_FEE_CENTS = parseInt(process.env.PHONE_LINE_SETUP_FEE_CENTS || '999', 10); // 9.99€
 const DEFAULT_LINE_CURRENCY = (process.env.PHONE_LINE_CURRENCY || 'EUR').toUpperCase();
 
 // First phone line per company is a free 15-day trial — no payment required.
