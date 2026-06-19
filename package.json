@@ -7,7 +7,8 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "test": "node src/tests/requirement.test.js",
-    "testWebhook": "node src/tests/webhook.test.js"
+    "testWebhook": "node src/tests/webhook.test.js",
+    "sync:stripe-minute-packs": "node src/scripts/syncStripeMinutePacks.js"
   },
   "keywords": [],
   "author": "",

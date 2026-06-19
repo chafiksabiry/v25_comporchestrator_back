@@ -9,6 +9,12 @@ import {
   activateCompanySubscription,
   activateFromStripeCheckoutSession
 } from '../services/subscriptionFulfillment.js';
+import {
+  fulfillRepCheckoutSession,
+  syncRepStripeSubscription,
+  cancelRepStripeSubscription,
+  isRepStripePriceId
+} from '../services/repSubscriptionBridge.js';
 import { fulfillStripeCheckoutSessionPayment } from '../services/paymentFulfillment.js';
 import { config } from '../config/env.js';
 
@@ -477,6 +483,21 @@ async function handleCheckoutSessionCompleted(session) {
         );
         return;
       }
+
+      const stripeSubscription = await stripeService.getSubscription(session.subscription);
+      const priceId = stripeSubscription.items?.data?.[0]?.price?.id;
+      const repPrice = await isRepStripePriceId(priceId);
+
+      if (repPrice) {
+        const ok = await fulfillRepCheckoutSession(session);
+        if (ok) {
+          console.log(`✅ Rep subscription fulfilled for session ${session.id}`);
+        } else {
+          console.warn(`⚠️ Rep subscription fulfillment failed for session ${session.id}`);
+        }
+        return;
+      }
+
       await activateFromStripeCheckoutSession(session);
       return;
     }
@@ -499,7 +520,7 @@ async function handleCheckoutSessionCompleted(session) {
 }
 
 async function handleSubscriptionUpdated(subscription) {
-  await Subscription.findOneAndUpdate(
+  const companyUpdated = await Subscription.findOneAndUpdate(
     { stripeSubscriptionId: subscription.id },
     {
       status: subscription.status,
@@ -508,23 +529,30 @@ async function handleSubscriptionUpdated(subscription) {
       cancelAtPeriodEnd: subscription.cancel_at_period_end,
     }
   );
+  if (!companyUpdated) {
+    await syncRepStripeSubscription(subscription);
+  }
 }
 
 async function handleSubscriptionDeleted(subscription) {
-  await Subscription.findOneAndUpdate(
-    { stripeSubscriptionId: subscription.id },
-    { status: 'canceled' }
-  );
-
-  // Reset Company subscription to free
   const subRecord = await Subscription.findOne({ stripeSubscriptionId: subscription.id });
-  if (subRecord && subRecord.companyId) {
-    await mongoose.connection.db.collection('companies').updateOne(
-      { _id: new mongoose.Types.ObjectId(subRecord.companyId) },
-      { $set: { subscription: 'free' } }
+  if (subRecord) {
+    await Subscription.findOneAndUpdate(
+      { stripeSubscriptionId: subscription.id },
+      { status: 'canceled' }
     );
-    console.log(`✅ Reset company ${subRecord.companyId} subscription status to free`);
+
+    if (subRecord.companyId) {
+      await mongoose.connection.db.collection('companies').updateOne(
+        { _id: new mongoose.Types.ObjectId(subRecord.companyId) },
+        { $set: { subscription: 'free' } }
+      );
+      console.log(`✅ Reset company ${subRecord.companyId} subscription status to free`);
+    }
+    return;
   }
+
+  await cancelRepStripeSubscription(subscription);
 }
 
 async function handleProductUpdated(product) {
