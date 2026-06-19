@@ -22,18 +22,50 @@ import { clearExpiredRetractions, reverseSaleCommission } from '../services/retr
 const REP_SHARE = 0.7;
 const HARX_SHARE = 0.3;
 
+const PROSPECT_RUBRIC_KEYS = ['RDV', 'A plus tard', 'PAS INTÉRESSÉS', 'PAS AU COURANT', 'DÉJÀ ÉQUIPÉS'];
+const NON_SALE_CALLOUTCOMES = new Set([
+  'appointment', 'callback_requested', 'refusal', 'not_interested', 'already_equipped',
+  'voicemail', 'no_answer', 'busy', 'wrong_number', 'fraud', 'too_short', 'connected_no_sale', 'argued_interested',
+]);
+
+function callIsProspectRubricOnly(call) {
+  if (!call || call.callOutcome === 'transaction') return false;
+  if (call.flags?.transactionDetected === true) return false;
+  const txDet = call.ai_call_score?.transaction_detected;
+  if (txDet === true || (txDet && typeof txDet === 'object' && txDet.passed === true)) return false;
+  if (call.transactionOccurred === true) return false;
+
+  if (call.callOutcome && NON_SALE_CALLOUTCOMES.has(call.callOutcome)) return true;
+
+  const score = call.ai_call_score;
+  if (!score || typeof score !== 'object') return false;
+
+  for (const key of PROSPECT_RUBRIC_KEYS) {
+    const metric = score[key];
+    if (!metric) continue;
+    const passed = typeof metric.passed === 'boolean' ? metric.passed : (metric.score ?? 0) >= 50;
+    if (passed) return true;
+  }
+  return false;
+}
+
 /**
  * IA / signaux métier ont détecté une vente potentielle (en attente entreprise).
+ * Un RDV ou une rubrique prospect seule ≠ vente.
  */
 function callHasDetectedTransactionSale(call, transaction) {
   if (!call || call.validByAI !== true) return false;
 
-  if (transaction?.validByAI === true) return true;
-  if (transaction?.validByReps === true) return true;
-  if (call.transactionOccurred === true) return true;
   if (call.callOutcome === 'transaction') return true;
   if (call.flags?.transactionDetected === true) return true;
-  if (call.ai_call_score?.transaction_detected === true) return true;
+  const txDet = call.ai_call_score?.transaction_detected;
+  if (txDet === true || (txDet && typeof txDet === 'object' && txDet.passed === true)) return true;
+  if (call.transactionOccurred === true) return true;
+  if (transaction?.validByAI === true) return true;
+
+  if (callIsProspectRubricOnly(call)) return false;
+
+  if (transaction?.validByReps === true) return true;
   return false;
 }
 
