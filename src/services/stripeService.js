@@ -55,9 +55,10 @@ async function createOneShotCheckoutSession({
   });
 }
 
-async function retrieveSession(sessionId, options = {}) {
-  const expand = options.expand || ['payment_intent'];
-  return getStripe().checkout.sessions.retrieve(sessionId, { expand });
+async function retrieveSession(sessionId) {
+  return getStripe().checkout.sessions.retrieve(sessionId, {
+    expand: ['payment_intent']
+  });
 }
 
 /**

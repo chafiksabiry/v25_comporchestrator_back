@@ -3,9 +3,6 @@ import MinutesCompany from '../models/MinutesCompany.js';
 import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
 import WalletCompany from '../models/WalletCompany.js';
 import WalletCompanyEntry from '../models/WalletCompanyEntry.js';
-import mongoose from 'mongoose';
-import { stripeService } from './stripeService.js';
-import { resolveMinutesFromStripePriceId } from '../config/minutesPricing.js';
 
 export async function fulfillWalletDeposit(payment) {
   const euros = Number((payment.amount / 100).toFixed(2));
@@ -102,9 +99,6 @@ async function fulfillStripeCompanyPaymentSession(session) {
     }
   }
   if (!payment) {
-    const pricingTableResult = await fulfillMinutesFromStripePricingTable(session);
-    if (pricingTableResult) return pricingTableResult;
-
     console.warn(`[payments] No CompanyPayment found for Stripe session ${session.id}`);
     return { skipped: true, reason: 'payment record not found' };
   }
@@ -175,89 +169,4 @@ export async function fulfillStripePhoneLineSession(session) {
     `✅ Phone-line Stripe payment fulfilled: payment=${payment._id} phone=${payment.phoneNumber} session=${session.id}`
   );
   return { fulfilled: true, paymentId: String(payment._id), purpose: 'phone_line' };
-}
-
-/**
- * Stripe Pricing Table — achat minutes sans CompanyPayment pré-créé.
- * client_reference_id = companyId sur le composant <stripe-pricing-table>.
- */
-export async function fulfillMinutesFromStripePricingTable(session) {
-  if (!session || session.mode !== 'payment') return null;
-  const paid = session.payment_status === 'paid' || session.status === 'complete';
-  if (!paid) return null;
-
-  const companyId = session.client_reference_id || session.metadata?.companyId;
-  if (!companyId || !mongoose.Types.ObjectId.isValid(String(companyId))) {
-    return null;
-  }
-
-  const already = await CompanyPayment.findOne({
-    providerRef: session.id,
-    fulfilledAt: { $ne: null },
-    purpose: 'minutes_purchase',
-  });
-  if (already) {
-    return { skipped: true, reason: 'already fulfilled', paymentId: String(already._id) };
-  }
-
-  let fullSession = session;
-  if (!session.line_items?.data?.length && session.id) {
-    try {
-      fullSession = await stripeService.retrieveSession(session.id, {
-        expand: ['line_items.data.price.product'],
-      });
-    } catch (err) {
-      console.warn('[payments] pricing table session expand failed:', err.message);
-      return null;
-    }
-  }
-
-  const line = fullSession.line_items?.data?.[0];
-  const priceObj = line?.price;
-  const priceId = typeof priceObj === 'string' ? priceObj : priceObj?.id;
-  const minutes = resolveMinutesFromStripePriceId(priceId, priceObj);
-  if (!minutes) return null;
-
-  const amountCents = Number(fullSession.amount_total || line?.amount_total || 0);
-
-  let payment = await CompanyPayment.findOne({ providerRef: session.id });
-  if (!payment) {
-    payment = await CompanyPayment.create({
-      companyId: new mongoose.Types.ObjectId(String(companyId)),
-      purpose: 'minutes_purchase',
-      provider: 'stripe',
-      amount: amountCents,
-      currency: String(fullSession.currency || 'eur').toUpperCase(),
-      quantity: minutes,
-      status: 'succeeded',
-      providerRef: session.id,
-      meta: {
-        source: 'stripe_pricing_table',
-        stripePriceId: priceId,
-      },
-    });
-  } else if (payment.fulfilledAt) {
-    return { skipped: true, reason: 'already fulfilled', paymentId: String(payment._id) };
-  }
-
-  payment.status = 'succeeded';
-  payment.quantity = minutes;
-  payment.providerRef = session.id;
-  await payment.save();
-
-  const result = await fulfillMinutesPurchase(payment);
-  payment.fulfilledAt = new Date();
-  await payment.save();
-
-  console.log(
-    `✅ Minutes credited via Stripe Pricing Table: company=${companyId} +${minutes}min session=${session.id}`
-  );
-
-  return {
-    fulfilled: true,
-    paymentId: String(payment._id),
-    purpose: 'minutes_purchase',
-    result,
-    source: 'stripe_pricing_table',
-  };
 }
