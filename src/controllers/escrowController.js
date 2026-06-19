@@ -233,7 +233,7 @@ async function resolveGigRates(call) {
  *     (`transaction.validByCompany === true`). Detection IA seule = en attente.
  */
 /** Backfill `transactions` doc when sale commission is booked (IA/company path may skip approveOrRefuse). */
-async function syncTransactionRetractionOnSaleBooked(transaction, { signedAt, retractionEndsAt }) {
+async function syncTransactionRetractionOnSaleBooked(transaction, { signedAt, retractionEndsAt, txRepShare, txGross }) {
   if (!transaction?._id) return;
   const db = mongoose.connection.db;
   const signed = signedAt instanceof Date ? signedAt : new Date(signedAt || Date.now());
@@ -244,6 +244,14 @@ async function syncTransactionRetractionOnSaleBooked(transaction, { signedAt, re
   if (!transaction.signedAt) update.signedAt = signed;
   if (!transaction.retractionEndsAt) update.retractionEndsAt = ends;
   if (!transaction.retractionStatus) update.retractionStatus = 'pending';
+  const repShare = Number(txRepShare);
+  const gross = Number(txGross);
+  if (!(Number(transaction.repTransactionCommission) > 0) && repShare > 0) {
+    update.repTransactionCommission = repShare;
+  }
+  if (!(Number(transaction.platformTransactionCommission) > 0) && gross > 0 && repShare > 0) {
+    update.platformTransactionCommission = Number((gross - repShare).toFixed(4));
+  }
   if (Object.keys(update).length === 0) return;
 
   update.updatedAt = new Date();
@@ -271,7 +279,7 @@ async function bookMissingEarningsForCall(call, transaction) {
     : call.agent;
 
   const { callRate, txRate, gigId } = await resolveGigRates(call);
-  const { callGross, txGross } = resolveCommissionAmounts(call, transaction, { callRate, txRate });
+  const { callGross, txGross, txRepShare } = resolveCommissionAmounts(call, transaction, { callRate, txRate });
   const gigObjectId = gigId && mongoose.Types.ObjectId.isValid(gigId)
     ? new mongoose.Types.ObjectId(gigId)
     : gigId || undefined;
@@ -325,7 +333,12 @@ async function bookMissingEarningsForCall(call, transaction) {
       });
       if (txRow) {
         bookedSomething = true;
-        await syncTransactionRetractionOnSaleBooked(transaction, { signedAt, retractionEndsAt });
+        await syncTransactionRetractionOnSaleBooked(transaction, {
+          signedAt,
+          retractionEndsAt,
+          txRepShare,
+          txGross,
+        });
       }
     } else {
       const signedAt = txRow.meta?.signedAt
@@ -336,7 +349,14 @@ async function bookMissingEarningsForCall(call, transaction) {
       const retractionEndsAt = txRow.withdrawableAt
         ? new Date(txRow.withdrawableAt)
         : computeRetractionEndsAt(signedAt);
-      await syncTransactionRetractionOnSaleBooked(transaction, { signedAt, retractionEndsAt });
+      const ledgerRepShare = Number(txRow.repShare);
+      const ledgerGross = Number(txRow.amount);
+      await syncTransactionRetractionOnSaleBooked(transaction, {
+        signedAt,
+        retractionEndsAt,
+        txRepShare: ledgerRepShare > 0 ? ledgerRepShare : txRepShare,
+        txGross: ledgerGross > 0 ? ledgerGross : txGross,
+      });
     }
   }
 
