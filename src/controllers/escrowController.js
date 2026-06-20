@@ -2025,6 +2025,36 @@ export const escrowController = {
     }
   },
 
+  /** Broadcast en temps réel quand l'analyse IA d'un appel est terminée. */
+  broadcastCallAnalysisComplete: async (req, res) => {
+    const {
+      callId,
+      repId,
+      companyId,
+      leadName,
+      ai_call_status,
+      validByAI,
+      completedAt,
+    } = req.body || {};
+
+    if (!callId || !repId) {
+      return res.status(400).json({ error: 'callId and repId are required' });
+    }
+
+    broadcastUpdate({
+      type: 'call_analysis_complete',
+      callId: String(callId),
+      repId: String(repId),
+      companyId: companyId ? String(companyId) : undefined,
+      leadName: leadName || 'Client',
+      ai_call_status: ai_call_status || 'scored',
+      validByAI: validByAI === true ? true : validByAI === false ? false : null,
+      completedAt: completedAt || new Date().toISOString(),
+    });
+
+    res.status(200).json({ success: true });
+  },
+
   /** Broadcast en temps réel quand un rep signale une analyse bloquée. */
   broadcastCallAnalysisHelp: async (req, res) => {
     const { companyId, callId, repName, leadName, message, requestedAt, requestCount } = req.body || {};
