@@ -17,6 +17,7 @@ router.post('/calls/approve/:callId', escrowController.approveOrRefuseCallTransa
 router.post('/transaction/:transactionId/retract', escrowController.retractSale);
 router.get('/harx/commissions', escrowController.getHarxCommissions);
 router.post('/reconcile/:companyId', escrowController.triggerReconciliation);
+router.post('/call-analysis-help', escrowController.broadcastCallAnalysisHelp);
 
 // Agent Payouts / Withdrawals
 router.get('/agent/wallet/:agentId', escrowController.getAgentWallet);

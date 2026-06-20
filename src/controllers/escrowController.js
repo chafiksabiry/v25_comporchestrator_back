@@ -2023,5 +2023,28 @@ export const escrowController = {
       console.error('Error fetching Harx commissions:', err);
       res.status(500).json({ error: 'Failed to fetch Harx commissions' });
     }
-  }
+  },
+
+  /** Broadcast en temps réel quand un rep signale une analyse bloquée. */
+  broadcastCallAnalysisHelp: async (req, res) => {
+    const { companyId, callId, repName, leadName, message, requestedAt, requestCount } = req.body || {};
+    if (!companyId || !callId) {
+      return res.status(400).json({ error: 'companyId and callId are required' });
+    }
+
+    broadcastUpdate({
+      type: 'call_analysis_help_requested',
+      companyId: String(companyId),
+      callId: String(callId),
+      repName: repName || 'Rep',
+      leadName: leadName || 'Client',
+      message:
+        message ||
+        `Le rep ${repName || 'Rep'} signale une analyse bloquée pour l'appel avec ${leadName || 'Client'}.`,
+      requestedAt: requestedAt || new Date().toISOString(),
+      requestCount: requestCount || 1,
+    });
+
+    res.status(200).json({ success: true });
+  },
 };
