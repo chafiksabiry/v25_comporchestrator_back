@@ -40,7 +40,7 @@ function sanitizePaymentReturnUrl(url, fallback) {
     const parsed = new URL(url);
     const allowed = new Set([
       new URL(stripeReturnBase()).origin,
-      'https://harx25pageslinks.netlify.app',
+      'https://harx.ai',
       'http://localhost:5183',
       'http://127.0.0.1:5183',
       'http://localhost:3000',
