@@ -5,9 +5,8 @@ import { stripeService } from '../services/stripeService.js';
 import { fulfillMinutesPurchase, fulfillWalletDeposit } from '../services/paymentFulfillment.js';
 import { config } from '../config/env.js';
 import {
-  MINUTE_PACKS,
-  MINUTES_CUSTOM_RATE_CENTS,
   computeMinutesPurchaseCents,
+  getPlatformPricing,
 } from '../config/minutesPricing.js';
 
 const CURRENCY = (process.env.PAYMENT_CURRENCY || 'EUR').toUpperCase();
@@ -66,7 +65,7 @@ function sanitizePaymentReturnUrl(url, fallback) {
   return fallback;
 }
 
-function computeAmountCents(purpose, { amountEuros, minutes }) {
+async function computeAmountCents(purpose, { amountEuros, minutes }) {
   if (purpose === 'wallet_deposit') {
     const euros = Number(amountEuros);
     if (!Number.isFinite(euros) || euros <= 0) return null;
@@ -110,24 +109,30 @@ async function fulfillPayment(payment) {
 }
 
 export const paymentCheckoutController = {
-  getConfig(req, res) {
-    res.json({
-      success: true,
-      paypal: {
-        enabled: paypalService.isConfigured(),
-        clientId: paypalService.getClientId(),
-        mode: paypalService.getMode()
-      },
-      stripe: {
-        enabled: stripeService.isConfigured()
-      },
-      pricing: {
-        currency: CURRENCY,
-        minutePacks: MINUTE_PACKS,
-        minutesCustomRateCents: MINUTES_CUSTOM_RATE_CENTS,
-        minutesCustomRateEuros: MINUTES_CUSTOM_RATE_CENTS / 100,
-      }
-    });
+  async getConfig(req, res) {
+    try {
+      const pricing = await getPlatformPricing();
+      res.json({
+        success: true,
+        paypal: {
+          enabled: paypalService.isConfigured(),
+          clientId: paypalService.getClientId(),
+          mode: paypalService.getMode()
+        },
+        stripe: {
+          enabled: stripeService.isConfigured()
+        },
+        pricing: {
+          currency: CURRENCY,
+          minutePacks: pricing.minutePacks,
+          minutesCustomRateCents: pricing.minutesCustomRateCents,
+          minutesCustomRateEuros: pricing.minutesCustomRateCents / 100,
+        }
+      });
+    } catch (error) {
+      console.error('[payments/checkout/config]', error.message);
+      res.status(500).json({ error: 'Failed to load checkout config' });
+    }
   },
 
   async initCheckout(req, res) {
@@ -144,7 +149,7 @@ export const paymentCheckoutController = {
         return res.status(400).json({ error: "provider must be 'stripe' or 'paypal'" });
       }
 
-      const amountCents = computeAmountCents(purpose, { amountEuros, minutes });
+      const amountCents = await computeAmountCents(purpose, { amountEuros, minutes });
       if (amountCents == null || amountCents <= 0) {
         return res.status(400).json({ error: 'Invalid amount or minutes quantity' });
       }

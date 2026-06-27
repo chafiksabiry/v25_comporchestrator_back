@@ -6,15 +6,7 @@ import telnyx from 'telnyx';
 import mongoose from 'mongoose';
 import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
-
-// Default checkout pricing for a phone line (overridable via env).
-// Stored in cents (EUR) — 100 = 1.00€.
-const DEFAULT_LINE_SETUP_FEE_CENTS = parseInt(process.env.PHONE_LINE_SETUP_FEE_CENTS || '999', 10); // 9.99€
-const DEFAULT_LINE_CURRENCY = (process.env.PHONE_LINE_CURRENCY || 'EUR').toUpperCase();
-
-// First phone line per company is a free 15-day trial — no payment required.
-const TRIAL_DURATION_DAYS = parseInt(process.env.PHONE_LINE_TRIAL_DAYS || '15', 10);
-const TRIAL_DURATION_MS = TRIAL_DURATION_DAYS * 24 * 60 * 60 * 1000;
+import { getPhoneLinePricing } from '../services/platformPricingService.js';
 
 class PhoneNumberController {
   async searchNumbers(req, res) {
@@ -182,9 +174,11 @@ class PhoneNumberController {
         }
       }
 
+      const linePricing = await getPhoneLinePricing();
+
       res.json({
         eligible,
-        trialDurationDays: TRIAL_DURATION_DAYS,
+        trialDurationDays: linePricing.trialDays,
         existingNumbers: existingCount,
         activeTrial,
       });
@@ -215,6 +209,8 @@ class PhoneNumberController {
         isTrial = existingCount === 0;
       }
 
+      const linePricing = await getPhoneLinePricing();
+
       if (!isTrial) {
         // Past the trial: enforce the standard Stripe / PayPal payment gate.
         if (!paymentId || !mongoose.Types.ObjectId.isValid(paymentId)) {
@@ -237,13 +233,13 @@ class PhoneNumberController {
           });
         }
       } else {
-        console.log(`🎁 First phone line for company ${companyId} — granting ${TRIAL_DURATION_DAYS}-day free trial.`);
+        console.log(`🎁 First phone line for company ${companyId} — granting ${linePricing.trialDays}-day free trial.`);
       }
 
       // Convert the Stripe / PayPal amount (stored in cents) to major units
       // for persistence on the PhoneNumber document (e.g. 500 -> 5.00€).
       const paidPrice = !isTrial && payment?.amount > 0 ? payment.amount / 100 : 0;
-      const trialExpiresAt = isTrial ? new Date(Date.now() + TRIAL_DURATION_MS) : null;
+      const trialExpiresAt = isTrial ? new Date(Date.now() + linePricing.trialDurationMs) : null;
 
       const newNumber = await phoneNumberService.purchaseTwilioNumber(
         phoneNumber,
@@ -254,7 +250,7 @@ class PhoneNumberController {
           bundleSid,
           addressSid,
           price: paidPrice,
-          currency: !isTrial && payment?.currency ? payment.currency : DEFAULT_LINE_CURRENCY,
+          currency: !isTrial && payment?.currency ? payment.currency : linePricing.currency,
           paymentRef: !isTrial ? payment?._id : undefined,
           isTrial,
           trialExpiresAt,
@@ -398,13 +394,15 @@ class PhoneNumberController {
         }
       }
 
+      const linePricing = await getPhoneLinePricing();
+
       const payment = await PhoneNumberPayment.create({
         companyId: new mongoose.Types.ObjectId(companyId),
         gigId: gigId && mongoose.Types.ObjectId.isValid(gigId) ? new mongoose.Types.ObjectId(gigId) : undefined,
         phoneNumber,
         provider,
-        amount: DEFAULT_LINE_SETUP_FEE_CENTS,
-        currency: DEFAULT_LINE_CURRENCY,
+        amount: linePricing.setupFeeCents,
+        currency: linePricing.currency,
         status: 'pending'
       });
 
@@ -634,21 +632,28 @@ class PhoneNumberController {
 
   /** Public checkout config for the telephony payment modal. */
   async getCheckoutConfig(req, res) {
-    res.json({
-      success: true,
-      paypal: {
-        enabled: paypalService.isConfigured(),
-        clientId: paypalService.getClientId(),
-        mode: paypalService.getMode()
-      },
-      stripe: {
-        enabled: stripeService.isConfigured()
-      },
-      pricing: {
-        amountCents: DEFAULT_LINE_SETUP_FEE_CENTS,
-        currency: DEFAULT_LINE_CURRENCY
-      }
-    });
+    try {
+      const linePricing = await getPhoneLinePricing();
+      res.json({
+        success: true,
+        paypal: {
+          enabled: paypalService.isConfigured(),
+          clientId: paypalService.getClientId(),
+          mode: paypalService.getMode()
+        },
+        stripe: {
+          enabled: stripeService.isConfigured()
+        },
+        pricing: {
+          amountCents: linePricing.setupFeeCents,
+          currency: linePricing.currency,
+          trialDays: linePricing.trialDays,
+        }
+      });
+    } catch (error) {
+      console.error('[phone-numbers/checkout/config]', error.message);
+      res.status(500).json({ error: 'Failed to load checkout config' });
+    }
   }
 
   /**
