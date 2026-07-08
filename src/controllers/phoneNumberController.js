@@ -883,24 +883,30 @@ class PhoneNumberController {
 
       console.log(`🔔 Telnyx Call Control Webhook received: ${event.event_type} for call ${event.payload?.call_control_id}`);
 
-      // When the call is answered, speak a test message
+      // When the call is answered, speak a test message with a slight delay so the user has time to put the phone to their ear
       if (event.event_type === 'call.answered') {
         const callControlId = event.payload.call_control_id;
         
-        await fetch(`https://api.telnyx.com/v2/calls/${callControlId}/actions/speak`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'Authorization': `Bearer ${config.telnyxApiKey}`
-          },
-          body: JSON.stringify({
-            payload: 'Bonjour. Ceci est un appel de test depuis la plateforme Harx. Votre ligne Telnyx est parfaitement configurée. Au revoir !',
-            voice: 'female',
-            language: 'fr-FR'
-          })
-        });
-        console.log(`🗣️ Sent speak command to call ${callControlId}`);
+        setTimeout(async () => {
+          try {
+            await fetch(`https://api.telnyx.com/v2/calls/${callControlId}/actions/speak`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'Authorization': `Bearer ${config.telnyxApiKey}`
+              },
+              body: JSON.stringify({
+                payload: 'Bonjour. Ceci est un appel de test depuis la plateforme Harx. Votre ligne Telnyx est parfaitement configurée. Au revoir !',
+                voice: 'female',
+                language: 'fr-FR'
+              })
+            });
+            console.log(`🗣️ Sent speak command to call ${callControlId}`);
+          } catch (err) {
+            console.error('Error sending speak command:', err);
+          }
+        }, 3000); // 3 seconds delay to ensure audio path is fully open
       }
 
       res.status(200).send('OK');
