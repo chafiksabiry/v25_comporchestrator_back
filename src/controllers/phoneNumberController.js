@@ -832,6 +832,40 @@ class PhoneNumberController {
     }
   }
 
+  async testCall(req, res) {
+    try {
+      const { fromNumber, toNumber } = req.body;
+      if (!fromNumber || !toNumber) {
+        return res.status(400).json({ error: 'fromNumber and toNumber are required' });
+      }
+
+      console.log(`📞 Testing call from ${fromNumber} to ${toNumber}`);
+      const response = await fetch('https://api.telnyx.com/v2/calls', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${config.telnyxApiKey}`
+        },
+        body: JSON.stringify({
+          connection_id: config.telnyxConnectionId,
+          to: toNumber,
+          from: fromNumber
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.errors?.[0]?.detail || 'Failed to initiate Telnyx call');
+      }
+
+      res.json({ success: true, data });
+    } catch (error) {
+      console.error('Error in testCall:', error);
+      res.status(500).json({ error: 'Failed to test call', message: error.message });
+    }
+  }
+
   async deleteNumber(req, res) {
     try {
       const result = await phoneNumberService.deletePhoneNumber(req.params.id);

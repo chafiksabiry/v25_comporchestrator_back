@@ -59,6 +59,9 @@ router.get('/gig/:gigId/check', phoneNumberController.checkGigNumber.bind(phoneN
 // Configure voice feature for a phone number
 router.post('/:phoneNumber/configure-voice', phoneNumberController.configureVoiceFeature.bind(phoneNumberController));
 
+// Test an outbound call
+router.post('/test-call', phoneNumberController.testCall.bind(phoneNumberController));
+
 // Webhook for Telnyx number order status updates
 // Middleware de logging pour le webhook
 const logWebhook = (req, res, next) => {
