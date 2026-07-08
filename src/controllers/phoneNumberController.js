@@ -843,6 +843,9 @@ class PhoneNumberController {
       }
 
       console.log(`📞 Testing call from ${fromNumber} to ${toNumber}`);
+      const dynamicWebhookUrl = `https://${req.get('host')}/api/phone-numbers/webhooks/telnyx/call-control`;
+      console.log(`🔗 Using webhook URL: ${dynamicWebhookUrl}`);
+      
       const response = await fetch('https://api.telnyx.com/v2/calls', {
         method: 'POST',
         headers: {
@@ -854,7 +857,7 @@ class PhoneNumberController {
           connection_id: config.telnyxConnectionId,
           to: toNumber,
           from: fromNumber,
-          webhook_url: `${config.publicApiBaseUrl}/phone-numbers/webhooks/telnyx/call-control`,
+          webhook_url: dynamicWebhookUrl,
           webhook_url_method: 'POST'
         })
       });
