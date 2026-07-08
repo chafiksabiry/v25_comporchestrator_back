@@ -853,7 +853,9 @@ class PhoneNumberController {
         body: JSON.stringify({
           connection_id: config.telnyxConnectionId,
           to: toNumber,
-          from: fromNumber
+          from: fromNumber,
+          webhook_url: `${config.publicApiBaseUrl}/phone-numbers/webhooks/telnyx/call-control`,
+          webhook_url_method: 'POST'
         })
       });
 
@@ -866,6 +868,42 @@ class PhoneNumberController {
     } catch (error) {
       console.error('Error in testCall:', error);
       res.status(500).json({ error: 'Failed to test call', message: error.message });
+    }
+  }
+
+  async handleCallControlWebhook(req, res) {
+    try {
+      const event = req.body?.data;
+      if (!event) {
+        return res.status(400).send('No data in webhook');
+      }
+
+      console.log(`🔔 Telnyx Call Control Webhook received: ${event.event_type} for call ${event.payload?.call_control_id}`);
+
+      // When the call is answered, speak a test message
+      if (event.event_type === 'call.answered') {
+        const callControlId = event.payload.call_control_id;
+        
+        await fetch(`https://api.telnyx.com/v2/calls/${callControlId}/actions/speak`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': `Bearer ${config.telnyxApiKey}`
+          },
+          body: JSON.stringify({
+            payload: 'Bonjour. Ceci est un appel de test depuis la plateforme Harx. Votre ligne Telnyx est parfaitement configurée. Au revoir !',
+            voice: 'female',
+            language: 'fr-FR'
+          })
+        });
+        console.log(`🗣️ Sent speak command to call ${callControlId}`);
+      }
+
+      res.status(200).send('OK');
+    } catch (error) {
+      console.error('Error handling Telnyx Call Control Webhook:', error);
+      res.status(500).send('Internal Server Error');
     }
   }
 

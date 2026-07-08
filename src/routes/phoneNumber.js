@@ -108,4 +108,10 @@ router.post('/webhooks/telnyx/number-order',
   phoneNumberController.handleTelnyxNumberOrderWebhook.bind(phoneNumberController)
 );
 
+router.post('/webhooks/telnyx/call-control',
+  express.json(),
+  logWebhook,
+  phoneNumberController.handleCallControlWebhook.bind(phoneNumberController)
+);
+
 export const phoneNumberRoutes = router;
