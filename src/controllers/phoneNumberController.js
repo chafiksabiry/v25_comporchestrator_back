@@ -838,6 +838,9 @@ class PhoneNumberController {
       if (!fromNumber || !toNumber) {
         return res.status(400).json({ error: 'fromNumber and toNumber are required' });
       }
+      if (!config.telnyxApiKey || !config.telnyxConnectionId) {
+        return res.status(500).json({ error: 'Configuration Telnyx manquante sur le serveur (TELNYX_API_KEY ou TELNYX_CONNECTION_ID)' });
+      }
 
       console.log(`📞 Testing call from ${fromNumber} to ${toNumber}`);
       const response = await fetch('https://api.telnyx.com/v2/calls', {
