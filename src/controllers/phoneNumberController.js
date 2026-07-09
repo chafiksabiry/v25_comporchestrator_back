@@ -904,13 +904,18 @@ class PhoneNumberController {
 
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.errors?.[0]?.detail || 'Failed to initiate Telnyx call');
+        const errorDetail = data.errors?.[0]?.detail || 'Failed to initiate Telnyx call';
+        if (errorDetail.includes('Origination number is not ready') || errorDetail.includes('requirement-info')) {
+          throw new Error('Ce numéro est en attente de validation réglementaire (Identity Verification). Vous ne pouvez pas encore l\'utiliser pour des appels sortants.');
+        }
+        throw new Error(errorDetail);
       }
 
       res.json({ success: true, data });
     } catch (error) {
-      console.error('Error in testCall:', error);
-      res.status(500).json({ error: 'Failed to test call', message: error.message });
+      console.error('Error in testCall:', error.message);
+      const isFriendlyError = error.message.includes('validation réglementaire');
+      res.status(isFriendlyError ? 403 : 500).json({ error: 'Failed to test call', message: error.message });
     }
   }
 
