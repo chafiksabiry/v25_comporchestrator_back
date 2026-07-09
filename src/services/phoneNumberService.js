@@ -40,11 +40,11 @@ class PhoneNumberService {
 
       if (countryCode === 'FR') {
         const nationalNumbersPromise = searchType('national').catch(natError => {
-          console.error('❌ Error searching Telnyx national numbers:', natError);
+          console.warn(`⚠️ Telnyx national search skipped: ${natError.message}`);
           return [];
         });
         const mobileNumbersPromise = searchType('mobile').catch(mobError => {
-          console.error('❌ Error searching Telnyx mobile numbers:', mobError);
+          console.warn(`⚠️ Telnyx mobile search skipped: ${mobError.message}`);
           return [];
         });
 
