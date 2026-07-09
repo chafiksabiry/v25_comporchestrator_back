@@ -76,14 +76,8 @@ class PhoneNumberController {
         });
       }
 
-      // Default to telnyx if not provided, but since they hit /purchase we expect telnyx.
+      // Resolve provider
       const resolvedProvider = provider || 'telnyx';
-      if (resolvedProvider !== 'telnyx') {
-        return res.status(400).json({
-          error: 'Invalid provider',
-          details: 'This endpoint is for Telnyx numbers only.'
-        });
-      }
 
       // ──────────────────────────────────────────────────────────────────
       // Free trial gate
