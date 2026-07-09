@@ -18,7 +18,7 @@ class PhoneNumberService {
     this.twilioClient = twilio(config.twilioAccountSid, config.twilioAuthToken);
   }
 
-  async searchAvailableNumbers(countryCode) {
+  async searchAvailableNumbers({ countryCode, type: reqType, features, limit }) {
     try {
       console.log(`🔍 Searching Telnyx numbers for country: ${countryCode}`);
       

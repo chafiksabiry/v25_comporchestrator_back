@@ -11,12 +11,13 @@ import { getPhoneLinePricing } from '../services/platformPricingService.js';
 class PhoneNumberController {
   async searchNumbers(req, res) {
     try {
-      const { countryCode, type, features } = req.query;
-      console.log(countryCode, type, features);
+      const { countryCode, type, features, limit } = req.query;
+      console.log(countryCode, type, features, limit);
       const numbers = await phoneNumberService.searchAvailableNumbers({
         countryCode,
         type,
-        features
+        features,
+        limit: parseInt(limit) || 10
       });
       res.json(numbers);
     } catch (error) {
