@@ -53,13 +53,13 @@ class PhoneNumberController {
 
   async purchaseNumber(req, res) {
     try {
-      const { phoneNumber, provider, gigId, requirementGroupId, companyId, bundleSid, addressSid } = req.body;
+      console.log("📥 Received purchaseNumber request (Telnyx)");
+      console.log("📦 req.body:", JSON.stringify(req.body, null, 2));
 
-      // Validation des champs obligatoires
-      // Validation des champs obligatoires
+      const { phoneNumber, provider, gigId, requirementGroupId, companyId, bundleSid, addressSid, paymentId } = req.body;
+
       const missingFields = {
         phoneNumber: !phoneNumber ? 'Phone number is required' : null,
-        provider: !provider ? 'Provider is required' : null,
         gigId: !gigId ? 'Gig ID is required' : null,
         companyId: !companyId ? 'Company ID is required' : null
       };
@@ -75,22 +75,84 @@ class PhoneNumberController {
         });
       }
 
-      // Validate provider
-      if (!['telnyx', 'twilio'].includes(provider)) {
+      // Default to telnyx if not provided, but since they hit /purchase we expect telnyx.
+      const resolvedProvider = provider || 'telnyx';
+      if (resolvedProvider !== 'telnyx') {
         return res.status(400).json({
           error: 'Invalid provider',
-          details: 'Provider must be either "telnyx" or "twilio"'
+          details: 'This endpoint is for Telnyx numbers only.'
         });
       }
 
+      // ──────────────────────────────────────────────────────────────────
+      // Free trial gate
+      // ──────────────────────────────────────────────────────────────────
+      let isTrial = false;
+      let payment = null;
+
+      if (companyId && mongoose.Types.ObjectId.isValid(companyId)) {
+        const existingCount = await PhoneNumber.countDocuments({ companyId });
+        isTrial = existingCount === 0;
+      }
+
+      const linePricing = await getPhoneLinePricing();
+
+      if (!isTrial) {
+        // Past the trial: enforce the standard Stripe / PayPal payment gate.
+        if (!paymentId || !mongoose.Types.ObjectId.isValid(paymentId)) {
+          return res.status(402).json({
+            error: 'Payment required',
+            message: 'A confirmed payment (Stripe or PayPal) is required to provision a phone line.'
+          });
+        }
+        payment = await PhoneNumberPayment.findById(paymentId);
+        if (!payment || payment.status !== 'succeeded') {
+          return res.status(402).json({
+            error: 'Payment not completed',
+            message: 'No succeeded payment matches this purchase request.'
+          });
+        }
+        if (payment.phoneNumber !== phoneNumber) {
+          return res.status(400).json({
+            error: 'Payment / number mismatch',
+            message: 'The payment was not authorized for this exact phone number.'
+          });
+        }
+      } else {
+        console.log(`🎁 First phone line for company ${companyId} — granting ${linePricing.trialDays}-day free trial.`);
+      }
+
+      const paidPrice = !isTrial && payment?.amount > 0 ? payment.amount / 100 : 0;
+      const trialExpiresAt = isTrial ? new Date(Date.now() + linePricing.trialDurationMs) : null;
+
       const newNumber = await phoneNumberService.purchaseNumber(
         phoneNumber,
-        provider,
+        resolvedProvider,
         gigId,
         requirementGroupId,
         companyId,
-        { bundleSid, addressSid }
+        { 
+          bundleSid, 
+          addressSid,
+          price: paidPrice,
+          currency: !isTrial && payment?.currency ? payment.currency : linePricing.currency,
+          paymentRef: !isTrial ? payment?._id : undefined,
+          isTrial,
+          trialExpiresAt,
+        }
       );
+
+      // Backlink the payment to the provisioned PhoneNumber doc for audit.
+      if (!isTrial && payment) {
+        try {
+          if (newNumber?._id) {
+            payment.phoneNumberRef = newNumber._id;
+            await payment.save();
+          }
+        } catch (linkErr) {
+          console.warn('Could not backlink payment -> phone number:', linkErr.message);
+        }
+      }
 
       res.json({
         success: true,
@@ -105,36 +167,19 @@ class PhoneNumberController {
     } catch (error) {
       console.error('Error purchasing phone number:', error);
 
-      // Handle specific error cases
       if (error.message.includes('already exists')) {
-        return res.status(409).json({
-          error: 'Conflict',
-          message: error.message
-        });
+        return res.status(409).json({ error: 'Conflict', message: error.message });
       }
-
       if (error.message.includes('Insufficient balance')) {
-        return res.status(402).json({
-          error: 'Payment Required',
-          message: error.message
-        });
+        return res.status(402).json({ error: 'Payment Required', message: error.message });
       }
-
       if (error.message.includes('no longer available')) {
-        return res.status(410).json({
-          error: 'Gone',
-          message: error.message
-        });
+        return res.status(410).json({ error: 'Gone', message: error.message });
       }
-
       if (error.message.includes('invalid')) {
-        return res.status(400).json({
-          error: 'Bad Request',
-          message: error.message
-        });
+        return res.status(400).json({ error: 'Bad Request', message: error.message });
       }
 
-      // Generic error handler
       res.status(500).json({
         error: 'Internal Server Error',
         message: error.message || 'Failed to purchase phone number'
