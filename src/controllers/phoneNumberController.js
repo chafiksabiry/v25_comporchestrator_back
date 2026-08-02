@@ -1,16 +1,23 @@
 import { phoneNumberService } from '../services/phoneNumberService.js';
+import { paypalService } from '../services/paypalService.js';
+import { stripeService } from '../services/stripeService.js';
 import { config } from '../config/env.js';
 import telnyx from 'telnyx';
+import mongoose from 'mongoose';
+import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
+import { PhoneNumber } from '../models/PhoneNumber.js';
+import { getPhoneLinePricing } from '../services/platformPricingService.js';
 
 class PhoneNumberController {
   async searchNumbers(req, res) {
     try {
-      const { countryCode, type, features } = req.query;
-      console.log(countryCode, type, features);
+      const { countryCode, type, features, limit } = req.query;
+      console.log(countryCode, type, features, limit);
       const numbers = await phoneNumberService.searchAvailableNumbers({
         countryCode,
         type,
-        features
+        features,
+        limit: parseInt(limit) || 10
       });
       res.json(numbers);
     } catch (error) {
@@ -22,9 +29,9 @@ class PhoneNumberController {
   async searchTwilioNumbers(req, res) {
     try {
       const { countryCode, areaCode, limit } = req.query;
-      console.log("countryCode",countryCode);
-      console.log("areaCode",areaCode);
-      console.log("limit",limit);
+      console.log("countryCode", countryCode);
+      console.log("areaCode", areaCode);
+      console.log("limit", limit);
       const numbers = await phoneNumberService.searchTwilioNumbers({
         countryCode: countryCode || 'US',
         areaCode,
@@ -32,21 +39,29 @@ class PhoneNumberController {
       });
       res.json(numbers);
     } catch (error) {
+      if (error.code === 'REGULATORY_BUNDLE_REQUIRED') {
+        return res.status(200).json({
+          numbers: [],
+          regulatoryBlocked: true,
+          message: error.message,
+          countryCode: error.countryCode
+        });
+      }
       console.error('Error searching Twilio phone numbers:', error);
-      res.status(500).json({ error: 'Failed to search Twilio phone numbers' });
+      res.status(error.status || 500).json({ error: error.message || 'Failed to search Twilio phone numbers' });
     }
   }
 
   async purchaseNumber(req, res) {
     try {
-      const { phoneNumber, provider, gigId, requirementGroupId, companyId } = req.body;
+      console.log("📥 Received purchaseNumber request (Telnyx)");
+      console.log("📦 req.body:", JSON.stringify(req.body, null, 2));
 
-      // Validation des champs obligatoires
+      const { phoneNumber, provider, gigId, requirementGroupId, companyId, bundleSid, addressSid, paymentId } = req.body;
+
       const missingFields = {
         phoneNumber: !phoneNumber ? 'Phone number is required' : null,
-        provider: !provider ? 'Provider is required' : null,
         gigId: !gigId ? 'Gig ID is required' : null,
-        requirementGroupId: !requirementGroupId ? 'Requirement group ID is required' : null,
         companyId: !companyId ? 'Company ID is required' : null
       };
 
@@ -61,21 +76,78 @@ class PhoneNumberController {
         });
       }
 
-      // Validate provider
-      if (!['telnyx', 'twilio'].includes(provider)) {
-        return res.status(400).json({
-          error: 'Invalid provider',
-          details: 'Provider must be either "telnyx" or "twilio"'
-        });
+      // Resolve provider
+      const resolvedProvider = provider || 'telnyx';
+
+      // ──────────────────────────────────────────────────────────────────
+      // Free trial gate
+      // ──────────────────────────────────────────────────────────────────
+      let isTrial = false;
+      let payment = null;
+
+      if (companyId && mongoose.Types.ObjectId.isValid(companyId)) {
+        const existingCount = await PhoneNumber.countDocuments({ companyId });
+        isTrial = existingCount === 0;
       }
+
+      const linePricing = await getPhoneLinePricing();
+
+      if (!isTrial) {
+        // Past the trial: enforce the standard Stripe / PayPal payment gate.
+        if (!paymentId || !mongoose.Types.ObjectId.isValid(paymentId)) {
+          return res.status(402).json({
+            error: 'Payment required',
+            message: 'A confirmed payment (Stripe or PayPal) is required to provision a phone line.'
+          });
+        }
+        payment = await PhoneNumberPayment.findById(paymentId);
+        if (!payment || payment.status !== 'succeeded') {
+          return res.status(402).json({
+            error: 'Payment not completed',
+            message: 'No succeeded payment matches this purchase request.'
+          });
+        }
+        if (payment.phoneNumber !== phoneNumber) {
+          return res.status(400).json({
+            error: 'Payment / number mismatch',
+            message: 'The payment was not authorized for this exact phone number.'
+          });
+        }
+      } else {
+        console.log(`🎁 First phone line for company ${companyId} — granting ${linePricing.trialDays}-day free trial.`);
+      }
+
+      const paidPrice = !isTrial && payment?.amount > 0 ? payment.amount / 100 : 0;
+      const trialExpiresAt = isTrial ? new Date(Date.now() + linePricing.trialDurationMs) : null;
 
       const newNumber = await phoneNumberService.purchaseNumber(
         phoneNumber,
-        provider,
+        resolvedProvider,
         gigId,
         requirementGroupId,
-        companyId
+        companyId,
+        { 
+          bundleSid, 
+          addressSid,
+          price: paidPrice,
+          currency: !isTrial && payment?.currency ? payment.currency : linePricing.currency,
+          paymentRef: !isTrial ? payment?._id : undefined,
+          isTrial,
+          trialExpiresAt,
+        }
       );
+
+      // Backlink the payment to the provisioned PhoneNumber doc for audit.
+      if (!isTrial && payment) {
+        try {
+          if (newNumber?._id) {
+            payment.phoneNumberRef = newNumber._id;
+            await payment.save();
+          }
+        } catch (linkErr) {
+          console.warn('Could not backlink payment -> phone number:', linkErr.message);
+        }
+      }
 
       res.json({
         success: true,
@@ -90,36 +162,19 @@ class PhoneNumberController {
     } catch (error) {
       console.error('Error purchasing phone number:', error);
 
-      // Handle specific error cases
       if (error.message.includes('already exists')) {
-        return res.status(409).json({
-          error: 'Conflict',
-          message: error.message
-        });
+        return res.status(409).json({ error: 'Conflict', message: error.message });
       }
-
       if (error.message.includes('Insufficient balance')) {
-        return res.status(402).json({
-          error: 'Payment Required',
-          message: error.message
-        });
+        return res.status(402).json({ error: 'Payment Required', message: error.message });
       }
-
       if (error.message.includes('no longer available')) {
-        return res.status(410).json({
-          error: 'Gone',
-          message: error.message
-        });
+        return res.status(410).json({ error: 'Gone', message: error.message });
       }
-
       if (error.message.includes('invalid')) {
-        return res.status(400).json({
-          error: 'Bad Request',
-          message: error.message
-        });
+        return res.status(400).json({ error: 'Bad Request', message: error.message });
       }
 
-      // Generic error handler
       res.status(500).json({
         error: 'Internal Server Error',
         message: error.message || 'Failed to purchase phone number'
@@ -127,29 +182,660 @@ class PhoneNumberController {
     }
   }
 
+  /**
+   * Returns whether the given company can still claim the free 15-day phone
+   * line trial. The trial is consumed by the very first PhoneNumber doc
+   * persisted for the company (whatever its provider).
+   */
+  async getTrialEligibility(req, res) {
+    try {
+      const { companyId } = req.params;
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) {
+        return res.status(400).json({ error: 'Invalid companyId' });
+      }
+
+      const existingCount = await PhoneNumber.countDocuments({ companyId });
+      const eligible = existingCount === 0;
+
+      let activeTrial = null;
+      if (!eligible) {
+        const trialDoc = await PhoneNumber.findOne({
+          companyId,
+          isTrial: true,
+          trialExpiresAt: { $gt: new Date() },
+        })
+          .select('phoneNumber trialExpiresAt')
+          .lean();
+        if (trialDoc) {
+          activeTrial = {
+            phoneNumber: trialDoc.phoneNumber,
+            expiresAt: trialDoc.trialExpiresAt,
+          };
+        }
+      }
+
+      const linePricing = await getPhoneLinePricing();
+
+      res.json({
+        eligible,
+        trialDurationDays: linePricing.trialDays,
+        existingNumbers: existingCount,
+        activeTrial,
+      });
+    } catch (error) {
+      console.error('Error checking trial eligibility:', error);
+      res.status(500).json({ error: 'Failed to check trial eligibility' });
+    }
+  }
+
   async purchaseTwilioNumber(req, res) {
     try {
-      const { phoneNumber, gigId } = req.body;
+      console.log("📥 Received purchaseTwilioNumber request");
+      console.log("📦 req.body:", JSON.stringify(req.body, null, 2));
+
+      const { phoneNumber, gigId, companyId, bundleSid, addressSid, paymentId } = req.body;
       console.log("phoneNumber", phoneNumber);
 
-      // Check if gig already has a phone number
-      const existingNumber = await phoneNumberService.getPhoneNumbersByGigId(gigId);
-      if (existingNumber && existingNumber.length > 0) {
-        return res.status(400).json({ 
-          error: 'This gig already has a phone number assigned'
-        });
+      // ──────────────────────────────────────────────────────────────────
+      // Free trial gate: the FIRST phone number per company is provisioned
+      // for free for 15 days (no Stripe/PayPal needed). Eligibility is based
+      // on the absence of any existing PhoneNumber document for this company.
+      // ──────────────────────────────────────────────────────────────────
+      let isTrial = false;
+      let payment = null;
+
+      if (companyId && mongoose.Types.ObjectId.isValid(companyId)) {
+        const existingCount = await PhoneNumber.countDocuments({ companyId });
+        isTrial = existingCount === 0;
       }
+
+      const linePricing = await getPhoneLinePricing();
+
+      if (!isTrial) {
+        // Past the trial: enforce the standard Stripe / PayPal payment gate.
+        if (!paymentId || !mongoose.Types.ObjectId.isValid(paymentId)) {
+          return res.status(402).json({
+            error: 'Payment required',
+            message: 'A confirmed payment (Stripe or PayPal) is required to provision a phone line.'
+          });
+        }
+        payment = await PhoneNumberPayment.findById(paymentId);
+        if (!payment || payment.status !== 'succeeded') {
+          return res.status(402).json({
+            error: 'Payment not completed',
+            message: 'No succeeded payment matches this purchase request.'
+          });
+        }
+        if (payment.phoneNumber !== phoneNumber) {
+          return res.status(400).json({
+            error: 'Payment / number mismatch',
+            message: 'The payment was not authorized for this exact phone number.'
+          });
+        }
+      } else {
+        console.log(`🎁 First phone line for company ${companyId} — granting ${linePricing.trialDays}-day free trial.`);
+      }
+
+      // Convert the Stripe / PayPal amount (stored in cents) to major units
+      // for persistence on the PhoneNumber document (e.g. 500 -> 5.00€).
+      const paidPrice = !isTrial && payment?.amount > 0 ? payment.amount / 100 : 0;
+      const trialExpiresAt = isTrial ? new Date(Date.now() + linePricing.trialDurationMs) : null;
 
       const newNumber = await phoneNumberService.purchaseTwilioNumber(
         phoneNumber,
         config.baseUrl,
-        gigId
+        gigId,
+        companyId,
+        {
+          bundleSid,
+          addressSid,
+          price: paidPrice,
+          currency: !isTrial && payment?.currency ? payment.currency : linePricing.currency,
+          paymentRef: !isTrial ? payment?._id : undefined,
+          isTrial,
+          trialExpiresAt,
+        }
       );
       console.log("newNumber", newNumber);
+
+      // Backlink the payment to the provisioned PhoneNumber doc for audit.
+      if (!isTrial && payment) {
+        try {
+          if (newNumber?._id) {
+            payment.phoneNumberRef = newNumber._id;
+            await payment.save();
+          }
+        } catch (linkErr) {
+          console.warn('Could not backlink payment -> phone number:', linkErr.message);
+        }
+      }
+
       res.json(newNumber);
     } catch (error) {
       console.error('Error purchasing Twilio phone number:', error);
-      res.status(500).json({ error: 'Failed to purchase Twilio phone number' });
+
+      if (error.code === 21404) {
+        return res.status(400).json({
+          error: 'Twilio Trial Limit Reached',
+          message: 'Trial accounts are allowed only one Twilio number. Please upgrade your Twilio account to purchase more numbers.'
+        });
+      }
+
+      if (error.code === 21649) {
+        // Twilio refused to provision the number because the prepared bundle
+        // does not cover this number's regulation type. The customer has
+        // already been charged via Stripe / PayPal at this point, so we
+        // issue a full refund here to keep the ledger consistent.
+        const refundInfo = await this.refundFailedLinePayment(
+          req.body?.paymentId,
+          'twilio_21649_bundle_regulation_mismatch'
+        );
+
+        return res.status(400).json({
+          error: 'Regulatory Bundle Required',
+          message: refundInfo.refunded
+            ? "Twilio could not provision this French number with the local Regulatory Bundle (it requires a different regulation type). Your payment was refunded automatically — please pick a geographic landline (starting with +33 1/2/3/4/5)."
+            : "Twilio could not provision this number with the current Regulatory Bundle. Please choose a different number or contact support to refund this payment.",
+          refunded: refundInfo.refunded,
+          refundProvider: refundInfo.provider,
+          moreInfo: error.moreInfo
+        });
+      }
+
+      res.status(500).json({
+        error: 'Failed to purchase Twilio phone number',
+        message: error.message
+      });
+    }
+  }
+
+  /**
+   * Attempt to refund the Stripe / PayPal charge linked to `paymentId` and
+   * flip the PhoneNumberPayment row to `refunded`. Safe to call when no
+   * payment exists (free trial path) — returns `{ refunded: false }` and
+   * logs a warning instead of throwing.
+   */
+  async refundFailedLinePayment(paymentId, reason) {
+    if (!paymentId || !mongoose.Types.ObjectId.isValid(paymentId)) {
+      return { refunded: false, provider: null };
+    }
+    try {
+      const payment = await PhoneNumberPayment.findById(paymentId);
+      if (!payment || payment.status !== 'succeeded' || !payment.providerRef) {
+        return { refunded: false, provider: payment?.provider || null };
+      }
+
+      if (payment.provider === 'stripe') {
+        await stripeService.refundCheckoutSession(payment.providerRef, { reason });
+      } else if (payment.provider === 'paypal') {
+        await paypalService.refundOrder(payment.providerRef, { reason });
+      } else {
+        return { refunded: false, provider: payment.provider };
+      }
+
+      payment.status = 'refunded';
+      payment.failureReason = reason;
+      await payment.save();
+
+      console.log(`💸 Auto-refunded ${payment.provider} payment ${payment._id} (reason=${reason})`);
+      return { refunded: true, provider: payment.provider };
+    } catch (refundErr) {
+      console.error('❌ Auto-refund failed:', refundErr.message);
+      return { refunded: false, provider: null, error: refundErr.message };
+    }
+  }
+
+  /**
+   * Create a pending payment for a phone line.
+   * Returns { paymentId, amount, currency, checkoutUrl? } so the client
+   * can either redirect to a Stripe Checkout Session / PayPal order, or
+   * — when no provider SDK is configured server-side — fall back to a
+   * client-side simulated confirmation.
+   *
+   * No wallet (`WalletCompany`) interaction here; this is fully separate.
+   */
+  async initLineCheckout(req, res) {
+    try {
+      const { phoneNumber, gigId, companyId, provider, returnUrl, apiBaseUrl } = req.body;
+      if (!phoneNumber || !companyId || !provider) {
+        return res.status(400).json({ error: 'phoneNumber, companyId and provider are required' });
+      }
+      if (!['stripe', 'paypal'].includes(provider)) {
+        return res.status(400).json({ error: "provider must be either 'stripe' or 'paypal'" });
+      }
+      if (!mongoose.Types.ObjectId.isValid(companyId)) {
+        return res.status(400).json({ error: 'Invalid companyId' });
+      }
+
+      // Pre-payment regulatory gate: refuse to charge the customer for a
+      // number that Twilio will reject at provisioning time (error 21649).
+      // We map the E.164 prefix → ISO country, then ask the service whether
+      // a Regulatory Bundle is required for that country and, if so, whether
+      // we have an approved one. This MUST run BEFORE we create the
+      // PhoneNumberPayment / Stripe session — otherwise the user pays for a
+      // number that can never be activated.
+      const isoCountry = phoneNumberService.guessCountryFromE164(phoneNumber);
+      if (isoCountry) {
+        const bundleRequired = await phoneNumberService.isRegulatoryBundleRequired(
+          isoCountry,
+          'local'
+        );
+        if (bundleRequired) {
+          const bundleSid = phoneNumberService.getBundleSidForCountry(isoCountry);
+          const approved = await phoneNumberService.isBundleApproved(bundleSid);
+          if (!approved) {
+            return res.status(409).json({
+              error: 'Regulatory Bundle Required',
+              code: 'REGULATORY_BUNDLE_REQUIRED',
+              countryCode: isoCountry,
+              message: `Les numéros ${isoCountry} nécessitent un Regulatory Bundle Twilio approuvé. Soumettez vos documents dans la console Twilio ou choisissez un pays sans régulation.`
+            });
+          }
+        }
+      }
+
+      const linePricing = await getPhoneLinePricing();
+
+      const payment = await PhoneNumberPayment.create({
+        companyId: new mongoose.Types.ObjectId(companyId),
+        gigId: gigId && mongoose.Types.ObjectId.isValid(gigId) ? new mongoose.Types.ObjectId(gigId) : undefined,
+        phoneNumber,
+        provider,
+        amount: linePricing.setupFeeCents,
+        currency: linePricing.currency,
+        status: 'pending'
+      });
+
+      let checkoutUrl;
+      let paypalOrderId;
+      let paypalApproveUrl;
+
+      if (provider === 'paypal') {
+        if (!paypalService.isConfigured()) {
+          await PhoneNumberPayment.findByIdAndDelete(payment._id);
+          return res.status(503).json({
+            error: 'PayPal not configured',
+            message: 'Définissez PAYPAL_CLIENT_ID et PAYPAL_CLIENT_SECRET sur le serveur.'
+          });
+        }
+
+        // Return pages must be real static HTML (orchestrator MF). FRONTEND_BASE_URL is the qiankun shell and has no /paypal-return.html.
+        const returnBase = (
+          process.env.PAYPAL_RETURN_BASE_URL
+          || 'https://harxv25comporchestratorfront.netlify.app'
+        ).replace(/\/$/, '');
+        const returnUrl = `${returnBase}/paypal-return.html?paymentId=${payment._id}`;
+        const cancelUrl = `${returnBase}/paypal-cancel.html?paymentId=${payment._id}`;
+
+        const paypalOrder = await paypalService.createOrder({
+          amountCents: payment.amount,
+          currency: payment.currency,
+          description: `HARX — Ligne ${phoneNumber}`,
+          customId: payment._id,
+          returnUrl,
+          cancelUrl
+        });
+
+        paypalOrderId = paypalOrder.id;
+        paypalApproveUrl = paypalOrder.approveUrl;
+        if (!paypalApproveUrl) {
+          await PhoneNumberPayment.findByIdAndDelete(payment._id);
+          return res.status(502).json({
+            error: 'PayPal order missing approval URL',
+            message: 'La commande PayPal a été créée sans URL d\'approbation.'
+          });
+        }
+
+        payment.providerRef = paypalOrderId;
+        payment.checkoutUrl = paypalApproveUrl;
+        await payment.save();
+      } else if (provider === 'stripe') {
+        if (!stripeService.isConfigured()) {
+          await PhoneNumberPayment.findByIdAndDelete(payment._id);
+          return res.status(503).json({
+            error: 'Stripe not configured',
+            message: 'Définissez STRIPE_SECRET_KEY sur le serveur.'
+          });
+        }
+
+        const returnBase = config.stripeReturnBaseUrl;
+        const apiBase = ((apiBaseUrl && String(apiBaseUrl)) || config.publicApiBaseUrl).replace(/\/$/, '');
+        const returnTo = (returnUrl && typeof returnUrl === 'string') ? returnUrl : `${returnBase}/`;
+        const successQuery = new URLSearchParams({
+          paymentId: String(payment._id),
+          flow: 'payment',
+          confirmPath: '/phone-numbers/checkout/confirm',
+          returnTo,
+          apiBase
+        });
+        const successUrl = `${returnBase}/stripe-return.html?${successQuery.toString()}&session_id={CHECKOUT_SESSION_ID}`;
+        const cancelUrl = `${returnBase}/stripe-cancel.html?paymentId=${payment._id}&returnTo=${encodeURIComponent(returnTo)}`;
+
+        try {
+          const session = await stripeService.createOneShotCheckoutSession({
+            amountCents: payment.amount,
+            currency: payment.currency,
+            productName: `HARX — Ligne ${phoneNumber}`,
+            successUrl,
+            cancelUrl,
+            clientReferenceId: payment._id,
+            metadata: { purpose: 'phone_line', companyId: String(companyId), paymentId: String(payment._id) }
+          });
+
+          checkoutUrl = session.url;
+          payment.providerRef = session.id;
+          payment.checkoutUrl = checkoutUrl;
+          await payment.save();
+        } catch (stripeErr) {
+          await PhoneNumberPayment.findByIdAndDelete(payment._id);
+          console.error('[checkout/init] Stripe error:', stripeErr.message);
+          return res.status(502).json({
+            error: 'Stripe checkout creation failed',
+            message: stripeErr.message
+          });
+        }
+      }
+
+      res.status(201).json({
+        success: true,
+        paymentId: payment._id,
+        amount: payment.amount,
+        currency: payment.currency,
+        provider: payment.provider,
+        checkoutUrl,
+        paypalOrderId,
+        paypalApproveUrl,
+        paypalMode: provider === 'paypal' ? paypalService.getMode() : undefined
+      });
+    } catch (error) {
+      if (payment?._id) {
+        try {
+          await PhoneNumberPayment.findByIdAndDelete(payment._id);
+        } catch (_) {
+          /* ignore cleanup errors */
+        }
+      }
+
+      const code = error?.code;
+      const message = error?.message || 'Failed to initialize checkout';
+
+      if (code === 'PAYPAL_NOT_CONFIGURED' || code === 'PAYPAL_INVALID_CREDENTIALS' || code === 'PAYPAL_AUTH_FAILED') {
+        console.error('[checkout/init] PayPal credentials:', message);
+        return res.status(503).json({
+          error: 'PayPal authentication failed',
+          message
+        });
+      }
+
+      console.error('Error initializing line checkout:', message);
+      res.status(500).json({ error: 'Failed to initialize checkout', message });
+    }
+  }
+
+  /**
+   * Confirm a phone line payment (called from the frontend after the
+   * Stripe / PayPal popup resolves, or by a provider webhook). Marks
+   * the payment as `succeeded`. The actual line provisioning is still
+   * done by `purchaseTwilioNumber`, which now requires this payment.
+   */
+  async confirmLineCheckout(req, res) {
+    try {
+      const { paymentId, providerRef } = req.body;
+      if (!paymentId || !mongoose.Types.ObjectId.isValid(paymentId)) {
+        return res.status(400).json({ error: 'Valid paymentId is required' });
+      }
+      const payment = await PhoneNumberPayment.findById(paymentId);
+      if (!payment) {
+        return res.status(404).json({ error: 'Payment not found' });
+      }
+      if (payment.status === 'succeeded') {
+        return res.status(200).json({ success: true, payment });
+      }
+      if (payment.status === 'failed' || payment.status === 'refunded') {
+        return res.status(409).json({ error: `Payment is already ${payment.status}` });
+      }
+
+      if (payment.provider === 'paypal') {
+        const orderId = providerRef || payment.providerRef;
+        if (!orderId) {
+          return res.status(400).json({ error: 'PayPal order ID (providerRef) is required' });
+        }
+
+        let capture;
+        try {
+          capture = await paypalService.captureOrder(orderId);
+        } catch (paypalErr) {
+          const detail = paypalErr?.message
+            || paypalErr?.response?.data?.details?.[0]?.description
+            || paypalErr?.response?.data?.message
+            || 'PayPal capture failed';
+          console.error('PayPal capture failed:', paypalErr?.response?.data || paypalErr.message);
+          if (paypalErr?.code !== 'PAYPAL_NOT_APPROVED') {
+            payment.status = 'failed';
+            payment.failureReason = detail;
+            await payment.save();
+          }
+          return res.status(402).json({
+            error: paypalErr?.code === 'PAYPAL_NOT_APPROVED' ? 'PayPal not approved' : 'PayPal capture failed',
+            message: detail
+          });
+        }
+
+        if (capture.status !== 'COMPLETED') {
+          return res.status(402).json({
+            error: 'PayPal payment not completed',
+            message: `Order status: ${capture.status}`
+          });
+        }
+
+        payment.status = 'succeeded';
+        payment.providerRef = orderId;
+        await payment.save();
+      } else if (payment.provider === 'stripe') {
+        const sessionId = providerRef || payment.providerRef;
+        if (!sessionId) {
+          return res.status(400).json({ error: 'Stripe session ID (providerRef) is required' });
+        }
+        let session;
+        try {
+          session = await stripeService.retrieveSession(sessionId);
+        } catch (stripeErr) {
+          payment.status = 'failed';
+          payment.failureReason = stripeErr.message;
+          await payment.save();
+          return res.status(502).json({
+            error: 'Stripe session retrieval failed',
+            message: stripeErr.message
+          });
+        }
+        if (session.payment_status !== 'paid' && session.status !== 'complete') {
+          return res.status(402).json({
+            error: 'Stripe payment not completed',
+            message: `Session status: ${session.payment_status || session.status}`
+          });
+        }
+        payment.status = 'succeeded';
+        payment.providerRef = session.id;
+        await payment.save();
+      } else {
+        payment.status = 'succeeded';
+        if (providerRef) payment.providerRef = providerRef;
+        await payment.save();
+      }
+
+      res.json({ success: true, payment });
+    } catch (error) {
+      console.error('Error confirming line checkout:', error);
+      res.status(500).json({ error: 'Failed to confirm checkout', message: error.message });
+    }
+  }
+
+  /** Public checkout config for the telephony payment modal. */
+  async getCheckoutConfig(req, res) {
+    try {
+      const linePricing = await getPhoneLinePricing();
+      res.json({
+        success: true,
+        paypal: {
+          enabled: paypalService.isConfigured(),
+          clientId: paypalService.getClientId(),
+          mode: paypalService.getMode()
+        },
+        stripe: {
+          enabled: stripeService.isConfigured()
+        },
+        pricing: {
+          amountCents: linePricing.setupFeeCents,
+          currency: linePricing.currency,
+          trialDays: linePricing.trialDays,
+        }
+      });
+    } catch (error) {
+      console.error('[phone-numbers/checkout/config]', error.message);
+      res.status(500).json({ error: 'Failed to load checkout config' });
+    }
+  }
+
+  /**
+   * List "orphan" PhoneNumberPayment records for a company: payments that
+   * are marked `succeeded` but for which the Twilio purchase never ran (no
+   * `phoneNumberRef` set yet). The frontend uses this to detect interrupted
+   * checkouts (e.g. popup-mode flow where the parent dashboard navigated
+   * away before `purchase/twilio` could fire) and offer a one-click retry.
+   */
+  async listOrphanLinePayments(req, res) {
+    try {
+      const { companyId } = req.params;
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) {
+        return res.status(400).json({ error: 'Invalid companyId' });
+      }
+
+      const orphans = await PhoneNumberPayment.find({
+        companyId: new mongoose.Types.ObjectId(companyId),
+        status: 'succeeded',
+        $or: [
+          { phoneNumberRef: { $exists: false } },
+          { phoneNumberRef: null }
+        ]
+      })
+        .sort({ createdAt: -1 })
+        .lean();
+
+      res.json({
+        success: true,
+        count: orphans.length,
+        orphans: orphans.map((p) => ({
+          paymentId: String(p._id),
+          phoneNumber: p.phoneNumber,
+          gigId: p.gigId ? String(p.gigId) : null,
+          provider: p.provider,
+          amount: p.amount,
+          currency: p.currency,
+          createdAt: p.createdAt,
+          providerRef: p.providerRef
+        }))
+      });
+    } catch (error) {
+      console.error('Error listing orphan line payments:', error);
+      res.status(500).json({ error: 'Failed to list orphan payments', message: error.message });
+    }
+  }
+
+  /**
+   * Recover an orphan succeeded PhoneNumberPayment by running the Twilio
+   * provisioning step. Idempotent: if the payment is already linked to a
+   * provisioned PhoneNumber, we return it as-is. The Twilio service itself
+   * also rejects duplicate purchases of the same number for the same gig.
+   *
+   * Body: { paymentId, bundleSid?, addressSid? }
+   */
+  async recoverLinePayment(req, res) {
+    try {
+      const { paymentId, bundleSid, addressSid } = req.body || {};
+      if (!paymentId || !mongoose.Types.ObjectId.isValid(paymentId)) {
+        return res.status(400).json({ error: 'paymentId is required' });
+      }
+
+      const payment = await PhoneNumberPayment.findById(paymentId);
+      if (!payment) {
+        return res.status(404).json({ error: 'Payment not found' });
+      }
+      if (payment.status !== 'succeeded') {
+        return res.status(400).json({
+          error: 'Payment not succeeded',
+          message: `Payment status is '${payment.status}', cannot recover.`
+        });
+      }
+      if (payment.phoneNumberRef) {
+        return res.json({
+          success: true,
+          alreadyProvisioned: true,
+          phoneNumberRef: String(payment.phoneNumberRef),
+          paymentId: String(payment._id)
+        });
+      }
+      if (!payment.phoneNumber || !payment.companyId) {
+        return res.status(400).json({
+          error: 'Payment missing phoneNumber or companyId',
+          message: 'Cannot recover this payment record — it is missing required fields.'
+        });
+      }
+
+      const paidPrice = payment.amount > 0 ? payment.amount / 100 : 0;
+      const newNumber = await phoneNumberService.purchaseTwilioNumber(
+        payment.phoneNumber,
+        config.baseUrl,
+        payment.gigId ? String(payment.gigId) : undefined,
+        String(payment.companyId),
+        {
+          bundleSid,
+          addressSid,
+          price: paidPrice,
+          currency: payment.currency,
+          paymentRef: payment._id
+        }
+      );
+
+      try {
+        if (newNumber?._id) {
+          payment.phoneNumberRef = newNumber._id;
+          await payment.save();
+        }
+      } catch (linkErr) {
+        console.warn('Could not backlink recovered payment -> phone number:', linkErr.message);
+      }
+
+      console.log(
+        `♻️ Recovered orphan line payment: payment=${payment._id} phone=${payment.phoneNumber}`
+      );
+      res.json({ success: true, recovered: true, paymentId: String(payment._id), data: newNumber });
+    } catch (error) {
+      console.error('Error recovering orphan line payment:', error);
+      if (error.message && error.message.includes('already exists')) {
+        return res.status(409).json({ error: 'Conflict', message: error.message });
+      }
+      if (error.code === 21404) {
+        return res.status(400).json({
+          error: 'Twilio Trial Limit Reached',
+          message: 'Trial accounts are allowed only one Twilio number.'
+        });
+      }
+      if (error.code === 21649) {
+        const refundInfo = await this.refundFailedLinePayment(
+          req.body?.paymentId,
+          'twilio_21649_bundle_regulation_mismatch_on_recovery'
+        );
+        return res.status(400).json({
+          error: 'Regulatory Bundle Required',
+          message: refundInfo.refunded
+            ? "Twilio could not provision this number — your payment was refunded automatically."
+            : "Twilio could not provision this number with the current Regulatory Bundle.",
+          refunded: refundInfo.refunded,
+          refundProvider: refundInfo.provider,
+          moreInfo: error.moreInfo
+        });
+      }
+      res.status(500).json({ error: 'Failed to recover orphan payment', message: error.message });
     }
   }
 
@@ -166,7 +852,7 @@ class PhoneNumberController {
   async checkGigNumber(req, res) {
     try {
       const { gigId } = req.params;
-      
+
       if (!gigId) {
         return res.status(400).json({
           error: 'Bad Request',
@@ -183,6 +869,95 @@ class PhoneNumberController {
         error: 'Internal Server Error',
         message: 'Failed to check gig number'
       });
+    }
+  }
+
+  async testCall(req, res) {
+    try {
+      const { fromNumber, toNumber } = req.body;
+      if (!fromNumber || !toNumber) {
+        return res.status(400).json({ error: 'fromNumber and toNumber are required' });
+      }
+      if (!config.telnyxApiKey || !config.telnyxConnectionId) {
+        return res.status(500).json({ error: 'Configuration Telnyx manquante sur le serveur (TELNYX_API_KEY ou TELNYX_CONNECTION_ID)' });
+      }
+
+      console.log(`📞 Testing call from ${fromNumber} to ${toNumber}`);
+      const dynamicWebhookUrl = `https://${req.get('host')}/api/phone-numbers/webhooks/telnyx/call-control`;
+      console.log(`🔗 Using webhook URL: ${dynamicWebhookUrl}`);
+      
+      const response = await fetch('https://api.telnyx.com/v2/calls', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${config.telnyxApiKey}`
+        },
+        body: JSON.stringify({
+          connection_id: config.telnyxConnectionId,
+          to: toNumber,
+          from: fromNumber,
+          webhook_url: dynamicWebhookUrl,
+          webhook_url_method: 'POST'
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        const errorDetail = data.errors?.[0]?.detail || 'Failed to initiate Telnyx call';
+        if (errorDetail.includes('Origination number is not ready') || errorDetail.includes('requirement-info')) {
+          throw new Error('Ce numéro est en attente de validation réglementaire (Identity Verification). Vous ne pouvez pas encore l\'utiliser pour des appels sortants.');
+        }
+        throw new Error(errorDetail);
+      }
+
+      res.json({ success: true, data });
+    } catch (error) {
+      console.error('Error in testCall:', error.message);
+      const isFriendlyError = error.message.includes('validation réglementaire');
+      res.status(isFriendlyError ? 403 : 500).json({ error: 'Failed to test call', message: error.message });
+    }
+  }
+
+  async handleCallControlWebhook(req, res) {
+    try {
+      const event = req.body?.data;
+      if (!event) {
+        return res.status(400).send('No data in webhook');
+      }
+
+      console.log(`🔔 Telnyx Call Control Webhook received: ${event.event_type} for call ${event.payload?.call_control_id}`);
+
+      // When the call is answered, speak a test message with a slight delay so the user has time to put the phone to their ear
+      if (event.event_type === 'call.answered') {
+        const callControlId = event.payload.call_control_id;
+        
+        setTimeout(async () => {
+          try {
+            await fetch(`https://api.telnyx.com/v2/calls/${callControlId}/actions/speak`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'Authorization': `Bearer ${config.telnyxApiKey}`
+              },
+              body: JSON.stringify({
+                payload: 'Bonjour. Ceci est un appel de test depuis la plateforme Harx. Votre ligne Telnyx est parfaitement configurée. Au revoir !',
+                voice: 'female',
+                language: 'fr-FR'
+              })
+            });
+            console.log(`🗣️ Sent speak command to call ${callControlId}`);
+          } catch (err) {
+            console.error('Error sending speak command:', err);
+          }
+        }, 3000); // 3 seconds delay to ensure audio path is fully open
+      }
+
+      res.status(200).send('OK');
+    } catch (error) {
+      console.error('Error handling Telnyx Call Control Webhook:', error);
+      res.status(500).send('Internal Server Error');
     }
   }
 
@@ -290,8 +1065,15 @@ class PhoneNumberController {
         userAgent: req.headers['user-agent']
       });
 
+      console.log('📝 Headers received:', {
+        timestamp: req.headers['telnyx-timestamp'],
+        signature: req.headers['telnyx-signature-ed25519'] ? req.headers['telnyx-signature-ed25519'] : undefined,
+        contentType: req.headers['content-type'],
+        userAgent: req.headers['user-agent']
+      });
+
       if (!timestamp || !signature) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: 'Missing required headers',
           details: 'Telnyx-Timestamp and Telnyx-Signature-Ed25519 are required'
         });
@@ -306,7 +1088,7 @@ class PhoneNumberController {
       console.log('📝 Debug webhook verification:');
       console.log('- Body type:', typeof req.body);
       console.log('- Is Buffer?', Buffer.isBuffer(req.body));
-      
+
       const event = telnyx.webhooks.constructEvent(
         req.body,  // Passer le body tel quel, Telnyx s'occupe de la conversion
         signature,
@@ -323,7 +1105,7 @@ class PhoneNumberController {
       // 3. Vérifier que c'est un événement number_order.complete
       if (event.data.event_type !== 'number_order.complete') {
         console.log(`⚠️ Ignoring event type: ${event.data.event_type}`);
-        return res.status(200).json({ 
+        return res.status(200).json({
           message: 'Event type not handled',
           eventType: event.data.event_type
         });
@@ -358,7 +1140,7 @@ class PhoneNumberController {
       });
 
       // Répondre avec succès après la vérification et le traitement
-      res.status(200).json({ 
+      res.status(200).json({
         success: true,
         orderId,
         status: orderStatus,
@@ -377,6 +1159,98 @@ class PhoneNumberController {
       res.status(500).json({ error: 'Failed to process webhook' });
     }
   }
+  async getTwilioRequirements(req, res) {
+    try {
+      const { countryCode, type } = req.query;
+      const requirements = await phoneNumberService.getTwilioRequirements(countryCode, type);
+      res.json(requirements);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to fetch Twilio requirements', details: error.message });
+    }
+  }
+
+  async createTwilioEndUser(req, res) {
+    try {
+      const { friendlyName, type, attributes } = req.body;
+      const endUser = await phoneNumberService.createTwilioEndUser(friendlyName, type, attributes);
+      res.json(endUser);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to create End User', details: error.message });
+    }
+  }
+
+  async createTwilioDocument(req, res) {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'File is required' });
+      }
+
+      const { friendlyName, type, attributes } = req.body;
+      const parsedAttributes = typeof attributes === 'string' ? JSON.parse(attributes) : attributes;
+
+      const document = await phoneNumberService.createTwilioDocument(
+        req.file.buffer,
+        req.file.mimetype,
+        friendlyName || req.file.originalname,
+        type,
+        parsedAttributes
+      );
+      res.json(document);
+    } catch (error) {
+      console.error('Error in createTwilioDocument:', error);
+      res.status(500).json({ error: 'Failed to upload document', details: error.message });
+    }
+  }
+
+  async createTwilioBundle(req, res) {
+    try {
+      // Expects friendlyName, email, regulationSid, isoCountry
+      const { friendlyName, email, regulationSid, isoCountry } = req.body;
+      const bundle = await phoneNumberService.createTwilioBundle(friendlyName, email, undefined, regulationSid, isoCountry);
+      res.json(bundle);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to create Bundle', details: error.message });
+    }
+  }
+
+  async assignItemToBundle(req, res) {
+    try {
+      const { sid } = req.params;
+      const { objectSid } = req.body;
+      const item = await phoneNumberService.assignItemToBundle(sid, objectSid);
+      res.json(item);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to assign item', details: error.message });
+    }
+  }
+
+  async submitTwilioBundle(req, res) {
+    try {
+      const { sid } = req.params;
+      const bundle = await phoneNumberService.submitTwilioBundle(sid);
+      res.json(bundle);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to submit Bundle', details: error.message });
+    }
+  }
+
+  async createTwilioAddress(req, res) {
+    try {
+      const { customerName, street, city, region, postalCode, isoCountry } = req.body;
+      const address = await phoneNumberService.createTwilioAddress(
+        customerName,
+        street,
+        city,
+        region,
+        postalCode,
+        isoCountry
+      );
+      res.json(address);
+    } catch (error) {
+      console.error('Error in createTwilioAddress:', error);
+      res.status(500).json({ error: 'Failed to create Address', details: error.message });
+    }
+  }
 }
 
-export const phoneNumberController = new PhoneNumberController(); 
+export const phoneNumberController = new PhoneNumberController();

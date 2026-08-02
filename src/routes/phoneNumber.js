@@ -12,8 +12,40 @@ router.get('/search/twilio', phoneNumberController.searchTwilioNumbers.bind(phon
 // Purchase a phone number (Telnyx)
 router.post('/purchase', phoneNumberController.purchaseNumber.bind(phoneNumberController));
 
-// Purchase a phone number (Twilio)
+// Purchase a phone number (Twilio) — requires a succeeded payment (`paymentId`)
+// unless the company is eligible for the free 15-day trial (first number ever).
 router.post('/purchase/twilio', phoneNumberController.purchaseTwilioNumber.bind(phoneNumberController));
+
+// Check whether a company is still eligible for the free 15-day trial line.
+router.get('/trial/eligibility/:companyId', phoneNumberController.getTrialEligibility.bind(phoneNumberController));
+
+// Stripe / PayPal checkout for a phone line (NOT linked to WalletCompany)
+router.get('/checkout/config', phoneNumberController.getCheckoutConfig.bind(phoneNumberController));
+router.post('/checkout/init', phoneNumberController.initLineCheckout.bind(phoneNumberController));
+router.post('/checkout/confirm', phoneNumberController.confirmLineCheckout.bind(phoneNumberController));
+
+// Recovery: list & re-provision PhoneNumberPayments that were paid but never
+// reached `purchase/twilio` (e.g. popup-mode flow interrupted by a redirect).
+router.get(
+  '/checkout/orphans/:companyId',
+  phoneNumberController.listOrphanLinePayments.bind(phoneNumberController)
+);
+router.post(
+  '/checkout/recover',
+  phoneNumberController.recoverLinePayment.bind(phoneNumberController)
+);
+
+// Twilio Regulatory Compliance Routes
+import multer from 'multer';
+const upload = multer({ storage: multer.memoryStorage() });
+
+router.get('/twilio/requirements', phoneNumberController.getTwilioRequirements.bind(phoneNumberController));
+router.post('/twilio/end-users', phoneNumberController.createTwilioEndUser.bind(phoneNumberController));
+router.post('/twilio/documents', upload.single('file'), phoneNumberController.createTwilioDocument.bind(phoneNumberController));
+router.post('/twilio/bundles', phoneNumberController.createTwilioBundle.bind(phoneNumberController));
+router.post('/twilio/bundles/:sid/items', phoneNumberController.assignItemToBundle.bind(phoneNumberController));
+router.post('/twilio/bundles/:sid/submit', phoneNumberController.submitTwilioBundle.bind(phoneNumberController));
+router.post('/twilio/addresses', phoneNumberController.createTwilioAddress.bind(phoneNumberController));
 
 // Get all phone numbers
 router.get('/', phoneNumberController.getAllNumbers.bind(phoneNumberController));
@@ -26,6 +58,9 @@ router.get('/gig/:gigId/check', phoneNumberController.checkGigNumber.bind(phoneN
 
 // Configure voice feature for a phone number
 router.post('/:phoneNumber/configure-voice', phoneNumberController.configureVoiceFeature.bind(phoneNumberController));
+
+// Test an outbound call
+router.post('/test-call', phoneNumberController.testCall.bind(phoneNumberController));
 
 // Webhook for Telnyx number order status updates
 // Middleware de logging pour le webhook
@@ -43,7 +78,7 @@ const logWebhook = (req, res, next) => {
   // Convertir le body brut en string pour le logging
   const rawBody = req.body.toString('utf8');
   console.log('📦 Raw Body:', rawBody);
-  
+
   try {
     // Tenter de parser le JSON pour un logging plus lisible
     const parsedBody = JSON.parse(rawBody);
@@ -54,23 +89,29 @@ const logWebhook = (req, res, next) => {
 
   // Intercepter la réponse pour logger
   const originalSend = res.send;
-  res.send = function(body) {
+  res.send = function (body) {
     const responseTime = new Date().toISOString();
     console.log(`\n✉️ [${requestId}] Response sent at ${responseTime}`);
     console.log('📤 Status:', res.statusCode);
     console.log('📤 Body:', body);
     console.log(`\n${'='.repeat(80)}\n`);
-    
+
     return originalSend.call(this, body);
   };
 
   next();
 };
 
-router.post('/webhooks/telnyx/number-order', 
+router.post('/webhooks/telnyx/number-order',
   express.raw({ type: 'application/json' }), // Important pour la vérification de signature
   logWebhook, // Middleware de logging
   phoneNumberController.handleTelnyxNumberOrderWebhook.bind(phoneNumberController)
+);
+
+router.post('/webhooks/telnyx/call-control',
+  express.json(),
+  logWebhook,
+  phoneNumberController.handleCallControlWebhook.bind(phoneNumberController)
 );
 
 export const phoneNumberRoutes = router;

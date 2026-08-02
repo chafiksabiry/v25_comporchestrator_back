@@ -13,10 +13,10 @@ const TEST_KEY_PAIR = crypto.generateKeyPairSync('ed25519');
 function generateTelnyxSignature(payload, timestamp) {
     // 1. Créer le message à signer (même format que Telnyx)
     const toSign = `${timestamp}|${JSON.stringify(payload)}`;
-    
+
     // 2. Signer avec notre clé privée de test
     const signature = crypto.sign(null, Buffer.from(toSign), TEST_KEY_PAIR.privateKey);
-    
+
     // 3. Pour le debug, vérifier que la signature est valide avec notre clé publique
     const isValid = crypto.verify(
         null,
@@ -24,10 +24,10 @@ function generateTelnyxSignature(payload, timestamp) {
         TEST_KEY_PAIR.publicKey,
         signature
     );
-    
+
     console.log('🔑 Test signature verification:', isValid ? 'Valid' : 'Invalid');
     console.log('📝 Public key (base64):', TEST_KEY_PAIR.publicKey.toString('base64'));
-    
+
     return signature.toString('base64');
 }
 
@@ -55,7 +55,7 @@ const webhookPayload = {
                     regulatory_requirements: [
                         {
                             field_type: "textual",
-                            field_value: "Chafik SABIRY, DIGITAL ASSURANCE, +33623984708",
+                            field_value: "Chafik SABIRY, DIGITAL ASSURANCE, +212637446431",
                             requirement_id: "2708e569-696a-4fc7-9305-5fdb3eb9c7dd",
                             status: "approved"
                         },
@@ -99,8 +99,8 @@ const webhookPayload = {
 testServer.post('/test-webhook', async (req, res) => {
     try {
         // Timestamp d'il y a 6 minutes (devrait échouer car > 5 minutes)
-/*         const timestamp = (Math.floor(Date.now() / 1000) - 360).toString();
-        const signature = generateTelnyxSignature(webhookPayload, timestamp, config.webhookSecret); */
+        /*         const timestamp = (Math.floor(Date.now() / 1000) - 360).toString();
+                const signature = generateTelnyxSignature(webhookPayload, timestamp, config.webhookSecret); */
 
         console.log('🔐 use old signature:', "p19Tr0zTWfDVCRBHjxJR+HTYuUe8rWGKv/1G3sN6ezBx+n/qffmlv00gNdSuvi1U3Ce46r7R3IJNbOM55MjbAA==");
         console.log('⏰ use ole Timestamp:', "1759163628");

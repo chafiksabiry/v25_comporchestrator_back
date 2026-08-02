@@ -10,10 +10,14 @@ const phoneNumberSchema = new mongoose.Schema({
     type: String,
     sparse: true
   },
+  twilioId: {
+    type: String,
+    sparse: true
+  },
   provider: {
     type: String,
     required: true,
-    enum: ['telnyx']
+    enum: ['telnyx', 'twilio']
   },
   orderId: {
     type: String,
@@ -71,6 +75,35 @@ const phoneNumberSchema = new mongoose.Schema({
     message: String,
     timestamp: Date
   },
+  // Price actually paid by the company to acquire this line (Stripe / PayPal).
+  // Stored in major units (e.g. 5.00 for 5.00€). Independent from the wallet.
+  price: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  currency: {
+    type: String,
+    default: 'EUR',
+    uppercase: true
+  },
+  paymentRef: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PhoneNumberPayment',
+    sparse: true
+  },
+  // Each company is entitled to ONE free phone line as a 15-day trial.
+  // No Stripe/PayPal is required for that very first provisioning.
+  // After the trial expires (or starting from the 2nd number), the regular
+  // payment-gated flow applies.
+  isTrial: {
+    type: Boolean,
+    default: false
+  },
+  trialExpiresAt: {
+    type: Date,
+    default: null
+  },
   createdAt: {
     type: Date,
     default: Date.now
@@ -82,7 +115,7 @@ const phoneNumberSchema = new mongoose.Schema({
 });
 
 // Middleware pour mettre à jour updatedAt
-phoneNumberSchema.pre('save', function(next) {
+phoneNumberSchema.pre('save', function (next) {
   this.updatedAt = new Date();
   next();
 });

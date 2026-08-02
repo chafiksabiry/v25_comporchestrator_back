@@ -1,16 +1,20 @@
-// Load environment variables first
-import dotenv from 'dotenv';
-dotenv.config({ silent: true });
-
+import 'dotenv/config';
 import { config } from './src/config/env.js';
 import express from 'express';
-import cors from 'cors';
+import http from 'http';
+import { setupEscrowWebSocket } from './src/websocket/escrowUpdates.js';
 import mongoose from 'mongoose';
 import { requirementRoutes } from './src/routes/requirement.js';
 import { addressRoutes } from './src/routes/address.js';
 import { documentRoutes } from './src/routes/document.js';
 import { phoneNumberRoutes } from './src/routes/phoneNumber.js';
 import { telnyxRequirementGroupRoutes } from './src/routes/telnyxRequirementGroup.js';
+import { subscriptionRoutes } from './src/routes/subscription.js';
+import { escrowRoutes } from './src/routes/escrow.js';
+import { walletCompanyRoutes } from './src/routes/walletCompany.js';
+import { minutesCompanyRoutes } from './src/routes/minutesCompany.js';
+import { paymentCheckoutRoutes } from './src/routes/paymentCheckout.js';
+import { clearExpiredRetractions } from './src/services/retractionService.js';
 
 const app = express();
 
@@ -28,9 +32,36 @@ mongoose.connect(config.mongodbUri, {
   process.exit(1); // Exit if we can't connect to database
 });
 
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, x-user-id, x-agent-id');
+  res.header('Access-Control-Allow-Credentials', 'true');
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
+// Database connection health check middleware
+app.use((req, res, next) => {
+  if (mongoose.connection.readyState !== 1 || !mongoose.connection.db) {
+    return res.status(503).json({
+      error: "Base de données non connectée. Veuillez réessayer dans quelques instants."
+    });
+  }
+  next();
+});
+
 // Middleware
 app.use((req, res, next) => {
-  if (req.originalUrl === '/api/phone-numbers/webhooks/telnyx/number-order') {
+  // Exclure les webhooks du parsing JSON global pour permettre l'accès au raw body (Stripe, Telnyx, etc.)
+  const isWebhook = 
+    req.originalUrl === '/api/phone-numbers/webhooks/telnyx/number-order' ||
+    req.originalUrl === '/api/subscriptions/webhook';
+
+  if (isWebhook) {
     next();
   } else {
     express.json()(req, res, next);
@@ -38,19 +69,38 @@ app.use((req, res, next) => {
 });
 app.use(express.urlencoded({ extended: true }));
 
-app.use(cors({
-  origin: [
-    'https://comp-orchestrator.harx.ai',
-    'https://api-comp-orchestrator.harx.ai',
-    'http://localhost:5184',
-    'http://localhost:5183',
-    'http://localhost:3000',
-    'https://v25.harx.ai' // Pour le développement local
-  ],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-}));
+// Map and Validate companyId / agentId parameters to prevent Mongoose CastErrors
+app.use((req, res, next) => {
+  if (req.body && req.body.companyId === 'demo_company_id') {
+    req.body.companyId = '6a0bfd35d605ccca8b51e13b';
+  }
+  if (req.query && req.query.companyId === 'demo_company_id') {
+    req.query.companyId = '6a0bfd35d605ccca8b51e13b';
+  }
+  next();
+});
+
+app.param('companyId', (req, res, next, value) => {
+  if (value === 'demo_company_id') {
+    req.params.companyId = '6a0bfd35d605ccca8b51e13b';
+    return next();
+  }
+  if (!mongoose.Types.ObjectId.isValid(value)) {
+    return res.status(400).json({ error: 'Invalid companyId format' });
+  }
+  next();
+});
+
+app.param('agentId', (req, res, next, value) => {
+  if (value === 'demo_company_id') {
+    req.params.agentId = '6a0bfd35d605ccca8b51e13b';
+    return next();
+  }
+  if (!mongoose.Types.ObjectId.isValid(value)) {
+    return res.status(400).json({ error: 'Invalid agentId format' });
+  }
+  next();
+});
 
 // Routes API
 app.use('/api/requirements', requirementRoutes);
@@ -58,6 +108,16 @@ app.use('/api/addresses', addressRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/requirement-groups', telnyxRequirementGroupRoutes);
 app.use('/api/phone-numbers', phoneNumberRoutes);
+app.use('/api/subscriptions', subscriptionRoutes);
+app.use('/api/escrow', escrowRoutes);
+app.use('/api/wallet-company', walletCompanyRoutes);
+app.use('/api/minutes-company', minutesCompanyRoutes);
+app.use('/api/payments/checkout', paymentCheckoutRoutes);
+
+// Health check to verify deployment
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', version: '1.0.1', timestamp: new Date() });
+});
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -65,10 +125,24 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something broke!' });
 });
 
+// Create HTTP server
+const server = http.createServer(app);
+
+// Set up WebSocket
+setupEscrowWebSocket(server);
+
 // Start server
-const server = app.listen(config.port, () => {
-  console.log(`✅ Server is running on port ${config.port}`);
+server.listen(config.port, () => {
+  console.log(`✅ Server v1.0.1 is running on port ${config.port}`);
 });
+
+// Release sale commissions after the 14-day retraction window (hourly).
+const RETRACTION_CRON_MS = 60 * 60 * 1000;
+setInterval(() => {
+  clearExpiredRetractions().catch((err) => {
+    console.warn('[retraction-cron]', err.message);
+  });
+}, RETRACTION_CRON_MS);
 
 // Handle process termination
 process.on('SIGINT', () => {
