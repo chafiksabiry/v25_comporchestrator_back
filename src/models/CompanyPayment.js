@@ -13,7 +13,7 @@ const companyPaymentSchema = new mongoose.Schema({
   purpose: {
     type: String,
     required: true,
-    enum: ['wallet_deposit', 'minutes_purchase', 'subscription_upgrade'],
+    enum: ['wallet_deposit', 'minutes_purchase', 'tokens_purchase', 'subscription_upgrade'],
     index: true
   },
   provider: {
@@ -33,7 +33,7 @@ const companyPaymentSchema = new mongoose.Schema({
     default: 'EUR',
     uppercase: true
   },
-  /** Minutes purchased when purpose === minutes_purchase. */
+  /** Minutes or tokens purchased when purpose is minutes_purchase / tokens_purchase. */
   quantity: {
     type: Number,
     required: false,
