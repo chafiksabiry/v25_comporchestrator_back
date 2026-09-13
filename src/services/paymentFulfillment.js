@@ -1,5 +1,6 @@
 import CompanyPayment from '../models/CompanyPayment.js';
 import MinutesCompany from '../models/MinutesCompany.js';
+import TokensCompany from '../models/TokensCompany.js';
 import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
 import WalletCompany from '../models/WalletCompany.js';
 import WalletCompanyEntry from '../models/WalletCompanyEntry.js';
@@ -57,12 +58,34 @@ export async function fulfillMinutesPurchase(payment) {
   };
 }
 
+export async function fulfillTokensPurchase(payment) {
+  const tokens = Math.round(Number(payment.quantity || 0));
+  if (tokens <= 0) {
+    throw new Error('Invalid tokens quantity on payment');
+  }
+
+  let wallet = await TokensCompany.findOne({ companyId: payment.companyId });
+  if (!wallet) {
+    wallet = new TokensCompany({ companyId: payment.companyId, tokens: 0 });
+  }
+  wallet.tokens = (wallet.tokens || 0) + tokens;
+  wallet.purchasedTokens = (wallet.purchasedTokens || 0) + tokens;
+  await wallet.save();
+
+  return {
+    tokens: wallet.tokens,
+    purchasedTokens: wallet.purchasedTokens,
+    credited: tokens
+  };
+}
+
 /**
  * Fulfill a one-shot Stripe Checkout Session (mode='payment') from a webhook.
  * Dispatches by `session.metadata.purpose`:
  *   - 'phone_line'                 → PhoneNumberPayment (status only; provisioning runs later)
  *   - 'wallet_deposit'             → CompanyPayment + fulfillWalletDeposit
  *   - 'minutes_purchase'           → CompanyPayment + fulfillMinutesPurchase
+ *   - 'tokens_purchase'            → CompanyPayment + fulfillTokensPurchase
  *   - anything else                → CompanyPayment fallback (purpose read from the row)
  * All branches are idempotent.
  */
@@ -117,6 +140,8 @@ async function fulfillStripeCompanyPaymentSession(session) {
     result = await fulfillWalletDeposit(payment);
   } else if (payment.purpose === 'minutes_purchase') {
     result = await fulfillMinutesPurchase(payment);
+  } else if (payment.purpose === 'tokens_purchase') {
+    result = await fulfillTokensPurchase(payment);
   } else {
     console.warn(`[payments] Unknown CompanyPayment purpose '${payment.purpose}' for payment ${payment._id}`);
     return { skipped: true, reason: `unknown purpose ${payment.purpose}` };
