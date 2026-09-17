@@ -49,7 +49,7 @@ const seedPlans = async () => {
 
       const features = extractStripeProductFeatures(product);
       const limits = extractStripeProductLimits(product);
-      const amount = (price.unit_amount || 0) / 100;
+      const amount = Number(((price.unit_amount || 0) / 100).toFixed(2));
       const name = String(product.name || '').trim().toUpperCase();
       if (!name) {
         console.warn(`⚠️ Skip ${price.id}: product has no name`);

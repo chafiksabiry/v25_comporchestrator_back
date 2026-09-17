@@ -111,7 +111,9 @@ export const subscriptionController = {
             return {
               _id: dbPlan._id,
               name: product.name || dbPlan.name,
-              price: stripePrice.unit_amount / 100,
+              // Keep integer Stripe cents — never round euros for display.
+              priceCents: stripePrice.unit_amount,
+              price: Number((stripePrice.unit_amount / 100).toFixed(2)),
               currency: stripePrice.currency || 'eur',
               stripePriceId: effectivePriceId,
               description: product.description || '',
@@ -566,7 +568,7 @@ async function handleProductUpdated(product) {
 async function handlePriceUpdated(price) {
   await SubscriptionPlan.findOneAndUpdate(
     { stripePriceId: price.id },
-    { price: price.unit_amount / 100 }
+    { price: Number((price.unit_amount / 100).toFixed(2)) }
   );
   console.log(`🔄 Synced price changes for ${price.id} to Database`);
 }
