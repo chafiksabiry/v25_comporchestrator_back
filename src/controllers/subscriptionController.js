@@ -118,6 +118,7 @@ export const subscriptionController = {
               stripePriceId: effectivePriceId,
               description: product.description || '',
               features: stripeFeatures,
+              marketingFeatures: stripeFeatures,
               metadata: product.metadata || {},
               isPopular: Boolean(dbPlan.isPopular),
               maxGigs: stripeLimits.maxGigs,
