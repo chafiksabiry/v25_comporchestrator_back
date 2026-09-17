@@ -101,6 +101,54 @@ function isConfigured() {
   return Boolean(config.stripeSecretKey);
 }
 
+/**
+ * Real plan features from Stripe Product (not DB seed mocks).
+ * Prefer marketing_features (Stripe Catalog UI), then metadata.features / feature_N.
+ */
+export function extractStripeProductFeatures(product) {
+  if (!product || typeof product === 'string') return [];
+
+  const marketing = Array.isArray(product.marketing_features)
+    ? product.marketing_features
+        .map((f) => String(f?.name || '').trim())
+        .filter(Boolean)
+    : [];
+  if (marketing.length) return marketing;
+
+  const meta = product.metadata && typeof product.metadata === 'object' ? product.metadata : {};
+  if (meta.features) {
+    try {
+      const parsed = JSON.parse(meta.features);
+      if (Array.isArray(parsed)) {
+        return parsed.map((x) => String(x).trim()).filter(Boolean);
+      }
+    } catch {
+      /* newline / pipe separated */
+    }
+    return String(meta.features)
+      .split(/[\n|;]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
+  return Object.keys(meta)
+    .filter((k) => /^feature[_-]?\d+$/i.test(k))
+    .sort((a, b) => Number(a.replace(/\D/g, '')) - Number(b.replace(/\D/g, '')))
+    .map((k) => String(meta[k]).trim())
+    .filter(Boolean);
+}
+
+export function extractStripeProductLimits(product) {
+  if (!product || typeof product === 'string') return {};
+  const meta = product.metadata && typeof product.metadata === 'object' ? product.metadata : {};
+  const out = {};
+  const gigs = Number(meta.max_gigs ?? meta.maxGigs);
+  const reps = Number(meta.max_reps ?? meta.maxReps);
+  if (Number.isFinite(gigs) && gigs >= 0) out.maxGigs = Math.round(gigs);
+  if (Number.isFinite(reps) && reps >= 0) out.maxReps = Math.round(reps);
+  return out;
+}
+
 /** 'live' | 'test' | 'unknown' */
 function getStripeMode() {
   const key = String(config.stripeSecretKey || '');
@@ -279,7 +327,12 @@ export const stripeService = {
         active: true,
         expand: ['data.product'],
       });
-      return prices.data;
+      // Drop prices whose product was archived/deleted.
+      return prices.data.filter((p) => {
+        const product = p.product;
+        if (!product || typeof product === 'string') return false;
+        return product.active !== false;
+      });
     } catch (error) {
       console.error('Error fetching plans from Stripe:', error);
       throw error;
@@ -293,4 +346,6 @@ export const stripeService = {
   getStripeMode,
   isTestLiveMismatchError,
   resolveSubscriptionPriceId,
+  extractStripeProductFeatures,
+  extractStripeProductLimits,
 };

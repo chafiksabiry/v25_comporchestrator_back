@@ -100,17 +100,31 @@ export const subscriptionController = {
             seen.add(effectivePriceId);
 
             const stripePrice = stripePrices.find((p) => p.id === effectivePriceId);
+            const product =
+              stripePrice?.product && typeof stripePrice.product === 'object'
+                ? stripePrice.product
+                : null;
+            const stripeFeatures = stripeService.extractStripeProductFeatures(product);
+            const stripeLimits = stripeService.extractStripeProductLimits(product);
             const fallbackPrice = Number(dbPlan.price) || 0;
 
             return {
               _id: dbPlan._id,
-              name: stripePrice?.product?.name || dbPlan.name,
+              name: product?.name || dbPlan.name,
               price: stripePrice ? stripePrice.unit_amount / 100 : fallbackPrice,
               currency: stripePrice?.currency || dbPlan.currency || 'eur',
               stripePriceId: effectivePriceId,
-              description: dbPlan.description || stripePrice?.product?.description || '',
-              features: Array.isArray(dbPlan.features) ? dbPlan.features : [],
+              // Stripe Catalog is source of truth — never prefer seeded mock copy.
+              description: product?.description || dbPlan.description || '',
+              features: stripeFeatures.length
+                ? stripeFeatures
+                : Array.isArray(dbPlan.features)
+                  ? dbPlan.features
+                  : [],
+              metadata: product?.metadata || {},
               isPopular: Boolean(dbPlan.isPopular),
+              maxGigs: stripeLimits.maxGigs ?? dbPlan.maxGigs,
+              maxReps: stripeLimits.maxReps ?? dbPlan.maxReps,
             };
           })
         )
@@ -528,20 +542,27 @@ async function handleSubscriptionDeleted(subscription) {
 }
 
 async function handleProductUpdated(product) {
-  // Mettre à jour le nom et la description dans la DB pour tous les plans associés à ce produit
+  // Sync real Stripe Catalog fields (name, description, marketing_features, metadata limits).
   const prices = await stripeService.getPublicPlans();
-  const productPrices = prices.filter(p => p.product.id === product.id);
-  
+  const productPrices = prices.filter(
+    (p) => p.product && typeof p.product === 'object' && p.product.id === product.id
+  );
+
+  const features = stripeService.extractStripeProductFeatures(product);
+  const limits = stripeService.extractStripeProductLimits(product);
+
   for (const price of productPrices) {
-    await SubscriptionPlan.findOneAndUpdate(
-      { stripePriceId: price.id },
-      { 
-        name: product.name, // Nom réel complet dans Stripe
-        description: product.description || ''
-      }
-    );
+    const update = {
+      name: product.name,
+      description: product.description || '',
+    };
+    if (features.length) update.features = features;
+    if (limits.maxGigs != null) update.maxGigs = limits.maxGigs;
+    if (limits.maxReps != null) update.maxReps = limits.maxReps;
+
+    await SubscriptionPlan.findOneAndUpdate({ stripePriceId: price.id }, update);
   }
-  console.log(`🔄 Synced product changes for ${product.name} to Database`);
+  console.log(`🔄 Synced Stripe product metadata for ${product.name} to Database`);
 }
 
 async function handlePriceUpdated(price) {
