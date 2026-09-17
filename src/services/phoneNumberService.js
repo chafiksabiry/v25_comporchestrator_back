@@ -185,11 +185,10 @@ class PhoneNumberService {
 
       let numbers = [];
 
-      // FR without a specific area: Twilio's unfiltered local inventory is
-      // heavily skewed toward +331 (Île-de-France). Fan out across geographic
-      // zones +33[1-5] so the UI shows Lyon/Marseille/etc., not only Paris.
+      // FR without a specific area: product choice is to hide Île-de-France
+      // (+331). Fan out across +332–5 (NW / NE / SE / SW) only.
       if (countryCode === 'FR' && !areaCode) {
-        const zones = ['1', '2', '3', '4', '5'];
+        const zones = ['2', '3', '4', '5'];
         const perZone = Math.max(Math.ceil(limit / zones.length), 10);
         const zoneResults = await Promise.all(
           zones.map(async (zone) => {
@@ -265,9 +264,9 @@ class PhoneNumberService {
    *
    * Country-specific rules:
    *  - FR : a "local" bundle approves geographic landlines only.
-   *    Geographic numbers start with +33[1-5]. Numbers starting with
-   *    +33 6, +33 7 (mobile), +33 8 (premium) and +33 9 (non-geographic /
-   *    VoIP services) need different bundles. → exclude them.
+   *    We offer +33[2-5] (exclude +331 Île-de-France by product choice).
+   *    +33 6/7 (mobile), +33 8 (premium) and +33 9 (non-geo / VoIP) need
+   *    different bundles → exclude them.
    *  - Other configured countries fall back to "compatible" (no extra filter)
    *    until they prove problematic.
    */
@@ -281,8 +280,8 @@ class PhoneNumberService {
       const m = raw.match(/^\+33(\d)/);
       if (!m) return true;
       const firstDigit = m[1];
-      // Keep only +33 1, 2, 3, 4, 5 (geographic landlines)
-      return ['1', '2', '3', '4', '5'].includes(firstDigit);
+      // Keep +33 2, 3, 4, 5 only (no Paris +331)
+      return ['2', '3', '4', '5'].includes(firstDigit);
     }
 
     // No extra filter for other countries yet.
