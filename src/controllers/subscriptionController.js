@@ -99,9 +99,22 @@ export const subscriptionController = {
             if (seen.has(effectivePriceId)) return null;
             seen.add(effectivePriceId);
 
-            const stripePrice = stripePrices.find((p) => p.id === effectivePriceId);
+            let stripePrice = stripePrices.find((p) => p.id === effectivePriceId);
+            if (!stripePrice && stripeService.isConfigured()) {
+              try {
+                stripePrice = await stripeService.retrievePriceWithProduct(effectivePriceId);
+              } catch (err) {
+                console.warn(
+                  `[subscriptions/plans] retrieve ${effectivePriceId} failed:`,
+                  err.message
+                );
+              }
+            }
             // Stripe Catalog only — skip plans that have no live price/product.
             if (!stripePrice || !stripePrice.product || typeof stripePrice.product !== 'object') {
+              console.warn(
+                `[subscriptions/plans] Skip ${dbPlan.name}: no active Stripe price/product for ${effectivePriceId}`
+              );
               return null;
             }
             const product = stripePrice.product;

@@ -199,12 +199,38 @@ function isTestLiveMismatchError(err) {
   );
 }
 
+/** Stripe Catalog renames (DB may still say GROWTH while product is RUNNER). */
+const PLAN_NAME_ALIASES = {
+  STARTER: ['STARTER'],
+  GROWTH: ['GROWTH', 'RUNNER'],
+  RUNNER: ['RUNNER', 'GROWTH'],
+  SCALE: ['SCALE', 'SCALER'],
+  SCALER: ['SCALER', 'SCALE'],
+};
+
+function planNameCandidates(planName) {
+  const key = String(planName || '').trim().toUpperCase();
+  if (!key) return [];
+  const aliases = PLAN_NAME_ALIASES[key];
+  return aliases ? [...aliases] : [key];
+}
+
+function productMatchesPlanName(productName, planName) {
+  const product = String(productName || '').trim().toUpperCase();
+  if (!product) return false;
+  return planNameCandidates(planName).some(
+    (alias) => product === alias || product.includes(alias) || alias.includes(product)
+  );
+}
+
 function configuredPriceIdForPlanName(planName) {
   const key = String(planName || '').trim().toUpperCase();
   const map = {
     STARTER: config.stripePriceStarter,
     GROWTH: config.stripePriceGrowth,
+    RUNNER: config.stripePriceGrowth,
     SCALE: config.stripePriceScale,
+    SCALER: config.stripePriceScale,
   };
   const id = map[key];
   if (!id || !String(id).startsWith('price_') || id.includes('placeholder')) {
@@ -215,7 +241,8 @@ function configuredPriceIdForPlanName(planName) {
 
 /**
  * Ensure priceId exists in the Stripe account matching STRIPE_SECRET_KEY (test vs live).
- * Falls back to STRIPE_PRICE_* env vars and active Stripe prices by product name.
+ * Falls back to STRIPE_PRICE_* env vars and active Stripe prices by product name
+ * (including aliases GROWTH↔RUNNER, SCALE↔SCALER).
  */
 async function resolveSubscriptionPriceId({ priceId, planName }) {
   const stripe = getStripe();
@@ -242,14 +269,13 @@ async function resolveSubscriptionPriceId({ priceId, planName }) {
     if (typeof resolved === 'string') return resolved;
   }
 
-  const normalized = String(planName || '').trim().toUpperCase();
-  if (normalized) {
+  const candidates = planNameCandidates(planName);
+  if (candidates.length) {
     try {
       const prices = await stripe.prices.list({ active: true, limit: 100, expand: ['data.product'] });
-      const match = prices.data.find((p) => {
-        const productName = String(p.product?.name || '').toUpperCase();
-        return productName === normalized || productName.includes(normalized);
-      });
+      const match = prices.data.find((p) =>
+        productMatchesPlanName(p.product?.name, planName)
+      );
       if (match?.id) return match.id;
     } catch (err) {
       console.warn('[stripe] resolveSubscriptionPriceId list failed:', err.message);
@@ -258,7 +284,7 @@ async function resolveSubscriptionPriceId({ priceId, planName }) {
 
   const err = new Error(
     mode === 'live'
-      ? `Le tarif Stripe « ${priceId} » est en mode test. Définissez STRIPE_PRICE_* (live) sur Railway et relancez seedSubscriptionPlans, ou créez les prix en mode live dans Stripe.`
+      ? `Le tarif Stripe « ${priceId} » est introuvable / inactif (plan ${planName || '?'}). Vérifiez STRIPE_PRICE_* et le produit Catalog (GROWTH/RUNNER, SCALE/SCALER).`
       : `Le tarif Stripe « ${priceId} » est en mode live alors que STRIPE_SECRET_KEY est en test. Alignez les price_id et la clé Stripe (test/live).`
   );
   err.code = 'STRIPE_PRICE_MODE_MISMATCH';
@@ -384,6 +410,23 @@ export const stripeService = {
       console.error('Error fetching plans from Stripe:', error);
       throw error;
     }
+  },
+
+  /** Retrieve one price + full product (used when missing from the active list cache). */
+  retrievePriceWithProduct: async (priceId) => {
+    if (!priceId || !String(priceId).startsWith('price_')) return null;
+    const stripe = getStripe();
+    const price = await stripe.prices.retrieve(priceId, { expand: ['product'] });
+    if (!price?.active) return null;
+    let product = price.product;
+    if (!product || typeof product === 'string') {
+      product = await stripe.products.retrieve(String(product || price.product));
+    } else {
+      product = await stripe.products.retrieve(product.id);
+    }
+    if (product?.active === false) return null;
+    price.product = product;
+    return price;
   },
 
   getSubscription: async (subscriptionId) => {
