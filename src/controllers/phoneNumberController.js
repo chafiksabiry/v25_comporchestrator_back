@@ -7,12 +7,23 @@ import mongoose from 'mongoose';
 import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { getPhoneLinePricing } from '../services/platformPricingService.js';
+import { isFrenchCountry, resolvePhoneProvider } from '../utils/phoneProvider.js';
 
 class PhoneNumberController {
   async searchNumbers(req, res) {
     try {
       const { countryCode, type, features, limit } = req.query;
       console.log(countryCode, type, features, limit);
+
+      // FR is Twilio-only — never search Telnyx inventory for France.
+      if (isFrenchCountry(countryCode)) {
+        const numbers = await phoneNumberService.searchTwilioNumbers({
+          countryCode: 'FR',
+          limit: parseInt(limit) || 10
+        });
+        return res.json(numbers);
+      }
+
       const numbers = await phoneNumberService.searchAvailableNumbers({
         countryCode,
         type,
@@ -21,6 +32,14 @@ class PhoneNumberController {
       });
       res.json(numbers);
     } catch (error) {
+      if (error.code === 'REGULATORY_BUNDLE_REQUIRED') {
+        return res.status(200).json({
+          numbers: [],
+          regulatoryBlocked: true,
+          message: error.message,
+          countryCode: error.countryCode || 'FR'
+        });
+      }
       console.error('Error searching phone numbers:', error);
       res.status(500).json({ error: 'Failed to search phone numbers' });
     }
@@ -54,7 +73,7 @@ class PhoneNumberController {
 
   async purchaseNumber(req, res) {
     try {
-      console.log("📥 Received purchaseNumber request (Telnyx)");
+      console.log("📥 Received purchaseNumber request");
       console.log("📦 req.body:", JSON.stringify(req.body, null, 2));
 
       const { phoneNumber, provider, gigId, requirementGroupId, companyId, bundleSid, addressSid, paymentId } = req.body;
@@ -76,8 +95,9 @@ class PhoneNumberController {
         });
       }
 
-      // Resolve provider
-      const resolvedProvider = provider || 'telnyx';
+      // FR / +33 → always Twilio (ignore client Telnyx).
+      const resolvedProvider = resolvePhoneProvider(provider, { phoneNumber });
+      console.log(`📡 Resolved phone provider: ${resolvedProvider} (requested=${provider || 'none'})`);
 
       // ──────────────────────────────────────────────────────────────────
       // Free trial gate
@@ -124,7 +144,7 @@ class PhoneNumberController {
         phoneNumber,
         resolvedProvider,
         gigId,
-        requirementGroupId,
+        resolvedProvider === 'telnyx' ? requirementGroupId : undefined,
         companyId,
         { 
           bundleSid, 
@@ -161,6 +181,22 @@ class PhoneNumberController {
 
     } catch (error) {
       console.error('Error purchasing phone number:', error);
+
+      if (error.code === 21649 || String(error.message || '').includes('correct regulation type')) {
+        const refundInfo = await this.refundFailedLinePayment(
+          req.body?.paymentId,
+          'twilio_21649_bundle_regulation_mismatch'
+        );
+        return res.status(400).json({
+          error: 'Regulatory Bundle Required',
+          message: refundInfo.refunded
+            ? "Ce numéro ne peut pas être provisionné avec le dossier réglementaire actuel (type de régulation incompatible). Votre paiement a été remboursé automatiquement — choisissez une ligne géographique fixe (+33 1/2/3/4/5) ou mettez à jour le Regulatory Bundle France Local dans la console Twilio."
+            : "Ce numéro ne peut pas être provisionné avec le dossier réglementaire actuel. Contactez le support pour un remboursement si le paiement a été débité.",
+          refunded: refundInfo.refunded,
+          refundProvider: refundInfo.provider,
+          moreInfo: error.moreInfo || 'https://www.twilio.com/docs/errors/21649'
+        });
+      }
 
       if (error.message.includes('already exists')) {
         return res.status(409).json({ error: 'Conflict', message: error.message });

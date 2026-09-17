@@ -20,6 +20,11 @@ class PhoneNumberService {
 
   async searchAvailableNumbers({ countryCode, type: reqType, features, limit }) {
     try {
+      const cc = String(countryCode || '').toUpperCase();
+      if (cc === 'FR') {
+        throw new Error('France phone numbers must be searched via Twilio (use /search/twilio)');
+      }
+
       console.log(`🔍 Searching Telnyx numbers for country: ${countryCode}`);
       
       const searchType = async (type) => {
@@ -36,36 +41,7 @@ class PhoneNumberService {
         }));
       };
 
-      const localNumbersPromise = searchType('local');
-
-      if (countryCode === 'FR') {
-        const nationalNumbersPromise = searchType('national').catch(natError => {
-          console.warn(`⚠️ Telnyx national search skipped: ${natError.message}`);
-          return [];
-        });
-        const mobileNumbersPromise = searchType('mobile').catch(mobError => {
-          console.warn(`⚠️ Telnyx mobile search skipped: ${mobError.message}`);
-          return [];
-        });
-
-        const [localResults, nationalResults, mobileResults] = await Promise.all([
-          localNumbersPromise,
-          nationalNumbersPromise,
-          mobileNumbersPromise
-        ]);
-
-        const combined = [
-          ...localResults.map(n => ({ ...n, type: 'local' })),
-          ...nationalResults.map(n => ({ ...n, type: 'national' })),
-          ...mobileResults.map(n => ({ ...n, type: 'mobile' }))
-        ];
-        
-        // Use a default limit if not provided
-        const searchLimit = limit || 10;
-        return combined.slice(0, Math.max(searchLimit * 3, 30));
-      }
-
-      return await localNumbersPromise;
+      return await searchType('local');
     } catch (error) {
       console.error('❌ Error searching Telnyx numbers:', error);
       throw error;
@@ -77,10 +53,16 @@ class PhoneNumberService {
       throw new Error('gigId and companyId are required to purchase a number');
     }
 
+    // France is Twilio-only — never route +33 through Telnyx.
+    const resolvedProvider =
+      String(phoneNumber || '').replace(/[^\d+]/g, '').startsWith('+33')
+        ? 'twilio'
+        : provider;
+
     try {
-      if (provider === 'twilio') {
+      if (resolvedProvider === 'twilio') {
         return await this.purchaseTwilioNumber(phoneNumber, null, gigId, companyId, options);
-      } else if (provider === 'telnyx') {
+      } else if (resolvedProvider === 'telnyx') {
         // 1. Créer la commande avec le requirement group
         const orderData = {
           phone_numbers: [
@@ -124,7 +106,7 @@ class PhoneNumberService {
         // 4. Retourner la réponse Telnyx
         return response.data;
       } else {
-        throw new Error(`Unsupported provider: ${provider}`);
+        throw new Error(`Unsupported provider: ${resolvedProvider}`);
       }
     } catch (error) {
       console.error('❌ Error purchasing number:', error);
@@ -271,6 +253,77 @@ class PhoneNumberService {
 
     // No extra filter for other countries yet.
     return true;
+  }
+
+  /**
+   * Guess Twilio numberType for regulatory matching (local / mobile / national).
+   */
+  guessTwilioNumberType(phoneNumber, isoCountry) {
+    const raw = String(phoneNumber || '').replace(/[^\d+]/g, '');
+    const cc = String(isoCountry || '').toUpperCase();
+    if (cc === 'FR') {
+      const m = raw.match(/^\+33(\d)/);
+      if (!m) return 'local';
+      const d = m[1];
+      if (d === '6' || d === '7') return 'mobile';
+      if (d === '9' || d === '8') return 'national';
+      return 'local';
+    }
+    return 'local';
+  }
+
+  /**
+   * Ensure the configured Regulatory Bundle's regulationSid matches the
+   * number type we are about to buy (e.g. FR local). Throws error.code 21649
+   * when it does not — same code Twilio returns so callers refund uniformly.
+   */
+  async assertBundleMatchesNumberType(bundleSid, phoneNumber, isoCountry) {
+    if (!bundleSid) return;
+    const cc = String(isoCountry || this.guessCountryFromE164(phoneNumber) || '').toUpperCase();
+    if (!cc) return;
+
+    const numberType = this.guessTwilioNumberType(phoneNumber, cc);
+
+    let bundle;
+    try {
+      bundle = await this.twilioClient.numbers.v2.regulatoryCompliance
+        .bundles(bundleSid)
+        .fetch();
+    } catch (error) {
+      console.warn(`[telephony] could not fetch bundle ${bundleSid}:`, error.message);
+      return;
+    }
+
+    let regulations = [];
+    try {
+      regulations = await this.twilioClient.numbers.v2.regulatoryCompliance
+        .regulations
+        .list({ isoCountry: cc, numberType, limit: 50 });
+    } catch (error) {
+      console.warn(`[telephony] could not list regulations for ${cc}/${numberType}:`, error.message);
+      return;
+    }
+
+    const regulationSid = bundle.regulationSid || bundle.regulation_sid;
+    const match = regulations.some((r) => r.sid === regulationSid);
+    console.log(
+      `[telephony] bundle ${bundleSid} regulation=${regulationSid} status=${bundle.status} ` +
+        `vs ${cc}/${numberType} regulations=${regulations.map((r) => r.sid).join(',') || '(none)'}`
+    );
+
+    if (!match) {
+      const err = new Error(
+        `Bundle [${bundleSid}] does not have the correct regulation type to provision this number`
+      );
+      err.code = 21649;
+      err.status = 400;
+      err.moreInfo = 'https://www.twilio.com/docs/errors/21649';
+      err.bundleSid = bundleSid;
+      err.regulationSid = regulationSid;
+      err.expectedNumberType = numberType;
+      err.isoCountry = cc;
+      throw err;
+    }
   }
 
   /** ISO country → configured Regulatory Bundle SID (if any). */
@@ -531,6 +584,22 @@ class PhoneNumberService {
 
       const currentBundleSid = bundleSid || (phoneNumber.startsWith('+33') ? config.twilioFrenchBundleSid : null);
       const currentAddressSid = addressSid || (phoneNumber.startsWith('+33') ? config.twilioFrenchAddressSid : null);
+
+      // Fail early (before Twilio IncomingPhoneNumbers.create) when the
+      // configured FR bundle is not a "local" regulation — same 21649 Twilio
+      // would return, so the controller can refund the payment.
+      if (currentBundleSid && phoneNumber.startsWith('+33')) {
+        if (!this.isCompatibleWithLocalBundle(phoneNumber, 'FR')) {
+          const err = new Error(
+            `Bundle [${currentBundleSid}] does not have the correct regulation type to provision this number`
+          );
+          err.code = 21649;
+          err.status = 400;
+          err.moreInfo = 'https://www.twilio.com/docs/errors/21649';
+          throw err;
+        }
+        await this.assertBundleMatchesNumberType(currentBundleSid, phoneNumber, 'FR');
+      }
 
       if (currentBundleSid) purchaseOptions.bundleSid = currentBundleSid;
       if (currentAddressSid) purchaseOptions.addressSid = currentAddressSid;
