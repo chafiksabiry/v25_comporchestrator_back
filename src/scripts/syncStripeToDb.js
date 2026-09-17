@@ -12,7 +12,7 @@ async function syncAll() {
     console.log('🔗 Connecting to MongoDB...');
     await mongoose.connect(config.mongodbUri);
 
-    console.log('📡 Fetching plans from Stripe Catalog...');
+    console.log('📡 Fetching plans from Stripe Catalog (no code defaults)...');
     const stripePrices = await stripeService.getPublicPlans();
 
     console.log(`🔍 Found ${stripePrices.length} active prices in Stripe.`);
@@ -21,34 +21,44 @@ async function syncAll() {
       const product = stripePrice.product;
       if (!product || typeof product !== 'object') continue;
 
-      const productName = product.name;
+      const productName = String(product.name || '').trim().toUpperCase();
+      if (!productName) continue;
+
       const amount = stripePrice.unit_amount / 100;
       const priceId = stripePrice.id;
       const features = extractStripeProductFeatures(product);
       const limits = extractStripeProductLimits(product);
 
-      console.log(`🔄 Syncing: ${productName} (${priceId}) - €${amount} · ${features.length} features`);
+      console.log(
+        `🔄 Syncing: ${productName} (${priceId}) - €${Number(amount).toFixed(2)} · ${features.length} features`
+      );
 
       const update = {
         name: productName,
         price: amount,
         currency: (stripePrice.currency || 'eur').toLowerCase(),
         description: product.description || '',
+        features,
+        metadata: product.metadata || {},
       };
-      if (features.length) update.features = features;
       if (limits.maxGigs != null) update.maxGigs = limits.maxGigs;
       if (limits.maxReps != null) update.maxReps = limits.maxReps;
+      if (limits.communicationMinutes != null) {
+        update.communicationMinutes = limits.communicationMinutes;
+      }
+      if (limits.activeLocalNumbers != null) {
+        update.activeLocalNumbers = limits.activeLocalNumbers;
+      }
+      if (limits.aiToken) update.aiToken = limits.aiToken;
 
       const result = await SubscriptionPlan.findOneAndUpdate(
         { stripePriceId: priceId },
         update,
-        { new: true }
+        { new: true, upsert: true, setDefaultsOnInsert: true }
       );
 
       if (result) {
-        console.log(`✅ Updated ${productName} in Database.`);
-      } else {
-        console.log(`⚠️ No matching plan found in DB for ${priceId}. Skipping...`);
+        console.log(`✅ Upserted ${productName} in Database.`);
       }
     }
 

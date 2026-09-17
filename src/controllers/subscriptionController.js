@@ -100,31 +100,29 @@ export const subscriptionController = {
             seen.add(effectivePriceId);
 
             const stripePrice = stripePrices.find((p) => p.id === effectivePriceId);
-            const product =
-              stripePrice?.product && typeof stripePrice.product === 'object'
-                ? stripePrice.product
-                : null;
+            // Stripe Catalog only — skip plans that have no live price/product.
+            if (!stripePrice || !stripePrice.product || typeof stripePrice.product !== 'object') {
+              return null;
+            }
+            const product = stripePrice.product;
             const stripeFeatures = stripeService.extractStripeProductFeatures(product);
             const stripeLimits = stripeService.extractStripeProductLimits(product);
-            const fallbackPrice = Number(dbPlan.price) || 0;
 
             return {
               _id: dbPlan._id,
-              name: product?.name || dbPlan.name,
-              price: stripePrice ? stripePrice.unit_amount / 100 : fallbackPrice,
-              currency: stripePrice?.currency || dbPlan.currency || 'eur',
+              name: product.name || dbPlan.name,
+              price: stripePrice.unit_amount / 100,
+              currency: stripePrice.currency || 'eur',
               stripePriceId: effectivePriceId,
-              // Stripe Catalog is source of truth — never prefer seeded mock copy.
-              description: product?.description || dbPlan.description || '',
-              features: stripeFeatures.length
-                ? stripeFeatures
-                : Array.isArray(dbPlan.features)
-                  ? dbPlan.features
-                  : [],
-              metadata: product?.metadata || {},
+              description: product.description || '',
+              features: stripeFeatures,
+              metadata: product.metadata || {},
               isPopular: Boolean(dbPlan.isPopular),
-              maxGigs: stripeLimits.maxGigs ?? dbPlan.maxGigs,
-              maxReps: stripeLimits.maxReps ?? dbPlan.maxReps,
+              maxGigs: stripeLimits.maxGigs,
+              maxReps: stripeLimits.maxReps,
+              communicationMinutes: stripeLimits.communicationMinutes,
+              activeLocalNumbers: stripeLimits.activeLocalNumbers,
+              aiToken: stripeLimits.aiToken,
             };
           })
         )

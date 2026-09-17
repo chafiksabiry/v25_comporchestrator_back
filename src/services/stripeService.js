@@ -102,50 +102,100 @@ function isConfigured() {
 }
 
 /**
+ * Case/spacing-insensitive metadata lookup
+ * (Stripe keys like "ACTIVE GIGS", "ACTIVE REPS", …).
+ */
+function metaGet(meta, ...candidates) {
+  if (!meta || typeof meta !== 'object') return undefined;
+  const normalize = (s) => String(s).toLowerCase().replace(/[_\s-]+/g, '');
+  const wanted = new Set(candidates.map(normalize));
+  for (const [key, value] of Object.entries(meta)) {
+    if (wanted.has(normalize(key))) return value;
+  }
+  return undefined;
+}
+
+function humanizeMetaKey(key) {
+  return String(key)
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/**
  * Real plan features from Stripe Product (not DB seed mocks).
- * Prefer marketing_features (Stripe Catalog UI), then metadata.features / feature_N.
+ * Prefer product metadata lines + marketing_features (Stripe Catalog UI).
  */
 export function extractStripeProductFeatures(product) {
   if (!product || typeof product === 'string') return [];
+
+  const meta = product.metadata && typeof product.metadata === 'object' ? product.metadata : {};
+
+  const metaLines = Object.entries(meta)
+    .filter(([k]) => {
+      const n = k.toLowerCase();
+      return n !== 'features' && !/^feature[_-]?\d+$/i.test(k);
+    })
+    .map(([k, v]) => `${humanizeMetaKey(k)}: ${String(v).trim()}`)
+    .filter((line) => !line.endsWith(':'));
 
   const marketing = Array.isArray(product.marketing_features)
     ? product.marketing_features
         .map((f) => String(f?.name || '').trim())
         .filter(Boolean)
     : [];
-  if (marketing.length) return marketing;
 
-  const meta = product.metadata && typeof product.metadata === 'object' ? product.metadata : {};
   if (meta.features) {
     try {
       const parsed = JSON.parse(meta.features);
       if (Array.isArray(parsed)) {
-        return parsed.map((x) => String(x).trim()).filter(Boolean);
+        marketing.unshift(...parsed.map((x) => String(x).trim()).filter(Boolean));
       }
     } catch {
-      /* newline / pipe separated */
+      marketing.unshift(
+        ...String(meta.features)
+          .split(/[\n|;]/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+      );
     }
-    return String(meta.features)
-      .split(/[\n|;]/)
-      .map((s) => s.trim())
-      .filter(Boolean);
   }
 
-  return Object.keys(meta)
+  const numbered = Object.keys(meta)
     .filter((k) => /^feature[_-]?\d+$/i.test(k))
     .sort((a, b) => Number(a.replace(/\D/g, '')) - Number(b.replace(/\D/g, '')))
     .map((k) => String(meta[k]).trim())
     .filter(Boolean);
+
+  // Metadata quotas first (ACTIVE GIGS, …), then marketing feature list.
+  const merged = [...metaLines, ...numbered, ...marketing];
+  return [...new Set(merged)];
 }
 
 export function extractStripeProductLimits(product) {
   if (!product || typeof product === 'string') return {};
   const meta = product.metadata && typeof product.metadata === 'object' ? product.metadata : {};
   const out = {};
-  const gigs = Number(meta.max_gigs ?? meta.maxGigs);
-  const reps = Number(meta.max_reps ?? meta.maxReps);
+  const gigs = Number(
+    metaGet(meta, 'ACTIVE GIGS', 'active_gigs', 'max_gigs', 'maxGigs')
+  );
+  const reps = Number(
+    metaGet(meta, 'ACTIVE REPS', 'active_reps', 'max_reps', 'maxReps')
+  );
+  const minutes = Number(
+    metaGet(meta, 'COMMUNICATION MINUTES', 'communication_minutes', 'minutes')
+  );
+  const localNumbers = Number(
+    metaGet(meta, 'ACTIVE LOCAL NUMBER', 'ACTIVE LOCAL NUMBERS', 'active_local_number', 'local_numbers')
+  );
   if (Number.isFinite(gigs) && gigs >= 0) out.maxGigs = Math.round(gigs);
   if (Number.isFinite(reps) && reps >= 0) out.maxReps = Math.round(reps);
+  if (Number.isFinite(minutes) && minutes >= 0) out.communicationMinutes = Math.round(minutes);
+  if (Number.isFinite(localNumbers) && localNumbers >= 0) out.activeLocalNumbers = Math.round(localNumbers);
+  const aiToken = metaGet(meta, 'AI TOKEN (Million)', 'AI TOKEN', 'ai_token', 'ai_tokens');
+  if (aiToken != null && String(aiToken).trim()) out.aiToken = String(aiToken).trim();
   return out;
 }
 
