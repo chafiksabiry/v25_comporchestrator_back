@@ -19,7 +19,7 @@ class PhoneNumberController {
       if (isFrenchCountry(countryCode)) {
         const numbers = await phoneNumberService.searchTwilioNumbers({
           countryCode: 'FR',
-          limit: parseInt(limit) || 10
+          limit: parseInt(limit) || 50
         });
         return res.json(numbers);
       }
@@ -28,7 +28,7 @@ class PhoneNumberController {
         countryCode,
         type,
         features,
-        limit: parseInt(limit) || 10
+        limit: parseInt(limit) || 50
       });
       res.json(numbers);
     } catch (error) {
@@ -54,7 +54,7 @@ class PhoneNumberController {
       const numbers = await phoneNumberService.searchTwilioNumbers({
         countryCode: countryCode || 'US',
         areaCode,
-        limit: parseInt(limit) || 10
+        limit: parseInt(limit) || 50
       });
       res.json(numbers);
     } catch (error) {

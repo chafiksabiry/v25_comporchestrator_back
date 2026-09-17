@@ -133,7 +133,7 @@ class PhoneNumberService {
 
   async searchTwilioNumbers(searchParams) {
     const countryCode = (searchParams.countryCode || 'US').toString().toUpperCase();
-    const limit = searchParams.limit || 10;
+    const limit = Math.min(Math.max(parseInt(searchParams.limit, 10) || 50, 1), 100);
     const areaCode = searchParams.areaCode;
     const numberType = 'local';
 
@@ -158,25 +158,71 @@ class PhoneNumberService {
       }
     }
 
-    const searchOptions = {
-      limit: limit,
-      voice: true
-    };
+    const mapNumber = (number) => ({
+      phoneNumber: number.phoneNumber,
+      friendlyName: number.friendlyName,
+      locality: number.locality,
+      region: number.region,
+      isoCountry: number.isoCountry,
+      type: 'local',
+      capabilities: {
+        voice: number.capabilities?.voice,
+        SMS: number.capabilities?.SMS,
+        MMS: number.capabilities?.MMS
+      }
+    });
 
-    if (areaCode) {
-      searchOptions.areaCode = areaCode;
-    }
-
-    try {
-      console.log(`📡 Searching Twilio numbers for ${countryCode}...`);
-      
-      // Standard local search for all countries (US, FR, etc.)
-      const numbers = await Promise.race([
+    const listWithTimeout = (searchOptions) =>
+      Promise.race([
         this.twilioClient.availablePhoneNumbers(countryCode).local.list(searchOptions),
-        new Promise((_, reject) => 
+        new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Twilio search timeout')), 25000)
         )
       ]);
+
+    try {
+      console.log(`📡 Searching Twilio numbers for ${countryCode} (limit=${limit})...`);
+
+      let numbers = [];
+
+      // FR without a specific area: Twilio's unfiltered local inventory is
+      // heavily skewed toward +331 (Île-de-France). Fan out across geographic
+      // zones +33[1-5] so the UI shows Lyon/Marseille/etc., not only Paris.
+      if (countryCode === 'FR' && !areaCode) {
+        const zones = ['1', '2', '3', '4', '5'];
+        const perZone = Math.max(Math.ceil(limit / zones.length), 10);
+        const zoneResults = await Promise.all(
+          zones.map(async (zone) => {
+            try {
+              return await listWithTimeout({
+                limit: perZone,
+                voice: true,
+                contains: `33${zone}`
+              });
+            } catch (zoneErr) {
+              console.warn(`⚠️ FR zone +33${zone} search failed:`, zoneErr.message || zoneErr);
+              return [];
+            }
+          })
+        );
+        const seen = new Set();
+        for (const batch of zoneResults) {
+          for (const n of batch) {
+            if (!n?.phoneNumber || seen.has(n.phoneNumber)) continue;
+            seen.add(n.phoneNumber);
+            numbers.push(n);
+          }
+        }
+      } else {
+        const searchOptions = {
+          limit,
+          voice: true
+        };
+        if (areaCode) {
+          searchOptions.areaCode = areaCode;
+        }
+        numbers = await listWithTimeout(searchOptions);
+      }
 
       console.log(`✅ Found ${numbers.length} numbers for ${countryCode}`);
 
@@ -196,19 +242,7 @@ class PhoneNumberService {
         );
       }
 
-      return compatible.map((number) => ({
-        phoneNumber: number.phoneNumber,
-        friendlyName: number.friendlyName,
-        locality: number.locality,
-        region: number.region,
-        isoCountry: number.isoCountry,
-        type: 'local',
-        capabilities: {
-          voice: number.capabilities.voice,
-          SMS: number.capabilities.SMS,
-          MMS: number.capabilities.MMS
-        }
-      }));
+      return compatible.slice(0, limit).map(mapNumber);
     } catch (error) {
       console.error('❌ Error in searchTwilioNumbers:', error);
       if (error.code === 'REGULATORY_BUNDLE_REQUIRED') {
