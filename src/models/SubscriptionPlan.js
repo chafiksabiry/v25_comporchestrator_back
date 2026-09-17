@@ -13,7 +13,6 @@ const subscriptionPlanSchema = new mongoose.Schema({
   },
   currency: {
     type: String,
-    default: 'eur',
     lowercase: true
   },
   stripePriceId: {
@@ -22,7 +21,7 @@ const subscriptionPlanSchema = new mongoose.Schema({
   },
   description: {
     type: String,
-    required: true
+    default: ''
   },
   features: [{
     type: String
@@ -31,13 +30,31 @@ const subscriptionPlanSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  // Quotas come from Stripe product metadata (ACTIVE GIGS / ACTIVE REPS) — no code defaults.
   maxGigs: {
     type: Number,
-    required: true
+    required: false
   },
   maxReps: {
     type: Number,
-    required: true
+    required: false
+  },
+  communicationMinutes: {
+    type: Number,
+    required: false
+  },
+  activeLocalNumbers: {
+    type: Number,
+    required: false
+  },
+  aiToken: {
+    type: String,
+    required: false
+  },
+  metadata: {
+    type: Map,
+    of: String,
+    required: false
   }
 }, {
   timestamps: true
