@@ -24,7 +24,7 @@ async function syncAll() {
       const productName = String(product.name || '').trim().toUpperCase();
       if (!productName) continue;
 
-      const amount = stripePrice.unit_amount / 100;
+      const amount = Number((stripePrice.unit_amount / 100).toFixed(2));
       const priceId = stripePrice.id;
       const features = extractStripeProductFeatures(product);
       const limits = extractStripeProductLimits(product);
