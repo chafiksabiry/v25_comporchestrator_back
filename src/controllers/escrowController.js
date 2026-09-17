@@ -22,12 +22,20 @@ import { clearExpiredRetractions, reverseSaleCommission } from '../services/retr
 const REP_SHARE = 0.7;
 const HARX_SHARE = 0.3;
 
-/** First finite number among candidates (supports `{ amount: n }` objects). Explicit 0 is kept. */
+/** First finite number among candidates (supports `{ amount: n }` and numeric strings). Explicit 0 is kept. */
 function firstFiniteNumber(...candidates) {
   for (const c of candidates) {
     if (typeof c === 'number' && Number.isFinite(c)) return c;
-    if (c && typeof c === 'object' && typeof c.amount === 'number' && Number.isFinite(c.amount)) {
-      return c.amount;
+    if (typeof c === 'string' && c.trim() !== '') {
+      const n = Number(c);
+      if (Number.isFinite(n)) return n;
+    }
+    if (c && typeof c === 'object') {
+      if (typeof c.amount === 'number' && Number.isFinite(c.amount)) return c.amount;
+      if (typeof c.toString === 'function' && c._bsontype === 'Decimal128') {
+        const n = Number(c.toString());
+        if (Number.isFinite(n)) return n;
+      }
     }
   }
   return undefined;
@@ -219,9 +227,24 @@ async function bookRepTransaction({
  * defaults only when the gig has no numeric rate configured.
  * Explicit 0€ rates are preserved (do not use `||` — 0 is falsy).
  */
-async function resolveGigRates(call) {
+async function resolveGigRates(call, preferredGigId = null) {
   const db = mongoose.connection.db;
-  const gigId = call?.lead?.gigId || call?.gigId;
+  let gigId = preferredGigId || call?.gigId || null;
+
+  // lead may be a bare ObjectId — fetch it to reach gigId.
+  if (!gigId && call?.lead) {
+    if (call.lead.gigId) {
+      gigId = call.lead.gigId;
+    } else {
+      const leadRef = call.lead._id || call.lead;
+      const leadObjectId = mongoose.Types.ObjectId.isValid(leadRef)
+        ? new mongoose.Types.ObjectId(leadRef)
+        : leadRef;
+      const leadDoc = await db.collection('leads').findOne({ _id: leadObjectId });
+      if (leadDoc?.gigId) gigId = leadDoc.gigId;
+    }
+  }
+
   let callRate = 4.0;
   let txRate = 30.0;
   let gigDoc = null;
@@ -278,7 +301,6 @@ async function reverseWrongCommission(repTx, reason) {
       await HarxCommission.deleteMany({
         type: 'call_commission',
         callId: String(repTx.callId),
-        amount: Number(repTx.harxShare),
       });
     } else if (repTx.type === 'transaction') {
       const filter = { type: 'transaction_commission' };
@@ -303,7 +325,7 @@ async function reverseWrongCommission(repTx, reason) {
 
 /**
  * Refund company / reverse ledger rows booked at default 4€/30€ while the gig
- * is configured at 0€ (or any rate strictly below the booked gross).
+ * is configured at 0€.
  */
 async function correctZeroRateOvercharges(companyId) {
   if (!companyId) return { reversed: 0 };
@@ -313,7 +335,7 @@ async function correctZeroRateOvercharges(companyId) {
     : companyId;
 
   const rows = await RepTransaction.find({
-    companyId: companyObjectId,
+    $or: [{ companyId: companyObjectId }, { companyId: String(companyId) }],
     status: { $in: ['earned', 'pending_retraction', 'paid'] },
     amount: { $gt: 0 },
     type: { $in: ['call_validated', 'transaction'] },
@@ -327,19 +349,56 @@ async function correctZeroRateOvercharges(companyId) {
     if (row.callId) {
       call = await db.collection('calls').findOne({ _id: row.callId });
     }
-    if (!call && row.sourceId && mongoose.Types.ObjectId.isValid(row.sourceId)) {
+    // Sale rows use transactionId as sourceId — resolve call via transaction doc.
+    if (!call && row.transactionDocId) {
+      const txDoc = await db.collection('transactions').findOne({ _id: row.transactionDocId });
+      if (txDoc?.call) {
+        const callRef = mongoose.Types.ObjectId.isValid(txDoc.call)
+          ? new mongoose.Types.ObjectId(txDoc.call)
+          : txDoc.call;
+        call = await db.collection('calls').findOne({ _id: callRef });
+      }
+    }
+    if (!call && row.type === 'transaction' && row.sourceId && mongoose.Types.ObjectId.isValid(row.sourceId)) {
+      const txDoc = await db.collection('transactions').findOne({
+        _id: new mongoose.Types.ObjectId(row.sourceId),
+      });
+      if (txDoc?.call) {
+        const callRef = mongoose.Types.ObjectId.isValid(txDoc.call)
+          ? new mongoose.Types.ObjectId(txDoc.call)
+          : txDoc.call;
+        call = await db.collection('calls').findOne({ _id: callRef });
+      }
+    }
+    if (!call && row.type === 'call_validated' && row.sourceId && mongoose.Types.ObjectId.isValid(row.sourceId)) {
       call = await db.collection('calls').findOne({
         _id: new mongoose.Types.ObjectId(row.sourceId),
       });
     }
-    if (!call) continue;
 
-    const { callRate, txRate } = await resolveGigRates(call);
+    const { callRate, txRate } = await resolveGigRates(call, row.gigId || null);
+    // If we still have no call/gig signal, skip — don't reverse blindly.
+    if (!call && !row.gigId) {
+      console.warn(
+        '[correctZeroRateOvercharges] skip row without call/gig',
+        String(row._id),
+        row.type,
+        row.sourceId
+      );
+      continue;
+    }
+
     const booked = Number(row.amount);
     const expected = row.type === 'call_validated' ? callRate : txRate;
 
     // Only auto-correct when the gig rate is explicitly 0 but money was taken.
-    if (!(expected === 0 && booked > 0)) continue;
+    if (!(expected === 0 && booked > 0)) {
+      continue;
+    }
+
+    console.log(
+      `[correctZeroRateOvercharges] reversing ${row.type} ${String(row._id)} booked=${booked} expected=${expected}`
+    );
 
     const done = await reverseWrongCommission(
       row,
@@ -349,19 +408,18 @@ async function correctZeroRateOvercharges(companyId) {
     reversed += 1;
     touchedRepIds.add(String(row.repId));
 
-    // Align denormalised call/transaction fields so UI + re-analyze stay at 0.
-    const callUpdate = {
-      updatedAt: new Date(),
-    };
-    if (row.type === 'call_validated') {
-      callUpdate.repCallCommission = 0;
-      callUpdate.platformCallCommission = 0;
-    } else {
-      callUpdate.repTransactionCommission = 0;
-      callUpdate.platformTransactionCommission = 0;
-      callUpdate.transaction_price = 0;
+    if (call?._id) {
+      const callUpdate = { updatedAt: new Date() };
+      if (row.type === 'call_validated') {
+        callUpdate.repCallCommission = 0;
+        callUpdate.platformCallCommission = 0;
+      } else {
+        callUpdate.repTransactionCommission = 0;
+        callUpdate.platformTransactionCommission = 0;
+        callUpdate.transaction_price = 0;
+      }
+      await db.collection('calls').updateOne({ _id: call._id }, { $set: callUpdate });
     }
-    await db.collection('calls').updateOne({ _id: call._id }, { $set: callUpdate });
 
     if (row.type === 'transaction' && row.transactionDocId) {
       await db.collection('transactions').updateOne(
@@ -383,6 +441,10 @@ async function correctZeroRateOvercharges(companyId) {
     } catch (err) {
       console.warn('[correctZeroRateOvercharges] agent reconcile skipped:', err.message);
     }
+  }
+
+  if (reversed > 0) {
+    console.log(`[correctZeroRateOvercharges] company=${companyId} reversed=${reversed}`);
   }
 
   return { reversed };
@@ -1846,9 +1908,13 @@ export const escrowController = {
         : companyId;
 
       const { type, status, gigId, limit = 200 } = req.query;
-      const filter = { companyId: companyObjectId };
+      const filter = {
+        $or: [{ companyId: companyObjectId }, { companyId: String(companyId) }],
+      };
       if (type) filter.type = type;
+      // By default hide reversed/refused corrections so the wallet table matches cash.
       if (status) filter.status = status;
+      else filter.status = { $nin: ['reversed', 'refused'] };
       if (gigId && gigId !== 'all' && mongoose.Types.ObjectId.isValid(gigId)) {
         filter.gigId = new mongoose.Types.ObjectId(gigId);
       }
