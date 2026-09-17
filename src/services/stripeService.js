@@ -115,63 +115,45 @@ function metaGet(meta, ...candidates) {
   return undefined;
 }
 
-function humanizeMetaKey(key) {
-  return String(key)
-    .replace(/[_-]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase()
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
 /**
- * Real plan features from Stripe Product (not DB seed mocks).
- * Prefer product metadata lines + marketing_features (Stripe Catalog UI).
+ * Plan feature bullets = Stripe Catalog "marketing features" only.
+ * Quotas / limits stay in product.metadata (returned separately).
  */
 export function extractStripeProductFeatures(product) {
   if (!product || typeof product === 'string') return [];
 
-  const meta = product.metadata && typeof product.metadata === 'object' ? product.metadata : {};
-
-  const metaLines = Object.entries(meta)
-    .filter(([k]) => {
-      const n = k.toLowerCase();
-      return n !== 'features' && !/^feature[_-]?\d+$/i.test(k);
-    })
-    .map(([k, v]) => `${humanizeMetaKey(k)}: ${String(v).trim()}`)
-    .filter((line) => !line.endsWith(':'));
-
   const marketing = Array.isArray(product.marketing_features)
     ? product.marketing_features
-        .map((f) => String(f?.name || '').trim())
+        .map((f) => String(f?.name || f || '').trim())
         .filter(Boolean)
     : [];
+  if (marketing.length) return [...new Set(marketing)];
 
+  // Fallback only if Catalog marketing list is empty.
+  const meta = product.metadata && typeof product.metadata === 'object' ? product.metadata : {};
   if (meta.features) {
     try {
       const parsed = JSON.parse(meta.features);
       if (Array.isArray(parsed)) {
-        marketing.unshift(...parsed.map((x) => String(x).trim()).filter(Boolean));
+        return [...new Set(parsed.map((x) => String(x).trim()).filter(Boolean))];
       }
     } catch {
-      marketing.unshift(
-        ...String(meta.features)
-          .split(/[\n|;]/)
-          .map((s) => s.trim())
-          .filter(Boolean)
-      );
+      return [
+        ...new Set(
+          String(meta.features)
+            .split(/[\n|;,]/)
+            .map((s) => s.trim())
+            .filter(Boolean)
+        ),
+      ];
     }
   }
 
-  const numbered = Object.keys(meta)
+  return Object.keys(meta)
     .filter((k) => /^feature[_-]?\d+$/i.test(k))
     .sort((a, b) => Number(a.replace(/\D/g, '')) - Number(b.replace(/\D/g, '')))
     .map((k) => String(meta[k]).trim())
     .filter(Boolean);
-
-  // Metadata quotas first (ACTIVE GIGS, …), then marketing feature list.
-  const merged = [...metaLines, ...numbered, ...marketing];
-  return [...new Set(merged)];
 }
 
 export function extractStripeProductLimits(product) {
@@ -373,16 +355,31 @@ export const stripeService = {
 
   getPublicPlans: async () => {
     try {
-      const prices = await getStripe().prices.list({
+      const stripe = getStripe();
+      const prices = await stripe.prices.list({
         active: true,
         expand: ['data.product'],
+        limit: 100,
       });
-      // Drop prices whose product was archived/deleted.
-      return prices.data.filter((p) => {
+
+      const active = prices.data.filter((p) => {
         const product = p.product;
         if (!product || typeof product === 'string') return false;
         return product.active !== false;
       });
+
+      // Re-fetch each product so marketing_features + description are complete
+      // (expand on prices.list can omit Catalog marketing fields).
+      const productCache = new Map();
+      for (const price of active) {
+        const productId = price.product.id;
+        if (!productCache.has(productId)) {
+          productCache.set(productId, await stripe.products.retrieve(productId));
+        }
+        price.product = productCache.get(productId);
+      }
+
+      return active;
     } catch (error) {
       console.error('Error fetching plans from Stripe:', error);
       throw error;
