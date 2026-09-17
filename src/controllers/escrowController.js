@@ -22,6 +22,17 @@ import { clearExpiredRetractions, reverseSaleCommission } from '../services/retr
 const REP_SHARE = 0.7;
 const HARX_SHARE = 0.3;
 
+/** First finite number among candidates (supports `{ amount: n }` objects). Explicit 0 is kept. */
+function firstFiniteNumber(...candidates) {
+  for (const c of candidates) {
+    if (typeof c === 'number' && Number.isFinite(c)) return c;
+    if (c && typeof c === 'object' && typeof c.amount === 'number' && Number.isFinite(c.amount)) {
+      return c.amount;
+    }
+  }
+  return undefined;
+}
+
 const PROSPECT_RUBRIC_KEYS = ['RDV', 'A plus tard', 'PAS INTÉRESSÉS', 'PAS AU COURANT', 'DÉJÀ ÉQUIPÉS'];
 const NON_SALE_CALLOUTCOMES = new Set([
   'appointment', 'callback_requested', 'refusal', 'not_interested', 'already_equipped',
@@ -77,21 +88,32 @@ function callHasValidatedTransactionSale(call, transaction) {
   return !!transaction && transaction.validByCompany === true;
 }
 
-/** Prefer denormalised commission fields written at AI scoring time. */
+/** Prefer gig rates (including explicit 0€). Denormalized call fields are fallback only. */
 function resolveCommissionAmounts(call, transaction, { callRate, txRate }) {
-  const callRepShare = Number(call?.repCallCommission);
-  const txRepShare = Number(
-    transaction?.repTransactionCommission ?? call?.repTransactionCommission ?? NaN
+  const callFromDoc = firstFiniteNumber(call?.repCallCommission);
+  const txFromDoc = firstFiniteNumber(
+    transaction?.repTransactionCommission,
+    call?.repTransactionCommission
   );
 
-  const callGross = callRepShare > 0 ? callRepShare / REP_SHARE : callRate;
-  const txGross = txRepShare > 0 ? txRepShare / REP_SHARE : txRate;
+  const callGross =
+    typeof callRate === 'number' && Number.isFinite(callRate)
+      ? callRate
+      : callFromDoc > 0
+        ? callFromDoc / REP_SHARE
+        : 4;
+  const txGross =
+    typeof txRate === 'number' && Number.isFinite(txRate)
+      ? txRate
+      : txFromDoc > 0
+        ? txFromDoc / REP_SHARE
+        : 30;
 
   return {
     callGross,
     txGross,
-    callRepShare: callRepShare > 0 ? callRepShare : callRate * REP_SHARE,
-    txRepShare: txRepShare > 0 ? txRepShare : txRate * REP_SHARE,
+    callRepShare: callGross * REP_SHARE,
+    txRepShare: txGross * REP_SHARE,
   };
 }
 
@@ -194,7 +216,8 @@ async function bookRepTransaction({
 
 /**
  * Resolve gig commission rates for a given call. Falls back to historical
- * defaults so we never crash if a gig is mis-configured.
+ * defaults only when the gig has no numeric rate configured.
+ * Explicit 0€ rates are preserved (do not use `||` — 0 is falsy).
  */
 async function resolveGigRates(call) {
   const db = mongoose.connection.db;
@@ -209,12 +232,160 @@ async function resolveGigRates(call) {
       : gigId;
     gigDoc = await db.collection('gigs').findOne({ _id: gigObjectId });
     if (gigDoc) {
-      callRate = gigDoc.commission?.commission_per_call || gigDoc.rewardPerCall || callRate;
-      txRate = gigDoc.commission?.transactionCommission || gigDoc.rewardPerSale || txRate;
+      const resolvedCall = firstFiniteNumber(
+        gigDoc.commission?.commission_per_call,
+        gigDoc.rewardPerCall
+      );
+      const resolvedTx = firstFiniteNumber(
+        gigDoc.commission?.transactionCommission,
+        gigDoc.rewardPerSale
+      );
+      if (resolvedCall !== undefined) callRate = resolvedCall;
+      if (resolvedTx !== undefined) txRate = resolvedTx;
     }
   }
 
   return { callRate, txRate, gig: gigDoc, gigId: gigId || null };
+}
+
+/**
+ * Reverse a wrongly booked commission (e.g. default 4€/30€ on a 0€ gig).
+ * Refunds the company wallet and excludes the row from rep earnings.
+ * Does NOT flip transaction.validByCompany (sale signature stays).
+ */
+async function reverseWrongCommission(repTx, reason) {
+  if (!repTx || repTx.status === 'reversed' || repTx.status === 'refused') return null;
+  if (!(Number(repTx.amount) > 0)) return null;
+
+  const now = new Date();
+  repTx.status = 'reversed';
+  repTx.meta = {
+    ...(repTx.meta || {}),
+    reversedAt: now,
+    reverseReason: reason || 'Correction commission gig 0€',
+  };
+  await repTx.save();
+
+  await WalletCompany.findOneAndUpdate(
+    { companyId: repTx.companyId },
+    { $inc: { balance: Number(repTx.amount) } },
+    { upsert: true, setDefaultsOnInsert: true }
+  );
+
+  // Drop the matching HARX cut so lifetime HARX wallet no longer counts it.
+  try {
+    if (repTx.type === 'call_validated' && repTx.callId) {
+      await HarxCommission.deleteMany({
+        type: 'call_commission',
+        callId: String(repTx.callId),
+        amount: Number(repTx.harxShare),
+      });
+    } else if (repTx.type === 'transaction') {
+      const filter = { type: 'transaction_commission' };
+      if (repTx.transactionDocId) filter.transactionId = String(repTx.transactionDocId);
+      else if (repTx.callId) filter.callId = String(repTx.callId);
+      await HarxCommission.deleteMany(filter);
+    }
+  } catch (harxErr) {
+    console.warn('[reverseWrongCommission] HarxCommission cleanup skipped:', harxErr.message);
+  }
+
+  try {
+    broadcastUpdate({
+      type: 'rep_wallet_update',
+      repId: String(repTx.repId),
+      companyId: String(repTx.companyId),
+    });
+  } catch (_) { /* noop */ }
+
+  return repTx;
+}
+
+/**
+ * Refund company / reverse ledger rows booked at default 4€/30€ while the gig
+ * is configured at 0€ (or any rate strictly below the booked gross).
+ */
+async function correctZeroRateOvercharges(companyId) {
+  if (!companyId) return { reversed: 0 };
+  const db = mongoose.connection.db;
+  const companyObjectId = mongoose.Types.ObjectId.isValid(companyId)
+    ? new mongoose.Types.ObjectId(companyId)
+    : companyId;
+
+  const rows = await RepTransaction.find({
+    companyId: companyObjectId,
+    status: { $in: ['earned', 'pending_retraction', 'paid'] },
+    amount: { $gt: 0 },
+    type: { $in: ['call_validated', 'transaction'] },
+  });
+
+  let reversed = 0;
+  const touchedRepIds = new Set();
+
+  for (const row of rows) {
+    let call = null;
+    if (row.callId) {
+      call = await db.collection('calls').findOne({ _id: row.callId });
+    }
+    if (!call && row.sourceId && mongoose.Types.ObjectId.isValid(row.sourceId)) {
+      call = await db.collection('calls').findOne({
+        _id: new mongoose.Types.ObjectId(row.sourceId),
+      });
+    }
+    if (!call) continue;
+
+    const { callRate, txRate } = await resolveGigRates(call);
+    const booked = Number(row.amount);
+    const expected = row.type === 'call_validated' ? callRate : txRate;
+
+    // Only auto-correct when the gig rate is explicitly 0 but money was taken.
+    if (!(expected === 0 && booked > 0)) continue;
+
+    const done = await reverseWrongCommission(
+      row,
+      `Correction auto: gig à 0€ mais commission ${booked}€ débitée`
+    );
+    if (!done) continue;
+    reversed += 1;
+    touchedRepIds.add(String(row.repId));
+
+    // Align denormalised call/transaction fields so UI + re-analyze stay at 0.
+    const callUpdate = {
+      updatedAt: new Date(),
+    };
+    if (row.type === 'call_validated') {
+      callUpdate.repCallCommission = 0;
+      callUpdate.platformCallCommission = 0;
+    } else {
+      callUpdate.repTransactionCommission = 0;
+      callUpdate.platformTransactionCommission = 0;
+      callUpdate.transaction_price = 0;
+    }
+    await db.collection('calls').updateOne({ _id: call._id }, { $set: callUpdate });
+
+    if (row.type === 'transaction' && row.transactionDocId) {
+      await db.collection('transactions').updateOne(
+        { _id: row.transactionDocId },
+        {
+          $set: {
+            repTransactionCommission: 0,
+            platformTransactionCommission: 0,
+            updatedAt: new Date(),
+          },
+        }
+      );
+    }
+  }
+
+  for (const repId of touchedRepIds) {
+    try {
+      await reconcileAgentEarnings(repId);
+    } catch (err) {
+      console.warn('[correctZeroRateOvercharges] agent reconcile skipped:', err.message);
+    }
+  }
+
+  return { reversed };
 }
 
 /**
@@ -597,8 +768,10 @@ async function reconcileAgentEarnings(agentId) {
       const gig = await db.collection('gigs').findOne({ _id: gigObjectId });
       if (!gig) continue;
 
-      const callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 4.00;
-      const txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 30.00;
+      const callRate =
+        firstFiniteNumber(gig.commission?.commission_per_call, gig.rewardPerCall) ?? 4.0;
+      const txRate =
+        firstFiniteNumber(gig.commission?.transactionCommission, gig.rewardPerSale) ?? 30.0;
       const transaction = await db.collection('transactions').findOne({
         $or: [{ call: call._id }, { call: callIdStr }]
       });
@@ -659,8 +832,10 @@ async function reconcileHarxEarnings() {
         const gig = await db.collection('gigs').findOne({ _id: gigObjectId });
 
         if (gig) {
-          const callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 4.00;
-          const txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 30.00;
+          const callRate =
+            firstFiniteNumber(gig.commission?.commission_per_call, gig.rewardPerCall) ?? 4.0;
+          const txRate =
+            firstFiniteNumber(gig.commission?.transactionCommission, gig.rewardPerSale) ?? 30.0;
 
           const callIdStr = call._id.toString();
 
@@ -760,6 +935,22 @@ async function reconcileAgentRewards(agentId) {
       ]
     }).toArray();
 
+    // Correct 0€-gig overcharges for every company this agent worked for.
+    const companyIds = [
+      ...new Set(
+        aiValidatedCalls
+          .map((c) => (c.companyId ? String(c.companyId) : null))
+          .filter(Boolean)
+      ),
+    ];
+    for (const companyId of companyIds) {
+      try {
+        await correctZeroRateOvercharges(companyId);
+      } catch (err) {
+        console.warn('[reconcileAgentRewards] zero-rate correction skipped:', err.message);
+      }
+    }
+
     for (const call of aiValidatedCalls) {
       if (!call.agent || !call.companyId) continue;
 
@@ -781,6 +972,9 @@ async function reconcileAgentRewards(agentId) {
 async function reconcileCompanyRewards(companyId) {
   if (!companyId) return;
   try {
+    // Refund default 4€/30€ bookings when the gig is actually configured at 0€.
+    await correctZeroRateOvercharges(companyId);
+
     const db = mongoose.connection.db;
     const companyObjectId = mongoose.Types.ObjectId.isValid(companyId)
       ? new mongoose.Types.ObjectId(companyId)
@@ -1336,8 +1530,10 @@ export const escrowController = {
               const gigIdObj = mongoose.Types.ObjectId.isValid(leadDoc.gigId) ? new mongoose.Types.ObjectId(leadDoc.gigId) : leadDoc.gigId;
               const gig = await db.collection('gigs').findOne({ _id: gigIdObj });
               if (gig) {
-                callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 0;
-                txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 0;
+                callRate =
+                  firstFiniteNumber(gig.commission?.commission_per_call, gig.rewardPerCall) ?? 0;
+                txRate =
+                  firstFiniteNumber(gig.commission?.transactionCommission, gig.rewardPerSale) ?? 0;
               }
             }
           }
@@ -1596,8 +1792,14 @@ export const escrowController = {
           gig: gigDoc ? {
             _id: gigDoc._id,
             title: gigDoc.title || gigDoc.name,
-            commission_per_call: gigDoc.commission?.commission_per_call || gigDoc.rewardPerCall,
-            transactionCommission: gigDoc.commission?.transactionCommission || gigDoc.rewardPerSale
+            commission_per_call: firstFiniteNumber(
+              gigDoc.commission?.commission_per_call,
+              gigDoc.rewardPerCall
+            ),
+            transactionCommission: firstFiniteNumber(
+              gigDoc.commission?.transactionCommission,
+              gigDoc.rewardPerSale
+            ),
           } : null
         };
       });
@@ -1972,6 +2174,7 @@ export const escrowController = {
         return res.status(400).json({ error: 'Company ID is required' });
       }
 
+      const zeroRateFix = await correctZeroRateOvercharges(companyId);
       await reconcilePendingTransactions(companyId);
       await reconcileCallCharges(companyId);
       await reconcileCompanyRewards(companyId);
@@ -1980,7 +2183,11 @@ export const escrowController = {
       // Broadcast update via WebSocket (single-arg payload; clients filter by companyId)
       broadcastUpdate({ type: 'reconciliation_complete', companyId });
 
-      res.status(200).json({ success: true, message: 'Reconciliation triggered' });
+      res.status(200).json({
+        success: true,
+        message: 'Reconciliation triggered',
+        zeroRateCommissionsReversed: zeroRateFix?.reversed || 0,
+      });
     } catch (err) {
       console.error('Error triggering reconciliation:', err);
       res.status(500).json({ error: 'Failed to trigger reconciliation' });
