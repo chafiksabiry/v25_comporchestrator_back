@@ -182,38 +182,15 @@ class PhoneNumberController {
     } catch (error) {
       console.error('Error purchasing phone number:', error);
 
-      if (error.code === 21649 || String(error.message || '').includes('correct regulation type')) {
-        const refundInfo = await this.refundFailedLinePayment(
-          req.body?.paymentId,
-          'twilio_21649_bundle_regulation_mismatch'
-        );
-        return res.status(400).json({
-          error: 'Regulatory Bundle Required',
-          message: refundInfo.refunded
-            ? "Ce numéro ne peut pas être provisionné avec le dossier réglementaire actuel (type de régulation incompatible). Votre paiement a été remboursé automatiquement — choisissez une ligne géographique fixe (+33 1/2/3/4/5) ou mettez à jour le Regulatory Bundle France Local dans la console Twilio."
-            : "Ce numéro ne peut pas être provisionné avec le dossier réglementaire actuel. Contactez le support pour un remboursement si le paiement a été débité.",
-          refunded: refundInfo.refunded,
-          refundProvider: refundInfo.provider,
-          moreInfo: error.moreInfo || 'https://www.twilio.com/docs/errors/21649'
-        });
-      }
-
-      if (error.message.includes('already exists')) {
-        return res.status(409).json({ error: 'Conflict', message: error.message });
-      }
-      if (error.message.includes('Insufficient balance')) {
-        return res.status(402).json({ error: 'Payment Required', message: error.message });
-      }
-      if (error.message.includes('no longer available')) {
-        return res.status(410).json({ error: 'Gone', message: error.message });
-      }
-      if (error.message.includes('invalid')) {
-        return res.status(400).json({ error: 'Bad Request', message: error.message });
-      }
-
-      res.status(500).json({
-        error: 'Internal Server Error',
-        message: error.message || 'Failed to purchase phone number'
+      // Payment already succeeded before Twilio/Telnyx provision — refund on
+      // ANY failure so the customer is never charged for a line they never got.
+      const refundInfo = await this.refundFailedLinePayment(
+        req.body?.paymentId,
+        this.lineProvisionFailureReason(error)
+      );
+      return this.sendProvisionFailureResponse(res, error, refundInfo, {
+        defaultError: 'Internal Server Error',
+        defaultMessage: error.message || 'Failed to purchase phone number'
       });
     }
   }
@@ -350,39 +327,87 @@ class PhoneNumberController {
     } catch (error) {
       console.error('Error purchasing Twilio phone number:', error);
 
-      if (error.code === 21404) {
-        return res.status(400).json({
-          error: 'Twilio Trial Limit Reached',
-          message: 'Trial accounts are allowed only one Twilio number. Please upgrade your Twilio account to purchase more numbers.'
-        });
-      }
-
-      if (error.code === 21649) {
-        // Twilio refused to provision the number because the prepared bundle
-        // does not cover this number's regulation type. The customer has
-        // already been charged via Stripe / PayPal at this point, so we
-        // issue a full refund here to keep the ledger consistent.
-        const refundInfo = await this.refundFailedLinePayment(
-          req.body?.paymentId,
-          'twilio_21649_bundle_regulation_mismatch'
-        );
-
-        return res.status(400).json({
-          error: 'Regulatory Bundle Required',
-          message: refundInfo.refunded
-            ? "Twilio could not provision this French number with the local Regulatory Bundle (it requires a different regulation type). Your payment was refunded automatically — please pick a geographic landline (starting with +33 1/2/3/4/5)."
-            : "Twilio could not provision this number with the current Regulatory Bundle. Please choose a different number or contact support to refund this payment.",
-          refunded: refundInfo.refunded,
-          refundProvider: refundInfo.provider,
-          moreInfo: error.moreInfo
-        });
-      }
-
-      res.status(500).json({
-        error: 'Failed to purchase Twilio phone number',
-        message: error.message
+      const refundInfo = await this.refundFailedLinePayment(
+        req.body?.paymentId,
+        this.lineProvisionFailureReason(error)
+      );
+      return this.sendProvisionFailureResponse(res, error, refundInfo, {
+        defaultError: 'Failed to purchase Twilio phone number',
+        defaultMessage: error.message || 'Failed to purchase Twilio phone number'
       });
     }
+  }
+
+  /** Stable refund reason codes for PhoneNumberPayment.failureReason. */
+  lineProvisionFailureReason(error) {
+    if (error?.code === 21649 || String(error?.message || '').includes('correct regulation type')) {
+      return 'twilio_21649_bundle_regulation_mismatch';
+    }
+    if (error?.code === 21404) return 'twilio_21404_trial_limit';
+    const msg = String(error?.message || '');
+    if (msg.includes('already exists')) return 'provision_number_already_exists';
+    if (msg.includes('no longer available')) return 'provision_number_unavailable';
+    if (msg.includes('Insufficient balance')) return 'provider_insufficient_balance';
+    if (msg.toLowerCase().includes('invalid')) return 'provision_invalid_request';
+    return `provision_failed_${error?.code || 'unknown'}`;
+  }
+
+  /**
+   * Map a provision error to the right HTTP status + message, appending
+   * auto-refund wording when the Stripe/PayPal charge was reversed.
+   */
+  sendProvisionFailureResponse(res, error, refundInfo, { defaultError, defaultMessage }) {
+    const refunded = Boolean(refundInfo?.refunded);
+    const refundNote = refunded
+      ? ' Votre paiement a été remboursé automatiquement — vous pouvez réessayer avec un autre numéro.'
+      : ' Contactez le support si le paiement a été débité.';
+
+    const withRefund = (message) => `${message}${refundNote}`;
+    const base = {
+      refunded,
+      refundProvider: refundInfo?.provider || null
+    };
+
+    if (error?.code === 21649 || String(error?.message || '').includes('correct regulation type')) {
+      return res.status(400).json({
+        ...base,
+        error: 'Regulatory Bundle Required',
+        message: withRefund(
+          'Ce numéro ne peut pas être provisionné avec le dossier réglementaire actuel (type de régulation incompatible). Choisissez une ligne géographique fixe (+33 2/3/4/5) ou mettez à jour le Regulatory Bundle France Local dans la console Twilio.'
+        ),
+        moreInfo: error.moreInfo || 'https://www.twilio.com/docs/errors/21649'
+      });
+    }
+
+    if (error?.code === 21404) {
+      return res.status(400).json({
+        ...base,
+        error: 'Twilio Trial Limit Reached',
+        message: withRefund(
+          'Les comptes Twilio trial ne peuvent provisionner qu’un seul numéro. Passez le compte Twilio en production pour en acheter d’autres.'
+        )
+      });
+    }
+
+    const msg = String(error?.message || '');
+    if (msg.includes('already exists')) {
+      return res.status(409).json({ ...base, error: 'Conflict', message: withRefund(msg) });
+    }
+    if (msg.includes('Insufficient balance')) {
+      return res.status(402).json({ ...base, error: 'Payment Required', message: withRefund(msg) });
+    }
+    if (msg.includes('no longer available')) {
+      return res.status(410).json({ ...base, error: 'Gone', message: withRefund(msg) });
+    }
+    if (msg.toLowerCase().includes('invalid')) {
+      return res.status(400).json({ ...base, error: 'Bad Request', message: withRefund(msg) });
+    }
+
+    return res.status(500).json({
+      ...base,
+      error: defaultError,
+      message: withRefund(defaultMessage)
+    });
   }
 
   /**
@@ -847,31 +872,14 @@ class PhoneNumberController {
       res.json({ success: true, recovered: true, paymentId: String(payment._id), data: newNumber });
     } catch (error) {
       console.error('Error recovering orphan line payment:', error);
-      if (error.message && error.message.includes('already exists')) {
-        return res.status(409).json({ error: 'Conflict', message: error.message });
-      }
-      if (error.code === 21404) {
-        return res.status(400).json({
-          error: 'Twilio Trial Limit Reached',
-          message: 'Trial accounts are allowed only one Twilio number.'
-        });
-      }
-      if (error.code === 21649) {
-        const refundInfo = await this.refundFailedLinePayment(
-          req.body?.paymentId,
-          'twilio_21649_bundle_regulation_mismatch_on_recovery'
-        );
-        return res.status(400).json({
-          error: 'Regulatory Bundle Required',
-          message: refundInfo.refunded
-            ? "Twilio could not provision this number — your payment was refunded automatically."
-            : "Twilio could not provision this number with the current Regulatory Bundle.",
-          refunded: refundInfo.refunded,
-          refundProvider: refundInfo.provider,
-          moreInfo: error.moreInfo
-        });
-      }
-      res.status(500).json({ error: 'Failed to recover orphan payment', message: error.message });
+      const refundInfo = await this.refundFailedLinePayment(
+        req.body?.paymentId,
+        `${this.lineProvisionFailureReason(error)}_on_recovery`
+      );
+      return this.sendProvisionFailureResponse(res, error, refundInfo, {
+        defaultError: 'Failed to recover orphan payment',
+        defaultMessage: error.message || 'Failed to recover orphan payment'
+      });
     }
   }
 
