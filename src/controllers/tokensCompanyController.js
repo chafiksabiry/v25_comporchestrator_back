@@ -1,13 +1,30 @@
-import TokensCompany from '../models/TokensCompany.js';
+import TokensCompany, {
+  isAiProviderAllowed,
+  normalizeAiProviders,
+} from '../models/TokensCompany.js';
 import TokensUsageLedger from '../models/TokensUsageLedger.js';
 import mongoose from 'mongoose';
 
 async function ensureWallet(companyId) {
   let wallet = await TokensCompany.findOne({ companyId });
   if (!wallet) {
-    wallet = await TokensCompany.create({ companyId, tokens: 0 });
+    wallet = await TokensCompany.create({
+      companyId,
+      tokens: 0,
+      aiProviders: { openai: true, anthropic: true, gemini: true },
+    });
   }
   return wallet;
+}
+
+function walletPublicData(wallet, companyId) {
+  return {
+    companyId,
+    tokens: typeof wallet.tokens === 'number' ? wallet.tokens : 0,
+    purchasedTokens: typeof wallet.purchasedTokens === 'number' ? wallet.purchasedTokens : 0,
+    consumedTokens: typeof wallet.consumedTokens === 'number' ? wallet.consumedTokens : 0,
+    aiProviders: normalizeAiProviders(wallet.aiProviders),
+  };
 }
 
 function toObjectIdOrNull(value) {
@@ -59,16 +76,32 @@ export const tokensCompanyController = {
       const wallet = await ensureWallet(companyId);
       res.status(200).json({
         success: true,
-        data: {
-          companyId,
-          tokens: typeof wallet.tokens === 'number' ? wallet.tokens : 0,
-          purchasedTokens: typeof wallet.purchasedTokens === 'number' ? wallet.purchasedTokens : 0,
-          consumedTokens: typeof wallet.consumedTokens === 'number' ? wallet.consumedTokens : 0,
-        },
+        data: walletPublicData(wallet, companyId),
       });
     } catch (err) {
       console.error('Error fetching tokens:', err);
       res.status(500).json({ error: 'Failed to fetch tokens' });
+    }
+  },
+
+  /** Admin / ops: update which LLM providers a company may use. */
+  updateAiProviders: async (req, res) => {
+    const { companyId } = req.params;
+    const raw = req.body?.aiProviders || req.body?.providers || req.body;
+    if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    try {
+      const wallet = await ensureWallet(companyId);
+      const next = normalizeAiProviders({
+        openai: raw?.openai ?? wallet.aiProviders?.openai,
+        anthropic: raw?.anthropic ?? wallet.aiProviders?.anthropic,
+        gemini: raw?.gemini ?? wallet.aiProviders?.gemini,
+      });
+      wallet.aiProviders = next;
+      await wallet.save();
+      res.status(200).json({ success: true, data: walletPublicData(wallet, companyId) });
+    } catch (err) {
+      console.error('Error updating AI providers:', err);
+      res.status(500).json({ error: 'Failed to update AI providers' });
     }
   },
 
@@ -114,6 +147,19 @@ export const tokensCompanyController = {
 
     try {
       const wallet = await ensureWallet(companyId);
+
+      const providerHint = meta?.provider || req.body?.provider || null;
+      if (providerHint && !isAiProviderAllowed(wallet.aiProviders, providerHint)) {
+        return res.status(403).json({
+          success: false,
+          error: 'provider_disabled',
+          message: `Le provider AI « ${providerHint} » est désactivé pour cette company.`,
+          data: {
+            tokens: wallet.tokens || 0,
+            aiProviders: normalizeAiProviders(wallet.aiProviders),
+          },
+        });
+      }
 
       if (Array.isArray(wallet.chargedUsageIds) && wallet.chargedUsageIds.includes(String(usageId))) {
         return res.status(200).json({
@@ -193,10 +239,11 @@ export const tokensCompanyController = {
     try {
       const wallet = await ensureWallet(companyId);
       const tokens = typeof wallet.tokens === 'number' ? wallet.tokens : 0;
+      const aiProviders = normalizeAiProviders(wallet.aiProviders);
       const ok = tokens >= minRequired;
       res.status(ok ? 200 : 402).json({
         success: ok,
-        data: { tokens, minRequired },
+        data: { tokens, minRequired, aiProviders },
         error: ok ? undefined : 'insufficient_tokens',
         message: ok
           ? undefined

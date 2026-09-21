@@ -7,6 +7,7 @@ router.get('/:companyId/check', tokensCompanyController.checkBalance);
 router.get('/:companyId/usage-by-gig', tokensCompanyController.getUsageByGig);
 router.get('/:companyId/usage', tokensCompanyController.getUsage);
 router.get('/:companyId', tokensCompanyController.getTokens);
+router.patch('/:companyId/ai-providers', tokensCompanyController.updateAiProviders);
 router.post('/buy-tokens', tokensCompanyController.buyTokens);
 router.post('/charge-usage', tokensCompanyController.chargeUsage);
 
