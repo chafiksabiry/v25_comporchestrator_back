@@ -1020,6 +1020,38 @@ class PhoneNumberController {
   }
 
   /**
+   * Assign (or re-assign) an existing phone line to a company gig.
+   * Used when a line shows as "Non affecté" because its gig is missing / orphaned.
+   */
+  async assignNumberToGig(req, res) {
+    try {
+      const { id, phoneNumber, gigId, companyId } = req.body || {};
+      const updated = await phoneNumberService.assignPhoneNumberToGig({
+        id,
+        phoneNumber,
+        gigId,
+        companyId
+      });
+      res.json({
+        success: true,
+        data: {
+          id: updated._id,
+          phoneNumber: updated.phoneNumber,
+          gigId: updated.gigId,
+          companyId: updated.companyId,
+          status: updated.status
+        }
+      });
+    } catch (error) {
+      console.error('Error assigning phone number to gig:', error);
+      res.status(error.status || 500).json({
+        error: error.status === 404 ? 'Not Found' : 'Failed to assign phone number',
+        message: error.message || 'Failed to assign phone number to gig'
+      });
+    }
+  }
+
+  /**
    * Configure la fonctionnalité voix pour un numéro de téléphone
    * @route POST /api/phone-numbers/:phoneNumber/configure-voice
    */

@@ -4,7 +4,7 @@ import telnyx from 'telnyx';
 import twilio from 'twilio';
 import axios from 'axios';
 import FormData from 'form-data';
-
+import mongoose from 'mongoose';
 
 class PhoneNumberService {
   constructor() {
@@ -693,6 +693,44 @@ class PhoneNumberService {
 
   async getPhoneNumbersByGigId(gigId) {
     return await PhoneNumber.find({ gigId });
+  }
+
+  /**
+   * Re-attach an existing company phone line to a gig (e.g. orphan / wrong gig).
+   */
+  async assignPhoneNumberToGig({ id, phoneNumber, gigId, companyId }) {
+    if (!gigId || !companyId) {
+      const err = new Error('gigId and companyId are required');
+      err.status = 400;
+      throw err;
+    }
+    if (!mongoose.Types.ObjectId.isValid(gigId) || !mongoose.Types.ObjectId.isValid(companyId)) {
+      const err = new Error('Invalid gigId or companyId');
+      err.status = 400;
+      throw err;
+    }
+
+    const query = { companyId };
+    if (id && mongoose.Types.ObjectId.isValid(id)) {
+      query._id = id;
+    } else if (phoneNumber) {
+      query.phoneNumber = String(phoneNumber).trim();
+    } else {
+      const err = new Error('id or phoneNumber is required');
+      err.status = 400;
+      throw err;
+    }
+
+    const doc = await PhoneNumber.findOne(query);
+    if (!doc) {
+      const err = new Error('Phone number not found for this company');
+      err.status = 404;
+      throw err;
+    }
+
+    doc.gigId = gigId;
+    await doc.save();
+    return doc;
   }
 
   async deletePhoneNumber(id) {

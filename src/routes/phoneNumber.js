@@ -50,6 +50,10 @@ router.post('/twilio/addresses', phoneNumberController.createTwilioAddress.bind(
 // Get all phone numbers
 router.get('/', phoneNumberController.getAllNumbers.bind(phoneNumberController));
 
+// Assign / re-assign an existing line to a gig
+router.patch('/assign-gig', phoneNumberController.assignNumberToGig.bind(phoneNumberController));
+router.post('/assign-gig', phoneNumberController.assignNumberToGig.bind(phoneNumberController));
+
 // Delete a phone number
 router.delete('/:id', phoneNumberController.deleteNumber.bind(phoneNumberController));
 
