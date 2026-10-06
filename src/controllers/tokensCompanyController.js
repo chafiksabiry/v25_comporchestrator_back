@@ -1,5 +1,6 @@
 import TokensCompany from '../models/TokensCompany.js';
 import TokensUsageLedger from '../models/TokensUsageLedger.js';
+import CompanyPayment from '../models/CompanyPayment.js';
 import mongoose from 'mongoose';
 
 async function ensureWallet(companyId) {
@@ -14,6 +15,21 @@ function toObjectIdOrNull(value) {
   const s = String(value || '').trim();
   if (!s || !mongoose.Types.ObjectId.isValid(s)) return null;
   return new mongoose.Types.ObjectId(s);
+}
+
+async function resolveLastPurchasedAt(companyId, wallet) {
+  if (wallet?.lastPurchasedAt) return wallet.lastPurchasedAt;
+  const companyOid = toObjectIdOrNull(companyId);
+  if (!companyOid) return null;
+  const latest = await CompanyPayment.findOne({
+    companyId: companyOid,
+    purpose: 'tokens_purchase',
+    status: 'succeeded',
+  })
+    .sort({ fulfilledAt: -1, createdAt: -1 })
+    .select('fulfilledAt createdAt')
+    .lean();
+  return latest?.fulfilledAt || latest?.createdAt || null;
 }
 
 function extractGigId(meta, bodyGigId) {
@@ -57,6 +73,11 @@ export const tokensCompanyController = {
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
     try {
       const wallet = await ensureWallet(companyId);
+      const lastPurchasedAt = await resolveLastPurchasedAt(companyId, wallet);
+      if (lastPurchasedAt && !wallet.lastPurchasedAt) {
+        wallet.lastPurchasedAt = lastPurchasedAt;
+        await wallet.save().catch(() => null);
+      }
       res.status(200).json({
         success: true,
         data: {
@@ -64,11 +85,47 @@ export const tokensCompanyController = {
           tokens: typeof wallet.tokens === 'number' ? wallet.tokens : 0,
           purchasedTokens: typeof wallet.purchasedTokens === 'number' ? wallet.purchasedTokens : 0,
           consumedTokens: typeof wallet.consumedTokens === 'number' ? wallet.consumedTokens : 0,
+          lastPurchasedAt: lastPurchasedAt ? new Date(lastPurchasedAt).toISOString() : null,
         },
       });
     } catch (err) {
       console.error('Error fetching tokens:', err);
       res.status(500).json({ error: 'Failed to fetch tokens' });
+    }
+  },
+
+  /** Succeeded prepaid token purchases for the company (newest first). */
+  getPurchases: async (req, res) => {
+    const { companyId } = req.params;
+    if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    try {
+      const companyOid = toObjectIdOrNull(companyId);
+      if (!companyOid) return res.status(400).json({ error: 'Invalid companyId' });
+      const limit = Math.min(100, Math.max(1, Math.round(Number(req.query.limit || 20))));
+      const rows = await CompanyPayment.find({
+        companyId: companyOid,
+        purpose: 'tokens_purchase',
+        status: 'succeeded',
+      })
+        .sort({ fulfilledAt: -1, createdAt: -1 })
+        .limit(limit)
+        .lean();
+
+      res.status(200).json({
+        success: true,
+        data: rows.map((row) => ({
+          id: String(row._id),
+          tokens: Math.round(Number(row.quantity || 0)),
+          amountCents: Number(row.amount || 0),
+          currency: row.currency || 'EUR',
+          provider: row.provider || null,
+          purchasedAt: row.fulfilledAt || row.createdAt || null,
+          status: row.status,
+        })),
+      });
+    } catch (err) {
+      console.error('Error fetching token purchases:', err);
+      res.status(500).json({ error: 'Failed to fetch token purchases' });
     }
   },
 
@@ -85,6 +142,7 @@ export const tokensCompanyController = {
       const purchased = Math.round(Number(amount));
       wallet.tokens = (wallet.tokens || 0) + purchased;
       wallet.purchasedTokens = (wallet.purchasedTokens || 0) + purchased;
+      wallet.lastPurchasedAt = new Date();
       await wallet.save();
 
       res.status(200).json({ success: true, data: wallet });

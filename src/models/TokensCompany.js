@@ -24,6 +24,11 @@ const tokensCompanySchema = new mongoose.Schema({
     required: true,
     default: 0
   },
+  /** Last successful prepaid tokens purchase (Stripe / PayPal / admin buy). */
+  lastPurchasedAt: {
+    type: Date,
+    default: null,
+  },
   // Idempotency keys for AI usage charges
   chargedUsageIds: {
     type: [String],

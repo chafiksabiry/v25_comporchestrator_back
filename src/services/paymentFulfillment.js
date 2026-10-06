@@ -70,11 +70,13 @@ export async function fulfillTokensPurchase(payment) {
   }
   wallet.tokens = (wallet.tokens || 0) + tokens;
   wallet.purchasedTokens = (wallet.purchasedTokens || 0) + tokens;
+  wallet.lastPurchasedAt = new Date();
   await wallet.save();
 
   return {
     tokens: wallet.tokens,
     purchasedTokens: wallet.purchasedTokens,
+    lastPurchasedAt: wallet.lastPurchasedAt,
     credited: tokens
   };
 }
