@@ -133,7 +133,9 @@ class PhoneNumberService {
 
   async searchTwilioNumbers(searchParams) {
     const countryCode = (searchParams.countryCode || 'US').toString().toUpperCase();
-    const limit = Math.min(Math.max(parseInt(searchParams.limit, 10) || 50, 1), 100);
+    // Hard floor at 50 — Twilio AvailablePhoneNumbers defaults to a tiny page
+    // (~10) when under-requested, which empties the buy UI after filtering.
+    const limit = Math.min(Math.max(parseInt(searchParams.limit, 10) || 50, 50), 100);
     const areaCode = searchParams.areaCode;
     const numberType = 'local';
 
@@ -186,17 +188,21 @@ class PhoneNumberService {
       let numbers = [];
 
       // FR: Twilio Local inventory is mostly geographic landlines (+331–5).
-      // Zone Contains fan-out often returns 0 in practice — prefer a broad
-      // voiceEnabled list, then keep only prefixes compatible with the local
-      // Regulatory Bundle (+33[1-5]). Twilio SDK param is voiceEnabled (not voice).
+      // Prefer a broad voiceEnabled list, then keep only prefixes compatible
+      // with the local Regulatory Bundle (+33[1-5]). Always pass pageSize —
+      // without it Twilio AvailablePhoneNumbers often returns only ~10 rows.
+      // Twilio SDK param is voiceEnabled (not voice).
+      const pageSize = Math.min(Math.max(limit, 50), 100);
       if (countryCode === 'FR' && !areaCode) {
         numbers = await listWithTimeout({
-          limit: Math.min(Math.max(limit * 2, 50), 100),
+          limit: pageSize,
+          pageSize,
           voiceEnabled: true
         });
       } else {
         const searchOptions = {
-          limit,
+          limit: pageSize,
+          pageSize,
           voiceEnabled: true
         };
         if (areaCode) {
