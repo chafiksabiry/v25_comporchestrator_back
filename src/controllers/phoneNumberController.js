@@ -1007,15 +1007,25 @@ class PhoneNumberController {
 
   async deleteNumber(req, res) {
     try {
-      const result = await phoneNumberService.deletePhoneNumber(req.params.id);
-      res.json(result);
+      const companyId =
+        req.body?.companyId ||
+        req.query?.companyId ||
+        req.headers['x-company-id'];
+      const phoneNumber = req.body?.phoneNumber || req.query?.phoneNumber;
+      const id = req.params.id || req.body?.id || req.query?.id;
+      const result = await phoneNumberService.deletePhoneNumber({
+        id,
+        phoneNumber,
+        companyId,
+      });
+      res.json({ success: true, ...result });
     } catch (error) {
       console.error('Error deleting phone number:', error);
-      if (error.message === 'Phone number not found') {
-        res.status(404).json({ error: error.message });
-      } else {
-        res.status(500).json({ error: 'Failed to delete phone number' });
-      }
+      const status = error.status || (error.message === 'Phone number not found' ? 404 : 500);
+      res.status(status).json({
+        error: status === 404 ? 'Not Found' : 'Failed to terminate phone number',
+        message: error.message || 'Failed to terminate phone number',
+      });
     }
   }
 

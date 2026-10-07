@@ -54,8 +54,9 @@ router.get('/', phoneNumberController.getAllNumbers.bind(phoneNumberController))
 router.patch('/assign-gig', phoneNumberController.assignNumberToGig.bind(phoneNumberController));
 router.post('/assign-gig', phoneNumberController.assignNumberToGig.bind(phoneNumberController));
 
-// Delete a phone number
+// Terminate a phone number at Telnyx/Twilio + remove from HARX
 router.delete('/:id', phoneNumberController.deleteNumber.bind(phoneNumberController));
+router.post('/terminate', phoneNumberController.deleteNumber.bind(phoneNumberController));
 
 // Check if a gig has an active number
 router.get('/gig/:gigId/check', phoneNumberController.checkGigNumber.bind(phoneNumberController));

@@ -543,18 +543,28 @@ class PhoneNumberService {
         .sort({ createdAt: -1 }) // Les plus récents d'abord
         .lean();
 
-      return numbers.map(number => ({
-        id: number._id,
-        phoneNumber: number.phoneNumber,
-        provider: number.provider,
-        status: number.status,
-        orderStatus: number.orderStatus,
-        features: number.features,
-        gigId: number.gigId,
-        companyId: number.companyId,
-        createdAt: number.createdAt,
-        updatedAt: number.updatedAt
-      }));
+      return numbers
+        .filter((number) => {
+          const st = String(number.status || '').toLowerCase();
+          return st !== 'cancelled' && st !== 'released' && st !== 'terminated';
+        })
+        .map(number => ({
+          id: number._id,
+          _id: number._id,
+          phoneNumber: number.phoneNumber,
+          provider: number.provider,
+          status: number.status,
+          orderStatus: number.orderStatus,
+          features: number.features,
+          gigId: number.gigId,
+          companyId: number.companyId,
+          createdAt: number.createdAt,
+          updatedAt: number.updatedAt,
+          price: number.price,
+          currency: number.currency,
+          isTrial: Boolean(number.isTrial),
+          trialExpiresAt: number.trialExpiresAt || null,
+        }));
     } catch (error) {
       console.error('❌ Error fetching all phone numbers:', error);
       throw error;
@@ -733,19 +743,98 @@ class PhoneNumberService {
     return doc;
   }
 
-  async deletePhoneNumber(id) {
-    const phoneNumber = await PhoneNumber.findById(id);
-    if (!phoneNumber) {
-      throw new Error('Phone number not found');
+  /**
+   * Terminate a line at the telephony provider (Telnyx / Twilio) then remove it
+   * from HARX. Requires company ownership when companyId is provided.
+   */
+  async deletePhoneNumber({ id, phoneNumber, companyId } = {}) {
+    const query = {};
+    if (id && mongoose.Types.ObjectId.isValid(String(id))) {
+      query._id = id;
+    } else if (phoneNumber) {
+      query.phoneNumber = String(phoneNumber).trim();
+    } else if (typeof arguments[0] === 'string' && mongoose.Types.ObjectId.isValid(arguments[0])) {
+      // Legacy: deletePhoneNumber(mongoId)
+      query._id = arguments[0];
+    } else {
+      const err = new Error('id or phoneNumber is required');
+      err.status = 400;
+      throw err;
+    }
+    if (companyId) {
+      if (!mongoose.Types.ObjectId.isValid(String(companyId))) {
+        const err = new Error('Invalid companyId');
+        err.status = 400;
+        throw err;
+      }
+      query.companyId = companyId;
     }
 
-    // Release number from Telnyx
-    await this.telnyxClient.phoneNumbers.delete(phoneNumber.telnyxId);
+    const doc = await PhoneNumber.findOne(query);
+    if (!doc) {
+      const err = new Error('Phone number not found');
+      err.status = 404;
+      throw err;
+    }
 
-    // Remove from database
-    await phoneNumber.remove();
+    const provider = String(doc.provider || '').toLowerCase();
+    const e164 = String(doc.phoneNumber || '').trim();
 
-    return { message: 'Phone number deleted successfully' };
+    try {
+      if (provider === 'twilio' || doc.twilioId) {
+        let sid = doc.twilioId ? String(doc.twilioId) : '';
+        if (!sid && this.twilioClient) {
+          const listed = await this.twilioClient.incomingPhoneNumbers.list({
+            phoneNumber: e164,
+            limit: 1,
+          });
+          sid = listed?.[0]?.sid || '';
+        }
+        if (sid && this.twilioClient) {
+          await this.twilioClient.incomingPhoneNumbers(sid).remove();
+          console.log(`🗑️ Released Twilio number ${e164} (${sid})`);
+        } else {
+          console.warn(`⚠️ Twilio SID missing for ${e164} — skipping provider release`);
+        }
+      } else if (provider === 'telnyx' || doc.telnyxId) {
+        let tid = doc.telnyxId ? String(doc.telnyxId) : '';
+        if (!tid && this.telnyxClient) {
+          const response = await this.telnyxClient.phoneNumbers.list({
+            filter: { phone_number: e164 },
+          });
+          tid = response?.data?.[0]?.id ? String(response.data[0].id) : '';
+        }
+        if (tid && this.telnyxClient) {
+          await this.telnyxClient.phoneNumbers.delete(tid);
+          console.log(`🗑️ Released Telnyx number ${e164} (${tid})`);
+        } else {
+          console.warn(`⚠️ Telnyx id missing for ${e164} — skipping provider release`);
+        }
+      } else {
+        console.warn(`⚠️ Unknown provider for ${e164} — DB delete only`);
+      }
+    } catch (providerErr) {
+      const status = Number(providerErr?.status || providerErr?.statusCode || 0);
+      const msg = String(providerErr?.message || providerErr || '');
+      // Already released upstream → still purge HARX record.
+      if (status === 404 || /not\s*found|does not exist|no longer exists/i.test(msg)) {
+        console.warn(`⚠️ Provider already released ${e164}: ${msg}`);
+      } else {
+        const err = new Error(
+          `Échec de la résiliation chez ${provider || 'le fournisseur'}: ${msg}`
+        );
+        err.status = status >= 400 ? status : 502;
+        err.cause = providerErr;
+        throw err;
+      }
+    }
+
+    await PhoneNumber.deleteOne({ _id: doc._id });
+    return {
+      message: 'Phone number terminated at provider and removed',
+      phoneNumber: e164,
+      provider: provider || null,
+    };
   }
   // Twilio Regulatory Compliance Methods
 
