@@ -54,21 +54,6 @@ function toObjectIdOrNull(value) {
   return new mongoose.Types.ObjectId(s);
 }
 
-async function resolveLastPurchasedAt(companyId, wallet) {
-  if (wallet?.lastPurchasedAt) return wallet.lastPurchasedAt;
-  const companyOid = toObjectIdOrNull(companyId);
-  if (!companyOid) return null;
-  const latest = await CompanyPayment.findOne({
-    companyId: companyOid,
-    purpose: 'tokens_purchase',
-    status: 'succeeded',
-  })
-    .sort({ fulfilledAt: -1, createdAt: -1 })
-    .select('fulfilledAt createdAt')
-    .lean();
-  return latest?.fulfilledAt || latest?.createdAt || null;
-}
-
 function extractGigId(meta, bodyGigId) {
   return toObjectIdOrNull(bodyGigId || meta?.gigId || meta?.gig?._id || meta?.gig?.id);
 }
