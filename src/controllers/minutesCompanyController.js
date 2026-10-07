@@ -1,13 +1,23 @@
 import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
+import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 
 export const minutesCompanyController = {
   getMinutes: async (req, res) => {
     const { companyId } = req.params;
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
     try {
+      // Credit plan-included minutes (e.g. Starter 120) for the current period
+      // when not yet granted — also backfills existing trialing/active subs.
+      let planGrant = { granted: false, allowance: 0, planName: undefined };
+      try {
+        planGrant = await ensurePlanMinutesGranted(companyId);
+      } catch (grantErr) {
+        console.warn('[minutes] plan grant skipped:', grantErr?.message || grantErr);
+      }
+
       // Ensure every completed call has been deducted from the balance.
-      // No AI validation is required for minute consumption.
+      // Billing rule: any started minute is billed in full (ceil seconds/60).
       await syncMinutesFromCalls(companyId);
 
       let wallet = await MinutesCompany.findOne({ companyId });
@@ -16,13 +26,22 @@ export const minutesCompanyController = {
         await wallet.save();
       }
 
+      const minutes = typeof wallet.minutes === 'number' ? wallet.minutes : 0;
+      const consumedSeconds =
+        typeof wallet.consumedSeconds === 'number' ? wallet.consumedSeconds : 0;
+
       res.status(200).json({
         success: true,
         data: {
           companyId,
-          minutes: typeof wallet.minutes === 'number' ? wallet.minutes : 0,
+          minutes,
           purchasedMinutes: typeof wallet.purchasedMinutes === 'number' ? wallet.purchasedMinutes : 0,
-          consumedSeconds: typeof wallet.consumedSeconds === 'number' ? wallet.consumedSeconds : 0
+          planMinutesIncluded: planGrant.allowance || 0,
+          planMinutesGranted:
+            typeof wallet.planMinutesGranted === 'number' ? wallet.planMinutesGranted : 0,
+          planName: planGrant.planName || null,
+          consumedSeconds,
+          limitReached: minutes <= 0,
         }
       });
     } catch (err) {
@@ -55,14 +74,15 @@ export const minutesCompanyController = {
 
   // Endpoint hit by other microservices (e.g. dash_calls_backend) right after a
   // call is saved so the minute balance reflects the consumption immediately.
-  // Body: { companyId, callSid, duration }  -- duration in seconds
+  // Body: { companyId, callSid, duration|durationSeconds }  -- duration in seconds
   chargeCall: async (req, res) => {
-    const { companyId, callSid, duration } = req.body;
+    const { companyId, callSid, duration, durationSeconds: durationSecondsBody } = req.body;
     if (!companyId || !callSid) {
       return res.status(400).json({ error: 'companyId and callSid are required' });
     }
 
-    const durationSeconds = Number(duration || 0);
+    // Accept both `duration` (Twilio) and `durationSeconds` (Telnyx).
+    const durationSeconds = Number(duration ?? durationSecondsBody ?? 0);
     if (durationSeconds <= 0) {
       return res.status(200).json({ success: true, charged: false, reason: 'No duration' });
     }

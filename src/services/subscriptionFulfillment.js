@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { SubscriptionPlan } from '../models/SubscriptionPlan.js';
 import { Subscription } from '../models/Subscription.js';
 import { stripeService } from './stripeService.js';
+import { ensurePlanMinutesGranted } from './planMinutesGrant.js';
 
 export async function resolvePlanByPriceId(priceId) {
   let plan = await SubscriptionPlan.findOne({ stripePriceId: priceId });
@@ -105,6 +106,13 @@ export async function activateCompanySubscription({
         }
       }
     );
+
+    // Credit included communication minutes for this period (Starter = 120, …).
+    try {
+      await ensurePlanMinutesGranted(companyId);
+    } catch (err) {
+      console.warn('[subscription] plan minutes grant failed:', err?.message || err);
+    }
   }
 
   return { planName: plan.name, status, periodEnd };
@@ -177,6 +185,12 @@ export async function activateFromStripeCheckoutSession(session) {
         }
       }
     );
+
+    try {
+      await ensurePlanMinutesGranted(companyId);
+    } catch (err) {
+      console.warn('[subscription] plan minutes grant failed:', err?.message || err);
+    }
   }
 
   return { plan: resolved.plan, stripeSubscription };
