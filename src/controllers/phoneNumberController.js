@@ -9,6 +9,39 @@ import { PhoneNumber } from '../models/PhoneNumber.js';
 import { getPhoneLinePricing } from '../services/platformPricingService.js';
 import { isFrenchCountry, resolvePhoneProvider } from '../utils/phoneProvider.js';
 
+/** In-memory status for live test-call monitoring (popup). */
+const testCallSessions = new Map();
+
+const mapTwilioCallStatus = (raw) => {
+  const s = String(raw || '').toLowerCase();
+  if (s === 'queued' || s === 'accepted') return 'connecting';
+  if (s === 'ringing' || s === 'initiated') return 'ringing';
+  if (s === 'in-progress') return 'active';
+  if (s === 'completed') return 'ended';
+  if (s === 'busy' || s === 'failed' || s === 'no-answer' || s === 'canceled') return 'ended';
+  return 'connecting';
+};
+
+const mapTelnyxEventToStatus = (eventType) => {
+  const e = String(eventType || '').toLowerCase();
+  if (e === 'call.initiated') return 'connecting';
+  if (e === 'call.ringing') return 'ringing';
+  if (e === 'call.answered' || e === 'call.bridged') return 'active';
+  if (e === 'call.hangup' || e === 'call.machine.detection.ended') return 'ended';
+  return null;
+};
+
+const upsertTestCallSession = (callId, patch) => {
+  if (!callId) return;
+  const prev = testCallSessions.get(callId) || {};
+  testCallSessions.set(callId, {
+    ...prev,
+    ...patch,
+    callId,
+    updatedAt: Date.now(),
+  });
+};
+
 class PhoneNumberController {
   async searchNumbers(req, res) {
     try {
@@ -968,15 +1001,28 @@ class PhoneNumberController {
             message: "La configuration téléphonie du serveur est incomplète.",
           });
         }
+        const statusCallback = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/call-status`;
         const call = await phoneNumberService.twilioClient.calls.create({
           to: String(toNumber).trim(),
           from: e164,
           twiml:
             '<Response><Say language="fr-FR" voice="Polly.Lea">Bonjour. Ceci est un appel de test depuis la plateforme Harx. Votre ligne est parfaitement configurée. Au revoir.</Say></Response>',
+          statusCallback,
+          statusCallbackMethod: 'POST',
+          statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
+        });
+        const callId = call.sid;
+        const status = mapTwilioCallStatus(call.status);
+        upsertTestCallSession(callId, {
+          provider: 'twilio',
+          status,
+          rawStatus: call.status,
+          from: e164,
+          to: String(toNumber).trim(),
         });
         return res.json({
           success: true,
-          data: { sid: call.sid, status: call.status, provider: 'twilio' },
+          data: { callId, status, provider: 'twilio' },
         });
       }
 
@@ -1009,7 +1055,22 @@ class PhoneNumberController {
         throw new Error(data.errors?.[0]?.detail || 'Failed to initiate call');
       }
 
-      res.json({ success: true, data: { ...data, provider: 'telnyx' } });
+      const callId =
+        data?.data?.call_control_id ||
+        data?.data?.call_session_id ||
+        data?.call_control_id ||
+        null;
+      upsertTestCallSession(callId, {
+        provider: 'telnyx',
+        status: 'connecting',
+        rawStatus: 'initiated',
+        from: e164,
+        to: String(toNumber).trim(),
+      });
+      res.json({
+        success: true,
+        data: { callId, status: 'connecting', provider: 'telnyx', raw: data },
+      });
     } catch (error) {
       console.error('Error in testCall:', error.message);
       const message = friendlyProviderError(error.message);
@@ -1021,6 +1082,137 @@ class PhoneNumberController {
     }
   }
 
+  async getTestCallStatus(req, res) {
+    try {
+      const callId = String(req.params.callId || '').trim();
+      const provider = String(req.query.provider || req.body?.provider || '').toLowerCase();
+      if (!callId) {
+        return res.status(400).json({ error: 'Bad Request', message: 'callId is required' });
+      }
+
+      const session = testCallSessions.get(callId);
+      const resolvedProvider = provider || session?.provider || '';
+
+      if (resolvedProvider === 'twilio') {
+        try {
+          const call = await phoneNumberService.twilioClient.calls(callId).fetch();
+          const status = mapTwilioCallStatus(call.status);
+          upsertTestCallSession(callId, {
+            provider: 'twilio',
+            status,
+            rawStatus: call.status,
+          });
+          return res.json({
+            success: true,
+            data: { callId, status, rawStatus: call.status, provider: 'twilio' },
+          });
+        } catch (err) {
+          if (session) {
+            return res.json({
+              success: true,
+              data: {
+                callId,
+                status: session.status || 'connecting',
+                rawStatus: session.rawStatus,
+                provider: 'twilio',
+              },
+            });
+          }
+          throw err;
+        }
+      }
+
+      // Telnyx (and unknown): prefer webhook-updated session
+      if (session) {
+        return res.json({
+          success: true,
+          data: {
+            callId,
+            status: session.status || 'connecting',
+            rawStatus: session.rawStatus,
+            provider: session.provider || 'telnyx',
+          },
+        });
+      }
+
+      return res.json({
+        success: true,
+        data: { callId, status: 'connecting', provider: resolvedProvider || 'telnyx' },
+      });
+    } catch (error) {
+      console.error('Error in getTestCallStatus:', error.message);
+      res.status(500).json({
+        error: 'Failed to fetch call status',
+        message: error.message || 'Failed to fetch call status',
+      });
+    }
+  }
+
+  async hangupTestCall(req, res) {
+    try {
+      const callId = String(req.params.callId || '').trim();
+      const provider = String(
+        req.body?.provider || req.query?.provider || testCallSessions.get(callId)?.provider || ''
+      ).toLowerCase();
+      if (!callId) {
+        return res.status(400).json({ error: 'Bad Request', message: 'callId is required' });
+      }
+
+      if (provider === 'twilio') {
+        await phoneNumberService.twilioClient.calls(callId).update({ status: 'completed' });
+      } else {
+        const response = await fetch(
+          `https://api.telnyx.com/v2/calls/${encodeURIComponent(callId)}/actions/hangup`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+              Authorization: `Bearer ${config.telnyxApiKey}`,
+            },
+            body: JSON.stringify({}),
+          }
+        );
+        if (!response.ok) {
+          const errBody = await response.json().catch(() => ({}));
+          const detail = errBody?.errors?.[0]?.detail || '';
+          // Already hung up is fine
+          if (!/not found|already|hangup/i.test(detail) && response.status !== 404) {
+            throw new Error(detail || 'Hangup failed');
+          }
+        }
+      }
+
+      upsertTestCallSession(callId, { status: 'ended', rawStatus: 'hangup' });
+      res.json({ success: true, data: { callId, status: 'ended', provider } });
+    } catch (error) {
+      console.error('Error in hangupTestCall:', error.message);
+      res.status(500).json({
+        error: 'Failed to hang up',
+        message: error.message || 'Failed to hang up',
+      });
+    }
+  }
+
+  async handleTwilioCallStatusWebhook(req, res) {
+    try {
+      const callId = String(req.body?.CallSid || req.body?.callSid || '').trim();
+      const rawStatus = String(req.body?.CallStatus || req.body?.callStatus || '').trim();
+      if (callId) {
+        upsertTestCallSession(callId, {
+          provider: 'twilio',
+          status: mapTwilioCallStatus(rawStatus),
+          rawStatus,
+        });
+        console.log(`🔔 Twilio call status ${callId}: ${rawStatus}`);
+      }
+      res.status(200).send('OK');
+    } catch (error) {
+      console.error('Error handling Twilio call status webhook:', error);
+      res.status(200).send('OK');
+    }
+  }
+
   async handleCallControlWebhook(req, res) {
     try {
       const event = req.body?.data;
@@ -1028,26 +1220,37 @@ class PhoneNumberController {
         return res.status(400).send('No data in webhook');
       }
 
-      console.log(`🔔 Telnyx Call Control Webhook received: ${event.event_type} for call ${event.payload?.call_control_id}`);
+      const callControlId = event.payload?.call_control_id;
+      console.log(
+        `🔔 Telnyx Call Control Webhook received: ${event.event_type} for call ${callControlId}`
+      );
+
+      const mapped = mapTelnyxEventToStatus(event.event_type);
+      if (callControlId && mapped) {
+        upsertTestCallSession(callControlId, {
+          provider: 'telnyx',
+          status: mapped,
+          rawStatus: event.event_type,
+        });
+      }
 
       // When the call is answered, speak a test message with a slight delay so the user has time to put the phone to their ear
       if (event.event_type === 'call.answered') {
-        const callControlId = event.payload.call_control_id;
-        
         setTimeout(async () => {
           try {
             await fetch(`https://api.telnyx.com/v2/calls/${callControlId}/actions/speak`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
-                'Accept': 'application/json',
-                'Authorization': `Bearer ${config.telnyxApiKey}`
+                Accept: 'application/json',
+                Authorization: `Bearer ${config.telnyxApiKey}`,
               },
               body: JSON.stringify({
-                payload: 'Bonjour. Ceci est un appel de test depuis la plateforme Harx. Votre ligne est parfaitement configurée. Au revoir !',
+                payload:
+                  'Bonjour. Ceci est un appel de test depuis la plateforme Harx. Votre ligne est parfaitement configurée. Au revoir !',
                 voice: 'female',
-                language: 'fr-FR'
-              })
+                language: 'fr-FR',
+              }),
             });
             console.log(`🗣️ Sent speak command to call ${callControlId}`);
           } catch (err) {

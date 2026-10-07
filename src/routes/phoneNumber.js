@@ -64,8 +64,21 @@ router.get('/gig/:gigId/check', phoneNumberController.checkGigNumber.bind(phoneN
 // Configure voice feature for a phone number
 router.post('/:phoneNumber/configure-voice', phoneNumberController.configureVoiceFeature.bind(phoneNumberController));
 
-// Test an outbound call
+// Test an outbound call (+ live status / hangup for the monitoring popup)
 router.post('/test-call', phoneNumberController.testCall.bind(phoneNumberController));
+router.get(
+  '/test-call/:callId/status',
+  phoneNumberController.getTestCallStatus.bind(phoneNumberController)
+);
+router.post(
+  '/test-call/:callId/hangup',
+  phoneNumberController.hangupTestCall.bind(phoneNumberController)
+);
+router.post(
+  '/webhooks/twilio/call-status',
+  express.urlencoded({ extended: false }),
+  phoneNumberController.handleTwilioCallStatusWebhook.bind(phoneNumberController)
+);
 
 // Webhook for Telnyx number order status updates
 // Middleware de logging pour le webhook
