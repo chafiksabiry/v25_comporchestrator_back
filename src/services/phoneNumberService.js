@@ -187,6 +187,8 @@ class PhoneNumberService {
 
       // FR without a specific area: product choice is to hide Île-de-France
       // (+331). Fan out across +332–5 (NW / NE / SE / SW) only.
+      // Twilio SDK param is voiceEnabled (not voice). Contains must start with
+      // '+' to anchor the E.164 prefix — bare "332" often returns zero inventory.
       if (countryCode === 'FR' && !areaCode) {
         const zones = ['2', '3', '4', '5'];
         const perZone = Math.max(Math.ceil(limit / zones.length), 10);
@@ -195,8 +197,8 @@ class PhoneNumberService {
             try {
               return await listWithTimeout({
                 limit: perZone,
-                voice: true,
-                contains: `33${zone}`
+                voiceEnabled: true,
+                contains: `+33${zone}`
               });
             } catch (zoneErr) {
               console.warn(`⚠️ FR zone +33${zone} search failed:`, zoneErr.message || zoneErr);
@@ -212,10 +214,23 @@ class PhoneNumberService {
             numbers.push(n);
           }
         }
+
+        // Fallback: broad FR local inventory, then filter to +33[2-5] below.
+        if (numbers.length === 0) {
+          console.log('ℹ️ FR zone Contains returned 0 — falling back to broad local list');
+          try {
+            numbers = await listWithTimeout({
+              limit: Math.min(Math.max(limit * 2, 50), 100),
+              voiceEnabled: true
+            });
+          } catch (fallbackErr) {
+            console.warn('⚠️ FR broad search fallback failed:', fallbackErr.message || fallbackErr);
+          }
+        }
       } else {
         const searchOptions = {
           limit,
-          voice: true
+          voiceEnabled: true
         };
         if (areaCode) {
           searchOptions.areaCode = areaCode;
