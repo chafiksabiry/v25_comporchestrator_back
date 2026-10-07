@@ -917,49 +917,107 @@ class PhoneNumberController {
   }
 
   async testCall(req, res) {
-    try {
-      const { fromNumber, toNumber } = req.body;
-      if (!fromNumber || !toNumber) {
-        return res.status(400).json({ error: 'fromNumber and toNumber are required' });
+    const friendlyProviderError = (raw) => {
+      const msg = String(raw || '');
+      if (
+        /unverified|not been verified|Origination number is not ready|requirement-info|identity.?verif/i.test(
+          msg
+        )
+      ) {
+        return "Ce numéro est en attente de validation réglementaire. Vous ne pouvez pas encore l'utiliser pour des appels sortants.";
       }
-      if (!config.telnyxApiKey || !config.telnyxConnectionId) {
-        return res.status(500).json({ error: 'Configuration Telnyx manquante sur le serveur (TELNYX_API_KEY ou TELNYX_CONNECTION_ID)' });
+      if (/not.?owned|does not belong|invalid.?from|from.?number/i.test(msg)) {
+        return "Impossible de lancer l'appel avec ce numéro. Vérifiez qu'il est actif et correctement configuré.";
+      }
+      const cleaned = msg.replace(/telnyx|twilio/gi, 'fournisseur').trim();
+      return cleaned || "Échec du test d'appel.";
+    };
+
+    try {
+      const { fromNumber, toNumber, companyId } = req.body || {};
+      if (!fromNumber || !toNumber) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'fromNumber and toNumber are required',
+        });
       }
 
-      console.log(`📞 Testing call from ${fromNumber} to ${toNumber}`);
+      const e164 = String(fromNumber).trim();
+      const lineQuery = { phoneNumber: e164 };
+      if (companyId && mongoose.Types.ObjectId.isValid(String(companyId))) {
+        lineQuery.companyId = companyId;
+      }
+      const line = await PhoneNumber.findOne(lineQuery);
+      if (!line) {
+        return res.status(404).json({
+          error: 'Not Found',
+          message: "Ce numéro n'appartient pas à votre entreprise ou n'est plus actif.",
+        });
+      }
+
+      const provider = String(
+        line.provider || (line.twilioId ? 'twilio' : line.telnyxId ? 'telnyx' : '')
+      ).toLowerCase();
+
+      console.log(`📞 Testing call via ${provider || 'unknown'} from ${e164} to ${toNumber}`);
+
+      if (provider === 'twilio' || line.twilioId) {
+        if (!config.twilioAccountSid || !config.twilioAuthToken) {
+          return res.status(500).json({
+            error: 'Server Configuration',
+            message: "La configuration téléphonie du serveur est incomplète.",
+          });
+        }
+        const call = await phoneNumberService.twilioClient.calls.create({
+          to: String(toNumber).trim(),
+          from: e164,
+          twiml:
+            '<Response><Say language="fr-FR" voice="Polly.Lea">Bonjour. Ceci est un appel de test depuis la plateforme Harx. Votre ligne est parfaitement configurée. Au revoir.</Say></Response>',
+        });
+        return res.json({
+          success: true,
+          data: { sid: call.sid, status: call.status, provider: 'twilio' },
+        });
+      }
+
+      if (!config.telnyxApiKey || !config.telnyxConnectionId) {
+        return res.status(500).json({
+          error: 'Server Configuration',
+          message: "La configuration téléphonie du serveur est incomplète.",
+        });
+      }
+
       const dynamicWebhookUrl = `https://${req.get('host')}/api/phone-numbers/webhooks/telnyx/call-control`;
-      console.log(`🔗 Using webhook URL: ${dynamicWebhookUrl}`);
-      
       const response = await fetch('https://api.telnyx.com/v2/calls', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'Authorization': `Bearer ${config.telnyxApiKey}`
+          Accept: 'application/json',
+          Authorization: `Bearer ${config.telnyxApiKey}`,
         },
         body: JSON.stringify({
           connection_id: config.telnyxConnectionId,
-          to: toNumber,
-          from: fromNumber,
+          to: String(toNumber).trim(),
+          from: e164,
           webhook_url: dynamicWebhookUrl,
-          webhook_url_method: 'POST'
-        })
+          webhook_url_method: 'POST',
+        }),
       });
 
       const data = await response.json();
       if (!response.ok) {
-        const errorDetail = data.errors?.[0]?.detail || 'Failed to initiate Telnyx call';
-        if (errorDetail.includes('Origination number is not ready') || errorDetail.includes('requirement-info')) {
-          throw new Error('Ce numéro est en attente de validation réglementaire (Identity Verification). Vous ne pouvez pas encore l\'utiliser pour des appels sortants.');
-        }
-        throw new Error(errorDetail);
+        throw new Error(data.errors?.[0]?.detail || 'Failed to initiate call');
       }
 
-      res.json({ success: true, data });
+      res.json({ success: true, data: { ...data, provider: 'telnyx' } });
     } catch (error) {
       console.error('Error in testCall:', error.message);
-      const isFriendlyError = error.message.includes('validation réglementaire');
-      res.status(isFriendlyError ? 403 : 500).json({ error: 'Failed to test call', message: error.message });
+      const message = friendlyProviderError(error.message);
+      const isFriendlyError = message.includes('validation réglementaire');
+      res.status(isFriendlyError ? 403 : 500).json({
+        error: 'Failed to test call',
+        message,
+      });
     }
   }
 
@@ -986,7 +1044,7 @@ class PhoneNumberController {
                 'Authorization': `Bearer ${config.telnyxApiKey}`
               },
               body: JSON.stringify({
-                payload: 'Bonjour. Ceci est un appel de test depuis la plateforme Harx. Votre ligne Telnyx est parfaitement configurée. Au revoir !',
+                payload: 'Bonjour. Ceci est un appel de test depuis la plateforme Harx. Votre ligne est parfaitement configurée. Au revoir !',
                 voice: 'female',
                 language: 'fr-FR'
               })
