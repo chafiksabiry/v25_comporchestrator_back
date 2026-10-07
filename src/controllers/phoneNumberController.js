@@ -12,34 +12,116 @@ import { isFrenchCountry, resolvePhoneProvider } from '../utils/phoneProvider.js
 /** In-memory status for live test-call monitoring (popup). */
 const testCallSessions = new Map();
 
-const mapTwilioCallStatus = (raw) => {
-  const s = String(raw || '').toLowerCase();
-  if (s === 'queued' || s === 'accepted') return 'connecting';
-  if (s === 'ringing' || s === 'initiated') return 'ringing';
-  if (s === 'in-progress') return 'active';
-  if (s === 'completed') return 'ended';
-  if (s === 'busy' || s === 'failed' || s === 'no-answer' || s === 'canceled') return 'ended';
-  return 'connecting';
+const toE164 = (value) => {
+  let s = String(value || '').trim().replace(/[\s()-]/g, '');
+  if (!s) return '';
+  if (s.startsWith('00')) s = `+${s.slice(2)}`;
+  if (!s.startsWith('+')) s = `+${s}`;
+  return s;
 };
 
-const mapTelnyxEventToStatus = (eventType) => {
+const sessionPublicView = (session, callId) => ({
+  callId,
+  status: session?.status || 'connecting',
+  outcome: session?.outcome || null,
+  rawStatus: session?.rawStatus || null,
+  provider: session?.provider || null,
+  reachedConnecting: true,
+  reachedRinging: Boolean(session?.reachedRinging),
+  reachedActive: Boolean(session?.reachedActive),
+  from: session?.from || null,
+  to: session?.to || null,
+});
+
+const mapTwilioCallStatus = (raw) => {
+  const s = String(raw || '').toLowerCase();
+  if (s === 'queued' || s === 'accepted') {
+    return { status: 'connecting', outcome: null };
+  }
+  if (s === 'ringing' || s === 'initiated') {
+    return { status: 'ringing', outcome: null, reachedRinging: true };
+  }
+  if (s === 'in-progress') {
+    return {
+      status: 'active',
+      outcome: null,
+      reachedRinging: true,
+      reachedActive: true,
+    };
+  }
+  if (s === 'completed') {
+    return {
+      status: 'ended',
+      outcome: 'completed',
+      reachedRinging: true,
+      reachedActive: true,
+    };
+  }
+  if (s === 'busy') {
+    return { status: 'ended', outcome: 'busy', reachedRinging: true };
+  }
+  if (s === 'no-answer') {
+    return { status: 'ended', outcome: 'no-answer', reachedRinging: true };
+  }
+  if (s === 'canceled') {
+    return { status: 'ended', outcome: 'canceled' };
+  }
+  if (s === 'failed') {
+    return { status: 'ended', outcome: 'failed' };
+  }
+  return { status: 'connecting', outcome: null };
+};
+
+const mapTelnyxEventToStatus = (eventType, hangupCause) => {
   const e = String(eventType || '').toLowerCase();
-  if (e === 'call.initiated') return 'connecting';
-  if (e === 'call.ringing') return 'ringing';
-  if (e === 'call.answered' || e === 'call.bridged') return 'active';
-  if (e === 'call.hangup' || e === 'call.machine.detection.ended') return 'ended';
+  if (e === 'call.initiated') return { status: 'connecting', outcome: null };
+  if (e === 'call.ringing') {
+    return { status: 'ringing', outcome: null, reachedRinging: true };
+  }
+  if (e === 'call.answered' || e === 'call.bridged') {
+    return {
+      status: 'active',
+      outcome: null,
+      reachedRinging: true,
+      reachedActive: true,
+    };
+  }
+  if (e === 'call.hangup' || e === 'call.machine.detection.ended') {
+    const cause = String(hangupCause || '').toLowerCase();
+    let outcome = 'completed';
+    if (/user_busy|busy/.test(cause)) outcome = 'busy';
+    else if (/originator_cancel/.test(cause)) outcome = 'canceled';
+    else if (
+      /no.?answer|timeout|not_found|unallocated|reject|forbidden|fail|call_rejected|destination_out_of_order/.test(
+        cause
+      )
+    ) {
+      outcome = 'failed';
+    }
+    // If never answered, upsertTestCallSession will downgrade "completed".
+    return { status: 'ended', outcome, hangupCause: cause || null };
+  }
   return null;
 };
 
 const upsertTestCallSession = (callId, patch) => {
   if (!callId) return;
   const prev = testCallSessions.get(callId) || {};
-  testCallSessions.set(callId, {
+  const next = {
     ...prev,
     ...patch,
     callId,
     updatedAt: Date.now(),
-  });
+    reachedRinging: Boolean(prev.reachedRinging || patch.reachedRinging),
+    reachedActive: Boolean(prev.reachedActive || patch.reachedActive),
+  };
+  // If call ended without ever ringing/answering, force a non-success outcome.
+  if (next.status === 'ended' && !next.reachedActive) {
+    if (!next.outcome || next.outcome === 'completed') {
+      next.outcome = next.reachedRinging ? 'no-answer' : 'failed';
+    }
+  }
+  testCallSessions.set(callId, next);
 };
 
 class PhoneNumberController {
@@ -975,12 +1057,25 @@ class PhoneNumberController {
         });
       }
 
-      const e164 = String(fromNumber).trim();
-      const lineQuery = { phoneNumber: e164 };
-      if (companyId && mongoose.Types.ObjectId.isValid(String(companyId))) {
-        lineQuery.companyId = companyId;
+      const e164 = toE164(fromNumber);
+      const destE164 = toE164(toNumber);
+      if (!e164 || !destE164) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'Numéros invalides. Utilisez le format international (+…).',
+        });
       }
-      const line = await PhoneNumber.findOne(lineQuery);
+
+      const companyFilter =
+        companyId && mongoose.Types.ObjectId.isValid(String(companyId))
+          ? { companyId }
+          : {};
+      const line =
+        (await PhoneNumber.findOne({ phoneNumber: e164, ...companyFilter })) ||
+        (await PhoneNumber.findOne({
+          phoneNumber: e164.replace(/^\+/, ''),
+          ...companyFilter,
+        }));
       if (!line) {
         return res.status(404).json({
           error: 'Not Found',
@@ -988,11 +1083,14 @@ class PhoneNumberController {
         });
       }
 
+      // Always dial with the canonical E.164 stored on the line when available.
+      const fromE164 = toE164(line.phoneNumber) || e164;
+
       const provider = String(
         line.provider || (line.twilioId ? 'twilio' : line.telnyxId ? 'telnyx' : '')
       ).toLowerCase();
 
-      console.log(`📞 Testing call via ${provider || 'unknown'} from ${e164} to ${toNumber}`);
+      console.log(`📞 Testing call via ${provider || 'unknown'} from ${fromE164} to ${destE164}`);
 
       if (provider === 'twilio' || line.twilioId) {
         if (!config.twilioAccountSid || !config.twilioAuthToken) {
@@ -1003,8 +1101,8 @@ class PhoneNumberController {
         }
         const statusCallback = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/call-status`;
         const call = await phoneNumberService.twilioClient.calls.create({
-          to: String(toNumber).trim(),
-          from: e164,
+          to: destE164,
+          from: fromE164,
           twiml:
             '<Response><Say language="fr-FR" voice="Polly.Lea">Bonjour. Ceci est un appel de test depuis la plateforme Harx. Votre ligne est parfaitement configurée. Au revoir.</Say></Response>',
           statusCallback,
@@ -1012,17 +1110,20 @@ class PhoneNumberController {
           statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
         });
         const callId = call.sid;
-        const status = mapTwilioCallStatus(call.status);
+        const mapped = mapTwilioCallStatus(call.status);
         upsertTestCallSession(callId, {
           provider: 'twilio',
-          status,
+          status: mapped.status,
+          outcome: mapped.outcome,
           rawStatus: call.status,
-          from: e164,
-          to: String(toNumber).trim(),
+          reachedRinging: mapped.reachedRinging,
+          reachedActive: mapped.reachedActive,
+          from: fromE164,
+          to: destE164,
         });
         return res.json({
           success: true,
-          data: { callId, status, provider: 'twilio' },
+          data: sessionPublicView(testCallSessions.get(callId), callId),
         });
       }
 
@@ -1043,8 +1144,8 @@ class PhoneNumberController {
         },
         body: JSON.stringify({
           connection_id: config.telnyxConnectionId,
-          to: String(toNumber).trim(),
-          from: e164,
+          to: destE164,
+          from: fromE164,
           webhook_url: dynamicWebhookUrl,
           webhook_url_method: 'POST',
         }),
@@ -1060,16 +1161,20 @@ class PhoneNumberController {
         data?.data?.call_session_id ||
         data?.call_control_id ||
         null;
+      if (!callId) {
+        throw new Error("L'appel n'a pas pu être démarré (identifiant manquant).");
+      }
       upsertTestCallSession(callId, {
         provider: 'telnyx',
         status: 'connecting',
+        outcome: null,
         rawStatus: 'initiated',
-        from: e164,
-        to: String(toNumber).trim(),
+        from: fromE164,
+        to: destE164,
       });
       res.json({
         success: true,
-        data: { callId, status: 'connecting', provider: 'telnyx', raw: data },
+        data: sessionPublicView(testCallSessions.get(callId), callId),
       });
     } catch (error) {
       console.error('Error in testCall:', error.message);
@@ -1096,26 +1201,24 @@ class PhoneNumberController {
       if (resolvedProvider === 'twilio') {
         try {
           const call = await phoneNumberService.twilioClient.calls(callId).fetch();
-          const status = mapTwilioCallStatus(call.status);
+          const mapped = mapTwilioCallStatus(call.status);
           upsertTestCallSession(callId, {
             provider: 'twilio',
-            status,
+            status: mapped.status,
+            outcome: mapped.outcome,
             rawStatus: call.status,
+            reachedRinging: mapped.reachedRinging,
+            reachedActive: mapped.reachedActive,
           });
           return res.json({
             success: true,
-            data: { callId, status, rawStatus: call.status, provider: 'twilio' },
+            data: sessionPublicView(testCallSessions.get(callId), callId),
           });
         } catch (err) {
           if (session) {
             return res.json({
               success: true,
-              data: {
-                callId,
-                status: session.status || 'connecting',
-                rawStatus: session.rawStatus,
-                provider: 'twilio',
-              },
+              data: sessionPublicView(session, callId),
             });
           }
           throw err;
@@ -1126,18 +1229,16 @@ class PhoneNumberController {
       if (session) {
         return res.json({
           success: true,
-          data: {
-            callId,
-            status: session.status || 'connecting',
-            rawStatus: session.rawStatus,
-            provider: session.provider || 'telnyx',
-          },
+          data: sessionPublicView(session, callId),
         });
       }
 
       return res.json({
         success: true,
-        data: { callId, status: 'connecting', provider: resolvedProvider || 'telnyx' },
+        data: sessionPublicView(
+          { status: 'connecting', provider: resolvedProvider || 'telnyx' },
+          callId
+        ),
       });
     } catch (error) {
       console.error('Error in getTestCallStatus:', error.message);
@@ -1183,8 +1284,15 @@ class PhoneNumberController {
         }
       }
 
-      upsertTestCallSession(callId, { status: 'ended', rawStatus: 'hangup' });
-      res.json({ success: true, data: { callId, status: 'ended', provider } });
+      upsertTestCallSession(callId, {
+        status: 'ended',
+        outcome: 'canceled',
+        rawStatus: 'hangup',
+      });
+      res.json({
+        success: true,
+        data: sessionPublicView(testCallSessions.get(callId), callId),
+      });
     } catch (error) {
       console.error('Error in hangupTestCall:', error.message);
       res.status(500).json({
@@ -1199,10 +1307,14 @@ class PhoneNumberController {
       const callId = String(req.body?.CallSid || req.body?.callSid || '').trim();
       const rawStatus = String(req.body?.CallStatus || req.body?.callStatus || '').trim();
       if (callId) {
+        const mapped = mapTwilioCallStatus(rawStatus);
         upsertTestCallSession(callId, {
           provider: 'twilio',
-          status: mapTwilioCallStatus(rawStatus),
+          status: mapped.status,
+          outcome: mapped.outcome,
           rawStatus,
+          reachedRinging: mapped.reachedRinging,
+          reachedActive: mapped.reachedActive,
         });
         console.log(`🔔 Twilio call status ${callId}: ${rawStatus}`);
       }
@@ -1221,16 +1333,26 @@ class PhoneNumberController {
       }
 
       const callControlId = event.payload?.call_control_id;
+      const hangupCause =
+        event.payload?.hangup_cause ||
+        event.payload?.hangup_source ||
+        event.payload?.state ||
+        '';
       console.log(
-        `🔔 Telnyx Call Control Webhook received: ${event.event_type} for call ${callControlId}`
+        `🔔 Telnyx Call Control Webhook received: ${event.event_type} for call ${callControlId}` +
+          (hangupCause ? ` cause=${hangupCause}` : '')
       );
 
-      const mapped = mapTelnyxEventToStatus(event.event_type);
+      const mapped = mapTelnyxEventToStatus(event.event_type, hangupCause);
       if (callControlId && mapped) {
         upsertTestCallSession(callControlId, {
           provider: 'telnyx',
-          status: mapped,
+          status: mapped.status,
+          outcome: mapped.outcome,
           rawStatus: event.event_type,
+          reachedRinging: mapped.reachedRinging,
+          reachedActive: mapped.reachedActive,
+          hangupCause: mapped.hangupCause || hangupCause || null,
         });
       }
 
