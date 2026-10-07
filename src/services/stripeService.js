@@ -103,16 +103,31 @@ function isConfigured() {
 
 /**
  * Case/spacing-insensitive metadata lookup
- * (Stripe keys like "ACTIVE GIGS", "ACTIVE REPS", …).
+ * (Stripe keys like "ACTIVE GIGS", "ACTIVE GIGS (Up to)", "COMMUNICATION MINUTES Included", …).
  */
 function metaGet(meta, ...candidates) {
   if (!meta || typeof meta !== 'object') return undefined;
   const normalize = (s) => String(s).toLowerCase().replace(/[_\s-]+/g, '');
-  const wanted = new Set(candidates.map(normalize));
-  for (const [key, value] of Object.entries(meta)) {
-    if (wanted.has(normalize(key))) return value;
+  const wanted = candidates.map(normalize).filter(Boolean);
+  const entries = Object.entries(meta).map(([key, value]) => [normalize(key), value]);
+
+  for (const w of wanted) {
+    for (const [nk, value] of entries) {
+      if (nk === w) return value;
+    }
+  }
+  // Prefix match so "ACTIVE GIGS" hits "ACTIVE GIGS (Up to)", etc.
+  for (const w of wanted) {
+    for (const [nk, value] of entries) {
+      if (nk.startsWith(w) || w.startsWith(nk)) return value;
+    }
   }
   return undefined;
+}
+
+function metaKeyLooksLike(metaKey, ...prefixes) {
+  const nk = String(metaKey || '').toLowerCase().replace(/[_\s-]+/g, '');
+  return prefixes.some((p) => nk.startsWith(String(p).toLowerCase().replace(/[_\s-]+/g, '')));
 }
 
 /**
@@ -167,17 +182,94 @@ export function extractStripeProductLimits(product) {
     metaGet(meta, 'ACTIVE REPS', 'active_reps', 'max_reps', 'maxReps')
   );
   const minutes = Number(
-    metaGet(meta, 'COMMUNICATION MINUTES', 'communication_minutes', 'minutes')
+    metaGet(
+      meta,
+      'COMMUNICATION MINUTES',
+      'COMMUNICATION MINUTES Included',
+      'COMMUNICATION MINUTES INCLUDED',
+      'communication_minutes',
+      'minutes'
+    )
   );
   const localNumbers = Number(
-    metaGet(meta, 'ACTIVE LOCAL NUMBER', 'ACTIVE LOCAL NUMBERS', 'active_local_number', 'local_numbers')
+    metaGet(
+      meta,
+      'ACTIVE LOCAL NUMBER',
+      'ACTIVE LOCAL NUMBERS',
+      'active_local_number',
+      'local_numbers'
+    )
   );
   if (Number.isFinite(gigs) && gigs >= 0) out.maxGigs = Math.round(gigs);
   if (Number.isFinite(reps) && reps >= 0) out.maxReps = Math.round(reps);
   if (Number.isFinite(minutes) && minutes >= 0) out.communicationMinutes = Math.round(minutes);
   if (Number.isFinite(localNumbers) && localNumbers >= 0) out.activeLocalNumbers = Math.round(localNumbers);
-  const aiToken = metaGet(meta, 'AI TOKEN (Million)', 'AI TOKEN', 'ai_token', 'ai_tokens');
+  const aiToken = metaGet(
+    meta,
+    'AI TOKEN (Million)',
+    'AI TOKEN (,000) INCLUDED',
+    'AI TOKEN',
+    'ai_token',
+    'ai_tokens'
+  );
   if (aiToken != null && String(aiToken).trim()) out.aiToken = String(aiToken).trim();
+
+  // Preserve wording from Stripe metadata when quotas are "per gig" / "up to".
+  for (const [key] of Object.entries(meta)) {
+    if (metaKeyLooksLike(key, 'ACTIVE REPS') && /per\s*gig/i.test(key)) {
+      out.repsPerGig = true;
+    }
+    if (metaKeyLooksLike(key, 'ACTIVE GIGS') && /up\s*to/i.test(key)) {
+      out.gigsUpTo = true;
+    }
+  }
+  return out;
+}
+
+/**
+ * Public pricing bullets: quotas from metadata first, then Catalog marketing features.
+ */
+export function buildStripePlanDisplayFeatures(product) {
+  const marketing = extractStripeProductFeatures(product);
+  const limits = extractStripeProductLimits(product);
+  const quotas = [];
+
+  if (limits.maxGigs != null) {
+    quotas.push(
+      limits.gigsUpTo
+        ? `Active GIGs: up to ${limits.maxGigs}`
+        : `Active GIGs: ${limits.maxGigs}`
+    );
+  }
+  if (limits.maxReps != null) {
+    quotas.push(
+      limits.repsPerGig
+        ? `Active REPs: up to ${limits.maxReps} per Gig`
+        : `Active REPs: ${limits.maxReps}`
+    );
+  }
+  if (limits.communicationMinutes != null) {
+    quotas.push(`Communication minutes: ${limits.communicationMinutes}`);
+  }
+  if (limits.activeLocalNumbers != null) {
+    quotas.push(`Active local numbers: ${limits.activeLocalNumbers}`);
+  }
+  if (limits.aiToken) {
+    quotas.push(`AI tokens: ${limits.aiToken}`);
+  }
+
+  const seen = new Set(quotas.map((q) => q.toLowerCase()));
+  const out = [...quotas];
+  for (const line of marketing) {
+    const trimmed = String(line).trim();
+    const key = trimmed.toLowerCase();
+    if (!trimmed || seen.has(key)) continue;
+    // Prefer metadata quotas over any marketing bullets that duplicate them.
+    if (limits.maxGigs != null && /^active\s+gigs?\b/i.test(trimmed)) continue;
+    if (limits.maxReps != null && /^active\s+reps?\b/i.test(trimmed)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
   return out;
 }
 
@@ -438,4 +530,5 @@ export const stripeService = {
   resolveSubscriptionPriceId,
   extractStripeProductFeatures,
   extractStripeProductLimits,
+  buildStripePlanDisplayFeatures,
 };

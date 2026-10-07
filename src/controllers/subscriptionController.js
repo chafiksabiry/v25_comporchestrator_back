@@ -118,8 +118,9 @@ export const subscriptionController = {
               return null;
             }
             const product = stripePrice.product;
-            const stripeFeatures = stripeService.extractStripeProductFeatures(product);
+            const marketingFeatures = stripeService.extractStripeProductFeatures(product);
             const stripeLimits = stripeService.extractStripeProductLimits(product);
+            const displayFeatures = stripeService.buildStripePlanDisplayFeatures(product);
 
             return {
               _id: dbPlan._id,
@@ -130,8 +131,8 @@ export const subscriptionController = {
               currency: stripePrice.currency || 'eur',
               stripePriceId: effectivePriceId,
               description: product.description || '',
-              features: stripeFeatures,
-              marketingFeatures: stripeFeatures,
+              features: displayFeatures,
+              marketingFeatures,
               metadata: product.metadata || {},
               isPopular: Boolean(dbPlan.isPopular),
               maxGigs: stripeLimits.maxGigs,
