@@ -28,13 +28,23 @@ const sessionPublicView = (session, callId) => ({
   provider: session?.provider || null,
   reachedConnecting: true,
   reachedRinging: Boolean(session?.reachedRinging),
-  reachedActive: Boolean(session?.reachedActive),
+  reachedActive: Boolean(session?.reachedActive || session?.humanConfirmed),
+  humanConfirmed: Boolean(session?.humanConfirmed),
+  answeredBy: session?.answeredBy || null,
   from: session?.from || null,
   to: session?.to || null,
 });
 
-const mapTwilioCallStatus = (raw) => {
+const isTwilioMachineAnswer = (answeredBy) => {
+  const v = String(answeredBy || '').toLowerCase();
+  return Boolean(v) && v !== 'human' && v !== 'unknown';
+};
+
+const mapTwilioCallStatus = (raw, { answeredBy, humanConfirmed, prev } = {}) => {
   const s = String(raw || '').toLowerCase();
+  const machine = isTwilioMachineAnswer(answeredBy);
+  const confirmed = Boolean(humanConfirmed || prev?.humanConfirmed);
+
   if (s === 'queued' || s === 'accepted') {
     return { status: 'connecting', outcome: null };
   }
@@ -42,19 +52,48 @@ const mapTwilioCallStatus = (raw) => {
     return { status: 'ringing', outcome: null, reachedRinging: true };
   }
   if (s === 'in-progress') {
+    if (machine) {
+      return {
+        status: 'ended',
+        outcome: 'voicemail',
+        reachedRinging: true,
+        reachedActive: false,
+        answeredBy,
+      };
+    }
+    // Carrier "answered" is not enough — wait for human DTMF confirmation.
     return {
-      status: 'active',
+      status: confirmed ? 'active' : 'ringing',
       outcome: null,
       reachedRinging: true,
-      reachedActive: true,
+      reachedActive: confirmed,
+      answeredBy: answeredBy || null,
     };
   }
   if (s === 'completed') {
+    if (machine || prev?.outcome === 'voicemail') {
+      return {
+        status: 'ended',
+        outcome: 'voicemail',
+        reachedRinging: true,
+        reachedActive: false,
+        answeredBy,
+      };
+    }
+    if (confirmed || prev?.humanConfirmed) {
+      return {
+        status: 'ended',
+        outcome: 'completed',
+        reachedRinging: true,
+        reachedActive: true,
+      };
+    }
+    // Completed without human confirm = not a real pickup on the handset.
     return {
       status: 'ended',
-      outcome: 'completed',
-      reachedRinging: true,
-      reachedActive: true,
+      outcome: prev?.reachedRinging ? 'no-answer' : 'failed',
+      reachedRinging: Boolean(prev?.reachedRinging),
+      reachedActive: false,
     };
   }
   if (s === 'busy') {
@@ -1099,12 +1138,20 @@ class PhoneNumberController {
             message: "La configuration téléphonie du serveur est incomplète.",
           });
         }
-        const statusCallback = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/call-status`;
+        const publicBase = `https://${req.get('host')}`;
+        const statusCallback = `${publicBase}/api/phone-numbers/webhooks/twilio/call-status`;
+        const twimlUrl = `${publicBase}/api/phone-numbers/webhooks/twilio/test-call-twiml`;
         const call = await phoneNumberService.twilioClient.calls.create({
           to: destE164,
           from: fromE164,
-          twiml:
-            '<Response><Say language="fr-FR" voice="Polly.Lea">Bonjour. Ceci est un appel de test depuis la plateforme Harx. Votre ligne est parfaitement configurée. Au revoir.</Say></Response>',
+          // Hosted TwiML asks the callee to press 1 — proves a real handset pickup.
+          url: twimlUrl,
+          method: 'POST',
+          timeout: 60,
+          machineDetection: 'Enable',
+          asyncAmd: true,
+          asyncAmdStatusCallback: statusCallback,
+          asyncAmdStatusCallbackMethod: 'POST',
           statusCallback,
           statusCallbackMethod: 'POST',
           statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
@@ -1117,7 +1164,8 @@ class PhoneNumberController {
           outcome: mapped.outcome,
           rawStatus: call.status,
           reachedRinging: mapped.reachedRinging,
-          reachedActive: mapped.reachedActive,
+          reachedActive: false,
+          humanConfirmed: false,
           from: fromE164,
           to: destE164,
         });
@@ -1201,7 +1249,12 @@ class PhoneNumberController {
       if (resolvedProvider === 'twilio') {
         try {
           const call = await phoneNumberService.twilioClient.calls(callId).fetch();
-          const mapped = mapTwilioCallStatus(call.status);
+          const answeredBy = call.answeredBy || session?.answeredBy;
+          const mapped = mapTwilioCallStatus(call.status, {
+            answeredBy,
+            humanConfirmed: session?.humanConfirmed,
+            prev: session,
+          });
           upsertTestCallSession(callId, {
             provider: 'twilio',
             status: mapped.status,
@@ -1209,7 +1262,19 @@ class PhoneNumberController {
             rawStatus: call.status,
             reachedRinging: mapped.reachedRinging,
             reachedActive: mapped.reachedActive,
+            answeredBy: answeredBy || null,
+            duration: call.duration != null ? Number(call.duration) : session?.duration,
           });
+
+          // If AMD says machine, hang up immediately so we don't pretend it's live.
+          if (mapped.outcome === 'voicemail' && String(call.status).toLowerCase() === 'in-progress') {
+            try {
+              await phoneNumberService.twilioClient.calls(callId).update({ status: 'completed' });
+            } catch {
+              /* ignore */
+            }
+          }
+
           return res.json({
             success: true,
             data: sessionPublicView(testCallSessions.get(callId), callId),
@@ -1306,22 +1371,125 @@ class PhoneNumberController {
     try {
       const callId = String(req.body?.CallSid || req.body?.callSid || '').trim();
       const rawStatus = String(req.body?.CallStatus || req.body?.callStatus || '').trim();
+      const answeredBy = req.body?.AnsweredBy || req.body?.answeredBy || '';
       if (callId) {
-        const mapped = mapTwilioCallStatus(rawStatus);
+        const prev = testCallSessions.get(callId);
+        const mapped = mapTwilioCallStatus(rawStatus || prev?.rawStatus || 'in-progress', {
+          answeredBy: answeredBy || prev?.answeredBy,
+          humanConfirmed: prev?.humanConfirmed,
+          prev,
+        });
         upsertTestCallSession(callId, {
           provider: 'twilio',
           status: mapped.status,
           outcome: mapped.outcome,
-          rawStatus,
+          rawStatus: rawStatus || prev?.rawStatus,
           reachedRinging: mapped.reachedRinging,
           reachedActive: mapped.reachedActive,
+          answeredBy: answeredBy || prev?.answeredBy || null,
         });
-        console.log(`🔔 Twilio call status ${callId}: ${rawStatus}`);
+        console.log(
+          `🔔 Twilio call status ${callId}: ${rawStatus || '(amd)'}` +
+            (answeredBy ? ` answeredBy=${answeredBy}` : '')
+        );
+
+        if (mapped.outcome === 'voicemail' && /in-progress|ringing/i.test(rawStatus || '')) {
+          try {
+            await phoneNumberService.twilioClient.calls(callId).update({ status: 'completed' });
+          } catch {
+            /* ignore */
+          }
+        }
       }
       res.status(200).send('OK');
     } catch (error) {
       console.error('Error handling Twilio call status webhook:', error);
       res.status(200).send('OK');
+    }
+  }
+
+  /** TwiML for outbound test call — require DTMF 1 to prove a real handset answered. */
+  async handleTwilioTestCallTwiml(req, res) {
+    try {
+      const callId = String(req.body?.CallSid || '').trim();
+      if (callId) {
+        upsertTestCallSession(callId, {
+          provider: 'twilio',
+          status: 'ringing',
+          reachedRinging: true,
+          rawStatus: 'in-progress',
+        });
+      }
+      const gatherAction = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/test-call-gather`;
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say language="fr-FR" voice="Polly.Lea">Bonjour, ceci est un appel de test depuis la plateforme Harx. Appuyez sur la touche 1 pour confirmer que vous avez bien reçu cet appel.</Say>
+  <Gather numDigits="1" timeout="20" action="${gatherAction}" method="POST">
+    <Say language="fr-FR" voice="Polly.Lea">Je répète : appuyez sur 1 maintenant pour confirmer.</Say>
+  </Gather>
+  <Say language="fr-FR" voice="Polly.Lea">Aucune confirmation reçue. Au revoir.</Say>
+  <Hangup/>
+</Response>`;
+      res.type('text/xml').status(200).send(twiml);
+    } catch (error) {
+      console.error('Error in handleTwilioTestCallTwiml:', error);
+      res
+        .type('text/xml')
+        .status(200)
+        .send(
+          '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>'
+        );
+    }
+  }
+
+  async handleTwilioTestCallGather(req, res) {
+    try {
+      const callId = String(req.body?.CallSid || '').trim();
+      const digit = String(req.body?.Digits || '').trim();
+      const confirmed = digit === '1';
+      if (callId) {
+        if (confirmed) {
+          upsertTestCallSession(callId, {
+            provider: 'twilio',
+            status: 'active',
+            humanConfirmed: true,
+            reachedRinging: true,
+            reachedActive: true,
+            outcome: null,
+            rawStatus: 'in-progress',
+          });
+          console.log(`✅ Twilio test call ${callId}: human confirmed with DTMF 1`);
+        } else {
+          upsertTestCallSession(callId, {
+            provider: 'twilio',
+            status: 'ended',
+            humanConfirmed: false,
+            reachedActive: false,
+            outcome: 'no-answer',
+            rawStatus: 'completed',
+          });
+        }
+      }
+      const twiml = confirmed
+        ? `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say language="fr-FR" voice="Polly.Lea">Merci. Confirmation reçue. Votre ligne fonctionne correctement. Au revoir.</Say>
+  <Hangup/>
+</Response>`
+        : `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say language="fr-FR" voice="Polly.Lea">Confirmation invalide. Au revoir.</Say>
+  <Hangup/>
+</Response>`;
+      res.type('text/xml').status(200).send(twiml);
+    } catch (error) {
+      console.error('Error in handleTwilioTestCallGather:', error);
+      res
+        .type('text/xml')
+        .status(200)
+        .send(
+          '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>'
+        );
     }
   }
 

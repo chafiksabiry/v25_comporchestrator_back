@@ -79,6 +79,16 @@ router.post(
   express.urlencoded({ extended: false }),
   phoneNumberController.handleTwilioCallStatusWebhook.bind(phoneNumberController)
 );
+router.post(
+  '/webhooks/twilio/test-call-twiml',
+  express.urlencoded({ extended: false }),
+  phoneNumberController.handleTwilioTestCallTwiml.bind(phoneNumberController)
+);
+router.post(
+  '/webhooks/twilio/test-call-gather',
+  express.urlencoded({ extended: false }),
+  phoneNumberController.handleTwilioTestCallGather.bind(phoneNumberController)
+);
 
 // Webhook for Telnyx number order status updates
 // Middleware de logging pour le webhook
