@@ -22,6 +22,20 @@ const minutesCompanySchema = new mongoose.Schema({
     required: true,
     default: 0
   },
+  /** Lifetime minutes credited from subscription plans (not paid packs). */
+  planMinutesGranted: {
+    type: Number,
+    required: true,
+    default: 0
+  },
+  /**
+   * Idempotency keys for plan grants — typically
+   * `${stripeSubscriptionId}:${currentPeriodStartISO}`.
+   */
+  planGrantKeys: {
+    type: [String],
+    default: []
+  },
   consumedSeconds: {
     type: Number,
     required: true,
