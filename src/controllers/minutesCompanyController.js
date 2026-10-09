@@ -40,6 +40,9 @@ export const minutesCompanyController = {
           planMinutesGranted:
             typeof wallet.planMinutesGranted === 'number' ? wallet.planMinutesGranted : 0,
           planName: planGrant.planName || null,
+          credits: Array.isArray(wallet.credits)
+            ? [...wallet.credits].sort((a, b) => new Date(b.at) - new Date(a.at))
+            : [],
           consumedSeconds,
           limitReached: minutes <= 0,
         }
@@ -63,6 +66,14 @@ export const minutesCompanyController = {
       const purchased = parseFloat(amount);
       wallet.minutes = Number((wallet.minutes + purchased).toFixed(2));
       wallet.purchasedMinutes = Number(((wallet.purchasedMinutes || 0) + purchased).toFixed(2));
+      wallet.credits = wallet.credits || [];
+      wallet.credits.push({
+        at: new Date(),
+        minutes: purchased,
+        planName: '',
+        kind: 'recharge',
+        grantKey: `recharge:${Date.now()}`,
+      });
       await wallet.save();
 
       res.status(200).json({ success: true, data: wallet });

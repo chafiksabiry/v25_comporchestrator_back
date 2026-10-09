@@ -45,7 +45,21 @@ const minutesCompanySchema = new mongoose.Schema({
   chargedCallSids: {
     type: [String],
     default: []
-  }
+  },
+  /**
+   * Dated credits: plan inclusion (subscription + renewal) and paid top-ups.
+   * Plan rows carry planName so they stay distinct from recharges.
+   */
+  credits: {
+    type: [{
+      at: { type: Date, required: true },
+      minutes: { type: Number, required: true },
+      planName: { type: String, default: '' },
+      kind: { type: String, enum: ['plan', 'recharge'], required: true },
+      grantKey: { type: String, default: '' },
+    }],
+    default: [],
+  },
 }, {
   timestamps: true
 });

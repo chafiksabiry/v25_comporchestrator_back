@@ -47,6 +47,37 @@ async function ensureMinutesWallet(companyId) {
   return wallet;
 }
 
+function creditDateFromGrantKey(grantKey, fallback) {
+  const iso = String(grantKey || '').includes(':')
+    ? String(grantKey).slice(String(grantKey).indexOf(':') + 1)
+    : '';
+  const parsed = Date.parse(iso);
+  if (!Number.isNaN(parsed)) return new Date(parsed);
+  return fallback || new Date();
+}
+
+/** One ledger row per period already granted, dated at that period start. */
+async function backfillPlanCredits(companyId, { allowance, planName }) {
+  if (allowance <= 0) return;
+  const wallet = await MinutesCompany.findOne({ companyId });
+  if (!wallet) return;
+  const existing = new Set((wallet.credits || []).map((row) => row.grantKey).filter(Boolean));
+  const rows = (wallet.planGrantKeys || [])
+    .filter((grantKey) => grantKey && !existing.has(grantKey))
+    .map((grantKey) => ({
+      at: creditDateFromGrantKey(grantKey),
+      minutes: allowance,
+      planName: planName || '',
+      kind: 'plan',
+      grantKey,
+    }));
+  if (!rows.length) return;
+  await MinutesCompany.updateOne(
+    { companyId },
+    { $push: { credits: { $each: rows } } }
+  );
+}
+
 /**
  * Idempotently credit the plan's included communication minutes for the
  * current subscription period (active or trialing).
@@ -101,6 +132,9 @@ export async function ensurePlanMinutesGranted(companyId) {
   const allowance = resolvePlanCommunicationMinutes(plan);
   const planName = String(plan.name || '');
   const grantKey = periodGrantKey(subscription);
+  const grantedAt = subscription.currentPeriodStart
+    ? new Date(subscription.currentPeriodStart)
+    : new Date();
 
   await ensureMinutesWallet(companyId);
 
@@ -129,6 +163,7 @@ export async function ensurePlanMinutesGranted(companyId) {
   );
 
   if (updated) {
+    await backfillPlanCredits(oid, { allowance, planName });
     console.log(
       `[planMinutes] Granted ${allowance} min to company ${companyId} (${planName}) key=${grantKey}`
     );
@@ -138,10 +173,12 @@ export async function ensurePlanMinutesGranted(companyId) {
       minutes: updated.minutes,
       planName,
       grantKey,
+      grantedAt,
       planMinutesGranted: updated.planMinutesGranted,
     };
   }
 
+  await backfillPlanCredits(oid, { allowance, planName });
   const wallet = await MinutesCompany.findOne({ companyId: oid });
   return {
     granted: false,
