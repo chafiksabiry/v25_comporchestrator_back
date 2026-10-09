@@ -21,6 +21,22 @@ const toE164 = (value) => {
   return s;
 };
 
+/**
+ * A succeeded, not-yet-used line payment for this company and number.
+ * The orchestrator sometimes calls /purchase without paymentId even after
+ * Stripe has already marked the checkout succeeded.
+ */
+async function findUnusedSucceededLinePayment(companyId, phoneNumber) {
+  if (!companyId || !mongoose.Types.ObjectId.isValid(companyId) || !phoneNumber) return null;
+  const numbers = [...new Set([String(phoneNumber), toE164(phoneNumber)].filter(Boolean))];
+  return PhoneNumberPayment.findOne({
+    companyId,
+    phoneNumber: { $in: numbers },
+    status: 'succeeded',
+    $or: [{ phoneNumberRef: { $exists: false } }, { phoneNumberRef: null }]
+  }).sort({ createdAt: -1 });
+}
+
 const sessionPublicView = (session, callId) => ({
   callId,
   status: session?.status || 'connecting',
@@ -271,21 +287,21 @@ class PhoneNumberController {
       const linePricing = await getPhoneLinePricing();
 
       if (!isTrial) {
-        // Past the trial: enforce the standard Stripe / PayPal payment gate.
-        if (!paymentId || !mongoose.Types.ObjectId.isValid(paymentId)) {
+        if (paymentId && mongoose.Types.ObjectId.isValid(paymentId)) {
+          payment = await PhoneNumberPayment.findById(paymentId);
+        }
+        if (!payment || payment.status !== 'succeeded' || payment.phoneNumberRef) {
+          payment = await findUnusedSucceededLinePayment(companyId, phoneNumber);
+        }
+        if (!payment || payment.status !== 'succeeded' || payment.phoneNumberRef) {
           return res.status(402).json({
             error: 'Payment required',
             message: 'A confirmed payment (Stripe or PayPal) is required to provision a phone line.'
           });
         }
-        payment = await PhoneNumberPayment.findById(paymentId);
-        if (!payment || payment.status !== 'succeeded') {
-          return res.status(402).json({
-            error: 'Payment not completed',
-            message: 'No succeeded payment matches this purchase request.'
-          });
-        }
-        if (payment.phoneNumber !== phoneNumber) {
+        const paidNumber = toE164(payment.phoneNumber);
+        const requestedNumber = toE164(phoneNumber);
+        if (paidNumber && requestedNumber && paidNumber !== requestedNumber) {
           return res.status(400).json({
             error: 'Payment / number mismatch',
             message: 'The payment was not authorized for this exact phone number.'
@@ -426,21 +442,21 @@ class PhoneNumberController {
       const linePricing = await getPhoneLinePricing();
 
       if (!isTrial) {
-        // Past the trial: enforce the standard Stripe / PayPal payment gate.
-        if (!paymentId || !mongoose.Types.ObjectId.isValid(paymentId)) {
+        if (paymentId && mongoose.Types.ObjectId.isValid(paymentId)) {
+          payment = await PhoneNumberPayment.findById(paymentId);
+        }
+        if (!payment || payment.status !== 'succeeded' || payment.phoneNumberRef) {
+          payment = await findUnusedSucceededLinePayment(companyId, phoneNumber);
+        }
+        if (!payment || payment.status !== 'succeeded' || payment.phoneNumberRef) {
           return res.status(402).json({
             error: 'Payment required',
             message: 'A confirmed payment (Stripe or PayPal) is required to provision a phone line.'
           });
         }
-        payment = await PhoneNumberPayment.findById(paymentId);
-        if (!payment || payment.status !== 'succeeded') {
-          return res.status(402).json({
-            error: 'Payment not completed',
-            message: 'No succeeded payment matches this purchase request.'
-          });
-        }
-        if (payment.phoneNumber !== phoneNumber) {
+        const paidNumber = toE164(payment.phoneNumber);
+        const requestedNumber = toE164(phoneNumber);
+        if (paidNumber && requestedNumber && paidNumber !== requestedNumber) {
           return res.status(400).json({
             error: 'Payment / number mismatch',
             message: 'The payment was not authorized for this exact phone number.'
