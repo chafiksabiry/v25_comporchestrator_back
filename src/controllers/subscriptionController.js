@@ -12,6 +12,88 @@ import {
 import { fulfillStripeCheckoutSessionPayment } from '../services/paymentFulfillment.js';
 import { config } from '../config/env.js';
 
+function numberOrNull(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n);
+}
+
+function metadataObject(metadata) {
+  if (!metadata) return {};
+  if (metadata instanceof Map) return Object.fromEntries(metadata.entries());
+  if (typeof metadata === 'object') return { ...metadata };
+  return {};
+}
+
+/**
+ * Quotas come from the Stripe product metadata stored on the plan
+ * (ACTIVE REPS → maxReps). Refresh from Stripe when the price is still active.
+ */
+async function resolveLivePlanLimits(plan) {
+  const storedMeta = metadataObject(plan?.metadata);
+  const fromMeta = stripeService.extractStripeProductLimits({ metadata: storedMeta });
+  const stored = {
+    planName: plan?.name ? String(plan.name) : null,
+    maxReps: numberOrNull(fromMeta.maxReps) ?? numberOrNull(plan?.maxReps),
+    maxGigs: numberOrNull(fromMeta.maxGigs) ?? numberOrNull(plan?.maxGigs),
+    communicationMinutes: numberOrNull(fromMeta.communicationMinutes) ?? numberOrNull(plan?.communicationMinutes),
+    activeLocalNumbers: numberOrNull(fromMeta.activeLocalNumbers) ?? numberOrNull(plan?.activeLocalNumbers),
+    aiToken: fromMeta.aiToken || (plan?.aiToken ? String(plan.aiToken) : null),
+    aiTokensIncluded: numberOrNull(fromMeta.aiTokensIncluded) ?? numberOrNull(plan?.aiTokensIncluded),
+    repsPerGig: Boolean(fromMeta.repsPerGig),
+    metadata: storedMeta,
+  };
+  if (!plan?.stripePriceId || !stripeService.isConfigured()) return stored;
+
+  try {
+    const price = await stripeService.retrievePriceWithProduct(plan.stripePriceId);
+    const product = price?.product;
+    if (!product || typeof product === 'string') return stored;
+    const limits = stripeService.extractStripeProductLimits(product);
+    const metadata =
+      product.metadata && typeof product.metadata === 'object' ? product.metadata : storedMeta;
+    const resolved = {
+      planName: product.name || stored.planName,
+      maxReps: numberOrNull(limits.maxReps) ?? stored.maxReps,
+      maxGigs: numberOrNull(limits.maxGigs) ?? stored.maxGigs,
+      communicationMinutes: numberOrNull(limits.communicationMinutes) ?? stored.communicationMinutes,
+      activeLocalNumbers: numberOrNull(limits.activeLocalNumbers) ?? stored.activeLocalNumbers,
+      aiToken: limits.aiToken || stored.aiToken,
+      aiTokensIncluded: numberOrNull(limits.aiTokensIncluded) ?? stored.aiTokensIncluded,
+      repsPerGig: Boolean(limits.repsPerGig),
+      metadata,
+    };
+    if (plan._id) {
+      const update = {};
+      if (resolved.maxReps != null && resolved.maxReps !== stored.maxReps) update.maxReps = resolved.maxReps;
+      if (resolved.maxGigs != null && resolved.maxGigs !== stored.maxGigs) update.maxGigs = resolved.maxGigs;
+      if (resolved.communicationMinutes != null && resolved.communicationMinutes !== stored.communicationMinutes) {
+        update.communicationMinutes = resolved.communicationMinutes;
+      }
+      if (resolved.activeLocalNumbers != null && resolved.activeLocalNumbers !== stored.activeLocalNumbers) {
+        update.activeLocalNumbers = resolved.activeLocalNumbers;
+      }
+      if (resolved.aiToken && resolved.aiToken !== stored.aiToken) update.aiToken = resolved.aiToken;
+      if (resolved.aiTokensIncluded != null && resolved.aiTokensIncluded !== stored.aiTokensIncluded) {
+        update.aiTokensIncluded = resolved.aiTokensIncluded;
+      }
+      if (metadata && Object.keys(metadata).length) {
+        const normalized = Object.fromEntries(
+          Object.entries(metadata).map(([key, value]) => [key, String(value ?? '')])
+        );
+        if (JSON.stringify(normalized) !== JSON.stringify(storedMeta)) update.metadata = normalized;
+      }
+      if (Object.keys(update).length) {
+        await SubscriptionPlan.updateOne({ _id: plan._id }, { $set: update });
+      }
+    }
+    return resolved;
+  } catch (error) {
+    console.warn('[subscription] live plan metadata failed:', error?.message || error);
+    return stored;
+  }
+}
+
 function returnBase() {
   return (
     process.env.STRIPE_RETURN_BASE_URL
@@ -140,6 +222,7 @@ export const subscriptionController = {
               communicationMinutes: stripeLimits.communicationMinutes,
               activeLocalNumbers: stripeLimits.activeLocalNumbers,
               aiToken: stripeLimits.aiToken,
+              aiTokensIncluded: stripeLimits.aiTokensIncluded,
             };
           })
         )
@@ -161,7 +244,18 @@ export const subscriptionController = {
       if (!subscription) {
         return res.json({ success: false, message: 'No subscription found' });
       }
-      res.json({ success: true, data: subscription });
+      const payload = subscription.toObject();
+      const limits = await resolveLivePlanLimits(payload.planId);
+      if (payload.planId && typeof payload.planId === 'object') {
+        if (limits.maxReps != null) payload.planId.maxReps = limits.maxReps;
+        if (limits.maxGigs != null) payload.planId.maxGigs = limits.maxGigs;
+        if (limits.communicationMinutes != null) payload.planId.communicationMinutes = limits.communicationMinutes;
+        if (limits.activeLocalNumbers != null) payload.planId.activeLocalNumbers = limits.activeLocalNumbers;
+        if (limits.aiToken) payload.planId.aiToken = limits.aiToken;
+        if (limits.aiTokensIncluded != null) payload.planId.aiTokensIncluded = limits.aiTokensIncluded;
+        if (limits.metadata) payload.planId.metadata = limits.metadata;
+      }
+      res.json({ success: true, data: payload, limits });
     } catch (error) {
       res.status(500).json({ error: 'Error fetching subscription' });
     }
@@ -574,6 +668,15 @@ async function handleProductUpdated(product) {
     if (features.length) update.features = features;
     if (limits.maxGigs != null) update.maxGigs = limits.maxGigs;
     if (limits.maxReps != null) update.maxReps = limits.maxReps;
+    if (limits.communicationMinutes != null) update.communicationMinutes = limits.communicationMinutes;
+    if (limits.activeLocalNumbers != null) update.activeLocalNumbers = limits.activeLocalNumbers;
+    if (limits.aiToken) update.aiToken = limits.aiToken;
+    if (limits.aiTokensIncluded != null) update.aiTokensIncluded = limits.aiTokensIncluded;
+    if (product.metadata && typeof product.metadata === 'object') {
+      update.metadata = Object.fromEntries(
+        Object.entries(product.metadata).map(([key, value]) => [key, String(value ?? '')])
+      );
+    }
 
     await SubscriptionPlan.findOneAndUpdate({ stripePriceId: price.id }, update);
   }

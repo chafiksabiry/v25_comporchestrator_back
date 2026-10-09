@@ -2,6 +2,7 @@ import TokensCompany, {
   isAiProviderAllowed,
   normalizeAiProviders,
 } from '../models/TokensCompany.js';
+import { ensurePlanTokensGranted } from '../services/planTokensGrant.js';
 import TokensUsageLedger from '../models/TokensUsageLedger.js';
 import CompanyPayment from '../models/CompanyPayment.js';
 import mongoose from 'mongoose';
@@ -94,6 +95,9 @@ export const tokensCompanyController = {
     const { companyId } = req.params;
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
     try {
+      await ensurePlanTokensGranted(companyId).catch((err) => {
+        console.warn('[tokens] plan grant failed:', err?.message || err);
+      });
       const wallet = await ensureWallet(companyId);
       const lastPurchasedAt = await resolveLastPurchasedAt(companyId, wallet);
       if (lastPurchasedAt && !wallet.lastPurchasedAt) {

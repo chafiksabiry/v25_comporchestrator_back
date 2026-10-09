@@ -105,24 +105,52 @@ function isConfigured() {
  * Case/spacing-insensitive metadata lookup
  * (Stripe keys like "ACTIVE GIGS", "ACTIVE GIGS (Up to)", "COMMUNICATION MINUTES Included", …).
  */
-function metaGet(meta, ...candidates) {
-  if (!meta || typeof meta !== 'object') return undefined;
-  const normalize = (s) => String(s).toLowerCase().replace(/[_\s-]+/g, '');
-  const wanted = candidates.map(normalize).filter(Boolean);
-  const entries = Object.entries(meta).map(([key, value]) => [normalize(key), value]);
+function asMetadataObject(meta) {
+  if (!meta) return {};
+  if (meta instanceof Map) return Object.fromEntries(meta.entries());
+  if (typeof meta === 'object') return meta;
+  return {};
+}
 
+/** "ACTIVE LOCAL NUMBER (Included)" → "activelocalnumberincluded" */
+function normalizeMetaKey(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+/**
+ * First metadata entry whose key equals or starts with a candidate.
+ * Covers: ACTIVE GIGS, Active GIGs, ACTIVE REPS, COMMUNICATION MINUTES Included,
+ * AI TOKEN (Million), ACTIVE LOCAL NUMBER (Included), Active local numbers.
+ */
+function metaFind(meta, ...candidates) {
+  const source = asMetadataObject(meta);
+  const wanted = candidates.map(normalizeMetaKey).filter(Boolean);
+  const entries = Object.entries(source);
   for (const w of wanted) {
-    for (const [nk, value] of entries) {
-      if (nk === w) return value;
+    for (const [key, value] of entries) {
+      if (normalizeMetaKey(key) === w) return { key, value };
     }
   }
-  // Prefix match so "ACTIVE GIGS" hits "ACTIVE GIGS (Up to)", etc.
   for (const w of wanted) {
-    for (const [nk, value] of entries) {
-      if (nk.startsWith(w) || w.startsWith(nk)) return value;
+    for (const [key, value] of entries) {
+      if (normalizeMetaKey(key).startsWith(w)) return { key, value };
     }
   }
-  return undefined;
+  return null;
+}
+
+function metaGet(meta, ...candidates) {
+  return metaFind(meta, ...candidates)?.value;
+}
+
+/** "120", "1.5", "1 Million" → first number. Null when the value has no digits. */
+function parseMetaNumber(value) {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value;
+  const match = String(value ?? '').match(/(\d+(?:[.,]\d+)?)/);
+  if (!match) return null;
+  const n = Number(match[1].replace(',', '.'));
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n;
 }
 
 function metaKeyLooksLike(metaKey, ...prefixes) {
@@ -173,48 +201,37 @@ export function extractStripeProductFeatures(product) {
 
 export function extractStripeProductLimits(product) {
   if (!product || typeof product === 'string') return {};
-  const meta = product.metadata && typeof product.metadata === 'object' ? product.metadata : {};
+  const meta = asMetadataObject(product.metadata);
   const out = {};
-  const gigs = Number(
-    metaGet(meta, 'ACTIVE GIGS', 'active_gigs', 'max_gigs', 'maxGigs')
+  const gigs = parseMetaNumber(metaGet(meta, 'ACTIVE GIGS', 'Active GIGs', 'maxGigs'));
+  const reps = parseMetaNumber(metaGet(meta, 'ACTIVE REPS', 'Active REPs', 'maxReps'));
+  const minutes = parseMetaNumber(
+    metaGet(meta, 'COMMUNICATION MINUTES Included', 'COMMUNICATION MINUTES', 'communication minutes')
   );
-  const reps = Number(
-    metaGet(meta, 'ACTIVE REPS', 'active_reps', 'max_reps', 'maxReps')
-  );
-  const minutes = Number(
+  const localNumbers = parseMetaNumber(
     metaGet(
       meta,
-      'COMMUNICATION MINUTES',
-      'COMMUNICATION MINUTES Included',
-      'COMMUNICATION MINUTES INCLUDED',
-      'communication_minutes',
-      'minutes'
-    )
-  );
-  const localNumbers = Number(
-    metaGet(
-      meta,
+      'ACTIVE LOCAL NUMBER (Included)',
       'ACTIVE LOCAL NUMBER',
       'ACTIVE LOCAL NUMBERS',
-      'active_local_number',
-      'local_numbers'
+      'Active local numbers'
     )
   );
-  if (Number.isFinite(gigs) && gigs >= 0) out.maxGigs = Math.round(gigs);
-  if (Number.isFinite(reps) && reps >= 0) out.maxReps = Math.round(reps);
-  if (Number.isFinite(minutes) && minutes >= 0) out.communicationMinutes = Math.round(minutes);
-  if (Number.isFinite(localNumbers) && localNumbers >= 0) out.activeLocalNumbers = Math.round(localNumbers);
-  const aiToken = metaGet(
-    meta,
-    'AI TOKEN (Million)',
-    'AI TOKEN (,000) INCLUDED',
-    'AI TOKEN',
-    'ai_token',
-    'ai_tokens'
-  );
-  if (aiToken != null && String(aiToken).trim()) out.aiToken = String(aiToken).trim();
+  if (gigs != null) out.maxGigs = Math.round(gigs);
+  if (reps != null) out.maxReps = Math.round(reps);
+  if (minutes != null) out.communicationMinutes = Math.round(minutes);
+  if (localNumbers != null) out.activeLocalNumbers = Math.round(localNumbers);
 
-  // Preserve wording from Stripe metadata when quotas are "per gig" / "up to".
+  const aiEntry = metaFind(meta, 'AI TOKEN (Million)', 'AI TOKEN');
+  if (aiEntry && String(aiEntry.value ?? '').trim()) {
+    out.aiToken = String(aiEntry.value).trim();
+    const amount = parseMetaNumber(aiEntry.value);
+    if (amount != null) {
+      const inMillions = /million/i.test(aiEntry.key) || /million/i.test(out.aiToken);
+      out.aiTokensIncluded = Math.round(inMillions ? amount * 1_000_000 : amount);
+    }
+  }
+
   for (const [key] of Object.entries(meta)) {
     if (metaKeyLooksLike(key, 'ACTIVE REPS') && /per\s*gig/i.test(key)) {
       out.repsPerGig = true;

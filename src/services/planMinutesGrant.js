@@ -4,23 +4,15 @@ import { Subscription } from '../models/Subscription.js';
 import { stripeService } from './stripeService.js';
 
 /**
- * Resolve monthly communication minutes included in a subscription plan.
- * Prefers Stripe product metadata (via plan.communicationMinutes).
- * Starter defaults to 120 when metadata is missing (trial / catalog lag).
+ * Monthly communication minutes from plan metadata
+ * ("COMMUNICATION MINUTES Included"). No plan-name default.
  */
 export function resolvePlanCommunicationMinutes(plan) {
   if (!plan) return 0;
+  const fromMeta = stripeService.extractStripeProductLimits({ metadata: plan.metadata });
+  if (fromMeta.communicationMinutes != null) return fromMeta.communicationMinutes;
   const fromPlan = Number(plan.communicationMinutes);
-  if (Number.isFinite(fromPlan) && fromPlan > 0) {
-    return Math.round(fromPlan);
-  }
-
-  // Optional live Stripe metadata refresh (best-effort)
-  // Caller may pass plan with stale DB fields — keep sync path elsewhere.
-
-  // Catalog lag fallback — Starter trial includes 120 communication minutes.
-  const name = String(plan.name || '').toUpperCase();
-  if (name.includes('STARTER')) return 120;
+  if (Number.isFinite(fromPlan) && fromPlan > 0) return Math.round(fromPlan);
   return 0;
 }
 

@@ -8,6 +8,7 @@ import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { getPhoneLinePricing } from '../services/platformPricingService.js';
 import { isFrenchCountry, resolvePhoneProvider } from '../utils/phoneProvider.js';
+import { loadCompanyPlanLimits, localNumberLimitPayload } from '../services/planLimits.js';
 
 /** In-memory status for live test-call monitoring (popup). */
 const testCallSessions = new Map();
@@ -261,6 +262,9 @@ class PhoneNumberController {
 
       if (companyId && mongoose.Types.ObjectId.isValid(companyId)) {
         const existingCount = await PhoneNumber.countDocuments({ companyId });
+        const limits = await loadCompanyPlanLimits(companyId);
+        const blocked = localNumberLimitPayload(limits, existingCount);
+        if (blocked) return res.status(403).json(blocked);
         isTrial = existingCount === 0;
       }
 
@@ -413,6 +417,9 @@ class PhoneNumberController {
 
       if (companyId && mongoose.Types.ObjectId.isValid(companyId)) {
         const existingCount = await PhoneNumber.countDocuments({ companyId });
+        const limits = await loadCompanyPlanLimits(companyId);
+        const blocked = localNumberLimitPayload(limits, existingCount);
+        if (blocked) return res.status(403).json(blocked);
         isTrial = existingCount === 0;
       }
 
@@ -621,6 +628,11 @@ class PhoneNumberController {
       if (!mongoose.Types.ObjectId.isValid(companyId)) {
         return res.status(400).json({ error: 'Invalid companyId' });
       }
+
+      const existingLines = await PhoneNumber.countDocuments({ companyId });
+      const planLimits = await loadCompanyPlanLimits(companyId);
+      const lineLimit = localNumberLimitPayload(planLimits, existingLines);
+      if (lineLimit) return res.status(403).json(lineLimit);
 
       // Pre-payment regulatory gate: refuse to charge the customer for a
       // number that Twilio will reject at provisioning time (error 21649).

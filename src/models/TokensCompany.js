@@ -29,6 +29,15 @@ const tokensCompanySchema = new mongoose.Schema({
     type: Date,
     default: null,
   },
+  /** Tokens credited from the plan metadata "AI TOKEN (Million)". */
+  planTokensGranted: {
+    type: Number,
+    default: 0,
+  },
+  planGrantKeys: {
+    type: [String],
+    default: [],
+  },
   // Idempotency keys for AI usage charges
   chargedUsageIds: {
     type: [String],

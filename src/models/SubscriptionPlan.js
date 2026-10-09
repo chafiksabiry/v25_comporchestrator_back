@@ -51,6 +51,11 @@ const subscriptionPlanSchema = new mongoose.Schema({
     type: String,
     required: false
   },
+  /** Absolute token count from "AI TOKEN (Million)" (value × 1_000_000). */
+  aiTokensIncluded: {
+    type: Number,
+    required: false
+  },
   metadata: {
     type: Map,
     of: String,
