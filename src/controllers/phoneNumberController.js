@@ -524,7 +524,12 @@ class PhoneNumberController {
     const msg = String(error?.message || '');
     if (msg.includes('already exists')) return 'provision_number_already_exists';
     if (msg.includes('no longer available')) return 'provision_number_unavailable';
-    if (msg.includes('Insufficient balance')) return 'provider_insufficient_balance';
+    if (
+      error?.code === 'TELNYX_INSUFFICIENT_CREDIT'
+      || /not enough credit|insufficient funds|insufficient balance/i.test(msg)
+    ) {
+      return 'provider_insufficient_balance';
+    }
     if (msg.toLowerCase().includes('invalid')) return 'provision_invalid_request';
     return `provision_failed_${error?.code || 'unknown'}`;
   }
@@ -567,6 +572,19 @@ class PhoneNumberController {
     }
 
     const msg = String(error?.message || '');
+    if (
+      error?.code === 'TELNYX_INSUFFICIENT_CREDIT'
+      || /not enough credit|insufficient funds|insufficient balance/i.test(msg)
+    ) {
+      return res.status(402).json({
+        ...base,
+        error: 'Provider credit insufficient',
+        code: 'TELNYX_INSUFFICIENT_CREDIT',
+        message: refunded
+          ? "L'activation de cette ligne est impossible pour le moment. Votre paiement a été remboursé automatiquement. Ne relancez pas l'achat : le crédit opérateur doit d'abord être rétabli."
+          : "L'achat de numéro est temporairement indisponible. Réessayez plus tard ou contactez le support."
+      });
+    }
     if (msg.includes('already exists')) {
       return res.status(409).json({ ...base, error: 'Conflict', message: withRefund(msg) });
     }
@@ -672,6 +690,24 @@ class PhoneNumberController {
               message: `Les numéros ${isoCountry} nécessitent un Regulatory Bundle Twilio approuvé. Soumettez vos documents dans la console Twilio ou choisissez un pays sans régulation.`
             });
           }
+        }
+      }
+
+      if (lineProvider === 'telnyx') {
+        try {
+          await phoneNumberService.assertTelnyxCanOrderNumber();
+        } catch (creditErr) {
+          if (creditErr?.code === 'TELNYX_INSUFFICIENT_CREDIT') {
+            console.error(
+              `[telephony] Telnyx credit too low to order a number (available=${creditErr.availableCredit}, required=${creditErr.requiredCredit})`
+            );
+            return res.status(402).json({
+              error: 'Provider credit insufficient',
+              code: 'TELNYX_INSUFFICIENT_CREDIT',
+              message: "L'achat de numéro est temporairement indisponible. Aucun paiement n'a été pris. Réessayez plus tard ou contactez le support."
+            });
+          }
+          console.warn('[telephony] Telnyx balance check skipped:', creditErr?.message || creditErr);
         }
       }
 

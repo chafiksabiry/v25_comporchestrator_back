@@ -18,6 +18,37 @@ class PhoneNumberService {
     this.twilioClient = twilio(config.twilioAccountSid, config.twilioAuthToken);
   }
 
+  /**
+   * Telnyx account credit available to place a number order.
+   * Returns null when the balance endpoint cannot be read.
+   */
+  async getTelnyxAvailableCredit() {
+    const response = await axios.get('https://api.telnyx.com/v2/balance', {
+      headers: { Authorization: `Bearer ${config.telnyxApiKey}` },
+      timeout: 8000
+    });
+    const data = response.data?.data || response.data || {};
+    const amount = Number(data.available_credit ?? data.balance);
+    return Number.isFinite(amount) ? amount : null;
+  }
+
+  /**
+   * A US local order costs about 2 USD on Telnyx. Refuse before Stripe/PayPal
+   * when the operator account cannot cover that, so the customer is not charged
+   * and then refunded.
+   */
+  async assertTelnyxCanOrderNumber(minCredit = 2) {
+    const available = await this.getTelnyxAvailableCredit();
+    if (available == null) return;
+    if (available < minCredit) {
+      const err = new Error("L'achat de numéro est temporairement indisponible.");
+      err.code = 'TELNYX_INSUFFICIENT_CREDIT';
+      err.availableCredit = available;
+      err.requiredCredit = minCredit;
+      throw err;
+    }
+  }
+
   async searchAvailableNumbers({ countryCode, type: reqType, features, limit }) {
     try {
       const cc = String(countryCode || '').toUpperCase();
@@ -113,13 +144,19 @@ class PhoneNumberService {
 
       if (error.raw) {
         const errorCode = error.raw.code || (error.raw.errors && error.raw.errors[0]?.code);
-        const errorMessage = error.raw.message || (error.raw.errors && error.raw.errors[0]?.detail) || 'Failed to purchase number';
+        const errorMessage = error.raw.message || (error.raw.errors && error.raw.errors[0]?.detail) || error.message || 'Failed to purchase number';
+        const creditShort = errorCode === 'insufficient_funds'
+          || /not enough credit|insufficient funds|insufficient balance/i.test(String(errorMessage));
+
+        if (creditShort) {
+          const err = new Error("L'achat de cette ligne est impossible pour le moment : le compte opérateur n'a pas assez de crédit.");
+          err.code = 'TELNYX_INSUFFICIENT_CREDIT';
+          throw err;
+        }
 
         switch (errorCode) {
           case 'number_already_registered':
             throw new Error('This number already exists in your account');
-          case 'insufficient_funds':
-            throw new Error('Insufficient balance to purchase this number');
           case 'number_not_available':
             throw new Error('This number is no longer available');
           default:
