@@ -634,15 +634,13 @@ class PhoneNumberController {
       const lineLimit = localNumberLimitPayload(planLimits, existingLines);
       if (lineLimit) return res.status(403).json(lineLimit);
 
-      // Pre-payment regulatory gate: refuse to charge the customer for a
-      // number that Twilio will reject at provisioning time (error 21649).
-      // We map the E.164 prefix → ISO country, then ask the service whether
-      // a Regulatory Bundle is required for that country and, if so, whether
-      // we have an approved one. This MUST run BEFORE we create the
-      // PhoneNumberPayment / Stripe session — otherwise the user pays for a
-      // number that can never be activated.
+      // Twilio-only regulatory gate. France is provisioned on Twilio and can
+      // be rejected (21649) after payment. Other markets (US, etc.) are
+      // Telnyx and must not be blocked by a missing Twilio bundle — that
+      // used to abort checkout before Stripe/PayPal returned a URL.
+      const lineProvider = resolvePhoneProvider(req.body.lineProvider, { phoneNumber });
       const isoCountry = phoneNumberService.guessCountryFromE164(phoneNumber);
-      if (isoCountry) {
+      if (lineProvider === 'twilio' && isoCountry) {
         const bundleRequired = await phoneNumberService.isRegulatoryBundleRequired(
           isoCountry,
           'local'
@@ -750,6 +748,13 @@ class PhoneNumberController {
           });
 
           checkoutUrl = session.url;
+          if (!checkoutUrl) {
+            await PhoneNumberPayment.findByIdAndDelete(payment._id);
+            return res.status(502).json({
+              error: 'Stripe checkout URL missing',
+              message: "Stripe n'a pas renvoyé d'URL de paiement."
+            });
+          }
           payment.providerRef = session.id;
           payment.checkoutUrl = checkoutUrl;
           await payment.save();
