@@ -32,9 +32,63 @@ async function findUnusedSucceededLinePayment(companyId, phoneNumber) {
   return PhoneNumberPayment.findOne({
     companyId,
     phoneNumber: { $in: numbers },
-    status: 'succeeded',
+    status: { $in: ['succeeded', 'authorized'] },
     $or: [{ phoneNumberRef: { $exists: false } }, { phoneNumberRef: null }]
   }).sort({ createdAt: -1 });
+}
+
+async function syncLinePaymentAuthorization(payment) {
+  if (!payment || payment.status === 'succeeded' || payment.status === 'authorized') return payment;
+  if (payment.provider === 'stripe' && payment.providerRef) {
+    const session = await stripeService.retrieveSession(payment.providerRef);
+    const pi = session?.payment_intent;
+    const piStatus = pi && typeof pi === 'object' ? pi.status : null;
+    if (session.payment_status === 'paid' || piStatus === 'succeeded') {
+      payment.status = 'succeeded';
+    } else if (piStatus === 'requires_capture' || session.status === 'complete') {
+      payment.status = 'authorized';
+    }
+    await payment.save();
+  } else if (payment.provider === 'paypal' && payment.providerRef) {
+    const order = await paypalService.getOrder(payment.providerRef);
+    if (order.status === 'COMPLETED') payment.status = 'succeeded';
+    else if (order.status === 'APPROVED') payment.status = 'authorized';
+    await payment.save();
+  }
+  return payment;
+}
+
+async function captureAuthorizedLinePayment(payment) {
+  if (!payment || payment.status === 'succeeded') return payment;
+  if (payment.status !== 'authorized') {
+    const err = new Error("Le paiement n'est pas encore autorisé.");
+    err.code = 'PAYMENT_NOT_AUTHORIZED';
+    throw err;
+  }
+  if (payment.provider === 'stripe') {
+    await stripeService.captureCheckoutSession(payment.providerRef);
+  } else if (payment.provider === 'paypal') {
+    await paypalService.captureOrder(payment.providerRef);
+  }
+  payment.status = 'succeeded';
+  await payment.save();
+  console.log(`✅ Line payment captured after number purchase: ${payment._id}`);
+  return payment;
+}
+
+async function releaseLineAuthorization(payment, reason) {
+  if (!payment || payment.status !== 'authorized') return { released: false };
+  try {
+    if (payment.provider === 'stripe' && payment.providerRef) {
+      await stripeService.cancelCheckoutAuthorization(payment.providerRef);
+    }
+  } catch (err) {
+    console.warn('[telephony] could not release card authorization:', err.message);
+  }
+  payment.status = 'failed';
+  payment.failureReason = reason || 'number_purchase_failed';
+  await payment.save();
+  return { released: true, provider: payment.provider };
 }
 
 const sessionPublicView = (session, callId) => ({
@@ -243,6 +297,7 @@ class PhoneNumberController {
   }
 
   async purchaseNumber(req, res) {
+    let numberPurchased = false;
     try {
       console.log("📥 Received purchaseNumber request");
       console.log("📦 req.body:", JSON.stringify(req.body, null, 2));
@@ -290,13 +345,20 @@ class PhoneNumberController {
         if (paymentId && mongoose.Types.ObjectId.isValid(paymentId)) {
           payment = await PhoneNumberPayment.findById(paymentId);
         }
-        if (!payment || payment.status !== 'succeeded' || payment.phoneNumberRef) {
+        if (!payment || payment.phoneNumberRef || !['pending', 'authorized', 'succeeded'].includes(payment.status)) {
           payment = await findUnusedSucceededLinePayment(companyId, phoneNumber);
         }
-        if (!payment || payment.status !== 'succeeded' || payment.phoneNumberRef) {
+        if (payment && payment.status === 'pending') {
+          try {
+            payment = await syncLinePaymentAuthorization(payment);
+          } catch (syncErr) {
+            console.warn('[telephony] could not read payment authorization:', syncErr.message);
+          }
+        }
+        if (!payment || payment.phoneNumberRef || !['authorized', 'succeeded'].includes(payment.status)) {
           return res.status(402).json({
             error: 'Payment required',
-            message: 'A confirmed payment (Stripe or PayPal) is required to provision a phone line.'
+            message: "Approuvez d'abord la carte ou PayPal. Le montant n'est encaissé qu'après l'achat du numéro."
           });
         }
         const paidNumber = toE164(payment.phoneNumber);
@@ -330,6 +392,10 @@ class PhoneNumberController {
           trialExpiresAt,
         }
       );
+      numberPurchased = true;
+      if (!isTrial && payment?.status === 'authorized') {
+        await captureAuthorizedLinePayment(payment);
+      }
 
       // Backlink the payment to the provisioned PhoneNumber doc for audit.
       if (!isTrial && payment) {
@@ -356,8 +422,22 @@ class PhoneNumberController {
     } catch (error) {
       console.error('Error purchasing phone number:', error);
 
-      // Payment already succeeded before Twilio/Telnyx provision — refund on
-      // ANY failure so the customer is never charged for a line they never got.
+      if (!numberPurchased && req.body?.paymentId && mongoose.Types.ObjectId.isValid(req.body.paymentId)) {
+        const stored = await PhoneNumberPayment.findById(req.body.paymentId);
+        if (stored?.status === 'authorized') {
+          await releaseLineAuthorization(stored, this.lineProvisionFailureReason(error));
+          return res.status(402).json({
+            refunded: false,
+            released: true,
+            error: 'Number purchase failed',
+            code: error?.code || 'NUMBER_PURCHASE_FAILED',
+            message: `L'achat du numéro a échoué. Aucun paiement n'a été encaissé. ${error?.message || ''}`.trim()
+          });
+        }
+      }
+
+      // A charge that was already captured is refunded. An authorization is
+      // released above so the customer is not billed for a line they never got.
       const refundInfo = await this.refundFailedLinePayment(
         req.body?.paymentId,
         this.lineProvisionFailureReason(error)
@@ -416,6 +496,7 @@ class PhoneNumberController {
   }
 
   async purchaseTwilioNumber(req, res) {
+    let numberPurchased = false;
     try {
       console.log("📥 Received purchaseTwilioNumber request");
       console.log("📦 req.body:", JSON.stringify(req.body, null, 2));
@@ -445,13 +526,20 @@ class PhoneNumberController {
         if (paymentId && mongoose.Types.ObjectId.isValid(paymentId)) {
           payment = await PhoneNumberPayment.findById(paymentId);
         }
-        if (!payment || payment.status !== 'succeeded' || payment.phoneNumberRef) {
+        if (!payment || payment.phoneNumberRef || !['pending', 'authorized', 'succeeded'].includes(payment.status)) {
           payment = await findUnusedSucceededLinePayment(companyId, phoneNumber);
         }
-        if (!payment || payment.status !== 'succeeded' || payment.phoneNumberRef) {
+        if (payment && payment.status === 'pending') {
+          try {
+            payment = await syncLinePaymentAuthorization(payment);
+          } catch (syncErr) {
+            console.warn('[telephony] could not read payment authorization:', syncErr.message);
+          }
+        }
+        if (!payment || payment.phoneNumberRef || !['authorized', 'succeeded'].includes(payment.status)) {
           return res.status(402).json({
             error: 'Payment required',
-            message: 'A confirmed payment (Stripe or PayPal) is required to provision a phone line.'
+            message: "Approuvez d'abord la carte ou PayPal. Le montant n'est encaissé qu'après l'achat du numéro."
           });
         }
         const paidNumber = toE164(payment.phoneNumber);
@@ -486,6 +574,10 @@ class PhoneNumberController {
           trialExpiresAt,
         }
       );
+      numberPurchased = true;
+      if (!isTrial && payment?.status === 'authorized') {
+        await captureAuthorizedLinePayment(payment);
+      }
       console.log("newNumber", newNumber);
 
       // Backlink the payment to the provisioned PhoneNumber doc for audit.
@@ -503,6 +595,20 @@ class PhoneNumberController {
       res.json(newNumber);
     } catch (error) {
       console.error('Error purchasing Twilio phone number:', error);
+
+      if (!numberPurchased && req.body?.paymentId && mongoose.Types.ObjectId.isValid(req.body.paymentId)) {
+        const stored = await PhoneNumberPayment.findById(req.body.paymentId);
+        if (stored?.status === 'authorized') {
+          await releaseLineAuthorization(stored, this.lineProvisionFailureReason(error));
+          return res.status(402).json({
+            refunded: false,
+            released: true,
+            error: 'Number purchase failed',
+            code: error?.code || 'NUMBER_PURCHASE_FAILED',
+            message: `L'achat du numéro a échoué. Aucun paiement n'a été encaissé. ${error?.message || ''}`.trim()
+          });
+        }
+      }
 
       const refundInfo = await this.refundFailedLinePayment(
         req.body?.paymentId,
@@ -796,6 +902,7 @@ class PhoneNumberController {
             successUrl,
             cancelUrl,
             clientReferenceId: payment._id,
+            captureMethod: 'manual',
             metadata: { purpose: 'phone_line', companyId: String(companyId), paymentId: String(payment._id) }
           });
 
@@ -884,35 +991,17 @@ class PhoneNumberController {
         if (!orderId) {
           return res.status(400).json({ error: 'PayPal order ID (providerRef) is required' });
         }
-
-        let capture;
-        try {
-          capture = await paypalService.captureOrder(orderId);
-        } catch (paypalErr) {
-          const detail = paypalErr?.message
-            || paypalErr?.response?.data?.details?.[0]?.description
-            || paypalErr?.response?.data?.message
-            || 'PayPal capture failed';
-          console.error('PayPal capture failed:', paypalErr?.response?.data || paypalErr.message);
-          if (paypalErr?.code !== 'PAYPAL_NOT_APPROVED') {
-            payment.status = 'failed';
-            payment.failureReason = detail;
-            await payment.save();
-          }
+        const order = await paypalService.getOrder(orderId);
+        if (order.status === 'COMPLETED') {
+          payment.status = 'succeeded';
+        } else if (order.status === 'APPROVED') {
+          payment.status = 'authorized';
+        } else {
           return res.status(402).json({
-            error: paypalErr?.code === 'PAYPAL_NOT_APPROVED' ? 'PayPal not approved' : 'PayPal capture failed',
-            message: detail
+            error: 'PayPal not approved',
+            message: "Le paiement PayPal n'est pas encore approuvé. Le montant n'est encaissé qu'après l'achat du numéro."
           });
         }
-
-        if (capture.status !== 'COMPLETED') {
-          return res.status(402).json({
-            error: 'PayPal payment not completed',
-            message: `Order status: ${capture.status}`
-          });
-        }
-
-        payment.status = 'succeeded';
         payment.providerRef = orderId;
         await payment.save();
       } else if (payment.provider === 'stripe') {
@@ -932,13 +1021,18 @@ class PhoneNumberController {
             message: stripeErr.message
           });
         }
-        if (session.payment_status !== 'paid' && session.status !== 'complete') {
+        const pi = session?.payment_intent;
+        const piStatus = pi && typeof pi === 'object' ? pi.status : null;
+        if (session.payment_status === 'paid' || piStatus === 'succeeded') {
+          payment.status = 'succeeded';
+        } else if (piStatus === 'requires_capture' || session.status === 'complete') {
+          payment.status = 'authorized';
+        } else {
           return res.status(402).json({
-            error: 'Stripe payment not completed',
+            error: 'Stripe payment not authorized',
             message: `Session status: ${session.payment_status || session.status}`
           });
         }
-        payment.status = 'succeeded';
         payment.providerRef = session.id;
         await payment.save();
       } else {

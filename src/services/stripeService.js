@@ -30,8 +30,10 @@ async function createOneShotCheckoutSession({
   successUrl,
   cancelUrl,
   clientReferenceId,
-  metadata = {}
+  metadata = {},
+  captureMethod = 'automatic'
 }) {
+  const manual = captureMethod === 'manual';
   return getStripe().checkout.sessions.create({
     mode: 'payment',
     payment_method_types: ['card'],
@@ -48,11 +50,52 @@ async function createOneShotCheckoutSession({
     success_url: successUrl,
     cancel_url: cancelUrl,
     client_reference_id: String(clientReferenceId),
+    ...(manual ? { payment_intent_data: { capture_method: 'manual' } } : {}),
     metadata: {
       paymentId: String(clientReferenceId),
       ...metadata
     }
   });
+}
+
+function paymentIntentFromSession(session) {
+  const pi = session?.payment_intent;
+  if (!pi) return null;
+  if (typeof pi === 'string') return { id: pi, status: null };
+  return pi;
+}
+
+async function captureCheckoutSession(sessionId) {
+  const session = await retrieveSession(sessionId);
+  const pi = paymentIntentFromSession(session);
+  if (!pi?.id) {
+    const err = new Error('Stripe session has no payment intent to capture.');
+    err.code = 'STRIPE_NOT_CAPTURABLE';
+    throw err;
+  }
+  const intent = pi.status
+    ? pi
+    : await getStripe().paymentIntents.retrieve(pi.id);
+  if (intent.status === 'succeeded') return intent;
+  if (intent.status !== 'requires_capture') {
+    const err = new Error(`Stripe payment is ${intent.status} and cannot be captured.`);
+    err.code = 'STRIPE_NOT_CAPTURABLE';
+    throw err;
+  }
+  return getStripe().paymentIntents.capture(intent.id);
+}
+
+async function cancelCheckoutAuthorization(sessionId) {
+  const session = await retrieveSession(sessionId);
+  const pi = paymentIntentFromSession(session);
+  if (!pi?.id) return null;
+  const intent = pi.status
+    ? pi
+    : await getStripe().paymentIntents.retrieve(pi.id);
+  if (intent.status === 'requires_capture' || intent.status === 'requires_confirmation') {
+    return getStripe().paymentIntents.cancel(intent.id);
+  }
+  return intent;
 }
 
 async function retrieveSession(sessionId) {
@@ -404,6 +447,8 @@ export const stripeService = {
   isConfigured,
   createOneShotCheckoutSession,
   retrieveSession,
+  captureCheckoutSession,
+  cancelCheckoutAuthorization,
   refundCheckoutSession,
   createCheckoutSession: async (userId, priceId, successUrl, cancelUrl, metadata = {}) => {
     try {

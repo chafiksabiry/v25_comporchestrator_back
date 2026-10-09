@@ -187,13 +187,20 @@ export async function fulfillStripePhoneLineSession(session) {
   if (payment.status === 'refunded' || payment.status === 'failed') {
     return { skipped: true, reason: `payment is ${payment.status}`, paymentId: String(payment._id) };
   }
+  if (payment.status === 'authorized' && session.payment_status !== 'paid') {
+    return { skipped: true, reason: 'already authorized', paymentId: String(payment._id) };
+  }
 
-  payment.status = 'succeeded';
+  // Phone lines use manual capture: checkout completion only authorizes the
+  // card. The charge is captured after the number order succeeds.
+  payment.status = session.payment_status === 'paid' ? 'succeeded' : 'authorized';
   payment.providerRef = session.id || payment.providerRef;
   await payment.save();
 
   console.log(
-    `✅ Phone-line Stripe payment fulfilled: payment=${payment._id} phone=${payment.phoneNumber} session=${session.id}`
+    payment.status === 'succeeded'
+      ? `✅ Phone-line Stripe payment fulfilled: payment=${payment._id} phone=${payment.phoneNumber} session=${session.id}`
+      : `✅ Phone-line Stripe payment authorized (not captured yet): payment=${payment._id} phone=${payment.phoneNumber} session=${session.id}`
   );
-  return { fulfilled: true, paymentId: String(payment._id), purpose: 'phone_line' };
+  return { fulfilled: payment.status === 'succeeded', authorized: payment.status === 'authorized', paymentId: String(payment._id), purpose: 'phone_line' };
 }
