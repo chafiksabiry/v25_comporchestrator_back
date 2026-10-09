@@ -902,6 +902,7 @@ class PhoneNumberController {
             successUrl,
             cancelUrl,
             clientReferenceId: payment._id,
+            // Authorize only. The charge is captured after the number order succeeds.
             captureMethod: 'manual',
             metadata: { purpose: 'phone_line', companyId: String(companyId), paymentId: String(payment._id) }
           });
