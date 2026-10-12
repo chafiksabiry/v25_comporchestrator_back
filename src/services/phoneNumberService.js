@@ -853,7 +853,15 @@ class PhoneNumberService {
           tid = response?.data?.[0]?.id ? String(response.data[0].id) : '';
         }
         if (tid && this.telnyxClient) {
-          await this.telnyxClient.phoneNumbers.delete(tid);
+          // telnyx@1.x exposes `del` (delete is a reserved word). Newer SDKs use `delete`.
+          const numbersApi = this.telnyxClient.phoneNumbers;
+          if (typeof numbersApi.del === 'function') {
+            await numbersApi.del(tid);
+          } else if (typeof numbersApi.delete === 'function') {
+            await numbersApi.delete(tid);
+          } else {
+            throw new Error('Telnyx SDK cannot release phone numbers');
+          }
           console.log(`🗑️ Released Telnyx number ${e164} (${tid})`);
         } else {
           console.warn(`⚠️ Telnyx id missing for ${e164} — skipping provider release`);
