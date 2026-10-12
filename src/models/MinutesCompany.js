@@ -30,7 +30,7 @@ const minutesCompanySchema = new mongoose.Schema({
   },
   /**
    * Idempotency keys for plan grants — typically
-   * `${stripeSubscriptionId}:${currentPeriodStartISO}`.
+   * `${stripeSubscriptionId}:${periodStartRoundedToTheMinute}`.
    */
   planGrantKeys: {
     type: [String],

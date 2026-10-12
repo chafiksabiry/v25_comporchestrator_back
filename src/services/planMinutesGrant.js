@@ -22,12 +22,37 @@ function toCompanyObjectId(companyId) {
   return new mongoose.Types.ObjectId(s);
 }
 
+/** Checkout confirm and the Stripe webhook can stamp the period a few seconds apart. */
+const DUPLICATE_GRANT_WINDOW_MS = 15 * 60 * 1000;
+
+function subscriptionRef(subscription) {
+  return String(subscription?.stripeSubscriptionId || subscription?._id || '');
+}
+
+function periodStartMs(subscription) {
+  const raw = subscription?.currentPeriodStart;
+  const ms = raw ? new Date(raw).getTime() : Date.now();
+  return Number.isFinite(ms) ? ms : Date.now();
+}
+
+/**
+ * One key per subscription period. The timestamp is rounded to the minute so
+ * two activations a few seconds apart do not credit the plan twice.
+ */
 function periodGrantKey(subscription) {
-  const subRef = subscription.stripeSubscriptionId || String(subscription._id);
-  const periodStart = subscription.currentPeriodStart
-    ? new Date(subscription.currentPeriodStart).toISOString()
-    : 'unknown';
-  return `${subRef}:${periodStart}`;
+  const subRef = subscriptionRef(subscription);
+  const bucket = Math.floor(periodStartMs(subscription) / 60000) * 60000;
+  return `${subRef}:${new Date(bucket).toISOString()}`;
+}
+
+function splitGrantKey(grantKey) {
+  const raw = String(grantKey || '');
+  const idx = raw.indexOf(':');
+  if (idx <= 0) return null;
+  const subRef = raw.slice(0, idx);
+  const at = Date.parse(raw.slice(idx + 1));
+  if (!subRef || Number.isNaN(at)) return null;
+  return { subRef, at };
 }
 
 async function ensureMinutesWallet(companyId) {
@@ -54,6 +79,69 @@ function creditDateFromGrantKey(grantKey, fallback) {
   const parsed = Date.parse(iso);
   if (!Number.isNaN(parsed)) return new Date(parsed);
   return fallback || new Date();
+}
+
+/**
+ * Drop a second plan credit for the same subscription when the two period
+ * stamps are only seconds apart (confirm + webhook). A real renewal is ~30 days later.
+ */
+async function collapseNearDuplicatePlanGrants(companyId, allowance) {
+  const wallet = await MinutesCompany.findOne({ companyId });
+  if (!wallet) return;
+  const parsed = (wallet.planGrantKeys || [])
+    .map((key) => ({ key, ...splitGrantKey(key) }))
+    .filter((row) => row.subRef && Number.isFinite(row.at));
+  const bySub = new Map();
+  for (const row of parsed) {
+    const list = bySub.get(row.subRef) || [];
+    list.push(row);
+    bySub.set(row.subRef, list);
+  }
+  const drop = [];
+  for (const list of bySub.values()) {
+    list.sort((a, b) => a.at - b.at);
+    let kept = list[0];
+    for (let i = 1; i < list.length; i += 1) {
+      if (list[i].at - kept.at <= DUPLICATE_GRANT_WINDOW_MS) drop.push(list[i].key);
+      else kept = list[i];
+    }
+  }
+  if (!drop.length) return;
+
+  const creditByKey = new Map((wallet.credits || []).map((row) => [row.grantKey, row]));
+  let removeMinutes = 0;
+  for (const key of drop) {
+    const row = creditByKey.get(key);
+    const mins = Number(row?.minutes);
+    removeMinutes += Number.isFinite(mins) && mins > 0 ? mins : allowance;
+  }
+
+  await MinutesCompany.updateOne(
+    { companyId, planGrantKeys: { $all: drop } },
+    {
+      $inc: {
+        minutes: -removeMinutes,
+        planMinutesGranted: -removeMinutes,
+      },
+      $pull: {
+        planGrantKeys: { $in: drop },
+        credits: { grantKey: { $in: drop } },
+      },
+    }
+  );
+  console.log(
+    `[planMinutes] Removed duplicate plan credit of ${removeMinutes} min for company ${companyId}`
+  );
+}
+
+function hasRecentPlanGrant(planGrantKeys, subscription) {
+  const subRef = subscriptionRef(subscription);
+  const at = periodStartMs(subscription);
+  return (planGrantKeys || []).some((key) => {
+    const parsed = splitGrantKey(key);
+    if (!parsed || parsed.subRef !== subRef) return false;
+    return Math.abs(parsed.at - at) <= DUPLICATE_GRANT_WINDOW_MS;
+  });
 }
 
 /** One ledger row per period already granted, dated at that period start. */
@@ -137,6 +225,21 @@ export async function ensurePlanMinutesGranted(companyId) {
     : new Date();
 
   await ensureMinutesWallet(companyId);
+  await collapseNearDuplicatePlanGrants(oid, allowance);
+  const walletBefore = await MinutesCompany.findOne({ companyId: oid });
+  if (hasRecentPlanGrant(walletBefore?.planGrantKeys, subscription)) {
+    await backfillPlanCredits(oid, { allowance, planName });
+    const wallet = await MinutesCompany.findOne({ companyId: oid });
+    return {
+      granted: false,
+      allowance,
+      minutes: typeof wallet?.minutes === 'number' ? wallet.minutes : 0,
+      planName,
+      grantKey,
+      planMinutesGranted: wallet?.planMinutesGranted || 0,
+      alreadyGranted: true,
+    };
+  }
 
   if (allowance <= 0) {
     const wallet = await MinutesCompany.findOne({ companyId: oid });

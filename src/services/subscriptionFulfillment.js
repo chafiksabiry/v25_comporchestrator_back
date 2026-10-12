@@ -65,9 +65,6 @@ export async function activateCompanySubscription({
   status = 'active',
   periodDays = 30
 }) {
-  const now = new Date();
-  const periodEnd = new Date(now.getTime() + periodDays * 24 * 60 * 60 * 1000);
-
   const subId =
     stripeSubscriptionId
     || (provider === 'paypal' && providerRef ? `paypal_${providerRef}` : null);
@@ -75,6 +72,19 @@ export async function activateCompanySubscription({
   if (!subId) {
     throw new Error('Missing subscription reference after payment');
   }
+
+  const existing = await Subscription.findOne({ userId });
+  const now = new Date();
+  const existingStart = existing?.currentPeriodStart ? new Date(existing.currentPeriodStart) : null;
+  const sameOpenPeriod = Boolean(
+    existing?.stripeSubscriptionId === subId
+    && existingStart
+    && (now.getTime() - existingStart.getTime()) < 60 * 60 * 1000
+  );
+  const periodStart = sameOpenPeriod ? existingStart : now;
+  const periodEnd = sameOpenPeriod && existing?.currentPeriodEnd
+    ? new Date(existing.currentPeriodEnd)
+    : new Date(periodStart.getTime() + periodDays * 24 * 60 * 60 * 1000);
 
   await Subscription.findOneAndUpdate(
     { userId },
@@ -87,7 +97,7 @@ export async function activateCompanySubscription({
       stripeCustomerId: stripeCustomerId || (provider === 'paypal' ? 'paypal' : ''),
       providerRef: providerRef || stripeSubscriptionId,
       status,
-      currentPeriodStart: now,
+      currentPeriodStart: periodStart,
       currentPeriodEnd: periodEnd,
       cancelAtPeriodEnd: false
     },
@@ -153,12 +163,25 @@ export async function activateFromStripeCheckoutSession(session) {
     throw new Error(`Plan not found for price ${priceId}`);
   }
 
-  const periodStart = stripeSubscription.current_period_start
-    ? new Date(stripeSubscription.current_period_start * 1000)
-    : new Date();
-  const periodEnd = stripeSubscription.current_period_end
-    ? new Date(stripeSubscription.current_period_end * 1000)
-    : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  const itemPeriod = stripeSubscription.items?.data?.[0];
+  const startUnix = stripeSubscription.current_period_start || itemPeriod?.current_period_start;
+  const endUnix = stripeSubscription.current_period_end || itemPeriod?.current_period_end;
+  const existing = userId ? await Subscription.findOne({ userId }) : null;
+  const now = new Date();
+  const existingStart = existing?.currentPeriodStart ? new Date(existing.currentPeriodStart) : null;
+  const sameOpenPeriod = Boolean(
+    existing?.stripeSubscriptionId === stripeSubscriptionId
+    && existingStart
+    && (now.getTime() - existingStart.getTime()) < 60 * 60 * 1000
+  );
+  const periodStart = startUnix
+    ? new Date(Number(startUnix) * 1000)
+    : (sameOpenPeriod ? existingStart : now);
+  const periodEnd = endUnix
+    ? new Date(Number(endUnix) * 1000)
+    : (sameOpenPeriod && existing?.currentPeriodEnd
+      ? new Date(existing.currentPeriodEnd)
+      : new Date(periodStart.getTime() + 30 * 24 * 60 * 60 * 1000));
 
   await Subscription.findOneAndUpdate(
     { userId },
