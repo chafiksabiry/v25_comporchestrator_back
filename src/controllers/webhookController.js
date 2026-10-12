@@ -164,17 +164,18 @@ async function handleNumberOrderUpdate(data) {
         phoneNumber.orderDeadline = new Date(data.requirements.deadline);
       }
 
-      // Mettre à jour le statut global
-      phoneNumber.status = 'requirements_pending';
-    }
-    // 4. Si la commande est complétée
-    else if (data.status === 'completed') {
       phoneNumber.status = 'active';
-      phoneNumber.telnyxId = data.phone_number?.id;
+    }
+    // 4. Commande réussie (Telnyx envoie success ou completed)
+    else if (['completed', 'success', 'active', 'purchased'].includes(String(data.status || '').toLowerCase())) {
+      phoneNumber.status = 'active';
+      if (data.phone_number?.id) phoneNumber.telnyxId = data.phone_number.id;
     }
     // 5. Si la commande a échoué
-    else if (data.status === 'failed') {
+    else if (['failed', 'error', 'cancelled'].includes(String(data.status || '').toLowerCase())) {
       phoneNumber.status = 'error';
+    } else {
+      phoneNumber.status = 'active';
     }
 
     await phoneNumber.save();

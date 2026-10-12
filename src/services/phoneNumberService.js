@@ -119,13 +119,15 @@ class PhoneNumberService {
         const phoneNumberData = {
           phoneNumber: phoneNumber,
           provider: 'telnyx',
-          status: response.data.status || 'pending',
+          // The order is placed. HARX treats a purchased line as active
+          // instead of leaving Telnyx's initial "pending" on the document.
+          status: 'active',
           gigId,
           companyId,
           orderId: response.data.id,
           telnyxId: response.data.phone_numbers[0]?.id,
           features: {
-            voice: false,
+            voice: true,
             sms: false,
             mms: false
           }
@@ -617,15 +619,24 @@ class PhoneNumberService {
         } = phoneNumberData;
 
         // Trouver le numéro dans notre base de données par telnyxId
-        const phoneNumber = await PhoneNumber.findOne({ telnyxId });
+        let phoneNumber = telnyxId ? await PhoneNumber.findOne({ telnyxId }) : null;
+        if (!phoneNumber && phoneNumberData.phone_number) {
+          phoneNumber = await PhoneNumber.findOne({ phoneNumber: phoneNumberData.phone_number });
+        }
+        if (!phoneNumber && orderId) {
+          phoneNumber = await PhoneNumber.findOne({ orderId });
+        }
 
         if (!phoneNumber) {
           console.warn(`⚠️ Phone number not found in DB for telnyxId: ${telnyxId}`);
           continue;
         }
 
-        // Mettre à jour le statut avec celui envoyé par Telnyx
-        phoneNumber.status = status;
+        // A purchased line stays active. Only a hard failure leaves that state.
+        const raw = String(status || '').toLowerCase();
+        phoneNumber.status = (raw === 'failed' || raw === 'error' || raw === 'cancelled')
+          ? 'error'
+          : 'active';
 
         // Sauvegarder les changements
         await phoneNumber.save();
@@ -726,6 +737,11 @@ class PhoneNumberService {
   }
 
   async getAllPhoneNumbers() {
+    // Lines already bought were stored as Telnyx "pending". A purchase is active.
+    await PhoneNumber.updateMany(
+      { status: { $regex: /^pending$/i } },
+      { $set: { status: 'active', 'features.voice': true } }
+    );
     return await PhoneNumber.find();
   }
 
