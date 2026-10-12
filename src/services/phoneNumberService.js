@@ -845,26 +845,44 @@ class PhoneNumberService {
           console.warn(`⚠️ Twilio SID missing for ${e164} — skipping provider release`);
         }
       } else if (provider === 'telnyx' || doc.telnyxId) {
-        let tid = doc.telnyxId ? String(doc.telnyxId) : '';
-        if (!tid && this.telnyxClient) {
-          const response = await this.telnyxClient.phoneNumbers.list({
-            filter: { phone_number: e164 },
-          });
-          tid = response?.data?.[0]?.id ? String(response.data[0].id) : '';
+        const numbersApi = this.telnyxClient?.phoneNumbers;
+        if (!numbersApi) {
+          throw new Error('Telnyx client is not configured');
         }
-        if (tid && this.telnyxClient) {
+        const release = async (id) => {
           // telnyx@1.x exposes `del` (delete is a reserved word). Newer SDKs use `delete`.
-          const numbersApi = this.telnyxClient.phoneNumbers;
           if (typeof numbersApi.del === 'function') {
-            await numbersApi.del(tid);
+            await numbersApi.del(id);
           } else if (typeof numbersApi.delete === 'function') {
-            await numbersApi.delete(tid);
+            await numbersApi.delete(id);
           } else {
             throw new Error('Telnyx SDK cannot release phone numbers');
           }
-          console.log(`🗑️ Released Telnyx number ${e164} (${tid})`);
+        };
+        const unlock = async (id) => {
+          // Portal lock "Prevent deletion" (deletion_lock_enabled) rejects DELETE.
+          if (typeof numbersApi.update === 'function') {
+            await numbersApi.update(id, { deletion_lock_enabled: false });
+          }
+        };
+
+        let tid = '';
+        try {
+          const listed = await numbersApi.list({ filter: { phone_number: e164 } });
+          const rows = Array.isArray(listed?.data) ? listed.data : [];
+          const live = rows.find((row) => String(row?.phone_number || '') === e164);
+          if (live?.id) tid = String(live.id);
+        } catch (listErr) {
+          console.warn(`⚠️ Telnyx lookup failed for ${e164}: ${listErr?.message || listErr}`);
+        }
+        if (!tid && doc.telnyxId) tid = String(doc.telnyxId);
+
+        if (!tid) {
+          console.warn(`⚠️ Telnyx number ${e164} is already absent — removing HARX record only`);
         } else {
-          console.warn(`⚠️ Telnyx id missing for ${e164} — skipping provider release`);
+          await unlock(tid);
+          await release(tid);
+          console.log(`🗑️ Released Telnyx number ${e164} (${tid})`);
         }
       } else {
         console.warn(`⚠️ Unknown provider for ${e164} — DB delete only`);
