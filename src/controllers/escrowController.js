@@ -3,6 +3,9 @@ import EscrowWallet from '../models/EscrowWallet.js';
 import EscrowTransaction from '../models/EscrowTransaction.js';
 import AgentWallet from '../models/AgentWallet.js';
 import AgentWithdrawal from '../models/AgentWithdrawal.js';
+import AgentWithdrawalOtp from '../models/AgentWithdrawalOtp.js';
+import twilio from 'twilio';
+import { config } from '../config/env.js';
 import HarxWallet from '../models/HarxWallet.js';
 import HarxCommission from '../models/HarxCommission.js';
 import MinutesCompany from '../models/MinutesCompany.js';
@@ -45,6 +48,12 @@ function firstFiniteNumber(...candidates) {
   }
   return undefined;
 }
+
+// APL-09 / user's 13/10 correction: calls credit immediately EXCEPT a
+// REP-declared callback request or appointment ("rdv pris pour rappel") —
+// those two still need company validation before any money moves, same as
+// a sale.
+const CALL_OUTCOMES_REQUIRING_COMPANY_APPROVAL = new Set(['appointment', 'callback_requested']);
 
 const PROSPECT_RUBRIC_KEYS = ['RDV', 'A plus tard', 'PAS INTÉRESSÉS', 'PAS AU COURANT', 'DÉJÀ ÉQUIPÉS'];
 const NON_SALE_CALLOUTCOMES = new Set([
@@ -728,6 +737,10 @@ async function bookMissingEarningsForCall(call, transaction) {
     // approve a call first. It only gets a window to CANCEL the credit
     // afterwards (cancelCallCommission), unlike a transaction/sale, which
     // must be validated by the company BEFORE anything is credited.
+    //
+    // Exception: a REP-declared callback request or appointment holds
+    // instead, exactly like a sale — the company must approve it.
+    const needsCompanyApproval = CALL_OUTCOMES_REQUIRING_COMPANY_APPROVAL.has(call.callOutcome);
     callRow = await bookRepTransaction({
       type: 'call_validated',
       sourceId: callSourceId,
@@ -736,10 +749,12 @@ async function bookMissingEarningsForCall(call, transaction) {
       gigId: gigObjectId,
       callId: call._id,
       amount: callGross,
-      status: 'earned',
+      status: needsCompanyApproval ? 'pending_review' : 'earned',
       aiVerdict: 'valid',
       reviewDeadlineAt: computeRetractionEndsAt(new Date(), retractionDays),
-      description: `Appel validé par l'IA — commission ${callGross}€ (70% rep / 30% HARX)`
+      description: needsCompanyApproval
+        ? `Rendez-vous/rappel déclaré par le rep — commission ${callGross}€ en attente de validation`
+        : `Appel validé par l'IA — commission ${callGross}€ (70% rep / 30% HARX)`
     });
     if (callRow) bookedSomething = true;
   }
@@ -1288,6 +1303,21 @@ async function reconcileCompanyRewards(companyId) {
 
 export const escrowController = {
   // Get wallet status (creates default + demo data if not exists)
+  /** PAY-17: lightweight, server-to-server balance read for the pre-call gate (no heavy reconciliation). */
+  getWalletBalance: async (req, res) => {
+    const { companyId } = req.params;
+    if (!companyId) {
+      return res.status(400).json({ error: 'companyId is required' });
+    }
+    try {
+      const walletCompany = await WalletCompany.findOne({ companyId });
+      res.status(200).json({ success: true, data: { balance: walletCompany?.balance ?? 0 } });
+    } catch (err) {
+      console.error('Error fetching wallet balance:', err);
+      res.status(500).json({ error: 'Failed to fetch wallet balance' });
+    }
+  },
+
   getWallet: async (req, res) => {
     const { companyId } = req.params;
     if (!companyId) {
@@ -2335,8 +2365,47 @@ export const escrowController = {
     }
   },
 
+  /** PAY-11: send a real, randomly-generated, short-lived SMS code before a withdrawal can be confirmed. */
+  requestAgentWithdrawalOtp: async (req, res) => {
+    const { agentId } = req.body;
+    if (!agentId) {
+      return res.status(400).json({ error: 'agentId is required' });
+    }
+
+    try {
+      const db = mongoose.connection.db;
+      const agentDoc = await db.collection('agents').findOne({ _id: new mongoose.Types.ObjectId(agentId) });
+      const phone = agentDoc?.personalInfo?.phone;
+      if (!phone) {
+        return res.status(400).json({ error: 'No phone number on file for this agent', code: 'NO_PHONE_ON_FILE' });
+      }
+
+      if (!config.twilioAccountSid || !config.twilioAuthToken || !config.twilioPhoneNumber) {
+        console.error('Missing Twilio configuration for withdrawal OTP (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_PHONE_NUMBER)');
+        return res.status(500).json({ error: 'SMS verification is not configured' });
+      }
+
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+      await AgentWithdrawalOtp.create({ agentId, code, expiresAt });
+
+      const client = twilio(config.twilioAccountSid, config.twilioAuthToken);
+      await client.messages.create({
+        to: phone,
+        from: config.twilioPhoneNumber,
+        body: `HARX : votre code de confirmation de retrait est ${code}. Il expire dans 5 minutes.`,
+      });
+
+      res.status(200).json({ success: true, message: 'Code sent' });
+    } catch (err) {
+      console.error('Error sending withdrawal OTP:', err);
+      res.status(500).json({ error: 'Failed to send verification code' });
+    }
+  },
+
   requestAgentWithdrawal: async (req, res) => {
-    const { agentId, amount, method, methodDetails, description, companyId } = req.body;
+    const { agentId, amount, method, methodDetails, description, companyId, code } = req.body;
     const MIN_WITHDRAWAL_AMOUNT = 1;
     if (!agentId || !amount || amount <= 0 || !method) {
       return res.status(400).json({ error: 'agentId, positive amount, and method are required' });
@@ -2351,7 +2420,25 @@ export const escrowController = {
       });
     }
 
+    if (!code || typeof code !== 'string') {
+      return res.status(400).json({ error: 'Verification code is required', code: 'OTP_REQUIRED' });
+    }
+
     try {
+      // 0. Verify the SMS code sent by requestAgentWithdrawalOtp — the most
+      // recent unconsumed, unexpired code for this agent must match exactly.
+      const otp = await AgentWithdrawalOtp.findOne({
+        agentId,
+        consumedAt: null,
+        expiresAt: { $gt: new Date() },
+      }).sort({ createdAt: -1 });
+
+      if (!otp || otp.code !== code.trim()) {
+        return res.status(400).json({ error: 'Code de vérification incorrect ou expiré.', code: 'OTP_INVALID' });
+      }
+      otp.consumedAt = new Date();
+      await otp.save();
+
       // 1. Book any missing commissions, then reconcile balance
       await reconcileAgentRewards(agentId);
       const wallet = await reconcileAgentEarnings(agentId);
@@ -2704,6 +2791,30 @@ export const escrowController = {
     } catch (err) {
       console.error('Error responding to AI audit:', err);
       res.status(500).json({ error: 'Failed to respond to AI audit' });
+    }
+  },
+
+  /** APL-09: company approves/refuses a REP-declared callback/appointment held as pending_review. */
+  approveOrRefuseCallCommission: async (req, res) => {
+    const { repTransactionId } = req.params;
+    const { action } = req.body; // 'approve' or 'refuse'
+    if (!repTransactionId || (action !== 'approve' && action !== 'refuse')) {
+      return res.status(400).json({ error: 'repTransactionId and action ("approve"|"refuse") are required' });
+    }
+    try {
+      const repTx = await RepTransaction.findById(repTransactionId);
+      if (!repTx || repTx.type !== 'call_validated') {
+        return res.status(404).json({ error: 'Call commission not found' });
+      }
+      if (repTx.status !== 'pending_review') {
+        return res.status(409).json({ error: 'This commission is not awaiting review' });
+      }
+
+      const resolved = await resolvePendingReview(repTx, action);
+      res.status(200).json({ success: true, data: resolved });
+    } catch (err) {
+      console.error('Error approving/refusing call commission:', err);
+      res.status(500).json({ error: 'Failed to process call commission decision' });
     }
   },
 

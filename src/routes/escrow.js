@@ -26,6 +26,7 @@ router.get('/ai-delegation/:companyId', ...company, escrowController.getAiDelega
 router.patch('/ai-delegation/:companyId', ...company, escrowController.setAiDelegation);
 router.get('/ai-audits/:companyId', ...company, escrowController.getAiAudits);
 router.post('/ai-audits/:repTransactionId/respond', authenticate, escrowController.respondToAiAudit);
+router.post('/call-commissions/:repTransactionId/respond', authenticate, escrowController.approveOrRefuseCallCommission);
 
 // Called by the calls service after scoring. Those callers have no user JWT.
 router.post('/reconcile/:companyId', escrowController.triggerReconciliation);
@@ -34,6 +35,7 @@ router.post('/call-analysis-complete', escrowController.broadcastCallAnalysisCom
 
 router.get('/agent/wallet/:agentId', authenticate, escrowController.getAgentWallet);
 router.get('/agent/withdrawals/:agentId', authenticate, escrowController.getAgentWithdrawals);
+router.post('/agent/withdraw/request-code', authenticate, escrowController.requestAgentWithdrawalOtp);
 router.post('/agent/withdraw', authenticate, escrowController.requestAgentWithdrawal);
 
 router.get('/agent/transactions/:agentId', authenticate, escrowController.getAgentTransactions);
