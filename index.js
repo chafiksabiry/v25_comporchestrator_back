@@ -15,6 +15,7 @@ import { walletCompanyRoutes } from './src/routes/walletCompany.js';
 import { minutesCompanyRoutes } from './src/routes/minutesCompany.js';
 import { tokensCompanyRoutes } from './src/routes/tokensCompany.js';
 import { paymentCheckoutRoutes } from './src/routes/paymentCheckout.js';
+import { internalRoutes } from './src/routes/internal.js';
 import { clearExpiredRetractions } from './src/services/retractionService.js';
 
 const app = express();
@@ -115,6 +116,7 @@ app.use('/api/wallet-company', walletCompanyRoutes);
 app.use('/api/minutes-company', minutesCompanyRoutes);
 app.use('/api/tokens-company', tokensCompanyRoutes);
 app.use('/api/payments/checkout', paymentCheckoutRoutes);
+app.use('/api/internal', internalRoutes);
 
 // Health check to verify deployment
 app.get('/api/health', (req, res) => {
