@@ -18,6 +18,7 @@ import { paymentCheckoutRoutes } from './src/routes/paymentCheckout.js';
 import { internalRoutes } from './src/routes/internal.js';
 import { clearExpiredRetractions } from './src/services/retractionService.js';
 import { resolveExpiredPendingReviews, flagWeeklyAiAudits } from './src/controllers/escrowController.js';
+import { billExpiredTrialLines, terminateSuspendedLines } from './src/services/phoneLineBillingService.js';
 
 const app = express();
 
@@ -169,6 +170,23 @@ setInterval(() => {
     console.warn('[ai-audit-cron]', err.message);
   });
 }, AI_AUDIT_CRON_MS);
+
+// PAY-19: bill a trial phone line's recurring monthly price once its 15-day
+// trial ends; suspend it immediately on a failed/missing payment. Same hourly
+// cadence as the crons above.
+setInterval(() => {
+  billExpiredTrialLines().catch((err) => {
+    console.warn('[phone-line-billing-cron]', err.message);
+  });
+}, RETRACTION_CRON_MS);
+
+// PAY-19: release a line's number once it has been suspended for 1 month
+// without recovering, before what would have been its next billing cycle.
+setInterval(() => {
+  terminateSuspendedLines().catch((err) => {
+    console.warn('[phone-line-termination-cron]', err.message);
+  });
+}, RETRACTION_CRON_MS);
 
 // Handle process termination
 process.on('SIGINT', () => {
