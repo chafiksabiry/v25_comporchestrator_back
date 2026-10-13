@@ -587,6 +587,36 @@ export const stripeService = {
     return await getStripe().subscriptions.retrieve(subscriptionId);
   },
 
+  /**
+   * PAY-19: does this Stripe customer have a payment method Stripe can charge
+   * off-session (default on the customer, or at least one card on file)?
+   */
+  hasUsablePaymentMethod: async (customerId) => {
+    if (!customerId) return false;
+    const stripe = getStripe();
+    const customer = await stripe.customers.retrieve(customerId);
+    if (customer?.deleted) return false;
+    if (customer?.invoice_settings?.default_payment_method) return true;
+    const methods = await stripe.paymentMethods.list({ customer: customerId, type: 'card', limit: 1 });
+    return methods.data.length > 0;
+  },
+
+  /**
+   * PAY-19: recurring monthly charge for a phone line past its free trial.
+   * `error_if_incomplete` makes Stripe attempt the first charge synchronously
+   * against the customer's default payment method and throw if it fails,
+   * instead of leaving the subscription in a dangling `incomplete` state.
+   */
+  createRecurringSubscription: async ({ customerId, priceId, metadata = {} }) => {
+    return getStripe().subscriptions.create({
+      customer: customerId,
+      items: [{ price: priceId }],
+      collection_method: 'charge_automatically',
+      payment_behavior: 'error_if_incomplete',
+      metadata,
+    });
+  },
+
   getStripeMode,
   isTestLiveMismatchError,
   resolveSubscriptionPriceId,

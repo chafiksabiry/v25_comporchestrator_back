@@ -36,6 +36,11 @@ export const config = {
   stripePriceStarter: process.env.STRIPE_PRICE_STARTER || 'price_starter_placeholder',
   stripePriceGrowth: process.env.STRIPE_PRICE_GROWTH || 'price_growth_placeholder',
   stripePriceScale: process.env.STRIPE_PRICE_SCALE || 'price_scale_placeholder',
+  // PAY-19: recurring monthly price charged once a phone line's 15-day free
+  // trial ends. Distinct from PHONE_LINE_SETUP_FEE_CENTS (one-shot, paid at
+  // acquisition for non-trial lines).
+  stripePricePhoneLine: process.env.STRIPE_PRICE_PHONE_LINE || 'price_phone_line_placeholder',
+  phoneLineMonthlyPriceCents: parseInt(process.env.PHONE_LINE_MONTHLY_PRICE_CENTS || '999', 10),
   twilioFrenchBundleSid: process.env.TWILIO_FRENCH_BUNDLE_SID || 'BUf007aeefc1a71ad9ac096a4d205563b0',
   twilioFrenchAddressSid: process.env.TWILIO_FRENCH_ADDRESS_SID || 'ADfa022505e9b0433a23c8b4f6e56cf15a',
   twilioFrenchBusinessInfo: {

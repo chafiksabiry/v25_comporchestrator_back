@@ -710,6 +710,9 @@ class PhoneNumberService {
       ...(paymentRef ? { paymentRef } : {}),
       isTrial: Boolean(isTrial),
       ...(trialExpiresAt ? { trialExpiresAt } : {}),
+      // PAY-19: a trial line enters the post-trial billing lifecycle;
+      // a paid-up-front line has no recurring charge to track here.
+      billingStatus: isTrial ? 'trial' : 'n/a',
       metadata: {
         type: type, // Save the original type (local, national, mobile)
         ...(isTrial ? { trial: { granted: true, expiresAt: trialExpiresAt } } : {})
