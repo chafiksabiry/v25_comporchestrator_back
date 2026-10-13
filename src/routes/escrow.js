@@ -25,6 +25,7 @@ router.get('/ai-delegation/:companyId', authenticate, escrowController.getAiDele
 router.patch('/ai-delegation/:companyId', authenticate, escrowController.setAiDelegation);
 router.get('/ai-audits/:companyId', authenticate, escrowController.getAiAudits);
 router.post('/ai-audits/:repTransactionId/respond', authenticate, escrowController.respondToAiAudit);
+router.post('/call-commissions/:repTransactionId/respond', authenticate, escrowController.approveOrRefuseCallCommission);
 
 // Server-to-server only (dash_calls_backend, right after AI scoring) — no
 // user JWT to present. /reconcile is also called directly by the frontend
@@ -37,6 +38,7 @@ router.post('/call-analysis-complete', escrowController.broadcastCallAnalysisCom
 // Agent Payouts / Withdrawals — REP-facing, same JWT/auth system as company.
 router.get('/agent/wallet/:agentId', authenticate, escrowController.getAgentWallet);
 router.get('/agent/withdrawals/:agentId', authenticate, escrowController.getAgentWithdrawals);
+router.post('/agent/withdraw/request-code', authenticate, escrowController.requestAgentWithdrawalOtp);
 router.post('/agent/withdraw', authenticate, escrowController.requestAgentWithdrawal);
 
 // Rep earnings ledger (validated calls, sales, bonuses)
