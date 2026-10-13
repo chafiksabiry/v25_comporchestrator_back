@@ -1302,6 +1302,21 @@ async function reconcileCompanyRewards(companyId) {
 
 export const escrowController = {
   // Get wallet status (creates default + demo data if not exists)
+  /** PAY-17: lightweight, server-to-server balance read for the pre-call gate (no heavy reconciliation). */
+  getWalletBalance: async (req, res) => {
+    const { companyId } = req.params;
+    if (!companyId) {
+      return res.status(400).json({ error: 'companyId is required' });
+    }
+    try {
+      const walletCompany = await WalletCompany.findOne({ companyId });
+      res.status(200).json({ success: true, data: { balance: walletCompany?.balance ?? 0 } });
+    } catch (err) {
+      console.error('Error fetching wallet balance:', err);
+      res.status(500).json({ error: 'Failed to fetch wallet balance' });
+    }
+  },
+
   getWallet: async (req, res) => {
     const { companyId } = req.params;
     if (!companyId) {
