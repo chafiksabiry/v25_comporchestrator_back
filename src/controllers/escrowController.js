@@ -308,8 +308,11 @@ async function computeAiAgreementRate(companyId) {
     ? new mongoose.Types.ObjectId(companyId)
     : companyId;
 
+  // Scoped to sale/transaction decisions only (VAL-02 to VAL-05, per the
+  // user's correction: calls credit immediately and are only ever
+  // cancelled, which is not an "AI agreement" decision the same way).
   const counts = await RepTransaction.aggregate([
-    { $match: { companyId: companyObjectId, companyDecision: { $in: ['agreed', 'contradicted'] } } },
+    { $match: { companyId: companyObjectId, type: 'transaction', companyDecision: { $in: ['agreed', 'contradicted'] } } },
     { $group: { _id: '$companyDecision', count: { $sum: 1 } } }
   ]);
 
@@ -692,7 +695,28 @@ async function bookMissingEarningsForCall(call, transaction) {
     ? new mongoose.Types.ObjectId(gigId)
     : gigId || undefined;
 
+  const db = mongoose.connection.db;
   const callSourceId = String(call._id);
+
+  // A sale the AI detects needs a stable `transactions` row from the start
+  // (not only once the company decides) so the pending_review hold's
+  // sourceId never changes — retractSale/the approve endpoint both key off
+  // this doc's _id.
+  if (!transaction && call.transactionDetected && call.validByAI) {
+    const newTx = {
+      call: call._id,
+      agent: call.agent,
+      lead: call.lead,
+      gigId: call.gigId,
+      companyId,
+      validByReps: true,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    const insertRes = await db.collection('transactions').insertOne(newTx);
+    transaction = { _id: insertRes.insertedId, ...newTx };
+  }
+
   const txSourceId = String(transaction?._id || call._id);
 
   let bookedSomething = false;
@@ -720,60 +744,63 @@ async function bookMissingEarningsForCall(call, transaction) {
     if (callRow) bookedSomething = true;
   }
 
-  let txRow = null;
-  if (callHasValidatedTransactionSale(call, transaction)) {
-    txRow = await RepTransaction.findOne({ type: 'transaction', sourceId: txSourceId });
-    if (!txRow) {
-      const signedAt = transaction?.signedAt ? new Date(transaction.signedAt) : new Date();
-      const retractionEndsAt = transaction?.retractionEndsAt
-        ? new Date(transaction.retractionEndsAt)
-        : computeRetractionEndsAt(signedAt, retractionDays);
+  // Sales are the opposite of calls (cahier de recette VAL-01/VAL-03, as
+  // scoped to the transaction per the user's 13/10 correction): the AI
+  // detecting one does NOT credit anyone — it opens a `pending_review` hold
+  // (the compte intermédiaire) that the company must explicitly approve or
+  // refuse before any money moves to the rep/HARX, or that auto-resolves
+  // after reviewDeadlineAt (VAL-01), or immediately under AI-delegated mode
+  // (VAL-03).
+  let txRow = await RepTransaction.findOne({ type: 'transaction', sourceId: txSourceId });
 
-      txRow = await bookRepTransaction({
-        type: 'transaction',
-        sourceId: txSourceId,
-        repId,
-        companyId,
-        gigId: gigObjectId,
-        callId: call._id,
-        transactionDocId: transaction?._id,
-        amount: txGross,
-        status: 'pending_retraction',
-        withdrawableAt: retractionEndsAt,
-        description: `Vente validée — commission ${txGross}€ (rétractation ${retractionDays}j)`,
-        meta: {
-          signedAt,
-          retractionEndsAt,
-          retractionDays,
-        },
-      });
-      if (txRow) {
-        bookedSomething = true;
-        await syncTransactionRetractionOnSaleBooked(transaction, {
-          signedAt,
-          retractionEndsAt,
-          txRepShare,
-          txGross,
-        });
+  if (!txRow && call.transactionDetected && call.validByAI) {
+    txRow = await bookRepTransaction({
+      type: 'transaction',
+      sourceId: txSourceId,
+      repId,
+      companyId,
+      gigId: gigObjectId,
+      callId: call._id,
+      transactionDocId: transaction?._id,
+      amount: txGross,
+      status: 'pending_review',
+      aiVerdict: 'valid',
+      reviewDeadlineAt: computeRetractionEndsAt(new Date(), retractionDays),
+      description: `Vente détectée par l'IA — commission ${txGross}€ (en attente de validation)`
+    });
+    if (txRow) bookedSomething = true;
+
+    if (txRow && txRow.status === 'pending_review') {
+      const delegation = await CompanyAiDelegation.findOne({ companyId, enabled: true }).lean();
+      if (delegation) {
+        const retractionEndsAt = computeRetractionEndsAt(new Date(), retractionDays);
+        await resolvePendingReview(txRow, 'ai_delegated', { saleWithdrawableAt: retractionEndsAt });
+        if (transaction?._id) {
+          await syncTransactionRetractionOnSaleBooked(transaction, { signedAt: new Date(), retractionEndsAt, txRepShare, txGross });
+        }
       }
-    } else {
-      const signedAt = txRow.meta?.signedAt
-        ? new Date(txRow.meta.signedAt)
-        : txRow.withdrawableAt
-          ? new Date(new Date(txRow.withdrawableAt).getTime() - RETRACTION_DAYS * 24 * 60 * 60 * 1000)
-          : new Date();
-      const retractionEndsAt = txRow.withdrawableAt
-        ? new Date(txRow.withdrawableAt)
-        : computeRetractionEndsAt(signedAt);
-      const ledgerRepShare = Number(txRow.repShare);
-      const ledgerGross = Number(txRow.amount);
-      await syncTransactionRetractionOnSaleBooked(transaction, {
-        signedAt,
-        retractionEndsAt,
-        txRepShare: ledgerRepShare > 0 ? ledgerRepShare : txRepShare,
-        txGross: ledgerGross > 0 ? ledgerGross : txGross,
-      });
     }
+  } else if (txRow && txRow.status === 'pending_review' && transaction?.validByCompany === true) {
+    // The company approved via approveOrRefuseCallTransaction.
+    const retractionEndsAt = computeRetractionEndsAt(new Date(), retractionDays);
+    txRow = await resolvePendingReview(txRow, 'approve', { saleWithdrawableAt: retractionEndsAt });
+    await syncTransactionRetractionOnSaleBooked(transaction, { signedAt: new Date(), retractionEndsAt, txRepShare, txGross });
+  } else if (txRow && txRow.status === 'pending_review' && transaction?.validByCompany === false) {
+    // The company refused.
+    txRow = await resolvePendingReview(txRow, 'refuse');
+  } else if (txRow && txRow.status === 'pending_retraction') {
+    // Already resolved and in its retraction window — keep the `transactions` doc's
+    // denormalised fields in sync (legacy path, pre-dates the pending_review hold).
+    const signedAt = txRow.meta?.signedAt ? new Date(txRow.meta.signedAt) : new Date();
+    const retractionEndsAt = txRow.withdrawableAt ? new Date(txRow.withdrawableAt) : computeRetractionEndsAt(signedAt, retractionDays);
+    const ledgerRepShare = Number(txRow.repShare);
+    const ledgerGross = Number(txRow.amount);
+    await syncTransactionRetractionOnSaleBooked(transaction, {
+      signedAt,
+      retractionEndsAt,
+      txRepShare: ledgerRepShare > 0 ? ledgerRepShare : txRepShare,
+      txGross: ledgerGross > 0 ? ledgerGross : txGross,
+    });
   }
 
   // Notify the rep (and company) in real time that new commissions were booked.
@@ -1952,9 +1979,11 @@ export const escrowController = {
       // This endpoint governs the TRANSACTION/sale only — a call's commission
       // is already credited immediately when the AI validates it
       // (bookMissingEarningsForCall) and is cancelled separately
-      // (cancelCallCommission), not approved/refused here.
+      // (cancelCallCommission), not approved/refused here. Both approve AND
+      // refuse must run the booking pass: refuse resolves the pending_review
+      // hold (credits the company back, no HARX row), approve releases it.
       let bookedRepTx = { call: null, transaction: null };
-      if (isApprove && call.agent) {
+      if (call.agent) {
         try {
           bookedRepTx = await bookEarningsForApprovedCall(call, transaction);
         } catch (bookErr) {
