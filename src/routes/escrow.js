@@ -37,6 +37,7 @@ router.post('/call-analysis-complete', escrowController.broadcastCallAnalysisCom
 // Agent Payouts / Withdrawals — REP-facing, same JWT/auth system as company.
 router.get('/agent/wallet/:agentId', authenticate, escrowController.getAgentWallet);
 router.get('/agent/withdrawals/:agentId', authenticate, escrowController.getAgentWithdrawals);
+router.post('/agent/withdraw/request-code', authenticate, escrowController.requestAgentWithdrawalOtp);
 router.post('/agent/withdraw', authenticate, escrowController.requestAgentWithdrawal);
 
 // Rep earnings ledger (validated calls, sales, bonuses)

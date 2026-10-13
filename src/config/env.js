@@ -16,6 +16,7 @@ export const config = {
   requirementGroupExpiration: parseInt(process.env.REQUIREMENT_GROUP_EXPIRATION) || 90 * 24 * 60 * 60 * 1000,
   twilioAccountSid: process.env.TWILIO_ACCOUNT_SID,
   twilioAuthToken: process.env.TWILIO_AUTH_TOKEN,
+  twilioPhoneNumber: process.env.TWILIO_PHONE_NUMBER,
   stripeSecretKey: process.env.STRIPE_SECRET_KEY,
   stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
   /** Public API base injected into stripe-return.html (?apiBase=). Must include /api. */

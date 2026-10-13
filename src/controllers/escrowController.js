@@ -3,6 +3,9 @@ import EscrowWallet from '../models/EscrowWallet.js';
 import EscrowTransaction from '../models/EscrowTransaction.js';
 import AgentWallet from '../models/AgentWallet.js';
 import AgentWithdrawal from '../models/AgentWithdrawal.js';
+import AgentWithdrawalOtp from '../models/AgentWithdrawalOtp.js';
+import twilio from 'twilio';
+import { config } from '../config/env.js';
 import HarxWallet from '../models/HarxWallet.js';
 import HarxCommission from '../models/HarxCommission.js';
 import MinutesCompany from '../models/MinutesCompany.js';
@@ -2334,8 +2337,47 @@ export const escrowController = {
     }
   },
 
+  /** PAY-11: send a real, randomly-generated, short-lived SMS code before a withdrawal can be confirmed. */
+  requestAgentWithdrawalOtp: async (req, res) => {
+    const { agentId } = req.body;
+    if (!agentId) {
+      return res.status(400).json({ error: 'agentId is required' });
+    }
+
+    try {
+      const db = mongoose.connection.db;
+      const agentDoc = await db.collection('agents').findOne({ _id: new mongoose.Types.ObjectId(agentId) });
+      const phone = agentDoc?.personalInfo?.phone;
+      if (!phone) {
+        return res.status(400).json({ error: 'No phone number on file for this agent', code: 'NO_PHONE_ON_FILE' });
+      }
+
+      if (!config.twilioAccountSid || !config.twilioAuthToken || !config.twilioPhoneNumber) {
+        console.error('Missing Twilio configuration for withdrawal OTP (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_PHONE_NUMBER)');
+        return res.status(500).json({ error: 'SMS verification is not configured' });
+      }
+
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+      await AgentWithdrawalOtp.create({ agentId, code, expiresAt });
+
+      const client = twilio(config.twilioAccountSid, config.twilioAuthToken);
+      await client.messages.create({
+        to: phone,
+        from: config.twilioPhoneNumber,
+        body: `HARX : votre code de confirmation de retrait est ${code}. Il expire dans 5 minutes.`,
+      });
+
+      res.status(200).json({ success: true, message: 'Code sent' });
+    } catch (err) {
+      console.error('Error sending withdrawal OTP:', err);
+      res.status(500).json({ error: 'Failed to send verification code' });
+    }
+  },
+
   requestAgentWithdrawal: async (req, res) => {
-    const { agentId, amount, method, methodDetails, description, companyId } = req.body;
+    const { agentId, amount, method, methodDetails, description, companyId, code } = req.body;
     const MIN_WITHDRAWAL_AMOUNT = 1;
     if (!agentId || !amount || amount <= 0 || !method) {
       return res.status(400).json({ error: 'agentId, positive amount, and method are required' });
@@ -2350,7 +2392,25 @@ export const escrowController = {
       });
     }
 
+    if (!code || typeof code !== 'string') {
+      return res.status(400).json({ error: 'Verification code is required', code: 'OTP_REQUIRED' });
+    }
+
     try {
+      // 0. Verify the SMS code sent by requestAgentWithdrawalOtp — the most
+      // recent unconsumed, unexpired code for this agent must match exactly.
+      const otp = await AgentWithdrawalOtp.findOne({
+        agentId,
+        consumedAt: null,
+        expiresAt: { $gt: new Date() },
+      }).sort({ createdAt: -1 });
+
+      if (!otp || otp.code !== code.trim()) {
+        return res.status(400).json({ error: 'Code de vérification incorrect ou expiré.', code: 'OTP_INVALID' });
+      }
+      otp.consumedAt = new Date();
+      await otp.save();
+
       // 1. Book any missing commissions, then reconcile balance
       await reconcileAgentRewards(agentId);
       const wallet = await reconcileAgentEarnings(agentId);
