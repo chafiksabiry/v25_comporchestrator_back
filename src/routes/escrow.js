@@ -25,6 +25,7 @@ router.get('/ai-delegation/:companyId', authenticate, escrowController.getAiDele
 router.patch('/ai-delegation/:companyId', authenticate, escrowController.setAiDelegation);
 router.get('/ai-audits/:companyId', authenticate, escrowController.getAiAudits);
 router.post('/ai-audits/:repTransactionId/respond', authenticate, escrowController.respondToAiAudit);
+router.post('/call-commissions/:repTransactionId/respond', authenticate, escrowController.approveOrRefuseCallCommission);
 
 // Server-to-server only (dash_calls_backend, right after AI scoring) — no
 // user JWT to present. /reconcile is also called directly by the frontend

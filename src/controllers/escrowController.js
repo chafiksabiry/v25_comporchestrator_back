@@ -48,6 +48,12 @@ function firstFiniteNumber(...candidates) {
   return undefined;
 }
 
+// APL-09 / user's 13/10 correction: calls credit immediately EXCEPT a
+// REP-declared callback request or appointment ("rdv pris pour rappel") —
+// those two still need company validation before any money moves, same as
+// a sale.
+const CALL_OUTCOMES_REQUIRING_COMPANY_APPROVAL = new Set(['appointment', 'callback_requested']);
+
 const PROSPECT_RUBRIC_KEYS = ['RDV', 'A plus tard', 'PAS INTÉRESSÉS', 'PAS AU COURANT', 'DÉJÀ ÉQUIPÉS'];
 const NON_SALE_CALLOUTCOMES = new Set([
   'appointment', 'callback_requested', 'refusal', 'not_interested', 'already_equipped',
@@ -730,6 +736,10 @@ async function bookMissingEarningsForCall(call, transaction) {
     // approve a call first. It only gets a window to CANCEL the credit
     // afterwards (cancelCallCommission), unlike a transaction/sale, which
     // must be validated by the company BEFORE anything is credited.
+    //
+    // Exception: a REP-declared callback request or appointment holds
+    // instead, exactly like a sale — the company must approve it.
+    const needsCompanyApproval = CALL_OUTCOMES_REQUIRING_COMPANY_APPROVAL.has(call.callOutcome);
     callRow = await bookRepTransaction({
       type: 'call_validated',
       sourceId: callSourceId,
@@ -738,10 +748,12 @@ async function bookMissingEarningsForCall(call, transaction) {
       gigId: gigObjectId,
       callId: call._id,
       amount: callGross,
-      status: 'earned',
+      status: needsCompanyApproval ? 'pending_review' : 'earned',
       aiVerdict: 'valid',
       reviewDeadlineAt: computeRetractionEndsAt(new Date(), retractionDays),
-      description: `Appel validé par l'IA — commission ${callGross}€ (70% rep / 30% HARX)`
+      description: needsCompanyApproval
+        ? `Rendez-vous/rappel déclaré par le rep — commission ${callGross}€ en attente de validation`
+        : `Appel validé par l'IA — commission ${callGross}€ (70% rep / 30% HARX)`
     });
     if (callRow) bookedSomething = true;
   }
@@ -2759,6 +2771,30 @@ export const escrowController = {
     } catch (err) {
       console.error('Error responding to AI audit:', err);
       res.status(500).json({ error: 'Failed to respond to AI audit' });
+    }
+  },
+
+  /** APL-09: company approves/refuses a REP-declared callback/appointment held as pending_review. */
+  approveOrRefuseCallCommission: async (req, res) => {
+    const { repTransactionId } = req.params;
+    const { action } = req.body; // 'approve' or 'refuse'
+    if (!repTransactionId || (action !== 'approve' && action !== 'refuse')) {
+      return res.status(400).json({ error: 'repTransactionId and action ("approve"|"refuse") are required' });
+    }
+    try {
+      const repTx = await RepTransaction.findById(repTransactionId);
+      if (!repTx || repTx.type !== 'call_validated') {
+        return res.status(404).json({ error: 'Call commission not found' });
+      }
+      if (repTx.status !== 'pending_review') {
+        return res.status(409).json({ error: 'This commission is not awaiting review' });
+      }
+
+      const resolved = await resolvePendingReview(repTx, action);
+      res.status(200).json({ success: true, data: resolved });
+    } catch (err) {
+      console.error('Error approving/refusing call commission:', err);
+      res.status(500).json({ error: 'Failed to process call commission decision' });
     }
   },
 
