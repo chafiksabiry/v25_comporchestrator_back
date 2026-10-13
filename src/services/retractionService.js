@@ -94,6 +94,20 @@ export async function reverseSaleCommission({
   }
 
   const now = new Date();
+
+  // PAY-10: the retraction window is legally binding — no control was
+  // enforcing it at all before (callable at any time). `status === 'earned'`
+  // means the window already closed and clearExpiredRetractions already
+  // cleared it; `withdrawableAt` in the past covers the gap before that job
+  // next runs.
+  const windowClosed =
+    repTx.status === 'earned' ||
+    (repTx.withdrawableAt && new Date(repTx.withdrawableAt).getTime() <= now.getTime());
+  if (windowClosed) {
+    const err = new Error('Retraction window has expired for this transaction');
+    err.statusCode = 410;
+    throw err;
+  }
   repTx.status = 'reversed';
   repTx.meta = {
     ...(repTx.meta || {}),

@@ -13,6 +13,7 @@ import { broadcastUpdate } from '../websocket/escrowUpdates.js';
 import {
   RETRACTION_DAYS,
   computeRetractionEndsAt,
+  resolveRetractionDays,
   isRepShareWithdrawable,
   isRepShareInRetraction,
 } from '../utils/retraction.js';
@@ -248,6 +249,7 @@ async function resolveGigRates(call, preferredGigId = null) {
   let callRate = 4.0;
   let txRate = 30.0;
   let gigDoc = null;
+  let retractionDays = RETRACTION_DAYS;
 
   if (gigId) {
     const gigObjectId = mongoose.Types.ObjectId.isValid(gigId)
@@ -265,10 +267,11 @@ async function resolveGigRates(call, preferredGigId = null) {
       );
       if (resolvedCall !== undefined) callRate = resolvedCall;
       if (resolvedTx !== undefined) txRate = resolvedTx;
+      retractionDays = await resolveRetractionDays(db, gigDoc);
     }
   }
 
-  return { callRate, txRate, gig: gigDoc, gigId: gigId || null };
+  return { callRate, txRate, gig: gigDoc, gigId: gigId || null, retractionDays };
 }
 
 /**
@@ -511,7 +514,7 @@ async function bookMissingEarningsForCall(call, transaction) {
     ? new mongoose.Types.ObjectId(call.agent)
     : call.agent;
 
-  const { callRate, txRate, gigId } = await resolveGigRates(call);
+  const { callRate, txRate, gigId, retractionDays } = await resolveGigRates(call);
   const { callGross, txGross, txRepShare } = resolveCommissionAmounts(call, transaction, { callRate, txRate });
   const gigObjectId = gigId && mongoose.Types.ObjectId.isValid(gigId)
     ? new mongoose.Types.ObjectId(gigId)
@@ -544,7 +547,7 @@ async function bookMissingEarningsForCall(call, transaction) {
       const signedAt = transaction?.signedAt ? new Date(transaction.signedAt) : new Date();
       const retractionEndsAt = transaction?.retractionEndsAt
         ? new Date(transaction.retractionEndsAt)
-        : computeRetractionEndsAt(signedAt);
+        : computeRetractionEndsAt(signedAt, retractionDays);
 
       txRow = await bookRepTransaction({
         type: 'transaction',
@@ -557,11 +560,11 @@ async function bookMissingEarningsForCall(call, transaction) {
         amount: txGross,
         status: 'pending_retraction',
         withdrawableAt: retractionEndsAt,
-        description: `Vente validée — commission ${txGross}€ (rétractation ${RETRACTION_DAYS}j)`,
+        description: `Vente validée — commission ${txGross}€ (rétractation ${retractionDays}j)`,
         meta: {
           signedAt,
           retractionEndsAt,
-          retractionDays: RETRACTION_DAYS,
+          retractionDays,
         },
       });
       if (txRow) {
@@ -1699,7 +1702,17 @@ export const escrowController = {
 
       const isApprove = action === 'approve';
       const signedAt = new Date();
-      const retractionEndsAt = computeRetractionEndsAt(signedAt);
+      let retractionDaysForCall = RETRACTION_DAYS;
+      if (call.gigId) {
+        const callGigId = mongoose.Types.ObjectId.isValid(call.gigId)
+          ? new mongoose.Types.ObjectId(call.gigId)
+          : call.gigId;
+        const callGigDoc = await db.collection('gigs').findOne({ _id: callGigId });
+        if (callGigDoc) {
+          retractionDaysForCall = await resolveRetractionDays(db, callGigDoc);
+        }
+      }
+      const retractionEndsAt = computeRetractionEndsAt(signedAt, retractionDaysForCall);
 
       // Update calls collection document directly too!
       await db.collection('calls').updateOne(
