@@ -9,6 +9,7 @@ import MinutesCompany from '../models/MinutesCompany.js';
 import WalletCompany from '../models/WalletCompany.js';
 import WalletCompanyEntry from '../models/WalletCompanyEntry.js';
 import RepTransaction from '../models/RepTransaction.js';
+import CompanyAiDelegation from '../models/CompanyAiDelegation.js';
 import { broadcastUpdate } from '../websocket/escrowUpdates.js';
 import { userCanAccessCompany } from '../middleware/companyAccess.js';
 import {
@@ -23,6 +24,8 @@ import { clearExpiredRetractions, reverseSaleCommission } from '../services/retr
 // 70/30 split enforced server-side. Single source of truth.
 const REP_SHARE = 0.7;
 const HARX_SHARE = 0.3;
+/** VAL-03/VAL-04/VAL-05: minimum AI-agreement rate to enable or keep AI-delegated validation. */
+const AI_DELEGATION_THRESHOLD = 85;
 
 /** First finite number among candidates (supports `{ amount: n }` and numeric strings). Explicit 0 is kept. */
 function firstFiniteNumber(...candidates) {
@@ -250,9 +253,20 @@ async function createHarxCommissionRow({ type, amount, repId, callId, transactio
 async function resolvePendingReview(repTx, decision, { saleWithdrawableAt } = {}) {
   if (!repTx || repTx.status !== 'pending_review') return repTx;
 
-  if (decision === 'refuse') {
+  // VAL-03: delegation mode resolves on the AI's own verdict, with nobody
+  // having decided yet — resolvedByAi marks it, companyDecision stays unset
+  // until (if ever) a weekly audit asks the company about this exact row.
+  const isAiDelegated = decision === 'ai_delegated';
+  const effectiveDecision = isAiDelegated
+    ? (repTx.aiVerdict === 'valid' ? 'approve' : 'refuse')
+    : decision;
+  if (isAiDelegated) repTx.resolvedByAi = true;
+
+  if (effectiveDecision === 'refuse') {
     repTx.status = 'refused';
-    repTx.companyDecision = repTx.aiVerdict === 'invalid' ? 'agreed' : 'contradicted';
+    if (!isAiDelegated) {
+      repTx.companyDecision = repTx.aiVerdict === 'invalid' ? 'agreed' : 'contradicted';
+    }
     await repTx.save();
     await WalletCompany.findOneAndUpdate(
       { companyId: repTx.companyId },
@@ -262,7 +276,7 @@ async function resolvePendingReview(repTx, decision, { saleWithdrawableAt } = {}
     return repTx;
   }
 
-  // approve or timeout
+  // approve, timeout, or ai_delegated-approve
   repTx.status = repTx.type === 'transaction' ? 'pending_retraction' : 'earned';
   if (repTx.type === 'transaction' && saleWithdrawableAt) {
     repTx.withdrawableAt = saleWithdrawableAt;
@@ -282,6 +296,75 @@ async function resolvePendingReview(repTx, decision, { saleWithdrawableAt } = {}
     description: repTx.description
   });
   return repTx;
+}
+
+/**
+ * VAL-02: share of company decisions that matched the AI's verdict, on the
+ * full volume since the start. Rows the company never actually decided on
+ * (timeout) are excluded, not counted against it.
+ */
+async function computeAiAgreementRate(companyId) {
+  const companyObjectId = mongoose.Types.ObjectId.isValid(companyId)
+    ? new mongoose.Types.ObjectId(companyId)
+    : companyId;
+
+  const counts = await RepTransaction.aggregate([
+    { $match: { companyId: companyObjectId, companyDecision: { $in: ['agreed', 'contradicted'] } } },
+    { $group: { _id: '$companyDecision', count: { $sum: 1 } } }
+  ]);
+
+  const agreed = counts.find((c) => c._id === 'agreed')?.count || 0;
+  const contradicted = counts.find((c) => c._id === 'contradicted')?.count || 0;
+  const totalDecided = agreed + contradicted;
+  const agreementRate = totalDecided > 0 ? Number(((agreed / totalDecided) * 100).toFixed(2)) : null;
+
+  return { companyId: String(companyId), agreed, contradicted, totalDecided, agreementRate };
+}
+
+/**
+ * Weekly scheduled job (cahier de recette VAL-03): for every company with
+ * AI delegation enabled, flag one random AI-resolved row from the last 7
+ * days as an audit for the company to confirm or contradict.
+ */
+export async function flagWeeklyAiAudits() {
+  const enabledCompanies = await CompanyAiDelegation.find({ enabled: true }).lean();
+  let flagged = 0;
+
+  for (const delegation of enabledCompanies) {
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+    // Already flagged (answered or not) one this week — wait for next week.
+    const alreadyFlaggedThisWeek = await RepTransaction.exists({
+      companyId: delegation.companyId,
+      resolvedByAi: true,
+      $or: [{ auditFlag: true }, { auditedAt: { $gte: weekAgo } }],
+      createdAt: { $gte: weekAgo }
+    });
+    if (alreadyFlaggedThisWeek) continue;
+
+    const candidates = await RepTransaction.aggregate([
+      {
+        $match: {
+          companyId: delegation.companyId,
+          resolvedByAi: true,
+          auditFlag: false,
+          companyDecision: { $exists: false },
+          createdAt: { $gte: weekAgo }
+        }
+      },
+      { $sample: { size: 1 } }
+    ]);
+
+    if (candidates.length) {
+      await RepTransaction.updateOne({ _id: candidates[0]._id }, { $set: { auditFlag: true } });
+      flagged += 1;
+      try {
+        broadcastUpdate({ type: 'ai_audit_flagged', companyId: String(delegation.companyId) });
+      } catch (_) { /* noop */ }
+    }
+  }
+
+  return { flagged };
 }
 
 /**
@@ -634,6 +717,15 @@ async function bookMissingEarningsForCall(call, transaction) {
       description: `Appel validé par l'IA — commission ${callGross}€ (70% rep / 30% HARX)`
     });
     if (callRow) bookedSomething = true;
+
+    // VAL-03: in AI-delegated mode, resolve immediately on the AI's own
+    // verdict instead of waiting for the company or the review deadline.
+    if (callRow && callRow.status === 'pending_review') {
+      const delegation = await CompanyAiDelegation.findOne({ companyId, enabled: true }).lean();
+      if (delegation) {
+        await resolvePendingReview(callRow, 'ai_delegated');
+      }
+    }
   }
 
   let txRow = null;
@@ -2433,6 +2525,135 @@ export const escrowController = {
     } catch (err) {
       console.error('Error fetching pending reviews:', err);
       res.status(500).json({ error: 'Failed to fetch pending reviews' });
+    }
+  },
+
+  // AI-agreement rate (cahier de recette VAL-02): share of company decisions
+  // that matched the AI's verdict, over the full volume since the start.
+  // Rows resolved by timeout count neither for nor against (the company
+  // never actually decided).
+  getAiAgreementRate: async (req, res) => {
+    const { companyId } = req.params;
+    if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    try {
+      const data = await computeAiAgreementRate(companyId);
+      res.status(200).json({ success: true, data });
+    } catch (err) {
+      console.error('Error computing AI agreement rate:', err);
+      res.status(500).json({ error: 'Failed to compute AI agreement rate' });
+    }
+  },
+
+  // VAL-03/VAL-04: turn AI-delegated validation on (refused below the 85%
+  // threshold) or off.
+  getAiDelegation: async (req, res) => {
+    const { companyId } = req.params;
+    if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    try {
+      const rate = await computeAiAgreementRate(companyId);
+      const settings = await CompanyAiDelegation.findOne({ companyId }).lean();
+      res.status(200).json({
+        success: true,
+        data: {
+          enabled: settings?.enabled || false,
+          auditFrequency: settings?.auditFrequency || 'weekly',
+          threshold: AI_DELEGATION_THRESHOLD,
+          ...rate
+        }
+      });
+    } catch (err) {
+      console.error('Error fetching AI delegation settings:', err);
+      res.status(500).json({ error: 'Failed to fetch AI delegation settings' });
+    }
+  },
+
+  setAiDelegation: async (req, res) => {
+    const { companyId } = req.params;
+    const { enabled } = req.body;
+    if (!companyId || typeof enabled !== 'boolean') {
+      return res.status(400).json({ error: 'companyId and a boolean enabled are required' });
+    }
+    try {
+      if (enabled) {
+        const rate = await computeAiAgreementRate(companyId);
+        if (!(rate.agreementRate >= AI_DELEGATION_THRESHOLD)) {
+          return res.status(400).json({
+            error: 'AI_AGREEMENT_RATE_TOO_LOW',
+            message: `Taux d'accord actuel ${rate.agreementRate ?? 0} % — le seuil de ${AI_DELEGATION_THRESHOLD} % n'est pas atteint.`,
+            data: rate
+          });
+        }
+      }
+
+      const update = enabled
+        ? { enabled: true, enabledAt: new Date(), disabledAt: null, disabledReason: null }
+        : { enabled: false, disabledAt: new Date(), disabledReason: 'manual' };
+
+      const settings = await CompanyAiDelegation.findOneAndUpdate(
+        { companyId },
+        { $set: update },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      );
+      res.status(200).json({ success: true, data: settings });
+    } catch (err) {
+      console.error('Error updating AI delegation settings:', err);
+      res.status(500).json({ error: 'Failed to update AI delegation settings' });
+    }
+  },
+
+  // VAL-03: this company's currently flagged audit rows, to review.
+  getAiAudits: async (req, res) => {
+    const { companyId } = req.params;
+    if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    try {
+      const rows = await RepTransaction.find({ companyId, auditFlag: true, companyDecision: { $exists: false } })
+        .sort({ createdAt: -1 })
+        .lean();
+      res.status(200).json({ success: true, data: rows });
+    } catch (err) {
+      console.error('Error fetching AI audits:', err);
+      res.status(500).json({ error: 'Failed to fetch AI audits' });
+    }
+  },
+
+  // VAL-05: the company confirms or contradicts an audited row. A
+  // contradiction that drops the agreement rate below the threshold
+  // auto-disables AI delegation.
+  respondToAiAudit: async (req, res) => {
+    const { repTransactionId } = req.params;
+    const { confirm } = req.body; // true = agrees with the AI, false = contradicts
+    if (!repTransactionId || typeof confirm !== 'boolean') {
+      return res.status(400).json({ error: 'repTransactionId and a boolean confirm are required' });
+    }
+    try {
+      const repTx = await RepTransaction.findById(repTransactionId);
+      if (!repTx || !repTx.auditFlag) {
+        return res.status(404).json({ error: 'Audit row not found' });
+      }
+      if (repTx.companyDecision) {
+        return res.status(409).json({ error: 'Audit already answered' });
+      }
+
+      repTx.companyDecision = confirm ? 'agreed' : 'contradicted';
+      repTx.auditedAt = new Date();
+      await repTx.save();
+
+      let delegationDisabled = false;
+      if (!confirm) {
+        const rate = await computeAiAgreementRate(repTx.companyId);
+        if (rate.agreementRate !== null && rate.agreementRate < AI_DELEGATION_THRESHOLD) {
+          await CompanyAiDelegation.findOneAndUpdate(
+            { companyId: repTx.companyId },
+            { $set: { enabled: false, disabledAt: new Date(), disabledReason: 'audit_contradiction' } }
+          );
+          delegationDisabled = true;
+        }
+      }
+
+      res.status(200).json({ success: true, data: { repTransaction: repTx, delegationDisabled } });
+    } catch (err) {
+      console.error('Error responding to AI audit:', err);
+      res.status(500).json({ error: 'Failed to respond to AI audit' });
     }
   },
 

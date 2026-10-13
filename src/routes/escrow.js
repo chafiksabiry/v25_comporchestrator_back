@@ -20,6 +20,11 @@ router.post('/calls/approve/:callId', authenticate, escrowController.approveOrRe
 router.post('/transaction/:transactionId/retract', authenticate, escrowController.retractSale);
 router.get('/harx/commissions', authenticate, escrowController.getHarxCommissions);
 router.get('/pending-reviews/:companyId', ...company, escrowController.getPendingReviews);
+router.get('/ai-agreement-rate/:companyId', ...company, escrowController.getAiAgreementRate);
+router.get('/ai-delegation/:companyId', ...company, escrowController.getAiDelegation);
+router.patch('/ai-delegation/:companyId', ...company, escrowController.setAiDelegation);
+router.get('/ai-audits/:companyId', ...company, escrowController.getAiAudits);
+router.post('/ai-audits/:repTransactionId/respond', authenticate, escrowController.respondToAiAudit);
 
 // Called by the calls service after scoring. Those callers have no user JWT.
 router.post('/reconcile/:companyId', escrowController.triggerReconciliation);

@@ -16,7 +16,7 @@ import { minutesCompanyRoutes } from './src/routes/minutesCompany.js';
 import { tokensCompanyRoutes } from './src/routes/tokensCompany.js';
 import { paymentCheckoutRoutes } from './src/routes/paymentCheckout.js';
 import { clearExpiredRetractions } from './src/services/retractionService.js';
-import { resolveExpiredPendingReviews } from './src/controllers/escrowController.js';
+import { resolveExpiredPendingReviews, flagWeeklyAiAudits } from './src/controllers/escrowController.js';
 
 const app = express();
 
@@ -155,6 +155,18 @@ setInterval(() => {
     console.warn('[pending-review-cron]', err.message);
   });
 }, RETRACTION_CRON_MS);
+
+// VAL-03: flag one random AI-resolved call per week per delegated company.
+// Checked hourly so it fires close to the 7-day mark without needing a
+// separate weekly scheduler; flagWeeklyAiAudits() itself only matches rows
+// from the last 7 days, so running it more often is harmless (a company
+// already flagged this week simply has no fresh candidate until the next).
+const AI_AUDIT_CRON_MS = 60 * 60 * 1000;
+setInterval(() => {
+  flagWeeklyAiAudits().catch((err) => {
+    console.warn('[ai-audit-cron]', err.message);
+  });
+}, AI_AUDIT_CRON_MS);
 
 // Handle process termination
 process.on('SIGINT', () => {
