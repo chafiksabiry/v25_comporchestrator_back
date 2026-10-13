@@ -158,6 +158,8 @@ async function bookRepTransaction({
   meta,
   status = 'earned',
   withdrawableAt = null,
+  aiVerdict = null,
+  reviewDeadlineAt = null,
 }) {
   if (!type || !sourceId || !repId || !companyId) return null;
   const grossAmount = Number(amount || 0);
@@ -182,6 +184,8 @@ async function bookRepTransaction({
       harxShare,
       status,
       withdrawableAt: withdrawableAt || undefined,
+      aiVerdict: aiVerdict || undefined,
+      reviewDeadlineAt: reviewDeadlineAt || undefined,
       description,
       meta
     });
@@ -194,13 +198,26 @@ async function bookRepTransaction({
   }
 
   // 2. Debit company wallet — WalletCompany is the SINGLE source of truth.
+  // Happens regardless of status: a `pending_review` row already reserves
+  // the money (cahier de recette PAY-08's "compte intermédiaire") even
+  // though the rep/HARX split below hasn't happened yet.
   await WalletCompany.findOneAndUpdate(
     { companyId },
     { $inc: { balance: -grossAmount } },
     { new: true, upsert: true, setDefaultsOnInsert: true }
   );
 
-  // 3. HARX 30% commission row.
+  // 3. HARX 30% commission row — NOT created yet for a `pending_review` hold;
+  // it's created when resolvePendingReview() settles the row (approve,
+  // refuse-is-a-no-op-here, or auto-timeout).
+  if (status !== 'pending_review') {
+    await createHarxCommissionRow({ type, amount: harxShare, repId, callId, transactionDocId, sourceId, companyId, description });
+  }
+
+  return repTx;
+}
+
+async function createHarxCommissionRow({ type, amount, repId, callId, transactionDocId, sourceId, companyId, description }) {
   const harxTypeByRep = {
     call_validated: 'call_commission',
     transaction: 'transaction_commission',
@@ -209,7 +226,7 @@ async function bookRepTransaction({
   try {
     await new HarxCommission({
       type: harxTypeByRep[type] || 'call_commission',
-      amount: harxShare,
+      amount,
       agentId: String(repId),
       callId: callId ? String(callId) : undefined,
       transactionId: transactionDocId ? String(transactionDocId) : undefined,
@@ -218,10 +235,81 @@ async function bookRepTransaction({
       description: description || `30% HARX cut on ${type}`
     }).save();
   } catch (harxErr) {
-    console.warn('[bookRepTransaction] HarxCommission write skipped:', harxErr.message);
+    console.warn('[createHarxCommissionRow] HarxCommission write skipped:', harxErr.message);
+  }
+}
+
+/**
+ * Settle a `pending_review` hold (cahier de recette PAY-08/PAY-18/VAL-01):
+ *  - 'approve' or 'timeout' -> same outcome as before (earned, or
+ *    pending_retraction for a sale with its own withdrawableAt), HARX
+ *    commission row created now.
+ *  - 'refuse' -> credits the company wallet back, no HARX row ever created.
+ * Idempotent: a row not in 'pending_review' is left untouched.
+ */
+async function resolvePendingReview(repTx, decision, { saleWithdrawableAt } = {}) {
+  if (!repTx || repTx.status !== 'pending_review') return repTx;
+
+  if (decision === 'refuse') {
+    repTx.status = 'refused';
+    repTx.companyDecision = repTx.aiVerdict === 'invalid' ? 'agreed' : 'contradicted';
+    await repTx.save();
+    await WalletCompany.findOneAndUpdate(
+      { companyId: repTx.companyId },
+      { $inc: { balance: repTx.amount } },
+      { upsert: true, setDefaultsOnInsert: true }
+    );
+    return repTx;
   }
 
+  // approve or timeout
+  repTx.status = repTx.type === 'transaction' ? 'pending_retraction' : 'earned';
+  if (repTx.type === 'transaction' && saleWithdrawableAt) {
+    repTx.withdrawableAt = saleWithdrawableAt;
+  }
+  if (decision === 'approve') {
+    repTx.companyDecision = repTx.aiVerdict === 'valid' ? 'agreed' : 'contradicted';
+  }
+  await repTx.save();
+  await createHarxCommissionRow({
+    type: repTx.type,
+    amount: repTx.harxShare,
+    repId: repTx.repId,
+    callId: repTx.callId,
+    transactionDocId: repTx.transactionDocId,
+    sourceId: repTx.sourceId,
+    companyId: repTx.companyId,
+    description: repTx.description
+  });
   return repTx;
+}
+
+/**
+ * Scheduled job (cahier de recette VAL-01): auto-resolve every
+ * `pending_review` hold whose `reviewDeadlineAt` has passed, exactly as if
+ * the company had approved it — the rep and HARX are paid, the company is
+ * notified. Mirrors `clearExpiredRetractions`' pattern.
+ */
+export async function resolveExpiredPendingReviews() {
+  const now = new Date();
+  const expired = await RepTransaction.find({
+    status: 'pending_review',
+    reviewDeadlineAt: { $lte: now },
+  });
+
+  if (!expired.length) return { resolved: 0 };
+
+  for (const repTx of expired) {
+    try {
+      await resolvePendingReview(repTx, 'timeout');
+      broadcastUpdate({ type: 'rep_wallet_update', repId: String(repTx.repId) });
+      broadcastUpdate({ type: 'escrow_update', companyId: String(repTx.companyId) });
+    } catch (err) {
+      console.error('[resolveExpiredPendingReviews] failed for', String(repTx._id), err.message);
+    }
+  }
+
+  return { resolved: expired.length };
 }
 
 /**
@@ -528,6 +616,10 @@ async function bookMissingEarningsForCall(call, transaction) {
 
   let callRow = await RepTransaction.findOne({ type: 'call_validated', sourceId: callSourceId });
   if (!callRow) {
+    // Hold the funds the moment the AI pre-validates (compte intermédiaire,
+    // PAY-08) — the company still has to approve/refuse before the rep and
+    // HARX are actually paid (resolvePendingReview), or it auto-resolves
+    // after reviewDeadlineAt (VAL-01).
     callRow = await bookRepTransaction({
       type: 'call_validated',
       sourceId: callSourceId,
@@ -536,6 +628,9 @@ async function bookMissingEarningsForCall(call, transaction) {
       gigId: gigObjectId,
       callId: call._id,
       amount: callGross,
+      status: 'pending_review',
+      aiVerdict: 'valid',
+      reviewDeadlineAt: computeRetractionEndsAt(new Date(), retractionDays),
       description: `Appel validé par l'IA — commission ${callGross}€ (70% rep / 30% HARX)`
     });
     if (callRow) bookedSomething = true;
@@ -1770,12 +1865,31 @@ export const escrowController = {
         }
       }
 
-      // Book the rep earnings (idempotent) and debit WalletCompany.balance.
-      // 70/30 split is enforced inside bookRepTransaction.
+      // Resolve the `pending_review` hold created when the AI pre-validated
+      // this call/sale (compte intermédiaire, PAY-08/PAY-18): approve pays
+      // the rep + HARX out of the held amount, refuse credits the company
+      // wallet back. No fresh debit happens here — that already happened
+      // at pre-validation time.
       let bookedRepTx = { call: null, transaction: null };
-      if (isApprove && call.agent) {
+      if (call.agent) {
         try {
-          bookedRepTx = await bookEarningsForApprovedCall(call, transaction);
+          const callSourceId = String(call._id);
+          const txSourceId = String(transaction?._id || call._id);
+          const decision = isApprove ? 'approve' : 'refuse';
+
+          const pendingCallRow = await RepTransaction.findOne({ type: 'call_validated', sourceId: callSourceId, status: 'pending_review' });
+          if (pendingCallRow) {
+            bookedRepTx.call = await resolvePendingReview(pendingCallRow, decision);
+          } else if (isApprove) {
+            // No pre-validation hold exists (legacy path / AI scoring never ran) — fall back
+            // to booking the call commission directly as before.
+            bookedRepTx = await bookEarningsForApprovedCall(call, transaction);
+          }
+
+          const pendingTxRow = await RepTransaction.findOne({ type: 'transaction', sourceId: txSourceId, status: 'pending_review' });
+          if (pendingTxRow) {
+            bookedRepTx.transaction = await resolvePendingReview(pendingTxRow, decision, { saleWithdrawableAt: retractionEndsAt });
+          }
         } catch (bookErr) {
           console.error('[approveOrRefuseCallTransaction] booking failed:', bookErr);
         }
@@ -2303,6 +2417,22 @@ export const escrowController = {
       const status = err.statusCode || 500;
       if (status >= 500) console.error('Error retracting sale:', err);
       res.status(status).json({ error: err.message || 'Failed to retract sale' });
+    }
+  },
+
+  // Pending AI-prevalidated calls/sales the company hasn't decided on yet —
+  // for the login popup (cahier de recette VAL-01).
+  getPendingReviews: async (req, res) => {
+    const { companyId } = req.params;
+    if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    try {
+      const rows = await RepTransaction.find({ companyId, status: 'pending_review' })
+        .sort({ reviewDeadlineAt: 1 })
+        .lean();
+      res.status(200).json({ success: true, data: rows });
+    } catch (err) {
+      console.error('Error fetching pending reviews:', err);
+      res.status(500).json({ error: 'Failed to fetch pending reviews' });
     }
   },
 

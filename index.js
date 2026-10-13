@@ -16,6 +16,7 @@ import { minutesCompanyRoutes } from './src/routes/minutesCompany.js';
 import { tokensCompanyRoutes } from './src/routes/tokensCompany.js';
 import { paymentCheckoutRoutes } from './src/routes/paymentCheckout.js';
 import { clearExpiredRetractions } from './src/services/retractionService.js';
+import { resolveExpiredPendingReviews } from './src/controllers/escrowController.js';
 
 const app = express();
 
@@ -143,6 +144,15 @@ const RETRACTION_CRON_MS = 60 * 60 * 1000;
 setInterval(() => {
   clearExpiredRetractions().catch((err) => {
     console.warn('[retraction-cron]', err.message);
+  });
+}, RETRACTION_CRON_MS);
+
+// Auto-resolve AI-pre-validated calls/sales the company never decided on
+// before their review deadline (cahier de recette VAL-01). Same cadence as
+// the retraction cron above.
+setInterval(() => {
+  resolveExpiredPendingReviews().catch((err) => {
+    console.warn('[pending-review-cron]', err.message);
   });
 }, RETRACTION_CRON_MS);
 

@@ -19,6 +19,7 @@ router.get('/calls/:companyId', ...company, escrowController.getCompanyCallsAndT
 router.post('/calls/approve/:callId', authenticate, escrowController.approveOrRefuseCallTransaction);
 router.post('/transaction/:transactionId/retract', authenticate, escrowController.retractSale);
 router.get('/harx/commissions', authenticate, escrowController.getHarxCommissions);
+router.get('/pending-reviews/:companyId', ...company, escrowController.getPendingReviews);
 
 // Called by the calls service after scoring. Those callers have no user JWT.
 router.post('/reconcile/:companyId', escrowController.triggerReconciliation);
