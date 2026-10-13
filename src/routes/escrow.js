@@ -17,6 +17,11 @@ router.post('/calls/approve/:callId', escrowController.approveOrRefuseCallTransa
 router.post('/transaction/:transactionId/retract', escrowController.retractSale);
 router.get('/harx/commissions', escrowController.getHarxCommissions);
 router.get('/pending-reviews/:companyId', escrowController.getPendingReviews);
+router.get('/ai-agreement-rate/:companyId', escrowController.getAiAgreementRate);
+router.get('/ai-delegation/:companyId', escrowController.getAiDelegation);
+router.patch('/ai-delegation/:companyId', escrowController.setAiDelegation);
+router.get('/ai-audits/:companyId', escrowController.getAiAudits);
+router.post('/ai-audits/:repTransactionId/respond', escrowController.respondToAiAudit);
 router.post('/reconcile/:companyId', escrowController.triggerReconciliation);
 router.post('/call-analysis-help', escrowController.broadcastCallAnalysisHelp);
 router.post('/call-analysis-complete', escrowController.broadcastCallAnalysisComplete);
