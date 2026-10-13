@@ -14,12 +14,17 @@ export function computeRetractionEndsAt(fromDate = new Date(), retractionDays = 
 }
 
 /**
- * Resolve the applicable retraction delay for a gig, from its destination
- * country's configured `retractionDays` (admin-set, see
- * adminCountriesService in v25_registration_backend), falling back to the
- * EU standard when unset or when the gig has no destination country.
+ * Resolve the applicable retraction delay for a gig: the gig's own
+ * `retractionDays` (ENT-13 — proposed from the country at gig creation,
+ * editable by the company before publishing, then locked onto the gig)
+ * when set, else its destination country's configured `retractionDays`
+ * (admin-set, see adminCountriesService in v25_registration_backend),
+ * falling back to the EU standard when unset or when the gig has no
+ * destination country.
  */
 export async function resolveRetractionDays(db, gigDoc) {
+  if (typeof gigDoc?.retractionDays === 'number') return gigDoc.retractionDays;
+
   const countryId = gigDoc?.destination_zone;
   if (!countryId) return RETRACTION_DAYS;
   try {

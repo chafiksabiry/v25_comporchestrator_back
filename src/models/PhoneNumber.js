@@ -104,6 +104,37 @@ const phoneNumberSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  // PAY-19: recurring billing lifecycle once the 15-day trial ends.
+  // 'n/a' for non-trial lines (out of this ticket's scope — they only ever
+  // had the one-shot setup fee). A trial line starts 'trial', then becomes:
+  //   'active'          — first post-trial charge succeeded (Stripe subscription running)
+  //   'payment_failed'  — charge attempt failed or no payment method on file
+  //   'suspended'       — set at the same time as payment_failed; line stays
+  //                       provisioned but is given up to 1 month to recover
+  //   'terminated'      — still unpaid after 1 month, number released before
+  //                       what would have been the next billing cycle
+  billingStatus: {
+    type: String,
+    enum: ['n/a', 'trial', 'active', 'payment_failed', 'suspended', 'terminated'],
+    default: 'n/a'
+  },
+  stripeSubscriptionId: {
+    type: String,
+    sparse: true
+  },
+  paymentFailedAt: {
+    type: Date,
+    default: null
+  },
+  suspendedAt: {
+    type: Date,
+    default: null
+  },
+  // suspendedAt + 1 month — when terminateSuspendedLines() releases the number.
+  terminatesAt: {
+    type: Date,
+    default: null
+  },
   createdAt: {
     type: Date,
     default: Date.now
