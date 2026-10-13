@@ -68,13 +68,23 @@ const repTransactionSchema = new mongoose.Schema({
 
   status: {
     type: String,
-    enum: ['earned', 'pending_retraction', 'paid', 'refused', 'reversed'],
+    enum: ['pending_review', 'earned', 'pending_retraction', 'paid', 'refused', 'reversed'],
     default: 'earned',
     index: true
   },
 
   /** Sale commissions become withdrawable after the retraction window. */
   withdrawableAt: { type: Date, required: false, index: true },
+
+  /**
+   * `pending_review` only: what the AI proposed ('valid' | 'invalid') and
+   * the deadline by which the company must decide before it auto-resolves
+   * as if approved (cahier de recette VAL-01). Also the basis for the
+   * company's AI-agreement rate (VAL-02).
+   */
+  aiVerdict: { type: String, enum: ['valid', 'invalid'], required: false },
+  reviewDeadlineAt: { type: Date, required: false, index: true },
+  companyDecision: { type: String, enum: ['agreed', 'contradicted'], required: false },
 
   description: { type: String },
   meta: { type: mongoose.Schema.Types.Mixed }

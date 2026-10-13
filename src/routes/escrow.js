@@ -16,6 +16,7 @@ router.get('/calls/:companyId', escrowController.getCompanyCallsAndTransactions)
 router.post('/calls/approve/:callId', escrowController.approveOrRefuseCallTransaction);
 router.post('/transaction/:transactionId/retract', escrowController.retractSale);
 router.get('/harx/commissions', escrowController.getHarxCommissions);
+router.get('/pending-reviews/:companyId', escrowController.getPendingReviews);
 router.post('/reconcile/:companyId', escrowController.triggerReconciliation);
 router.post('/call-analysis-help', escrowController.broadcastCallAnalysisHelp);
 router.post('/call-analysis-complete', escrowController.broadcastCallAnalysisComplete);
