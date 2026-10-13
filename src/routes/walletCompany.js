@@ -1,7 +1,13 @@
 import express from 'express';
 import { walletCompanyController } from '../controllers/walletCompanyController.js';
+import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
+
+// All routes here are company-dashboard-facing and move or reveal real
+// money — none are called server-to-server, so the whole router requires
+// authentication (cahier de recette PAY-12: previously none did).
+router.use(authenticate);
 
 router.get('/:companyId', walletCompanyController.getWallet);
 router.post('/deposit', walletCompanyController.deposit);
