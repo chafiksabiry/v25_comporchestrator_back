@@ -699,10 +699,11 @@ async function bookMissingEarningsForCall(call, transaction) {
 
   let callRow = await RepTransaction.findOne({ type: 'call_validated', sourceId: callSourceId });
   if (!callRow) {
-    // Hold the funds the moment the AI pre-validates (compte intermédiaire,
-    // PAY-08) — the company still has to approve/refuse before the rep and
-    // HARX are actually paid (resolvePendingReview), or it auto-resolves
-    // after reviewDeadlineAt (VAL-01).
+    // Calls credit immediately once the AI validates them (>30s, not
+    // voicemail/fraud/callback-pending) — the company does NOT have to
+    // approve a call first. It only gets a window to CANCEL the credit
+    // afterwards (cancelCallCommission), unlike a transaction/sale, which
+    // must be validated by the company BEFORE anything is credited.
     callRow = await bookRepTransaction({
       type: 'call_validated',
       sourceId: callSourceId,
@@ -711,21 +712,12 @@ async function bookMissingEarningsForCall(call, transaction) {
       gigId: gigObjectId,
       callId: call._id,
       amount: callGross,
-      status: 'pending_review',
+      status: 'earned',
       aiVerdict: 'valid',
       reviewDeadlineAt: computeRetractionEndsAt(new Date(), retractionDays),
       description: `Appel validé par l'IA — commission ${callGross}€ (70% rep / 30% HARX)`
     });
     if (callRow) bookedSomething = true;
-
-    // VAL-03: in AI-delegated mode, resolve immediately on the AI's own
-    // verdict instead of waiting for the company or the review deadline.
-    if (callRow && callRow.status === 'pending_review') {
-      const delegation = await CompanyAiDelegation.findOne({ companyId, enabled: true }).lean();
-      if (delegation) {
-        await resolvePendingReview(callRow, 'ai_delegated');
-      }
-    }
   }
 
   let txRow = null;
@@ -1957,31 +1949,14 @@ export const escrowController = {
         }
       }
 
-      // Resolve the `pending_review` hold created when the AI pre-validated
-      // this call/sale (compte intermédiaire, PAY-08/PAY-18): approve pays
-      // the rep + HARX out of the held amount, refuse credits the company
-      // wallet back. No fresh debit happens here — that already happened
-      // at pre-validation time.
+      // This endpoint governs the TRANSACTION/sale only — a call's commission
+      // is already credited immediately when the AI validates it
+      // (bookMissingEarningsForCall) and is cancelled separately
+      // (cancelCallCommission), not approved/refused here.
       let bookedRepTx = { call: null, transaction: null };
-      if (call.agent) {
+      if (isApprove && call.agent) {
         try {
-          const callSourceId = String(call._id);
-          const txSourceId = String(transaction?._id || call._id);
-          const decision = isApprove ? 'approve' : 'refuse';
-
-          const pendingCallRow = await RepTransaction.findOne({ type: 'call_validated', sourceId: callSourceId, status: 'pending_review' });
-          if (pendingCallRow) {
-            bookedRepTx.call = await resolvePendingReview(pendingCallRow, decision);
-          } else if (isApprove) {
-            // No pre-validation hold exists (legacy path / AI scoring never ran) — fall back
-            // to booking the call commission directly as before.
-            bookedRepTx = await bookEarningsForApprovedCall(call, transaction);
-          }
-
-          const pendingTxRow = await RepTransaction.findOne({ type: 'transaction', sourceId: txSourceId, status: 'pending_review' });
-          if (pendingTxRow) {
-            bookedRepTx.transaction = await resolvePendingReview(pendingTxRow, decision, { saleWithdrawableAt: retractionEndsAt });
-          }
+          bookedRepTx = await bookEarningsForApprovedCall(call, transaction);
         } catch (bookErr) {
           console.error('[approveOrRefuseCallTransaction] booking failed:', bookErr);
         }
@@ -2485,6 +2460,52 @@ export const escrowController = {
   },
 
   /** Company signals a client retraction on a validated sale. */
+  // Company cancels an already-credited call commission, within its
+  // cancellation window (reviewDeadlineAt — same country-based delay as a
+  // sale's retraction window). The AI credits the call immediately; this
+  // is the company's opt-out, not a pre-credit approval.
+  cancelCallCommission: async (req, res) => {
+    const { callId } = req.params;
+    const { reason } = req.body || {};
+    if (!callId) {
+      return res.status(400).json({ error: 'callId is required' });
+    }
+
+    try {
+      const repTx = await RepTransaction.findOne({ type: 'call_validated', sourceId: String(callId) });
+      if (!repTx) {
+        return res.status(404).json({ error: 'No call commission found for this call' });
+      }
+      if (repTx.status === 'reversed' || repTx.status === 'refused') {
+        return res.status(409).json({ error: 'Commission already cancelled' });
+      }
+      if (repTx.reviewDeadlineAt && new Date(repTx.reviewDeadlineAt).getTime() <= Date.now()) {
+        return res.status(410).json({ error: 'Cancellation window has expired for this call' });
+      }
+
+      repTx.status = 'reversed';
+      repTx.companyDecision = 'contradicted';
+      repTx.meta = { ...(repTx.meta || {}), cancelledAt: new Date(), cancelReason: reason || 'Annulé par l\'entreprise' };
+      await repTx.save();
+
+      await WalletCompany.findOneAndUpdate(
+        { companyId: repTx.companyId },
+        { $inc: { balance: repTx.amount } },
+        { upsert: true, setDefaultsOnInsert: true }
+      );
+
+      // Void the 30% HARX cut that was booked alongside the credit.
+      await HarxCommission.deleteOne({ type: 'call_commission', callId: String(callId) });
+
+      await reconcileAgentEarnings(repTx.repId);
+
+      res.status(200).json({ success: true, data: repTx });
+    } catch (err) {
+      console.error('Error cancelling call commission:', err);
+      res.status(500).json({ error: 'Failed to cancel call commission' });
+    }
+  },
+
   retractSale: async (req, res) => {
     const { transactionId } = req.params;
     const { companyId, reason } = req.body;

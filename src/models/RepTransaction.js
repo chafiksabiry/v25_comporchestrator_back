@@ -77,12 +77,19 @@ const repTransactionSchema = new mongoose.Schema({
   withdrawableAt: { type: Date, required: false, index: true },
 
   /**
-   * `pending_review` only: what the AI proposed ('valid' | 'invalid') and
-   * the deadline by which the company must decide before it auto-resolves
-   * as if approved (cahier de recette VAL-01). Also the basis for the
-   * company's AI-agreement rate (VAL-02).
+   * What the AI proposed ('valid' | 'invalid'). Basis for the company's
+   * AI-agreement rate (VAL-02).
    */
   aiVerdict: { type: String, enum: ['valid', 'invalid'], required: false },
+  /**
+   * `call_validated` rows: the deadline by which the company can still
+   * cancel an already-credited call commission (cancelCallCommission).
+   * Calls credit immediately on AI validation — this is a cancellation
+   * window, not an approval deadline (see bookMissingEarningsForCall).
+   * `transaction` rows awaiting `pending_review` (not currently created —
+   * sales are still gated on explicit company approval) would use the
+   * same field as their original approval-deadline meaning.
+   */
   reviewDeadlineAt: { type: Date, required: false, index: true },
   companyDecision: { type: String, enum: ['agreed', 'contradicted'], required: false },
 
