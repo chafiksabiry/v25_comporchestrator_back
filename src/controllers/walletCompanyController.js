@@ -3,6 +3,7 @@ import WalletCompanyEntry from '../models/WalletCompanyEntry.js';
 import EscrowTransaction from '../models/EscrowTransaction.js';
 import AgentWithdrawal from '../models/AgentWithdrawal.js';
 import mongoose from 'mongoose';
+import { userCanAccessCompany } from '../middleware/companyAccess.js';
 
 export const walletCompanyController = {
   getWallet: async (req, res) => {
@@ -252,6 +253,10 @@ export const walletCompanyController = {
       const withdrawal = await AgentWithdrawal.findById(withdrawalId);
       if (!withdrawal) {
         return res.status(404).json({ error: 'Withdrawal request not found' });
+      }
+      const allowed = await userCanAccessCompany(req.user, withdrawal.companyId);
+      if (!allowed) {
+        return res.status(403).json({ error: 'You do not have access to this company' });
       }
 
       if (action === 'approve') {

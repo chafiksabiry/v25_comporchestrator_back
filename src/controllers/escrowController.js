@@ -10,6 +10,7 @@ import WalletCompany from '../models/WalletCompany.js';
 import WalletCompanyEntry from '../models/WalletCompanyEntry.js';
 import RepTransaction from '../models/RepTransaction.js';
 import { broadcastUpdate } from '../websocket/escrowUpdates.js';
+import { userCanAccessCompany } from '../middleware/companyAccess.js';
 import {
   RETRACTION_DAYS,
   computeRetractionEndsAt,
@@ -2211,6 +2212,10 @@ export const escrowController = {
       const withdrawal = await AgentWithdrawal.findById(withdrawalId);
       if (!withdrawal) {
         return res.status(404).json({ error: 'Withdrawal request not found' });
+      }
+      const allowed = await userCanAccessCompany(req.user, withdrawal.companyId);
+      if (!allowed) {
+        return res.status(403).json({ error: 'You do not have access to this company' });
       }
 
       if (action === 'approve') {
