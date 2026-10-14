@@ -1,7 +1,10 @@
 import express from 'express';
 import { walletCompanyController } from '../controllers/walletCompanyController.js';
+import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
+
+router.use(authenticate);
 
 router.get('/:companyId', walletCompanyController.getWallet);
 router.post('/deposit', walletCompanyController.deposit);
