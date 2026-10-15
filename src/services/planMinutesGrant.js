@@ -56,26 +56,36 @@ function creditDateFromGrantKey(grantKey, fallback) {
   return fallback || new Date();
 }
 
-/** One ledger row per period already granted, dated at that period start. */
+/**
+ * One ledger row per period already granted, dated at that period start.
+ *
+ * Pushes one grantKey at a time with the "not already present" check baked
+ * into the same atomic updateOne filter — a read-then-push of the whole
+ * batch would race with a concurrent caller (e.g. the Stripe webhook firing
+ * alongside the frontend's post-checkout confirm call) and could duplicate
+ * a row between the read and the write.
+ */
 async function backfillPlanCredits(companyId, { allowance, planName }) {
   if (allowance <= 0) return;
-  const wallet = await MinutesCompany.findOne({ companyId });
+  const wallet = await MinutesCompany.findOne({ companyId }, { planGrantKeys: 1 });
   if (!wallet) return;
-  const existing = new Set((wallet.credits || []).map((row) => row.grantKey).filter(Boolean));
-  const rows = (wallet.planGrantKeys || [])
-    .filter((grantKey) => grantKey && !existing.has(grantKey))
-    .map((grantKey) => ({
-      at: creditDateFromGrantKey(grantKey),
-      minutes: allowance,
-      planName: planName || '',
-      kind: 'plan',
-      grantKey,
-    }));
-  if (!rows.length) return;
-  await MinutesCompany.updateOne(
-    { companyId },
-    { $push: { credits: { $each: rows } } }
-  );
+  for (const grantKey of wallet.planGrantKeys || []) {
+    if (!grantKey) continue;
+    await MinutesCompany.updateOne(
+      { companyId, 'credits.grantKey': { $ne: grantKey } },
+      {
+        $push: {
+          credits: {
+            at: creditDateFromGrantKey(grantKey),
+            minutes: allowance,
+            planName: planName || '',
+            kind: 'plan',
+            grantKey,
+          },
+        },
+      }
+    );
+  }
 }
 
 /**
