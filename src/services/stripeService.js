@@ -462,6 +462,7 @@ export const stripeService = {
         ],
         mode: 'subscription',
         allow_promotion_codes: true,
+        payment_method_collection: 'if_required',
         success_url: successUrl,
         cancel_url: cancelUrl,
         redirect_on_completion: 'always',
@@ -496,6 +497,10 @@ export const stripeService = {
       payment_method_types: ['card'],
       line_items: [{ price: priceId, quantity: 1 }],
       allow_promotion_codes: true,
+      // Skip asking for a card when nothing is actually due today (free
+      // trial, or a 100%-off promo code applied) — Stripe still collects
+      // one automatically before any future real charge becomes due.
+      payment_method_collection: 'if_required',
       redirect_on_completion: 'never',
       client_reference_id: userId.toString(),
       metadata: { userId: userId.toString(), ...metadata },
