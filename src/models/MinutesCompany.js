@@ -64,5 +64,13 @@ const minutesCompanySchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Guard against duplicate plan-credit ledger rows (e.g. the Stripe webhook
+// and the frontend's post-checkout confirm call both firing for the same
+// billing period) even if an application-level race slips through.
+minutesCompanySchema.index(
+  { 'credits.grantKey': 1 },
+  { unique: true, partialFilterExpression: { 'credits.grantKey': { $type: 'string', $ne: '' } } }
+);
+
 const MinutesCompany = mongoose.model('MinutesCompany', minutesCompanySchema);
 export default MinutesCompany;
