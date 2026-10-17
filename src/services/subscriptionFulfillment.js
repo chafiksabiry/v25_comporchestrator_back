@@ -163,8 +163,14 @@ export async function activateFromStripeCheckoutSession(session) {
     throw new Error(`Plan not found for price ${priceId}`);
   }
 
+  // current_period_start can be absent before the first invoice (promo/trial).
+  // Prefer Stripe's stable start_date/created over wall-clock time so the
+  // webhook and the post-checkout confirm share one grantKey.
   const itemPeriod = stripeSubscription.items?.data?.[0];
-  const startUnix = stripeSubscription.current_period_start || itemPeriod?.current_period_start;
+  const startUnix = stripeSubscription.current_period_start
+    || itemPeriod?.current_period_start
+    || stripeSubscription.start_date
+    || stripeSubscription.created;
   const endUnix = stripeSubscription.current_period_end || itemPeriod?.current_period_end;
   const existing = userId ? await Subscription.findOne({ userId }) : null;
   const now = new Date();
