@@ -153,12 +153,21 @@ export async function activateFromStripeCheckoutSession(session) {
     throw new Error(`Plan not found for price ${priceId}`);
   }
 
-  const periodStart = stripeSubscription.current_period_start
-    ? new Date(stripeSubscription.current_period_start * 1000)
-    : new Date();
+  // current_period_start/end can be absent on a subscription that hasn't
+  // billed yet (e.g. a 100%-off promo code, or a free trial) — fall back to
+  // Stripe's own stable start_date/created fields, never to `new Date()`.
+  // A wall-clock fallback makes periodGrantKey() (below) non-deterministic:
+  // two concurrent callers (the Stripe webhook + the frontend's post-redirect
+  // confirm call) would each compute a different grantKey for the exact same
+  // period and both pass ensurePlanMinutesGranted's idempotency check,
+  // double-crediting the plan's included minutes.
+  const stableStart = stripeSubscription.current_period_start
+    || stripeSubscription.start_date
+    || stripeSubscription.created;
+  const periodStart = stableStart ? new Date(stableStart * 1000) : new Date();
   const periodEnd = stripeSubscription.current_period_end
     ? new Date(stripeSubscription.current_period_end * 1000)
-    : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    : new Date((stableStart || Math.floor(Date.now() / 1000)) * 1000 + 30 * 24 * 60 * 60 * 1000);
 
   await Subscription.findOneAndUpdate(
     { userId },
