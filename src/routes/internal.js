@@ -24,25 +24,47 @@ router.get('/companies/:companyId/wallet-balance', escrowController.getWalletBal
 // Remove this route (and the MinutesCompany import above) once it has run.
 router.post('/maintenance/fix-6ad13c17591a34074d714ba5-double-credit', async (req, res) => {
   const companyId = '6ad13c17591a34074d714ba5';
-  const duplicateGrantKey = 'sub_1UQwISA36sN0mgY3JR4b4koh:2026-10-15T21:34:47.674Z';
   try {
     const wallet = await MinutesCompany.findOne({ companyId });
     if (!wallet) return res.status(404).json({ success: false, error: 'wallet not found' });
 
-    const dupCredits = (wallet.credits || []).filter((c) => c.grantKey === duplicateGrantKey);
-    if (dupCredits.length === 0) {
+    // Keep only the first credit row per grantKey — NOT a $pull on the
+    // grantKey itself. planGrantKeys must keep every grantKey this wallet
+    // has ever been credited for, including both duplicates: every GET
+    // /minutes-company/:id calls ensurePlanMinutesGranted again, and if a
+    // grantKey it still deterministically recomputes were removed from
+    // planGrantKeys, the very next read would pass the idempotency check
+    // and re-grant it (exactly what happened on the first attempt here).
+    const seen = new Set();
+    let removedMinutes = 0;
+    const dedupedCredits = (wallet.credits || []).filter((c) => {
+      const key = c.grantKey || `__no-key-${c._id}`;
+      if (seen.has(key)) {
+        removedMinutes += c.minutes || 0;
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+
+    if (removedMinutes === 0) {
       return res.json({ success: true, alreadyFixed: true, minutes: wallet.minutes });
     }
 
-    const removedMinutes = dupCredits.reduce((sum, c) => sum + (c.minutes || 0), 0);
+    // The first (botched) run of this route $pulled one of the two
+    // grantKeys out of planGrantKeys, which let the very next GET
+    // re-grant it. Restore both known grantKeys unconditionally so the
+    // idempotency guard actually stays shut this time.
+    const knownGrantKeys = [
+      'sub_1UQwISA36sN0mgY3JR4b4koh:2026-10-15T21:34:47.674Z',
+      'sub_1UQwISA36sN0mgY3JR4b4koh:2026-10-15T21:34:47.253Z',
+    ];
     const updated = await MinutesCompany.findOneAndUpdate(
       { companyId },
       {
         $inc: { minutes: -removedMinutes, planMinutesGranted: -removedMinutes },
-        $pull: {
-          credits: { grantKey: duplicateGrantKey },
-          planGrantKeys: duplicateGrantKey,
-        },
+        $set: { credits: dedupedCredits },
+        $addToSet: { planGrantKeys: { $each: knownGrantKeys } },
       },
       { new: true }
     );
