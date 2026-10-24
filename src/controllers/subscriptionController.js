@@ -138,19 +138,47 @@ function sanitizeReturnUrl(url, fallback) {
   return fallback;
 }
 
+function isCallcenterProduct(product) {
+  return metadataObject(product?.metadata).harx_product === 'callcenter';
+}
+
+/** Inscrit en base les prix Stripe actifs et récurrents des produits Call Centre qui n'y sont pas encore. */
+async function registerCallcenterPlans(stripePrices) {
+  for (const price of stripePrices) {
+    try {
+      const product = price.product;
+      if (!isCallcenterProduct(product) || !price.recurring || price.unit_amount == null) continue;
+      if (await SubscriptionPlan.exists({ stripePriceId: price.id })) continue;
+      await SubscriptionPlan.create({
+        name: product.name,
+        price: Number((price.unit_amount / 100).toFixed(2)),
+        currency: price.currency || 'eur',
+        stripePriceId: price.id,
+        description: product.description || '',
+      });
+    } catch (err) {
+      console.warn('[subscriptions/plans] Call Centre plan registration failed:', err.message);
+    }
+  }
+}
+
 export const subscriptionController = {
   getPlans: async (req, res) => {
     try {
-      // 1. La DB est la source de vérité : seuls les plans listés ici sont publiés.
-      const dbPlans = await SubscriptionPlan.find({ stripePriceId: { $exists: true, $ne: '' } });
+      const callcenterOnly = req.query.product === 'callcenter';
 
-      // 2. Métadonnées Stripe (prix actuel, nom produit) pour les plans connus.
+      // 1. Métadonnées Stripe (prix actuel, nom produit) pour les plans connus.
       let stripePrices = [];
       try {
         stripePrices = await stripeService.getPublicPlans();
       } catch (err) {
         console.warn('[subscriptions/plans] Stripe lookup failed, using DB only:', err.message);
       }
+
+      // 2. La DB est la source de vérité : seuls les plans listés ici sont publiés.
+      //    Les forfaits Call Centre y sont inscrits dès qu'un prix Stripe actif porte harx_product=callcenter.
+      await registerCallcenterPlans(stripePrices);
+      const dbPlans = await SubscriptionPlan.find({ stripePriceId: { $exists: true, $ne: '' } });
 
       const seen = new Set();
       const mergedPlans = (
@@ -200,6 +228,8 @@ export const subscriptionController = {
               return null;
             }
             const product = stripePrice.product;
+            // Marketplace et Call Centre ont chacun leur catalogue : on ne mélange pas les forfaits.
+            if (isCallcenterProduct(product) !== callcenterOnly) return null;
             const marketingFeatures = stripeService.extractStripeProductFeatures(product);
             const stripeLimits = stripeService.extractStripeProductLimits(product);
             const displayFeatures = stripeService.buildStripePlanDisplayFeatures(product);
