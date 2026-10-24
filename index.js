@@ -16,6 +16,7 @@ import { minutesCompanyRoutes } from './src/routes/minutesCompany.js';
 import { tokensCompanyRoutes } from './src/routes/tokensCompany.js';
 import { paymentCheckoutRoutes } from './src/routes/paymentCheckout.js';
 import { internalRoutes } from './src/routes/internal.js';
+import { companyNotificationRoutes } from './src/routes/companyNotifications.js';
 import { clearExpiredRetractions } from './src/services/retractionService.js';
 import { resolveExpiredPendingReviews, flagWeeklyAiAudits } from './src/controllers/escrowController.js';
 import { billExpiredTrialLines, terminateSuspendedLines } from './src/services/phoneLineBillingService.js';
@@ -119,6 +120,7 @@ app.use('/api/minutes-company', minutesCompanyRoutes);
 app.use('/api/tokens-company', tokensCompanyRoutes);
 app.use('/api/payments/checkout', paymentCheckoutRoutes);
 app.use('/api/internal', internalRoutes);
+app.use('/api/company-notifications', companyNotificationRoutes);
 
 // Health check to verify deployment
 app.get('/api/health', (req, res) => {
