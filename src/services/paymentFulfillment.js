@@ -4,6 +4,7 @@ import TokensCompany from '../models/TokensCompany.js';
 import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
 import WalletCompany from '../models/WalletCompany.js';
 import WalletCompanyEntry from '../models/WalletCompanyEntry.js';
+import { notifyCompany } from './companyNotificationService.js';
 
 export async function fulfillWalletDeposit(payment) {
   const euros = Number((payment.amount / 100).toFixed(2));
@@ -34,6 +35,15 @@ export async function fulfillWalletDeposit(payment) {
     console.warn('WalletCompanyEntry log failed (PayPal deposit):', logErr.message);
   }
 
+  await notifyCompany({
+    companyId: payment.companyId,
+    key: `payment-${payment._id}`,
+    kind: 'wallet',
+    title: 'Dépôt crédité',
+    message: `${euros.toFixed(2)} € ont été ajoutés à votre portefeuille. Nouveau solde : ${Number(wallet.balance).toFixed(2)} €.`,
+    actionPath: '/dashboard/wallet',
+  });
+
   return { balance: wallet.balance, credited: euros };
 }
 
@@ -50,6 +60,15 @@ export async function fulfillMinutesPurchase(payment) {
   wallet.minutes = Number((wallet.minutes + minutes).toFixed(2));
   wallet.purchasedMinutes = Number(((wallet.purchasedMinutes || 0) + minutes).toFixed(2));
   await wallet.save();
+
+  await notifyCompany({
+    companyId: payment.companyId,
+    key: `payment-${payment._id}`,
+    kind: 'minutes',
+    title: 'Minutes ajoutées',
+    message: `${minutes.toLocaleString('fr-FR')} minutes d'appel ont été ajoutées. Total : ${wallet.minutes.toLocaleString('fr-FR')} min.`,
+    actionPath: '/dashboard/minutes',
+  });
 
   return {
     minutes: wallet.minutes,
@@ -72,6 +91,15 @@ export async function fulfillTokensPurchase(payment) {
   wallet.purchasedTokens = (wallet.purchasedTokens || 0) + tokens;
   wallet.lastPurchasedAt = new Date();
   await wallet.save();
+
+  await notifyCompany({
+    companyId: payment.companyId,
+    key: `payment-${payment._id}`,
+    kind: 'tokens',
+    title: 'Tokens AI ajoutés',
+    message: `${tokens.toLocaleString('fr-FR')} tokens AI ont été ajoutés. Solde : ${wallet.tokens.toLocaleString('fr-FR')}.`,
+    actionPath: '/dashboard/tokens',
+  });
 
   return {
     tokens: wallet.tokens,
