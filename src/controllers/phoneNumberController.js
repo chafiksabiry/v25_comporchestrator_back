@@ -1237,6 +1237,9 @@ class PhoneNumberController {
   async testCall(req, res) {
     const friendlyProviderError = (raw) => {
       const msg = String(raw || '');
+      if (/authentication failed|is not active|account .* (suspended|closed)|20003|20005/i.test(msg)) {
+        return "Le compte de l'opérateur téléphonique est inactif ou suspendu : les appels sont impossibles tant qu'il n'est pas réactivé. Contactez le support HARX.";
+      }
       if (
         /unverified|not been verified|Origination number is not ready|requirement-info|identity.?verif/i.test(
           msg
