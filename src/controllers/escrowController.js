@@ -14,6 +14,7 @@ import WalletCompanyEntry from '../models/WalletCompanyEntry.js';
 import RepTransaction from '../models/RepTransaction.js';
 import CompanyAiDelegation from '../models/CompanyAiDelegation.js';
 import { broadcastUpdate } from '../websocket/escrowUpdates.js';
+import { notifyCompany, notifyLowResource } from '../services/companyNotificationService.js';
 import {
   RETRACTION_DAYS,
   computeRetractionEndsAt,
@@ -212,11 +213,28 @@ async function bookRepTransaction({
   // Happens regardless of status: a `pending_review` row already reserves
   // the money (cahier de recette PAY-08's "compte intermédiaire") even
   // though the rep/HARX split below hasn't happened yet.
-  await WalletCompany.findOneAndUpdate(
+  const debitedWallet = await WalletCompany.findOneAndUpdate(
     { companyId },
     { $inc: { balance: -grossAmount } },
     { new: true, upsert: true, setDefaultsOnInsert: true }
   );
+  await notifyLowResource(companyId, 'wallet', debitedWallet?.balance);
+
+  // A sale (or a REP-declared appointment/callback) waits for the company's decision: tell the company.
+  if (status === 'pending_review') {
+    const isSale = type === 'transaction';
+    await notifyCompany({
+      companyId,
+      key: `validation-${repTx._id}`,
+      kind: 'validation',
+      title: isSale ? 'Vente à valider' : 'Rendez-vous ou rappel à valider',
+      message: `${isSale ? 'Une vente a été détectée' : 'Un REP a déclaré un rendez-vous ou un rappel'} : ${grossAmount} € en attente de votre décision${
+        reviewDeadlineAt ? ` avant le ${new Date(reviewDeadlineAt).toLocaleDateString('fr-FR')}` : ''
+      }. Sans réponse, elle sera validée automatiquement.`,
+      gigId: gigId ? String(gigId) : null,
+      actionPath: '/dashboard/calls',
+    });
+  }
 
   // 3. HARX 30% commission row — NOT created yet for a `pending_review` hold;
   // it's created when resolvePendingReview() settles the row (approve,
@@ -303,6 +321,20 @@ async function resolvePendingReview(repTx, decision, { saleWithdrawableAt } = {}
     companyId: repTx.companyId,
     description: repTx.description
   });
+  if (decision === 'timeout' || isAiDelegated) {
+    await notifyCompany({
+      companyId: repTx.companyId,
+      key: `auto-validated-${repTx._id}`,
+      kind: 'transaction',
+      title: decision === 'timeout' ? 'Validation automatique' : 'Transaction validée par l’IA',
+      message:
+        decision === 'timeout'
+          ? `Le délai de validation est dépassé : ${repTx.amount} € ont été validés automatiquement.`
+          : `Votre assistant IA a validé une transaction de ${repTx.amount} €. Une vérification aléatoire hebdomadaire vous sera proposée.`,
+      gigId: repTx.gigId ? String(repTx.gigId) : null,
+      actionPath: '/dashboard/calls',
+    });
+  }
   return repTx;
 }
 
@@ -369,6 +401,14 @@ export async function flagWeeklyAiAudits() {
     if (candidates.length) {
       await RepTransaction.updateOne({ _id: candidates[0]._id }, { $set: { auditFlag: true } });
       flagged += 1;
+      await notifyCompany({
+        companyId: delegation.companyId,
+        key: `ai-audit-${candidates[0]._id}`,
+        kind: 'validation',
+        title: 'Audit IA : une décision à confirmer',
+        message: 'Une décision prise par votre assistant IA cette semaine est à confirmer ou contredire.',
+        actionPath: '/dashboard/calls',
+      });
       try {
         broadcastUpdate({ type: 'ai_audit_flagged', companyId: String(delegation.companyId) });
       } catch (_) { /* noop */ }

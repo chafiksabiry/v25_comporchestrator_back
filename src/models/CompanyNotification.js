@@ -10,7 +10,11 @@ const companyNotificationSchema = new mongoose.Schema(
     key: { type: String, required: true },
     kind: {
       type: String,
-      enum: ['enrollment_request', 'enrollment_accepted', 'enrollment_rejected', 'wallet', 'tokens', 'minutes', 'phone', 'subscription', 'info'],
+      enum: [
+        'enrollment_request', 'enrollment_accepted', 'enrollment_rejected',
+        'matching', 'transaction', 'validation', 'fraud', 'resource',
+        'wallet', 'tokens', 'minutes', 'phone', 'subscription', 'info',
+      ],
       default: 'info',
     },
     title: { type: String, required: true },

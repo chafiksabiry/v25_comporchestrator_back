@@ -17,6 +17,7 @@ import { tokensCompanyRoutes } from './src/routes/tokensCompany.js';
 import { paymentCheckoutRoutes } from './src/routes/paymentCheckout.js';
 import { internalRoutes } from './src/routes/internal.js';
 import { companyNotificationRoutes } from './src/routes/companyNotifications.js';
+import { scanLowResources } from './src/services/companyNotificationService.js';
 import { clearExpiredRetractions } from './src/services/retractionService.js';
 import { resolveExpiredPendingReviews, flagWeeklyAiAudits } from './src/controllers/escrowController.js';
 import { billExpiredTrialLines, terminateSuspendedLines } from './src/services/phoneLineBillingService.js';
@@ -189,6 +190,14 @@ setInterval(() => {
     console.warn('[phone-line-termination-cron]', err.message);
   });
 }, RETRACTION_CRON_MS);
+
+// Warn companies whose wallet / minutes / tokens run short (the first check runs a minute after boot).
+const runLowResourceScan = () =>
+  scanLowResources().catch((err) => {
+    console.error('[low-resource-scan] failed:', err.message);
+  });
+setTimeout(runLowResourceScan, 60 * 1000);
+setInterval(runLowResourceScan, 15 * 60 * 1000);
 
 // Handle process termination
 process.on('SIGINT', () => {
