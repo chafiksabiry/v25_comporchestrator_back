@@ -8,7 +8,7 @@ import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { getPhoneLinePricing } from '../services/platformPricingService.js';
 import { isFrenchCountry, resolvePhoneProvider } from '../utils/phoneProvider.js';
-import { loadCompanyPlanLimits, localNumberLimitPayload } from '../services/planLimits.js';
+import { isLineTrialAllowed, loadCompanyPlanLimits, localNumberLimitPayload } from '../services/planLimits.js';
 
 /** In-memory status for live test-call monitoring (popup). */
 const testCallSessions = new Map();
@@ -336,7 +336,7 @@ class PhoneNumberController {
         const limits = await loadCompanyPlanLimits(companyId);
         const blocked = localNumberLimitPayload(limits, existingCount);
         if (blocked) return res.status(403).json(blocked);
-        isTrial = existingCount === 0;
+        isTrial = existingCount === 0 && isLineTrialAllowed(limits);
       }
 
       const linePricing = await getPhoneLinePricing();
@@ -462,7 +462,7 @@ class PhoneNumberController {
       }
 
       const existingCount = await PhoneNumber.countDocuments({ companyId });
-      const eligible = existingCount === 0;
+      const eligible = existingCount === 0 && isLineTrialAllowed(await loadCompanyPlanLimits(companyId));
 
       let activeTrial = null;
       if (!eligible) {
@@ -517,7 +517,7 @@ class PhoneNumberController {
         const limits = await loadCompanyPlanLimits(companyId);
         const blocked = localNumberLimitPayload(limits, existingCount);
         if (blocked) return res.status(403).json(blocked);
-        isTrial = existingCount === 0;
+        isTrial = existingCount === 0 && isLineTrialAllowed(limits);
       }
 
       const linePricing = await getPhoneLinePricing();
