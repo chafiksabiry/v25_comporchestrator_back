@@ -9,6 +9,7 @@ import { PhoneNumber } from '../models/PhoneNumber.js';
 import { getPhoneLinePricing } from '../services/platformPricingService.js';
 import { isFrenchCountry, resolvePhoneProvider } from '../utils/phoneProvider.js';
 import { isLineTrialAllowed, loadCompanyPlanLimits, localNumberLimitPayload } from '../services/planLimits.js';
+import { getInboundTest, receiveInboundCall, startInboundTest as startInboundTestSession } from '../services/inboundTestService.js';
 
 /** In-memory status for live test-call monitoring (popup). */
 const testCallSessions = new Map();
@@ -1606,6 +1607,107 @@ class PhoneNumberController {
         .send(
           '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>'
         );
+    }
+  }
+
+  /** Cherche la ligne de l'entreprise correspondant à un numéro (formats +33… ou 33…). */
+  async findCompanyLine(rawNumber, companyId) {
+    const e164 = toE164(rawNumber);
+    if (!e164) return { e164: null, line: null };
+    const companyFilter = companyId && mongoose.Types.ObjectId.isValid(String(companyId)) ? { companyId } : {};
+    const line =
+      (await PhoneNumber.findOne({ phoneNumber: e164, ...companyFilter })) ||
+      (await PhoneNumber.findOne({ phoneNumber: e164.replace(/^\+/, ''), ...companyFilter }));
+    return { e164: line ? toE164(line.phoneNumber) || e164 : e164, line };
+  }
+
+  /**
+   * Test d'appel entrant : branche la ligne sur le webhook d'appel entrant puis attend que le centre l'appelle
+   * depuis un téléphone (suivi par GET /inbound-test/status).
+   */
+  async startInboundTest(req, res) {
+    try {
+      const { phoneNumber, companyId } = req.body || {};
+      const { e164, line } = await this.findCompanyLine(phoneNumber, companyId);
+      if (!e164) {
+        return res.status(400).json({ error: 'Bad Request', message: 'Numéro invalide. Utilisez le format international (+…).' });
+      }
+      if (!line) {
+        return res.status(404).json({ error: 'Not Found', message: "Ce numéro n'appartient pas à votre entreprise ou n'est plus actif." });
+      }
+      const provider = String(line.provider || (line.twilioId ? 'twilio' : line.telnyxId ? 'telnyx' : '')).toLowerCase();
+      if (provider !== 'twilio' && !line.twilioId) {
+        return res.status(400).json({ error: 'Unsupported', message: "Le test d'appel entrant n'est pas disponible pour ce type de ligne." });
+      }
+      if (!config.twilioAccountSid || !config.twilioAuthToken) {
+        return res.status(500).json({ error: 'Server Configuration', message: 'La configuration téléphonie du serveur est incomplète.' });
+      }
+      const voiceUrl = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/inbound-call`;
+      let sid = line.twilioId ? String(line.twilioId) : '';
+      if (!sid) {
+        const found = await phoneNumberService.twilioClient.incomingPhoneNumbers.list({ phoneNumber: e164, limit: 1 });
+        sid = found[0]?.sid || '';
+      }
+      if (!sid) {
+        return res.status(404).json({ error: 'Not Found', message: "La ligne n'a pas été retrouvée chez l'opérateur." });
+      }
+      await phoneNumberService.twilioClient.incomingPhoneNumbers(sid).update({ voiceUrl, voiceMethod: 'POST' });
+      await PhoneNumber.updateOne({ _id: line._id }, { $set: { 'metadata.inboundWebhook': voiceUrl } });
+      const session = startInboundTestSession(e164);
+      res.json({ success: true, data: { phoneNumber: e164, status: session.status, startedAt: session.startedAt, expiresAt: session.expiresAt } });
+    } catch (error) {
+      console.error('Error in startInboundTest:', error.message);
+      res.status(500).json({ error: 'Failed to start inbound test', message: "Impossible de préparer le test d'appel entrant : " + String(error.message || '').replace(/telnyx|twilio/gi, 'opérateur') });
+    }
+  }
+
+  /** État du test d'appel entrant d'une ligne, avec le dernier résultat conservé sur la ligne. */
+  async getInboundTestStatus(req, res) {
+    try {
+      const { phoneNumber, companyId } = req.query || {};
+      const { e164, line } = await this.findCompanyLine(phoneNumber, companyId);
+      if (!e164 || !line) {
+        return res.status(404).json({ error: 'Not Found', message: "Ce numéro n'appartient pas à votre entreprise ou n'est plus actif." });
+      }
+      const session = getInboundTest(e164);
+      res.json({
+        success: true,
+        data: {
+          phoneNumber: e164,
+          status: session ? session.status : 'none',
+          startedAt: session?.startedAt ?? null,
+          expiresAt: session?.expiresAt ?? null,
+          receivedAt: session?.receivedAt ?? null,
+          from: session?.from ?? null,
+          lastTest: line.metadata?.inboundTest ?? null,
+        },
+      });
+    } catch (error) {
+      console.error('Error in getInboundTestStatus:', error.message);
+      res.status(500).json({ error: 'Failed to read inbound test', message: "Lecture du test d'appel entrant impossible." });
+    }
+  }
+
+  /** Appel reçu sur une ligne : valide un test en attente, sinon annonce simplement que la ligne est active. */
+  async handleTwilioInboundCall(req, res) {
+    const reply = (body) => res.type('text/xml').status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response>${body}</Response>`);
+    try {
+      const to = toE164(req.body?.To);
+      const from = String(req.body?.From || '').trim();
+      const callSid = String(req.body?.CallSid || '').trim();
+      const received = to ? receiveInboundCall(to, { from, callSid }) : null;
+      if (received) {
+        await PhoneNumber.updateMany(
+          { phoneNumber: { $in: [to, to.replace(/^\+/, '')] } },
+          { $set: { 'metadata.inboundTest': { testedAt: new Date(received.receivedAt).toISOString(), from, callSid } } }
+        );
+        console.log(`✅ Test d'appel entrant reçu sur ${to} depuis ${from}`);
+        return reply('<Say language="fr-FR" voice="Polly.Lea">Test d\'appel entrant réussi. Votre ligne reçoit bien les appels. Au revoir.</Say><Hangup/>');
+      }
+      return reply('<Say language="fr-FR" voice="Polly.Lea">Cette ligne est active sur la plateforme Harx. Aucun conseiller n\'est disponible pour le moment. Au revoir.</Say><Hangup/>');
+    } catch (error) {
+      console.error('Error in handleTwilioInboundCall:', error);
+      return reply('<Hangup/>');
     }
   }
 
