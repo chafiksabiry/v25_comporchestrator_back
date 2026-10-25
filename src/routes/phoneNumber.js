@@ -79,6 +79,14 @@ router.post(
   express.urlencoded({ extended: false }),
   phoneNumberController.handleTwilioCallStatusWebhook.bind(phoneNumberController)
 );
+// Test d'appel entrant : préparation de la ligne, suivi, et webhook d'appel entrant
+router.post('/inbound-test', phoneNumberController.startInboundTest.bind(phoneNumberController));
+router.get('/inbound-test/status', phoneNumberController.getInboundTestStatus.bind(phoneNumberController));
+router.post(
+  '/webhooks/twilio/inbound-call',
+  express.urlencoded({ extended: false }),
+  phoneNumberController.handleTwilioInboundCall.bind(phoneNumberController)
+);
 router.post(
   '/webhooks/twilio/test-call-twiml',
   express.urlencoded({ extended: false }),
