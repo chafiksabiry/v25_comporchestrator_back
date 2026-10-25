@@ -28,9 +28,12 @@ export async function loadCompanyPlanLimits(companyId) {
   if (!plan || typeof plan === 'string') return null;
 
   const metadata = metadataObject(plan.metadata);
+  const productEntry = Object.entries(metadata).find(([k]) => k.trim().toLowerCase() === 'harx_product');
   const fromMeta = stripeService.extractStripeProductLimits({ metadata });
   return {
     planName: plan.name ? String(plan.name) : null,
+    /** Produit du forfait (metadata `harx_product`), ex. `callcenter` ; null pour les forfaits TaaS. */
+    product: productEntry ? String(productEntry[1] ?? '').trim().toLowerCase() || null : null,
     maxGigs: numberOrNull(fromMeta.maxGigs) ?? numberOrNull(plan.maxGigs),
     maxReps: numberOrNull(fromMeta.maxReps) ?? numberOrNull(plan.maxReps),
     communicationMinutes: numberOrNull(fromMeta.communicationMinutes) ?? numberOrNull(plan.communicationMinutes),
@@ -53,3 +56,5 @@ export function localNumberLimitPayload(limits, existingCount) {
     message: `Le plan ${plan} inclut ${max} numéro${max > 1 ? 's' : ''} local${max > 1 ? 'aux' : ''} actif${max > 1 ? 's' : ''}. Passez à un plan supérieur pour en ajouter.`,
   };
 }
+
+export { isLineTrialAllowed } from './lineTrialPolicy.js';
