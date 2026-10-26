@@ -80,8 +80,8 @@ class PhoneNumberService {
   }
 
   async purchaseNumber(phoneNumber, provider, gigId, requirementGroupId, companyId, options = {}) {
-    if (!gigId || !companyId) {
-      throw new Error('gigId and companyId are required to purchase a number');
+    if (!companyId) {
+      throw new Error('companyId is required to purchase a number');
     }
 
     // France is Twilio-only — never route +33 through Telnyx.
@@ -644,8 +644,8 @@ class PhoneNumberService {
   }
 
   async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId, { bundleSid, addressSid, type, price, currency, paymentRef, isTrial, trialExpiresAt } = {}) {
-    if (!gigId || !companyId) {
-      throw new Error('gigId and companyId are required to purchase a phone number');
+    if (!companyId) {
+      throw new Error('companyId is required to purchase a phone number');
     }
 
     console.log(`🛒 Attempting to purchase number: ${phoneNumber} for gig: ${gigId}`);
