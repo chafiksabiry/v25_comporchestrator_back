@@ -1,38 +1,44 @@
 import express from 'express';
 import { phoneNumberController } from '../controllers/phoneNumberController.js';
 import { authenticate } from '../middleware/auth.js';
+import { guard, companyFrom, ofNumber, ofPayment } from '../middleware/phoneScope.js';
+
+// Access control: `authenticate` = valid login; `guard(...)` = login + the caller belongs to the targeted company.
+// Left open on purpose: provider webhooks, and the two routes the REP copilot calls (gig check, configure-voice).
 
 const router = express.Router();
 
 // Search available phone numbers (Telnyx)
-router.get('/search', phoneNumberController.searchNumbers.bind(phoneNumberController));
+router.get('/search', authenticate, phoneNumberController.searchNumbers.bind(phoneNumberController));
 
 // Search available Twilio phone numbers
-router.get('/search/twilio', phoneNumberController.searchTwilioNumbers.bind(phoneNumberController));
+router.get('/search/twilio', authenticate, phoneNumberController.searchTwilioNumbers.bind(phoneNumberController));
 
 // Purchase a phone number (Telnyx)
-router.post('/purchase', phoneNumberController.purchaseNumber.bind(phoneNumberController));
+router.post('/purchase', ...guard(companyFrom('companyId')), phoneNumberController.purchaseNumber.bind(phoneNumberController));
 
 // Purchase a phone number (Twilio) — requires a succeeded payment (`paymentId`)
 // unless the company is eligible for the free 15-day trial (first number ever).
-router.post('/purchase/twilio', phoneNumberController.purchaseTwilioNumber.bind(phoneNumberController));
+router.post('/purchase/twilio', ...guard(companyFrom('companyId')), phoneNumberController.purchaseTwilioNumber.bind(phoneNumberController));
 
 // Check whether a company is still eligible for the free 15-day trial line.
-router.get('/trial/eligibility/:companyId', phoneNumberController.getTrialEligibility.bind(phoneNumberController));
+router.get('/trial/eligibility/:companyId', ...guard(companyFrom('companyId')), phoneNumberController.getTrialEligibility.bind(phoneNumberController));
 
 // Stripe / PayPal checkout for a phone line (NOT linked to WalletCompany)
-router.get('/checkout/config', phoneNumberController.getCheckoutConfig.bind(phoneNumberController));
-router.post('/checkout/init', phoneNumberController.initLineCheckout.bind(phoneNumberController));
-router.post('/checkout/confirm', phoneNumberController.confirmLineCheckout.bind(phoneNumberController));
+router.get('/checkout/config', authenticate, phoneNumberController.getCheckoutConfig.bind(phoneNumberController));
+router.post('/checkout/init', ...guard(companyFrom('companyId')), phoneNumberController.initLineCheckout.bind(phoneNumberController));
+router.post('/checkout/confirm', ...guard(ofPayment), phoneNumberController.confirmLineCheckout.bind(phoneNumberController));
 
 // Recovery: list & re-provision PhoneNumberPayments that were paid but never
 // reached `purchase/twilio` (e.g. popup-mode flow interrupted by a redirect).
 router.get(
   '/checkout/orphans/:companyId',
+  ...guard(companyFrom('companyId')),
   phoneNumberController.listOrphanLinePayments.bind(phoneNumberController)
 );
 router.post(
   '/checkout/recover',
+  ...guard(ofPayment),
   phoneNumberController.recoverLinePayment.bind(phoneNumberController)
 );
 
@@ -40,24 +46,24 @@ router.post(
 import multer from 'multer';
 const upload = multer({ storage: multer.memoryStorage() });
 
-router.get('/twilio/requirements', phoneNumberController.getTwilioRequirements.bind(phoneNumberController));
-router.post('/twilio/end-users', phoneNumberController.createTwilioEndUser.bind(phoneNumberController));
-router.post('/twilio/documents', upload.single('file'), phoneNumberController.createTwilioDocument.bind(phoneNumberController));
-router.post('/twilio/bundles', phoneNumberController.createTwilioBundle.bind(phoneNumberController));
-router.post('/twilio/bundles/:sid/items', phoneNumberController.assignItemToBundle.bind(phoneNumberController));
-router.post('/twilio/bundles/:sid/submit', phoneNumberController.submitTwilioBundle.bind(phoneNumberController));
-router.post('/twilio/addresses', phoneNumberController.createTwilioAddress.bind(phoneNumberController));
+router.get('/twilio/requirements', authenticate, phoneNumberController.getTwilioRequirements.bind(phoneNumberController));
+router.post('/twilio/end-users', authenticate, phoneNumberController.createTwilioEndUser.bind(phoneNumberController));
+router.post('/twilio/documents', authenticate, upload.single('file'), phoneNumberController.createTwilioDocument.bind(phoneNumberController));
+router.post('/twilio/bundles', authenticate, phoneNumberController.createTwilioBundle.bind(phoneNumberController));
+router.post('/twilio/bundles/:sid/items', authenticate, phoneNumberController.assignItemToBundle.bind(phoneNumberController));
+router.post('/twilio/bundles/:sid/submit', authenticate, phoneNumberController.submitTwilioBundle.bind(phoneNumberController));
+router.post('/twilio/addresses', authenticate, phoneNumberController.createTwilioAddress.bind(phoneNumberController));
 
 // Get all phone numbers
 router.get('/', authenticate, phoneNumberController.getAllNumbers.bind(phoneNumberController));
 
 // Assign / re-assign an existing line to a gig
-router.patch('/assign-gig', phoneNumberController.assignNumberToGig.bind(phoneNumberController));
-router.post('/assign-gig', phoneNumberController.assignNumberToGig.bind(phoneNumberController));
+router.patch('/assign-gig', ...guard(companyFrom('companyId'), ofNumber), phoneNumberController.assignNumberToGig.bind(phoneNumberController));
+router.post('/assign-gig', ...guard(companyFrom('companyId'), ofNumber), phoneNumberController.assignNumberToGig.bind(phoneNumberController));
 
 // Terminate a phone number at Telnyx/Twilio + remove from HARX
-router.delete('/:id', phoneNumberController.deleteNumber.bind(phoneNumberController));
-router.post('/terminate', phoneNumberController.deleteNumber.bind(phoneNumberController));
+router.delete('/:id', ...guard(ofNumber), phoneNumberController.deleteNumber.bind(phoneNumberController));
+router.post('/terminate', ...guard(ofNumber), phoneNumberController.deleteNumber.bind(phoneNumberController));
 
 // Check if a gig has an active number
 router.get('/gig/:gigId/check', phoneNumberController.checkGigNumber.bind(phoneNumberController));
@@ -66,13 +72,15 @@ router.get('/gig/:gigId/check', phoneNumberController.checkGigNumber.bind(phoneN
 router.post('/:phoneNumber/configure-voice', phoneNumberController.configureVoiceFeature.bind(phoneNumberController));
 
 // Test an outbound call (+ live status / hangup for the monitoring popup)
-router.post('/test-call', phoneNumberController.testCall.bind(phoneNumberController));
+router.post('/test-call', ...guard(companyFrom('companyId')), phoneNumberController.testCall.bind(phoneNumberController));
 router.get(
   '/test-call/:callId/status',
+  authenticate,
   phoneNumberController.getTestCallStatus.bind(phoneNumberController)
 );
 router.post(
   '/test-call/:callId/hangup',
+  authenticate,
   phoneNumberController.hangupTestCall.bind(phoneNumberController)
 );
 router.post(
@@ -81,8 +89,8 @@ router.post(
   phoneNumberController.handleTwilioCallStatusWebhook.bind(phoneNumberController)
 );
 // Test d'appel entrant : préparation de la ligne, suivi, et webhook d'appel entrant
-router.post('/inbound-test', phoneNumberController.startInboundTest.bind(phoneNumberController));
-router.get('/inbound-test/status', phoneNumberController.getInboundTestStatus.bind(phoneNumberController));
+router.post('/inbound-test', ...guard(companyFrom('companyId')), phoneNumberController.startInboundTest.bind(phoneNumberController));
+router.get('/inbound-test/status', ...guard(companyFrom('companyId')), phoneNumberController.getInboundTestStatus.bind(phoneNumberController));
 router.post(
   '/webhooks/twilio/inbound-call',
   express.urlencoded({ extended: false }),
