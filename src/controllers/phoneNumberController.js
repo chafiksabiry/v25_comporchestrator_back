@@ -308,7 +308,6 @@ class PhoneNumberController {
 
       const missingFields = {
         phoneNumber: !phoneNumber ? 'Phone number is required' : null,
-        gigId: !gigId ? 'Gig ID is required' : null,
         companyId: !companyId ? 'Company ID is required' : null
       };
 
