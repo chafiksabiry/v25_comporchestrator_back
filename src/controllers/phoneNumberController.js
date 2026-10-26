@@ -1,4 +1,5 @@
 import { phoneNumberService } from '../services/phoneNumberService.js';
+import { callerCompanyId, onlyCompanyRows } from '../middleware/companyScope.js';
 import { paypalService } from '../services/paypalService.js';
 import { stripeService } from '../services/stripeService.js';
 import { config } from '../config/env.js';
@@ -1204,9 +1205,12 @@ class PhoneNumberController {
 
   async getAllNumbers(req, res) {
     try {
+      // Each company only sees its own lines (the list used to contain every company's numbers).
+      const companyId = await callerCompanyId(req);
       const numbers = await phoneNumberService.getAllPhoneNumbers();
-      res.json(numbers);
+      res.json(onlyCompanyRows(numbers, companyId));
     } catch (error) {
+      if (error.status) return res.status(error.status).json({ error: error.message });
       console.error('Error fetching phone numbers:', error);
       res.status(500).json({ error: 'Failed to fetch phone numbers' });
     }
