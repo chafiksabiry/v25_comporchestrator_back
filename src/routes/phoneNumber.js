@@ -1,5 +1,6 @@
 import express from 'express';
 import { phoneNumberController } from '../controllers/phoneNumberController.js';
+import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -48,7 +49,7 @@ router.post('/twilio/bundles/:sid/submit', phoneNumberController.submitTwilioBun
 router.post('/twilio/addresses', phoneNumberController.createTwilioAddress.bind(phoneNumberController));
 
 // Get all phone numbers
-router.get('/', phoneNumberController.getAllNumbers.bind(phoneNumberController));
+router.get('/', authenticate, phoneNumberController.getAllNumbers.bind(phoneNumberController));
 
 // Assign / re-assign an existing line to a gig
 router.patch('/assign-gig', phoneNumberController.assignNumberToGig.bind(phoneNumberController));
