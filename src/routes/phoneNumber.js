@@ -91,6 +91,9 @@ router.post(
 // Test d'appel entrant : préparation de la ligne, suivi, et webhook d'appel entrant
 router.post('/inbound-test', ...guard(companyFrom('companyId')), phoneNumberController.startInboundTest.bind(phoneNumberController));
 router.get('/inbound-test/status', ...guard(companyFrom('companyId')), phoneNumberController.getInboundTestStatus.bind(phoneNumberController));
+// Téléphone du navigateur : jeton Twilio Voice et disponibilité du conseiller pour les appels entrants
+router.post('/voice/token', ...guard(companyFrom('companyId')), phoneNumberController.voiceToken.bind(phoneNumberController));
+router.post('/voice/presence', ...guard(companyFrom('companyId')), phoneNumberController.voicePresence.bind(phoneNumberController));
 router.post(
   '/webhooks/twilio/inbound-call',
   express.urlencoded({ extended: false }),

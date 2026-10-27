@@ -10,6 +10,8 @@ import { PhoneNumber } from '../models/PhoneNumber.js';
 import { getPhoneLinePricing } from '../services/platformPricingService.js';
 import { isFrenchCountry, resolvePhoneProvider } from '../utils/phoneProvider.js';
 import { isLineTrialAllowed, loadCompanyPlanLimits, localNumberLimitPayload } from '../services/planLimits.js';
+import { availableIdentities, markAvailable, markUnavailable, voiceIdentity } from '../services/voicePresenceService.js';
+import { createVoiceToken, VOICE_TOKEN_TTL_S } from '../services/voiceTokenService.js';
 import { getInboundTest, receiveInboundCall, startInboundTest as startInboundTestSession } from '../services/inboundTestService.js';
 
 /** In-memory status for live test-call monitoring (popup). */
@@ -1691,6 +1693,53 @@ class PhoneNumberController {
     }
   }
 
+  /** Jeton Twilio Voice pour que le navigateur d'un conseiller du centre reçoive les appels entrants. */
+  async voiceToken(req, res) {
+    try {
+      const userId = req.user?.userId || req.user?.id;
+      if (!userId) return res.status(401).json({ error: 'Authentication required' });
+      if (!config.twilioAccountSid || !config.twilioAuthToken) {
+        return res.status(500).json({ error: 'Server Configuration', message: 'La configuration téléphonie du serveur est incomplète.' });
+      }
+      const identity = voiceIdentity(userId);
+      const token = await createVoiceToken({ client: phoneNumberService.twilioClient, accountSid: config.twilioAccountSid, identity });
+      res.json({ success: true, data: { token, identity, expiresIn: VOICE_TOKEN_TTL_S } });
+    } catch (error) {
+      console.error('Error in voiceToken:', error.message);
+      res.status(500).json({ error: 'Failed to create voice token', message: 'Téléphone du navigateur indisponible pour le moment.' });
+    }
+  }
+
+  /** Signal de présence : le conseiller est (ou n'est plus) prêt à prendre les appels. Branche aussi les lignes de l'entreprise. */
+  async voicePresence(req, res) {
+    try {
+      const userId = req.user?.userId || req.user?.id;
+      const { companyId, available } = req.body || {};
+      if (!userId) return res.status(401).json({ error: 'Authentication required' });
+      if (available === false) {
+        markUnavailable(userId);
+        return res.json({ success: true, data: { available: false } });
+      }
+      markAvailable({ userId, companyId, name: req.user?.name || '' });
+      const voiceUrl = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/inbound-call`;
+      this.ensureInboundWebhook(companyId, voiceUrl).catch((e) => console.error('ensureInboundWebhook:', e.message));
+      res.json({ success: true, data: { available: true } });
+    } catch (error) {
+      console.error('Error in voicePresence:', error.message);
+      res.status(500).json({ error: 'Failed to update presence', message: 'Disponibilité non enregistrée.' });
+    }
+  }
+
+  /** Toute ligne Twilio de l'entreprise doit envoyer ses appels entrants au serveur. */
+  async ensureInboundWebhook(companyId, voiceUrl) {
+    if (!mongoose.Types.ObjectId.isValid(String(companyId))) return;
+    const lines = await PhoneNumber.find({ companyId, twilioId: { $exists: true, $ne: null }, 'metadata.inboundWebhook': { $ne: voiceUrl } });
+    for (const line of lines) {
+      await phoneNumberService.twilioClient.incomingPhoneNumbers(String(line.twilioId)).update({ voiceUrl, voiceMethod: 'POST' });
+      await PhoneNumber.updateOne({ _id: line._id }, { $set: { 'metadata.inboundWebhook': voiceUrl } });
+    }
+  }
+
   /** Appel reçu sur une ligne : valide un test en attente, sinon annonce simplement que la ligne est active. */
   async handleTwilioInboundCall(req, res) {
     const reply = (body) => res.type('text/xml').status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response>${body}</Response>`);
@@ -1707,6 +1756,20 @@ class PhoneNumberController {
         console.log(`✅ Test d'appel entrant reçu sur ${to} depuis ${from}`);
         return reply('<Say language="fr-FR" voice="Polly.Lea">Test d\'appel entrant réussi. Votre ligne reçoit bien les appels. Au revoir.</Say><Hangup/>');
       }
+      // Appel réel : on fait sonner les conseillers disponibles de l'entreprise propriétaire de la ligne.
+      const line = to
+        ? (await PhoneNumber.findOne({ phoneNumber: to })) || (await PhoneNumber.findOne({ phoneNumber: to.replace(/^\+/, '') }))
+        : null;
+      const identities = line?.companyId ? availableIdentities(line.companyId) : [];
+      if (identities.length) {
+        console.log(`📞 Appel entrant sur ${to} depuis ${from} : sonnerie chez ${identities.length} conseiller(s)`);
+        const clients = identities.map((id) => `<Client>${id}</Client>`).join('');
+        return reply(
+          `<Dial timeout="30" answerOnBridge="true" callerId="${from.replace(/[^+\d]/g, '')}">${clients}</Dial>` +
+            '<Say language="fr-FR" voice="Polly.Lea">Aucun conseiller n\'a pu répondre. Veuillez rappeler plus tard. Au revoir.</Say><Hangup/>'
+        );
+      }
+      console.log(`📞 Appel entrant sur ${to} depuis ${from} : aucun conseiller disponible`);
       return reply('<Say language="fr-FR" voice="Polly.Lea">Cette ligne est active sur la plateforme Harx. Aucun conseiller n\'est disponible pour le moment. Au revoir.</Say><Hangup/>');
     } catch (error) {
       console.error('Error in handleTwilioInboundCall:', error);
