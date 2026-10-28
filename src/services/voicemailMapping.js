@@ -22,8 +22,8 @@ export function mapRecordingCallback(body = {}) {
   if (!isTwilioRecordingUrl(recordingUrl)) return { ignore: 'invalid_recording_url' };
   const durationSeconds = Math.round(Number(body.RecordingDuration));
   if (!Number.isFinite(durationSeconds) || durationSeconds < MIN_DURATION_SECONDS) return { ignore: 'empty_message' };
+  // Le rappel d'enregistrement de Twilio ne porte ni From ni To : l'appel (CallSid) retrouve la ligne et l'appelant.
   const to = toE164(body.To);
-  if (!to) return { ignore: 'missing_to' };
   return {
     value: {
       recordingSid,
