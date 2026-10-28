@@ -11,6 +11,8 @@ import { getPhoneLinePricing } from '../services/platformPricingService.js';
 import { isFrenchCountry, resolvePhoneProvider } from '../utils/phoneProvider.js';
 import { isLineTrialAllowed, loadCompanyPlanLimits, localNumberLimitPayload } from '../services/planLimits.js';
 import { availableIdentities, markAvailable, markUnavailable, voiceIdentity } from '../services/voicePresenceService.js';
+import InboundCall from '../models/InboundCall.js';
+import { computeInboundStats } from '../services/inboundStats.js';
 import { createVoiceToken, VOICE_TOKEN_TTL_S } from '../services/voiceTokenService.js';
 import { getInboundTest, receiveInboundCall, startInboundTest as startInboundTestSession } from '../services/inboundTestService.js';
 
@@ -1761,19 +1763,66 @@ class PhoneNumberController {
         ? (await PhoneNumber.findOne({ phoneNumber: to })) || (await PhoneNumber.findOne({ phoneNumber: to.replace(/^\+/, '') }))
         : null;
       const identities = line?.companyId ? availableIdentities(line.companyId) : [];
+      // Chaque appel est consigné : niveau de service, abandon et attente en sont calculés (inbound-stats).
+      if (line?.companyId && callSid) {
+        await InboundCall.updateOne(
+          { callSid },
+          { $setOnInsert: { companyId: line.companyId, gigId: line.gigId || null, phoneNumber: to, from, callSid, startedAt: new Date(), status: identities.length ? 'ringing' : 'no_agent', waitSeconds: identities.length ? null : 0 } },
+          { upsert: true }
+        ).catch((e) => console.error('InboundCall log:', e.message));
+      }
       if (identities.length) {
         console.log(`📞 Appel entrant sur ${to} depuis ${from} : sonnerie chez ${identities.length} conseiller(s)`);
         const clients = identities.map((id) => `<Client>${id}</Client>`).join('');
-        return reply(
-          `<Dial timeout="30" answerOnBridge="true" callerId="${from.replace(/[^+\d]/g, '')}">${clients}</Dial>` +
-            '<Say language="fr-FR" voice="Polly.Lea">Aucun conseiller n\'a pu répondre. Veuillez rappeler plus tard. Au revoir.</Say><Hangup/>'
-        );
+        const resultUrl = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/inbound-dial-result`;
+        return reply(`<Dial timeout="30" answerOnBridge="true" action="${resultUrl}" method="POST" callerId="${from.replace(/[^+\d]/g, '')}">${clients}</Dial>`);
       }
       console.log(`📞 Appel entrant sur ${to} depuis ${from} : aucun conseiller disponible`);
       return reply('<Say language="fr-FR" voice="Polly.Lea">Cette ligne est active sur la plateforme Harx. Aucun conseiller n\'est disponible pour le moment. Au revoir.</Say><Hangup/>');
     } catch (error) {
       console.error('Error in handleTwilioInboundCall:', error);
       return reply('<Hangup/>');
+    }
+  }
+
+  /** Fin de la sonnerie chez les conseillers : consigne décroché / non décroché / abandonné, puis répond à l'appelant. */
+  async handleTwilioInboundDialResult(req, res) {
+    const reply = (body) => res.type('text/xml').status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response>${body}</Response>`);
+    try {
+      const callSid = String(req.body?.CallSid || '').trim();
+      const dialStatus = String(req.body?.DialCallStatus || '').toLowerCase();
+      const dialDuration = Number(req.body?.DialCallDuration);
+      const call = callSid ? await InboundCall.findOne({ callSid }) : null;
+      const answered = dialStatus === 'completed' || dialStatus === 'answered';
+      if (call) {
+        const elapsed = Math.max(0, (Date.now() - new Date(call.startedAt).getTime()) / 1000);
+        call.status = answered ? 'answered' : dialStatus === 'canceled' ? 'abandoned' : 'missed';
+        call.waitSeconds = answered && Number.isFinite(dialDuration) ? Math.max(0, Math.round(elapsed - dialDuration)) : Math.round(elapsed);
+        call.talkSeconds = answered && Number.isFinite(dialDuration) ? dialDuration : null;
+        await call.save();
+      }
+      if (answered) return reply('<Hangup/>');
+      return reply('<Say language="fr-FR" voice="Polly.Lea">Aucun conseiller n\'a pu répondre. Veuillez rappeler plus tard. Au revoir.</Say><Hangup/>');
+    } catch (error) {
+      console.error('Error in handleTwilioInboundDialResult:', error);
+      return reply('<Hangup/>');
+    }
+  }
+
+  /** Niveau de service, abandon et attente des appels entrants d'une opération (ou de toutes les lignes de l'entreprise). */
+  async getInboundStats(req, res) {
+    try {
+      const { companyId, gigId } = req.query || {};
+      if (!mongoose.Types.ObjectId.isValid(String(companyId))) return res.status(400).json({ error: 'Bad Request', message: 'companyId invalide.' });
+      const days = Math.min(365, Math.max(1, Number(req.query.days) || 30));
+      const slaSeconds = Math.min(600, Math.max(1, Number(req.query.slaSeconds) || 20));
+      const filter = { companyId, startedAt: { $gte: new Date(Date.now() - days * 86400000) } };
+      if (gigId && mongoose.Types.ObjectId.isValid(String(gigId))) filter.gigId = gigId;
+      const rows = await InboundCall.find(filter).select('status waitSeconds startedAt').lean();
+      res.json({ success: true, data: { days, slaSeconds, ...computeInboundStats(rows, { slaSeconds }) } });
+    } catch (error) {
+      console.error('Error in getInboundStats:', error.message);
+      res.status(500).json({ error: 'Failed to read inbound stats', message: 'Statistiques des appels entrants indisponibles.' });
     }
   }
 
