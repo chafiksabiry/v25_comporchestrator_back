@@ -100,6 +100,12 @@ router.post(
   phoneNumberController.handleTwilioInboundCall.bind(phoneNumberController)
 );
 router.post(
+  '/webhooks/twilio/inbound-dial-result',
+  express.urlencoded({ extended: false }),
+  phoneNumberController.handleTwilioInboundDialResult.bind(phoneNumberController)
+);
+router.get('/inbound-stats', ...guard(companyFrom('companyId')), phoneNumberController.getInboundStats.bind(phoneNumberController));
+router.post(
   '/webhooks/twilio/test-call-twiml',
   express.urlencoded({ extended: false }),
   phoneNumberController.handleTwilioTestCallTwiml.bind(phoneNumberController)
