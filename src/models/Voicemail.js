@@ -12,6 +12,9 @@ const schema = new mongoose.Schema(
     /** URL Twilio de l'enregistrement, sans extension. */
     recordingUrl: { type: String, required: true },
     durationSeconds: { type: Number, default: 0 },
+    /** HARX détient une copie de l'audio (collection voicemail_audio) ; l'original est supprimé chez Twilio. */
+    audioStored: { type: Boolean, default: false },
+    twilioRecordingDeleted: { type: Boolean, default: false },
     listenedAt: { type: Date, default: null },
     followUpStatus: { type: String, enum: ['new', 'to_call', 'called', 'closed'], default: 'new' },
     note: { type: String, default: '', maxlength: 1000 },

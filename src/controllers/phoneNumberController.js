@@ -18,6 +18,7 @@ import Voicemail from '../models/Voicemail.js';
 import { buildInboundTwiml, buildNoAnswerTwiml, buildVoicemailDoneTwiml, wrapResponse } from '../services/inboundFlow.js';
 import { mapRecordingCallback } from '../services/voicemailMapping.js';
 import { analyzeVoicemail } from '../services/voicemailAnalysis.js';
+import { ingestRecording } from '../services/voicemailStorage.js';
 import { notifyCompany } from '../services/companyNotificationService.js';
 import { createVoiceToken, VOICE_TOKEN_TTL_S } from '../services/voiceTokenService.js';
 import { getInboundTest, receiveInboundCall, startInboundTest as startInboundTestSession } from '../services/inboundTestService.js';
@@ -1864,7 +1865,8 @@ class PhoneNumberController {
           actionPath: '/app/voicemails',
         });
         const created = await Voicemail.findOne({ recordingSid: v.recordingSid }).select('_id').lean();
-        if (created) analyzeVoicemail(created._id).catch((e) => console.error('analyzeVoicemail:', e.message));
+        // HARX rapatrie et conserve l'audio (puis supprime l'original chez Twilio), avant l'analyse.
+        if (created) ingestRecording(created._id).then(() => analyzeVoicemail(created._id)).catch((e) => console.error('analyzeVoicemail:', e.message));
       }
       return res.status(200).json({ success: true });
     } catch (error) {

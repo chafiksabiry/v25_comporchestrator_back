@@ -1,16 +1,14 @@
 import jwt from 'jsonwebtoken';
 import TokensCompany from '../models/TokensCompany.js';
 import Voicemail from '../models/Voicemail.js';
-import { config } from '../config/env.js';
 import { notifyCompany } from './companyNotificationService.js';
-import { isTwilioRecordingUrl } from './voicemailMapping.js';
+import { loadAudio } from './voicemailStorage.js';
 
 /** Analyse IA d'un message du répondeur par le service dash_calls (qui débite lui-même les jetons via charge-usage). */
 export const MIN_TOKENS = 3000;
 export const SERVICE_SCOPE = 'voicemail-analyze';
 export const SERVICE_ISSUER = 'comporchestrator';
 const ANALYZE_TIMEOUT_MS = 90 * 1000;
-const DOWNLOAD_TIMEOUT_MS = 30 * 1000;
 const URGENCIES = ['low', 'medium', 'high'];
 
 /** Jeton de service HS256, 120 s, signé avec le secret JWT partagé. */
@@ -71,11 +69,7 @@ export async function analyzeVoicemail(voicemailId) {
     }
     const apiBase = resolveDashCallsApi();
     if (!apiBase) throw new Error('dash_calls URL not configured');
-    if (!isTwilioRecordingUrl(vm.recordingUrl)) throw new Error('invalid recording url');
-    const auth = Buffer.from(`${config.twilioAccountSid}:${config.twilioAuthToken}`).toString('base64');
-    const dl = await fetch(`${vm.recordingUrl}.mp3`, { headers: { Authorization: `Basic ${auth}` }, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
-    if (!dl.ok) throw new Error(`recording download status ${dl.status}`);
-    const audio = Buffer.from(await dl.arrayBuffer());
+    const audio = await loadAudio(vm);
     const res = await fetch(buildAnalyzeUrl({ apiBase, companyId: vm.companyId, from: vm.from, recordingSid: vm.recordingSid }), {
       method: 'POST',
       headers: { Authorization: `Bearer ${signServiceToken()}`, 'Content-Type': 'audio/mpeg' },
