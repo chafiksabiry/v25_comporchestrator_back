@@ -1,4 +1,5 @@
 import { PhoneNumber } from '../models/PhoneNumber.js';
+import Voicemail from '../models/Voicemail.js';
 import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
 import { authenticate } from './auth.js';
 import { callerCompanyId, ScopeError } from './companyScope.js';
@@ -31,6 +32,14 @@ export const ofNumber = async (req) => {
   if (!line) return undefined;
   if (!line.companyId) throw new ScopeError(403, 'This line is not attached to a company');
   return line.companyId;
+};
+
+/** Company of the voicemail designated by id. Not found: nothing to check (the handler answers 404). */
+export const ofVoicemail = async (req) => {
+  const id = pick(req, 'id');
+  if (!id) return undefined;
+  const vm = await Voicemail.findById(id).select('companyId').lean().catch(() => null);
+  return vm ? vm.companyId : undefined;
 };
 
 /** Company of the payment designated by paymentId. */

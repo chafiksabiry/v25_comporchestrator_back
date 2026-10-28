@@ -1,6 +1,8 @@
 import express from 'express';
 import { minutesCompanyController } from '../controllers/minutesCompanyController.js';
 import { escrowController } from '../controllers/escrowController.js';
+import mongoose from 'mongoose';
+import TokensCompany from '../models/TokensCompany.js';
 import { notifyCompany, verifyIngestToken } from '../services/companyNotificationService.js';
 
 const router = express.Router();
@@ -14,6 +16,19 @@ router.get('/companies/:companyId/minutes-balance', minutesCompanyController.get
 // Same pattern, for the euro/commission wallet (cahier de recette PAY-17):
 // dash_calls_backend checks this before placing a call too.
 router.get('/companies/:companyId/wallet-balance', escrowController.getWalletBalance);
+
+// Solde de jetons IA (0 si la company n'a pas encore de portefeuille) : dash_calls / le répondeur le consultent avant une analyse.
+router.get('/companies/:companyId/tokens-balance', async (req, res) => {
+  const { companyId } = req.params;
+  if (!mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ error: 'Invalid companyId format' });
+  try {
+    const row = await TokensCompany.findOne({ companyId }).select('tokens').lean();
+    res.json({ success: true, tokens: Number(row?.tokens) || 0 });
+  } catch (error) {
+    console.error('tokens-balance failed:', error.message);
+    res.status(500).json({ error: 'Failed to read tokens balance' });
+  }
+});
 
 // Other services (matching…) push a company notification. Requires a short-lived JWT with scope
 // `company-notify`, signed with the shared JWT_SECRET (no user token exists for these events).

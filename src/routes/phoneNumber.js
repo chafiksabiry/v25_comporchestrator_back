@@ -104,6 +104,16 @@ router.post(
   express.urlencoded({ extended: false }),
   phoneNumberController.handleTwilioInboundDialResult.bind(phoneNumberController)
 );
+router.post(
+  '/webhooks/twilio/voicemail-done',
+  express.urlencoded({ extended: false }),
+  phoneNumberController.handleTwilioVoicemailDone.bind(phoneNumberController)
+);
+router.post(
+  '/webhooks/twilio/voicemail-recording',
+  express.urlencoded({ extended: false }),
+  phoneNumberController.handleTwilioVoicemailRecording.bind(phoneNumberController)
+);
 router.get('/inbound-stats', ...guard(companyFrom('companyId')), phoneNumberController.getInboundStats.bind(phoneNumberController));
 router.post(
   '/webhooks/twilio/test-call-twiml',

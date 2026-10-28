@@ -13,6 +13,12 @@ import { isLineTrialAllowed, loadCompanyPlanLimits, localNumberLimitPayload } fr
 import { availableIdentities, markAvailable, markUnavailable, voiceIdentity } from '../services/voicePresenceService.js';
 import InboundCall from '../models/InboundCall.js';
 import { computeInboundStats } from '../services/inboundStats.js';
+import InboundSettings from '../models/InboundSettings.js';
+import Voicemail from '../models/Voicemail.js';
+import { buildInboundTwiml, buildNoAnswerTwiml, buildVoicemailDoneTwiml, wrapResponse } from '../services/inboundFlow.js';
+import { mapRecordingCallback } from '../services/voicemailMapping.js';
+import { analyzeVoicemail } from '../services/voicemailAnalysis.js';
+import { notifyCompany } from '../services/companyNotificationService.js';
 import { createVoiceToken, VOICE_TOKEN_TTL_S } from '../services/voiceTokenService.js';
 import { getInboundTest, receiveInboundCall, startInboundTest as startInboundTestSession } from '../services/inboundTestService.js';
 
@@ -1771,14 +1777,17 @@ class PhoneNumberController {
           { upsert: true }
         ).catch((e) => console.error('InboundCall log:', e.message));
       }
-      if (identities.length) {
-        console.log(`📞 Appel entrant sur ${to} depuis ${from} : sonnerie chez ${identities.length} conseiller(s)`);
-        const clients = identities.map((id) => `<Client>${id}</Client>`).join('');
-        const resultUrl = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/inbound-dial-result`;
-        return reply(`<Dial timeout="30" answerOnBridge="true" action="${resultUrl}" method="POST" callerId="${from.replace(/[^+\d]/g, '')}">${clients}</Dial>`);
-      }
-      console.log(`📞 Appel entrant sur ${to} depuis ${from} : aucun conseiller disponible`);
-      return reply('<Say language="fr-FR" voice="Polly.Lea">Cette ligne est active sur la plateforme Harx. Aucun conseiller n\'est disponible pour le moment. Au revoir.</Say><Hangup/>');
+      const settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
+      const baseUrl = `https://${req.get('host')}`;
+      console.log(`📞 Appel entrant sur ${to} depuis ${from} : ${identities.length ? `sonnerie chez ${identities.length} conseiller(s)` : 'aucun conseiller disponible'}`);
+      return reply(buildInboundTwiml({
+        settings,
+        baseUrl,
+        companyId: line?.companyId ? String(line.companyId) : '',
+        identities,
+        from,
+        resultUrl: `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result`,
+      }));
     } catch (error) {
       console.error('Error in handleTwilioInboundCall:', error);
       return reply('<Hangup/>');
@@ -1801,11 +1810,58 @@ class PhoneNumberController {
         call.talkSeconds = answered && Number.isFinite(dialDuration) ? dialDuration : null;
         await call.save();
       }
-      if (answered) return reply('<Hangup/>');
-      return reply('<Say language="fr-FR" voice="Polly.Lea">Aucun conseiller n\'a pu répondre. Veuillez rappeler plus tard. Au revoir.</Say><Hangup/>');
+      const settings = call?.companyId ? await InboundSettings.findOne({ companyId: call.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
+      return reply(buildNoAnswerTwiml({ settings, baseUrl: `https://${req.get('host')}`, companyId: call?.companyId ? String(call.companyId) : '', dialStatus }));
     } catch (error) {
       console.error('Error in handleTwilioInboundDialResult:', error);
       return reply('<Hangup/>');
+    }
+  }
+
+  /** Action du <Record> : remercie l'appelant puis raccroche. */
+  async handleTwilioVoicemailDone(req, res) {
+    res.type('text/xml').status(200).send(wrapResponse(buildVoicemailDoneTwiml()));
+  }
+
+  /** recordingStatusCallback : crée le message du répondeur (idempotent), notifie l'entreprise, lance l'analyse IA sans bloquer. */
+  async handleTwilioVoicemailRecording(req, res) {
+    try {
+      const mapped = mapRecordingCallback(req.body || {});
+      if (mapped.ignore) {
+        console.log(`Répondeur : rappel ignoré (${mapped.ignore})`);
+        return res.status(200).json({ success: true, ignored: mapped.ignore });
+      }
+      const v = mapped.value;
+      const line = (await PhoneNumber.findOne({ phoneNumber: v.to })) || (await PhoneNumber.findOne({ phoneNumber: v.to.replace(/^\+/, '') }));
+      if (!line?.companyId) {
+        console.warn('Répondeur : ligne inconnue pour un enregistrement');
+        return res.status(200).json({ success: true, ignored: 'unknown_line' });
+      }
+      const result = await Voicemail.updateOne(
+        { recordingSid: v.recordingSid },
+        { $setOnInsert: { companyId: line.companyId, gigId: line.gigId || null, phoneNumber: v.to, from: v.from, callSid: v.callSid, recordingSid: v.recordingSid, recordingUrl: v.recordingUrl, durationSeconds: v.durationSeconds, analysisStatus: 'pending' } },
+        { upsert: true }
+      );
+      if (result.upsertedCount) {
+        if (v.callSid) {
+          await InboundCall.updateOne({ callSid: v.callSid, status: { $ne: 'answered' } }, { $set: { status: 'voicemail' } }).catch((e) => console.error('InboundCall voicemail:', e.message));
+        }
+        await notifyCompany({
+          companyId: line.companyId,
+          key: `voicemail-${v.recordingSid}`,
+          kind: 'voicemail',
+          title: 'Nouveau message sur le répondeur',
+          message: `${v.from || 'Numéro masqué'} · ${v.durationSeconds} s`,
+          gigId: line.gigId || null,
+          actionPath: '/app/voicemails',
+        });
+        const created = await Voicemail.findOne({ recordingSid: v.recordingSid }).select('_id').lean();
+        if (created) analyzeVoicemail(created._id).catch((e) => console.error('analyzeVoicemail:', e.message));
+      }
+      return res.status(200).json({ success: true });
+    } catch (error) {
+      console.error('Error in handleTwilioVoicemailRecording:', error.message);
+      return res.status(200).json({ success: false });
     }
   }
 
