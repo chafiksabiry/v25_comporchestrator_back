@@ -1,9 +1,7 @@
 import mongoose from 'mongoose';
-import { Readable } from 'node:stream';
 import Voicemail from '../models/Voicemail.js';
-import { config } from '../config/env.js';
 import { analyzeVoicemail, getTokensBalance, MIN_TOKENS } from '../services/voicemailAnalysis.js';
-import { isTwilioRecordingUrl } from '../services/voicemailMapping.js';
+import { ingestRecording, loadAudio } from '../services/voicemailStorage.js';
 
 const FOLLOW_UPS = ['new', 'to_call', 'called', 'closed'];
 const validId = (v) => mongoose.Types.ObjectId.isValid(String(v)) && String(v).length === 24;
@@ -50,16 +48,13 @@ export const voicemailController = {
     try {
       const vm = validId(req.params.id) ? await Voicemail.findById(req.params.id).lean() : null;
       if (!vm) return fail(res, 404, 'Message introuvable.');
-      if (!isTwilioRecordingUrl(vm.recordingUrl) || !config.twilioAccountSid || !config.twilioAuthToken) return fail(res, 502, 'Enregistrement indisponible.');
-      const auth = Buffer.from(`${config.twilioAccountSid}:${config.twilioAuthToken}`).toString('base64');
-      const upstream = await fetch(`${vm.recordingUrl}.mp3`, { headers: { Authorization: `Basic ${auth}` }, signal: AbortSignal.timeout(30000) });
-      if (!upstream.ok || !upstream.body) return fail(res, 502, 'Enregistrement indisponible.');
+      // Copie conservée par HARX ; les anciens messages se relisent encore depuis Twilio.
+      const audio = await loadAudio(vm);
       if (!vm.listenedAt) await Voicemail.updateOne({ _id: vm._id, listenedAt: null }, { $set: { listenedAt: new Date() } });
       res.set('Content-Type', 'audio/mpeg');
       res.set('Cache-Control', 'private, no-store');
-      const len = upstream.headers.get('content-length');
-      if (len) res.set('Content-Length', len);
-      Readable.fromWeb(upstream.body).on('error', () => res.destroy()).pipe(res);
+      res.set('Content-Length', String(audio.length));
+      res.end(audio);
     } catch (error) {
       console.error('voicemails audio:', error.name, error.message);
       if (!res.headersSent) fail(res, 502, 'Enregistrement indisponible.');
@@ -95,7 +90,7 @@ export const voicemailController = {
       }
       vm.analysisStatus = 'pending';
       await vm.save();
-      analyzeVoicemail(vm._id).catch((e) => console.error('analyzeVoicemail:', e.message));
+      ingestRecording(vm._id).then(() => analyzeVoicemail(vm._id)).catch((e) => console.error('analyzeVoicemail:', e.message));
       res.status(202).json({ success: true, data: toItem(vm.toObject()) });
     } catch (error) {
       console.error('voicemails analyze:', error.message);
