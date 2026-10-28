@@ -13,7 +13,7 @@ const companyNotificationSchema = new mongoose.Schema(
       enum: [
         'enrollment_request', 'enrollment_accepted', 'enrollment_rejected',
         'matching', 'transaction', 'validation', 'fraud', 'resource',
-        'wallet', 'tokens', 'minutes', 'phone', 'subscription', 'info',
+        'wallet', 'tokens', 'minutes', 'phone', 'subscription', 'info', 'voicemail',
       ],
       default: 'info',
     },

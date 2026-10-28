@@ -9,8 +9,8 @@ const schema = new mongoose.Schema(
     from: { type: String, default: '' },
     callSid: { type: String, required: true, unique: true },
     startedAt: { type: Date, required: true, default: Date.now },
-    /** ringing : en cours de sonnerie ; answered : un conseiller a décroché ; abandoned : l'appelant a raccroché avant ; missed : personne n'a décroché ; no_agent : aucun conseiller disponible. */
-    status: { type: String, enum: ['ringing', 'answered', 'abandoned', 'missed', 'no_agent'], default: 'ringing' },
+    /** ringing : en cours de sonnerie ; answered : un conseiller a décroché ; abandoned : l'appelant a raccroché avant ; missed : personne n'a décroché ; no_agent : aucun conseiller disponible ; voicemail : l'appelant a laissé un message (compté comme non décroché par les statistiques). */
+    status: { type: String, enum: ['ringing', 'answered', 'abandoned', 'missed', 'no_agent', 'voicemail'], default: 'ringing' },
     waitSeconds: { type: Number, default: null },
     talkSeconds: { type: Number, default: null },
   },

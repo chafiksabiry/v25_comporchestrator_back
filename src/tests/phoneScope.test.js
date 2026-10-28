@@ -95,8 +95,11 @@ assert.deepEqual(openPaths, [
   '/webhooks/telnyx/number-order',
   '/webhooks/twilio/call-status',
   '/webhooks/twilio/inbound-call',
+  '/webhooks/twilio/inbound-dial-result',
   '/webhooks/twilio/test-call-gather',
   '/webhooks/twilio/test-call-twiml',
+  '/webhooks/twilio/voicemail-done',
+  '/webhooks/twilio/voicemail-recording',
 ], 'only webhooks and the two REP-copilot routes may stay open');
 assert.ok(statements.length >= 30, `parsed ${statements.length} routes`);
 

@@ -5,7 +5,7 @@ import CompanyNotification from '../models/CompanyNotification.js';
 const KINDS = new Set([
   'enrollment_request', 'enrollment_accepted', 'enrollment_rejected',
   'matching', 'transaction', 'validation', 'fraud', 'resource',
-  'wallet', 'tokens', 'minutes', 'phone', 'subscription', 'info',
+  'wallet', 'tokens', 'minutes', 'phone', 'subscription', 'info', 'voicemail',
 ]);
 
 /** Server-to-server callers (matching…) prove themselves with a short-lived JWT signed with the shared secret. */
