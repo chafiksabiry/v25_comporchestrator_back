@@ -1832,7 +1832,15 @@ class PhoneNumberController {
         return res.status(200).json({ success: true, ignored: mapped.ignore });
       }
       const v = mapped.value;
-      const line = (await PhoneNumber.findOne({ phoneNumber: v.to })) || (await PhoneNumber.findOne({ phoneNumber: v.to.replace(/^\+/, '') }));
+      // Twilio n'envoie ni From ni To avec ce rappel : l'appel entrant consigné (CallSid) donne la ligne et l'appelant.
+      const call = v.callSid ? await InboundCall.findOne({ callSid: v.callSid }).select('companyId gigId phoneNumber from').lean() : null;
+      const to = v.to || call?.phoneNumber || '';
+      v.from = v.from || call?.from || '';
+      let line = call?.companyId ? { companyId: call.companyId, gigId: call.gigId || null } : null;
+      v.to = to;
+      if (!line && to) {
+        line = (await PhoneNumber.findOne({ phoneNumber: to })) || (await PhoneNumber.findOne({ phoneNumber: to.replace(/^\+/, '') }));
+      }
       if (!line?.companyId) {
         console.warn('Répondeur : ligne inconnue pour un enregistrement');
         return res.status(200).json({ success: true, ignored: 'unknown_line' });

@@ -17,7 +17,9 @@ assert.equal(mapRecordingCallback({ ...body, RecordingDuration: '0.4' }).ignore,
 assert.equal(mapRecordingCallback({ ...body, RecordingDuration: 'abc' }).ignore, 'empty_message');
 assert.equal(mapRecordingCallback({ ...body, RecordingStatus: 'failed' }).ignore, 'not_completed');
 assert.equal(mapRecordingCallback({ ...body, RecordingSid: 'x' }).ignore, 'invalid_recording_sid');
-assert.equal(mapRecordingCallback({ ...body, To: '' }).ignore, 'missing_to');
+// Le rappel d'enregistrement Twilio réel ne contient ni From ni To : il reste exploitable via le CallSid
+const real = { RecordingSid: sid, RecordingUrl: body.RecordingUrl, RecordingDuration: '5', RecordingStatus: 'completed', CallSid: 'CA1' };
+assert.deepEqual(mapRecordingCallback(real).value, { recordingSid: sid, recordingUrl: body.RecordingUrl, durationSeconds: 5, callSid: 'CA1', from: '', to: '' });
 // Sécurité : on n'envoie jamais nos identifiants Twilio ailleurs que chez Twilio
 assert.equal(mapRecordingCallback({ ...body, RecordingUrl: 'https://evil.example/rec' }).ignore, 'invalid_recording_url');
 assert.equal(isTwilioRecordingUrl('http://api.twilio.com/x'), false);
