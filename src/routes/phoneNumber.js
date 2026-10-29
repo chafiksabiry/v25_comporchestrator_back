@@ -1,5 +1,6 @@
 import express from 'express';
 import { phoneNumberController } from '../controllers/phoneNumberController.js';
+import { voicemailController } from '../controllers/voicemailController.js';
 import { authenticate } from '../middleware/auth.js';
 import { guard, companyFrom, ofNumber, ofPayment } from '../middleware/phoneScope.js';
 
@@ -115,6 +116,11 @@ router.post(
   phoneNumberController.handleTwilioVoicemailRecording.bind(phoneNumberController)
 );
 router.get('/inbound-stats', ...guard(companyFrom('companyId')), phoneNumberController.getInboundStats.bind(phoneNumberController));
+router.post(
+  '/webhooks/twilio/voicemail-callback',
+  express.urlencoded({ extended: false }),
+  voicemailController.callbackVoice
+);
 router.post(
   '/webhooks/twilio/test-call-twiml',
   express.urlencoded({ extended: false }),

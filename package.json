@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "test": "node src/tests/requirement.test.js && node src/tests/inboundTest.test.js && node src/tests/voicePresence.test.js && node src/tests/planLimits.test.js && node src/tests/inboundStats.test.js && node src/tests/inboundFlow.test.js && node src/tests/inboundSettings.test.js && node src/tests/voicemail.test.js && node src/tests/voicemailStorage.test.js",
+    "test": "node src/tests/requirement.test.js && node src/tests/inboundTest.test.js && node src/tests/voicePresence.test.js && node src/tests/planLimits.test.js && node src/tests/inboundStats.test.js && node src/tests/inboundFlow.test.js && node src/tests/inboundSettings.test.js && node src/tests/voicemail.test.js && node src/tests/voicemailStorage.test.js && node src/tests/voicemailCallback.test.js",
     "testWebhook": "node src/tests/webhook.test.js"
   },
   "keywords": [],

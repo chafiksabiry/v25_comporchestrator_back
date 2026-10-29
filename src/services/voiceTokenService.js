@@ -23,10 +23,11 @@ export async function signingKey(client) {
   return cached;
 }
 
-export async function createVoiceToken({ client, accountSid, identity }) {
+/** `outgoingApplicationSid` : autorise aussi les appels sortants du navigateur (rappels), traités par cette application TwiML. */
+export async function createVoiceToken({ client, accountSid, identity, outgoingApplicationSid }) {
   const key = await signingKey(client);
   const { AccessToken } = twilio.jwt;
   const token = new AccessToken(accountSid, key.sid, key.secret, { identity, ttl: VOICE_TOKEN_TTL_S });
-  token.addGrant(new AccessToken.VoiceGrant({ incomingAllow: true }));
+  token.addGrant(new AccessToken.VoiceGrant({ incomingAllow: true, ...(outgoingApplicationSid ? { outgoingApplicationSid } : {}) }));
   return token.toJwt();
 }

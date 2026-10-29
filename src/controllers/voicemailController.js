@@ -2,6 +2,12 @@ import mongoose from 'mongoose';
 import Voicemail from '../models/Voicemail.js';
 import { analyzeVoicemail, getTokensBalance, MIN_TOKENS } from '../services/voicemailAnalysis.js';
 import { ingestRecording, loadAudio } from '../services/voicemailStorage.js';
+import { PhoneNumber } from '../models/PhoneNumber.js';
+import { config } from '../config/env.js';
+import { phoneNumberService } from '../services/phoneNumberService.js';
+import { createVoiceToken } from '../services/voiceTokenService.js';
+import { voiceIdentity } from '../services/voicePresenceService.js';
+import { buildCallbackTwiml, buildRefusalTwiml, CALLBACK_WEBHOOK_PATH, ensureCallbackApp, pickDestination, signTicket, verifyTicket } from '../services/voicemailCallback.js';
 
 const FOLLOW_UPS = ['new', 'to_call', 'called', 'closed'];
 const validId = (v) => mongoose.Types.ObjectId.isValid(String(v)) && String(v).length === 24;
@@ -20,6 +26,15 @@ export const toItem = (v) => ({
   analysisStatus: v.analysisStatus,
   analysis: v.analysisStatus === 'done' && v.analysis ? v.analysis : null,
 });
+
+/** Ligne Twilio de l'entreprise qui a reçu le message ; null si elle n'existe plus ou n'est pas chez Twilio. */
+async function callbackLine(voicemail) {
+  if (!voicemail.phoneNumber) return null;
+  const line = await PhoneNumber.findOne({ phoneNumber: voicemail.phoneNumber, companyId: voicemail.companyId }).lean();
+  if (!line) return null;
+  const provider = String(line.provider || (line.twilioId ? 'twilio' : '')).toLowerCase();
+  return provider === 'twilio' ? line : null;
+}
 
 export const voicemailController = {
   async list(req, res) {
@@ -95,6 +110,54 @@ export const voicemailController = {
     } catch (error) {
       console.error('voicemails analyze:', error.message);
       fail(res, 500, "Lancement de l'analyse impossible.");
+    }
+  },
+  /**
+   * Rappel depuis le navigateur : jeton de téléphone autorisé à appeler, et preuve signée que cette personne peut rappeler
+   * CE message. Le numéro composé est choisi par le serveur (webhook), jamais envoyé par le navigateur.
+   */
+  async callbackToken(req, res) {
+    try {
+      const userId = req.user?.userId || req.user?.id;
+      if (!userId) return fail(res, 401, 'Authentification requise.');
+      if (!validId(req.params.id)) return fail(res, 400, 'Identifiant invalide.');
+      const vm = await Voicemail.findById(req.params.id).lean();
+      if (!vm) return fail(res, 404, 'Message introuvable.');
+      const to = pickDestination(vm);
+      if (!to) return fail(res, 422, 'Aucun numéro à rappeler : l’appelant n’a pas laissé de numéro exploitable.');
+      const line = await callbackLine(vm);
+      if (!line) return fail(res, 422, 'Le rappel n’est disponible que depuis une ligne Twilio de votre centre : la ligne qui a reçu ce message est introuvable.');
+      if (!config.twilioAccountSid || !config.twilioAuthToken) return fail(res, 500, 'La configuration téléphonie du serveur est incomplète.');
+      const client = phoneNumberService.twilioClient;
+      const appSid = await ensureCallbackApp(client, `https://${req.get('host')}${CALLBACK_WEBHOOK_PATH}`);
+      const identity = voiceIdentity(userId);
+      const token = await createVoiceToken({ client, accountSid: config.twilioAccountSid, identity, outgoingApplicationSid: appSid });
+      const voicemailId = String(vm._id);
+      const ticket = signTicket({ secret: config.twilioAuthToken, voicemailId, identity });
+      res.json({ success: true, data: { token, identity, params: { VoicemailId: voicemailId, Ticket: ticket }, from: line.phoneNumber, to } });
+    } catch (error) {
+      console.error('[voicemail] callbackToken failed:', error.message);
+      fail(res, 500, 'Le téléphone du navigateur n’est pas disponible pour le moment.');
+    }
+  },
+
+  /** Webhook Twilio de l'application de rappel : compose le numéro du message depuis la ligne qui l'a reçu, si la preuve est valide. */
+  async callbackVoice(req, res) {
+    const send = (xml) => res.type('text/xml').status(200).send(xml);
+    try {
+      const { VoicemailId, Ticket, From } = req.body || {};
+      const identity = String(From || '').replace(/^client:/, '');
+      if (!validId(VoicemailId) || !verifyTicket({ secret: config.twilioAuthToken, voicemailId: String(VoicemailId), identity, ticket: Ticket })) {
+        return send(buildRefusalTwiml('Rappel non autorisé.'));
+      }
+      const vm = await Voicemail.findById(VoicemailId).lean();
+      const to = vm ? pickDestination(vm) : '';
+      const line = vm ? await callbackLine(vm) : null;
+      if (!vm || !to || !line) return send(buildRefusalTwiml('Impossible de rappeler ce numéro.'));
+      return send(buildCallbackTwiml({ callerId: line.phoneNumber, to }));
+    } catch (error) {
+      console.error('[voicemail] callbackVoice failed:', error.message);
+      return send(buildRefusalTwiml('Une erreur est survenue.'));
     }
   },
 };

@@ -942,7 +942,9 @@ export async function syncMinutesFromCalls(companyId) {
           { companyId: companyObjectId },
           { companyId: companyId }
         ],
-        duration: { $gt: 0 }
+        duration: { $gt: 0 },
+        // Les appels de test du centre ne consomment pas de minutes.
+        isTest: { $ne: true }
       },
       { projection: { sid: 1, duration: 1 } }
     ).toArray();
