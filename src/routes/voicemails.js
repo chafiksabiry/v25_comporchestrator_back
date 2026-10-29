@@ -7,6 +7,7 @@ const router = express.Router();
 router.get('/', ...guard(companyFrom('companyId')), c.list);
 router.get('/:id/audio', ...guard(ofVoicemail), c.audio);
 router.patch('/:id', ...guard(ofVoicemail), c.patch);
+router.post('/:id/callback-token', ...guard(ofVoicemail), c.callbackToken);
 router.post('/:id/analyze', ...guard(ofVoicemail), c.analyze);
 
 export const voicemailRoutes = router;
