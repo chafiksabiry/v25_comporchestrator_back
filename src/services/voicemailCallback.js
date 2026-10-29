@@ -49,7 +49,7 @@ export function verifyTicket({ secret, voicemailId, identity, ticket, now = Date
 const wrap = (inner) => `<?xml version="1.0" encoding="UTF-8"?><Response>${inner}</Response>`;
 
 export const buildCallbackTwiml = ({ callerId, to }) =>
-  wrap(`<Dial callerId="${xmlEscape(callerId)}" answerOnBridge="true" timeout="45"><Number>${xmlEscape(to)}</Number></Dial>`);
+  wrap(`<Dial callerId="${xmlEscape(callerId)}" answerOnBridge="true" timeout="30"><Number>${xmlEscape(to)}</Number></Dial>`);
 
 export const buildRefusalTwiml = (message) =>
   wrap(`<Say language="fr-FR" voice="Polly.Lea">${xmlEscape(message)}</Say><Hangup/>`);
