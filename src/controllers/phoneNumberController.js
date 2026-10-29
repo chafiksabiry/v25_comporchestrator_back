@@ -21,6 +21,7 @@ import { analyzeVoicemail } from '../services/voicemailAnalysis.js';
 import { ingestRecording } from '../services/voicemailStorage.js';
 import { notifyCompany } from '../services/companyNotificationService.js';
 import { createVoiceToken, VOICE_TOKEN_TTL_S } from '../services/voiceTokenService.js';
+import { journalUnansweredCall } from '../services/journalCall.js';
 import { getInboundTest, receiveInboundCall, startInboundTest as startInboundTestSession } from '../services/inboundTestService.js';
 
 /** In-memory status for live test-call monitoring (popup). */
@@ -1810,6 +1811,8 @@ class PhoneNumberController {
         call.waitSeconds = answered && Number.isFinite(dialDuration) ? Math.max(0, Math.round(elapsed - dialDuration)) : Math.round(elapsed);
         call.talkSeconds = answered && Number.isFinite(dialDuration) ? dialDuration : null;
         await call.save();
+        // Appel que personne n'a pris : il apparaît au journal d'appels (sonnerie sans réponse, abandon).
+        if (!answered) void journalUnansweredCall({ callSid, companyId: call.companyId, gigId: call.gigId, from: call.from, to: call.phoneNumber, startedAt: call.startedAt });
       }
       const settings = call?.companyId ? await InboundSettings.findOne({ companyId: call.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
       return reply(buildNoAnswerTwiml({ settings, baseUrl: `https://${req.get('host')}`, companyId: call?.companyId ? String(call.companyId) : '', dialStatus }));
@@ -1834,7 +1837,7 @@ class PhoneNumberController {
       }
       const v = mapped.value;
       // Twilio n'envoie ni From ni To avec ce rappel : l'appel entrant consigné (CallSid) donne la ligne et l'appelant.
-      const call = v.callSid ? await InboundCall.findOne({ callSid: v.callSid }).select('companyId gigId phoneNumber from').lean() : null;
+      const call = v.callSid ? await InboundCall.findOne({ callSid: v.callSid }).select('companyId gigId phoneNumber from startedAt').lean() : null;
       const to = v.to || call?.phoneNumber || '';
       v.from = v.from || call?.from || '';
       let line = call?.companyId ? { companyId: call.companyId, gigId: call.gigId || null } : null;
@@ -1854,6 +1857,8 @@ class PhoneNumberController {
       if (result.upsertedCount) {
         if (v.callSid) {
           await InboundCall.updateOne({ callSid: v.callSid, status: { $ne: 'answered' } }, { $set: { status: 'voicemail' } }).catch((e) => console.error('InboundCall voicemail:', e.message));
+          // Le journal d'appels indique que cet appel s'est terminé sur le répondeur.
+          void journalUnansweredCall({ callSid: v.callSid, companyId: line.companyId, gigId: line.gigId, from: v.from, to: v.to, startedAt: call?.startedAt, voicemail: true });
         }
         await notifyCompany({
           companyId: line.companyId,

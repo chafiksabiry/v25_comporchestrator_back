@@ -32,3 +32,20 @@ const r = buildRefusalTwiml('Impossible <ici>');
 assert(r.includes('&lt;ici&gt;') && r.includes('<Hangup/>'));
 
 console.log('voicemailCallback OK');
+
+// journal : appel entrant non décroché
+const { buildUnansweredBody, journalUnansweredCall } = await import('../services/journalCall.js');
+const b = buildUnansweredBody({ callSid: 'CA1', companyId: 'c1', gigId: null, from: '+33612345678', to: '+33219122061', startedAt: 0, voicemail: true });
+assert.equal(b.unanswered, true);
+assert.equal(b.outcome, 'voicemail');
+assert.equal(b.direction, 'inbound');
+assert.equal(b.gigId, undefined);
+assert.equal(buildUnansweredBody({ callSid: 'CA2', companyId: 'c1' }).outcome, undefined);
+let sent = null;
+assert.equal(await journalUnansweredCall({ callSid: 'CA1', companyId: 'c1' }, { env: {}, fetchImpl: async () => { throw new Error('ne doit pas être appelé'); } }), false, 'service non configuré : rien n’est envoyé');
+process.env.JWT_SECRET = 'x';
+assert.equal(await journalUnansweredCall({ callSid: 'CA1', companyId: 'c1', voicemail: true }, { env: { DASH_CALLS_API_URL: 'https://dash.test' }, fetchImpl: async (url, init) => { sent = { url, body: JSON.parse(init.body) }; return { ok: true }; } }), true);
+assert.equal(sent.url, 'https://dash.test/api/calls/center-call');
+assert.equal(sent.body.outcome, 'voicemail');
+assert.equal(await journalUnansweredCall({ callSid: 'CA1', companyId: 'c1' }, { env: { DASH_CALLS_API_URL: 'https://dash.test' }, fetchImpl: async () => { throw new Error('réseau'); } }), false, 'une panne ne lève pas');
+console.log('journalCall OK');
