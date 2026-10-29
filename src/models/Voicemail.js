@@ -14,6 +14,8 @@ const schema = new mongoose.Schema(
     durationSeconds: { type: Number, default: 0 },
     /** HARX détient une copie de l'audio (collection voicemail_audio) ; l'original est supprimé chez Twilio. */
     audioStored: { type: Boolean, default: false },
+    /** Identifiant Cloudinary de l'audio (stockage privé HARX) ; vide tant que seule la copie en base existe. */
+    cloudinaryPublicId: { type: String, default: '' },
     twilioRecordingDeleted: { type: Boolean, default: false },
     listenedAt: { type: Date, default: null },
     followUpStatus: { type: String, enum: ['new', 'to_call', 'called', 'closed'], default: 'new' },

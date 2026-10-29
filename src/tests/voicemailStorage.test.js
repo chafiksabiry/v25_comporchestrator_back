@@ -32,4 +32,24 @@ await deleteTwilioRecording(URL_OK);
 stub(() => new Response('', { status: 500 }));
 await assert.rejects(() => deleteTwilioRecording(URL_OK), /status 500/);
 await assert.rejects(() => deleteTwilioRecording('https://evil.example/rec'), /invalid recording url/);
+
+// Cloudinary : signature SHA-1 des paramètres triés + secret, dépôt privé, relecture signée
+const { signCloudinary, uploadToCloudinary, downloadFromCloudinary, cloudinaryEnabled } = await import('../services/voicemailStorage.js');
+assert.equal(signCloudinary({ timestamp: 1, public_id: 'x', type: 'private', folder: '' }, 'sec'), (await import('node:crypto')).createHash('sha1').update('public_id=x&timestamp=1&type=privatesec').digest('hex'));
+assert.equal(cloudinaryEnabled(), false);
+process.env.CLOUDINARY_CLOUD_NAME = 'demo'; process.env.CLOUDINARY_API_KEY = 'k'; process.env.CLOUDINARY_API_SECRET = 's';
+assert.equal(cloudinaryEnabled(), true);
+calls.length = 0;
+globalThis.fetch = async (url, init = {}) => { calls.push({ url: String(url), body: init.body }); return new Response(JSON.stringify({ public_id: 'harx/callcentre/voicemails/abc' }), { status: 200 }); };
+assert.equal(await uploadToCloudinary('abc', Buffer.from([1, 2, 3])), 'harx/callcentre/voicemails/abc');
+assert.equal(calls[0].url, 'https://api.cloudinary.com/v1_1/demo/video/upload');
+assert.equal(calls[0].body.get('type'), 'private');
+assert.equal(calls[0].body.get('api_key'), 'k');
+assert.ok(calls[0].body.get('signature'));
+globalThis.fetch = async () => new Response(JSON.stringify({ error: { message: 'bad' } }), { status: 401 });
+await assert.rejects(() => uploadToCloudinary('abc', Buffer.from([1])), /status 401 bad/);
+calls.length = 0;
+globalThis.fetch = async (url) => { calls.push(String(url)); return new Response(Buffer.from([9, 9]), { status: 200 }); };
+assert.equal((await downloadFromCloudinary('harx/callcentre/voicemails/abc')).length, 2);
+assert.match(calls[0], /^https:\/\/api\.cloudinary\.com\/v1_1\/demo\/video\/download\?.*type=private.*signature=/);
 console.log('voicemailStorage OK');
