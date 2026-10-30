@@ -17,6 +17,7 @@ import InboundSettings from '../models/InboundSettings.js';
 import Voicemail from '../models/Voicemail.js';
 import { buildInboundTwiml, buildNoAnswerTwiml, buildVoicemailDoneTwiml, wrapResponse } from '../services/inboundFlow.js';
 import { mapRecordingCallback } from '../services/voicemailMapping.js';
+import { mapTwilioCallStatus } from '../services/twilioTestCallStatus.js';
 import { analyzeVoicemail } from '../services/voicemailAnalysis.js';
 import { ingestRecording } from '../services/voicemailStorage.js';
 import { notifyCompany } from '../services/companyNotificationService.js';
@@ -119,82 +120,6 @@ const sessionPublicView = (session, callId) => ({
   from: session?.from || null,
   to: session?.to || null,
 });
-
-const isTwilioMachineAnswer = (answeredBy) => {
-  const v = String(answeredBy || '').toLowerCase();
-  return Boolean(v) && v !== 'human' && v !== 'unknown';
-};
-
-const mapTwilioCallStatus = (raw, { answeredBy, humanConfirmed, prev } = {}) => {
-  const s = String(raw || '').toLowerCase();
-  const machine = isTwilioMachineAnswer(answeredBy);
-  const confirmed = Boolean(humanConfirmed || prev?.humanConfirmed);
-
-  if (s === 'queued' || s === 'accepted') {
-    return { status: 'connecting', outcome: null };
-  }
-  if (s === 'ringing' || s === 'initiated') {
-    return { status: 'ringing', outcome: null, reachedRinging: true };
-  }
-  if (s === 'in-progress') {
-    if (machine) {
-      return {
-        status: 'ended',
-        outcome: 'voicemail',
-        reachedRinging: true,
-        reachedActive: false,
-        answeredBy,
-      };
-    }
-    // Carrier "answered" is not enough — wait for human DTMF confirmation.
-    return {
-      status: confirmed ? 'active' : 'ringing',
-      outcome: null,
-      reachedRinging: true,
-      reachedActive: confirmed,
-      answeredBy: answeredBy || null,
-    };
-  }
-  if (s === 'completed') {
-    if (machine || prev?.outcome === 'voicemail') {
-      return {
-        status: 'ended',
-        outcome: 'voicemail',
-        reachedRinging: true,
-        reachedActive: false,
-        answeredBy,
-      };
-    }
-    if (confirmed || prev?.humanConfirmed) {
-      return {
-        status: 'ended',
-        outcome: 'completed',
-        reachedRinging: true,
-        reachedActive: true,
-      };
-    }
-    // Completed without human confirm = not a real pickup on the handset.
-    return {
-      status: 'ended',
-      outcome: prev?.reachedRinging ? 'no-answer' : 'failed',
-      reachedRinging: Boolean(prev?.reachedRinging),
-      reachedActive: false,
-    };
-  }
-  if (s === 'busy') {
-    return { status: 'ended', outcome: 'busy', reachedRinging: true };
-  }
-  if (s === 'no-answer') {
-    return { status: 'ended', outcome: 'no-answer', reachedRinging: true };
-  }
-  if (s === 'canceled') {
-    return { status: 'ended', outcome: 'canceled' };
-  }
-  if (s === 'failed') {
-    return { status: 'ended', outcome: 'failed' };
-  }
-  return { status: 'connecting', outcome: null };
-};
 
 const mapTelnyxEventToStatus = (eventType, hangupCause) => {
   const e = String(eventType || '').toLowerCase();
@@ -1437,6 +1362,7 @@ class PhoneNumberController {
             answeredBy,
             humanConfirmed: session?.humanConfirmed,
             prev: session,
+            duration: call.duration != null ? Number(call.duration) : undefined,
           });
           upsertTestCallSession(callId, {
             provider: 'twilio',
@@ -1449,14 +1375,6 @@ class PhoneNumberController {
             duration: call.duration != null ? Number(call.duration) : session?.duration,
           });
 
-          // If AMD says machine, hang up immediately so we don't pretend it's live.
-          if (mapped.outcome === 'voicemail' && String(call.status).toLowerCase() === 'in-progress') {
-            try {
-              await phoneNumberService.twilioClient.calls(callId).update({ status: 'completed' });
-            } catch {
-              /* ignore */
-            }
-          }
 
           return res.json({
             success: true,
@@ -1561,6 +1479,7 @@ class PhoneNumberController {
           answeredBy: answeredBy || prev?.answeredBy,
           humanConfirmed: prev?.humanConfirmed,
           prev,
+          duration: req.body?.CallDuration != null ? Number(req.body.CallDuration) : undefined,
         });
         upsertTestCallSession(callId, {
           provider: 'twilio',
@@ -1576,13 +1495,6 @@ class PhoneNumberController {
             (answeredBy ? ` answeredBy=${answeredBy}` : '')
         );
 
-        if (mapped.outcome === 'voicemail' && /in-progress|ringing/i.test(rawStatus || '')) {
-          try {
-            await phoneNumberService.twilioClient.calls(callId).update({ status: 'completed' });
-          } catch {
-            /* ignore */
-          }
-        }
       }
       res.status(200).send('OK');
     } catch (error) {
