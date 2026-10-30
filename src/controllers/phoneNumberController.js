@@ -10,7 +10,7 @@ import { PhoneNumber } from '../models/PhoneNumber.js';
 import { getPhoneLinePricing } from '../services/platformPricingService.js';
 import { isFrenchCountry, resolvePhoneProvider } from '../utils/phoneProvider.js';
 import { isLineTrialAllowed, loadCompanyPlanLimits, localNumberLimitPayload } from '../services/planLimits.js';
-import { availableIdentities, markAvailable, markUnavailable, voiceIdentity } from '../services/voicePresenceService.js';
+import { availableIdentities, isAvailable, markAvailable, markUnavailable, presenceSummary, voiceIdentity } from '../services/voicePresenceService.js';
 import InboundCall from '../models/InboundCall.js';
 import { computeInboundStats } from '../services/inboundStats.js';
 import InboundSettings from '../models/InboundSettings.js';
@@ -1642,6 +1642,7 @@ class PhoneNumberController {
         markUnavailable(userId);
         return res.json({ success: true, data: { available: false } });
       }
+      if (!isAvailable(userId)) console.log(`🎧 Conseiller ${userId} disponible pour l'entreprise ${companyId}`);
       markAvailable({ userId, companyId, name: req.user?.name || '' });
       const voiceUrl = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/inbound-call`;
       this.ensureInboundWebhook(companyId, voiceUrl).catch((e) => console.error('ensureInboundWebhook:', e.message));
@@ -1693,7 +1694,7 @@ class PhoneNumberController {
       }
       const settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
       const baseUrl = `https://${req.get('host')}`;
-      console.log(`📞 Appel entrant sur ${to} depuis ${from} : ${identities.length ? `sonnerie chez ${identities.length} conseiller(s)` : 'aucun conseiller disponible'}`);
+      console.log(`📞 Appel entrant sur ${to} depuis ${from} : ${identities.length ? `sonnerie chez ${identities.length} conseiller(s)` : `aucun conseiller disponible pour l'entreprise de la ligne ${line?.companyId ?? '(ligne inconnue)'} ; présents : ${JSON.stringify(presenceSummary())}`}`);
       return reply(buildInboundTwiml({
         settings,
         baseUrl,

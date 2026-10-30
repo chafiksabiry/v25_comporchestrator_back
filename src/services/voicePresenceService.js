@@ -9,6 +9,12 @@ const agents = new Map();
 
 export const voiceIdentity = (userId) => `cc-${String(userId)}`;
 
+/** Ce conseiller est-il déjà suivi comme disponible ? (pour ne journaliser que sa première apparition) */
+export function isAvailable(userId, now = Date.now()) {
+  const a = agents.get(voiceIdentity(userId));
+  return Boolean(a) && now - a.lastSeen <= PRESENCE_TTL_MS;
+}
+
 export function markAvailable({ userId, companyId, name = '' }, now = Date.now()) {
   const identity = voiceIdentity(userId);
   agents.set(identity, { identity, userId: String(userId), companyId: String(companyId), name, lastSeen: now });
@@ -27,6 +33,16 @@ export function availableIdentities(companyId, now = Date.now()) {
     else if (a.companyId === String(companyId)) out.push(identity);
   }
   return out;
+}
+
+/** Conseillers disponibles par entreprise : sert à comprendre pourquoi personne ne sonne (autre entreprise, signal périmé…). */
+export function presenceSummary(now = Date.now()) {
+  const byCompany = new Map();
+  for (const a of agents.values()) {
+    if (now - a.lastSeen > PRESENCE_TTL_MS) continue;
+    byCompany.set(a.companyId, (byCompany.get(a.companyId) || 0) + 1);
+  }
+  return [...byCompany].map(([companyId, count]) => ({ companyId, count }));
 }
 
 export function clearPresence() {
