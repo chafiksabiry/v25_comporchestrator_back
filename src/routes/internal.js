@@ -3,6 +3,7 @@ import { minutesCompanyController } from '../controllers/minutesCompanyControlle
 import { escrowController } from '../controllers/escrowController.js';
 import mongoose from 'mongoose';
 import TokensCompany from '../models/TokensCompany.js';
+import { createCallEndedHandler } from '../controllers/callEndedController.js';
 import { notifyCompany, verifyIngestToken } from '../services/companyNotificationService.js';
 
 const router = express.Router();
@@ -41,5 +42,8 @@ router.post('/company-notifications', async (req, res) => {
   if (!row) return res.status(400).json({ error: 'companyId, key and title are required' });
   res.status(201).json({ success: true });
 });
+
+// Le service des appels signale un appel terminé (jeton de service, portée `call-ended`) : journal CRM et webhooks.
+router.post('/call-ended', createCallEndedHandler());
 
 export const internalRoutes = router;

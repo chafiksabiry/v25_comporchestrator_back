@@ -36,3 +36,9 @@ export function callcenterTierFromMetadata(metadata) {
   const entry = entries.find(([k]) => String(k).trim().toLowerCase() === 'callcenter_tier');
   return entry ? normalizeCallcenterTier(entry[1]) : null;
 }
+
+/**
+ * Paliers qui incluent le groupe de fonctions H « Intégrations » (CRM, API, webhooks) : miroir de `groups` dans
+ * src/domain/plans.ts du front (Full Scope et Multi-clients).
+ */
+export const CALLCENTER_TIERS_WITH_INTEGRATIONS = ['full_scope', 'multi_clients'];

@@ -18,6 +18,9 @@ import { paymentCheckoutRoutes } from './src/routes/paymentCheckout.js';
 import { inboundSettingsRoutes } from './src/routes/inboundSettings.js';
 import { voicemailRoutes } from './src/routes/voicemails.js';
 import { followUpRoutes } from './src/routes/followUps.js';
+import { integrationsRoutes } from './src/routes/integrations.js';
+import { publicApiRoutes } from './src/routes/publicApi.js';
+import { startIntegrationsWorker } from './src/integrations/runtime.js';
 import { internalRoutes } from './src/routes/internal.js';
 import { companyNotificationRoutes } from './src/routes/companyNotifications.js';
 import { scanLowResources } from './src/services/companyNotificationService.js';
@@ -44,7 +47,7 @@ mongoose.connect(config.mongodbUri, {
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, x-user-id, x-agent-id');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, x-user-id, x-agent-id, X-Api-Key');
   res.header('Access-Control-Allow-Credentials', 'true');
 
   if (req.method === 'OPTIONS') {
@@ -124,6 +127,8 @@ app.use('/api/minutes-company', minutesCompanyRoutes);
 app.use('/api/tokens-company', tokensCompanyRoutes);
 app.use('/api/payments/checkout', paymentCheckoutRoutes);
 app.use('/api/internal', internalRoutes);
+app.use('/api/integrations', integrationsRoutes);
+app.use('/api/public/v1', publicApiRoutes);
 app.use('/api/inbound-settings', inboundSettingsRoutes);
 app.use('/api/voicemails', voicemailRoutes);
 app.use('/api/follow-ups', followUpRoutes);
@@ -204,6 +209,9 @@ const runLowResourceScan = () =>
   });
 setTimeout(runLowResourceScan, 60 * 1000);
 setInterval(runLowResourceScan, 15 * 60 * 1000);
+
+// Reprise des journalisations CRM et des webhooks en échec (inactif sans INTEGRATIONS_ENC_KEY).
+startIntegrationsWorker();
 
 // Handle process termination
 process.on('SIGINT', () => {
