@@ -16,21 +16,25 @@ export class ScopeError extends Error {
   }
 }
 
-function registrationOrigin() {
+export function registrationOrigin() {
   const explicit = process.env.REGISTRATION_BACKEND_URL;
   const railway = process.env.RAILWAY_SERVICE_V25_REGISTRATION_BACKEND_URL;
   const raw = explicit || (railway ? (/^https?:\/\//i.test(railway) ? railway : `https://${railway}`) : '');
   return raw.replace(/\/+$/, '').replace(/\/api$/, '');
 }
 
-/** @returns {Promise<string|null>} the caller's company id, or null when the user has no company */
-export async function callerCompanyId(req) {
+/**
+ * The caller's place in its company, from the registration backend: role (owner / member / agent), company and the
+ * permissions of a member. A user without company has companyId null.
+ * @returns {Promise<{userId: string, companyId: string|null, role: 'owner'|'member'|'agent', permissions: Record<string, boolean>}>}
+ */
+export async function callerAccess(req) {
   const userId = req.user && (req.user.userId || req.user.id);
   const token = req.headers.authorization?.split(' ')[1];
   if (!userId || !token) throw new ScopeError(401, 'Authentication required');
 
   const cached = companyByUser.get(String(userId));
-  if (cached && cached.expires > Date.now()) return cached.companyId;
+  if (cached && cached.expires > Date.now()) return cached.access;
 
   const origin = registrationOrigin();
   if (!origin) throw new ScopeError(503, 'Company lookup is not configured');
@@ -43,15 +47,27 @@ export async function callerCompanyId(req) {
     });
     if (!res.ok) throw new ScopeError(503, 'Company lookup failed');
     const payload = await res.json();
-    const companyId = payload?.data?.companyId ? String(payload.data.companyId) : null;
-    companyByUser.set(String(userId), { companyId, expires: Date.now() + CACHE_TTL_MS });
-    return companyId;
+    const d = payload?.data || {};
+    const role = d.isAgent ? 'agent' : d.isOwner === false ? 'member' : 'owner';
+    const access = {
+      userId: String(userId),
+      companyId: d.companyId ? String(d.companyId) : null,
+      role,
+      permissions: d.permissions && typeof d.permissions === 'object' ? d.permissions : {},
+    };
+    companyByUser.set(String(userId), { access, expires: Date.now() + CACHE_TTL_MS });
+    return access;
   } catch (error) {
     if (error instanceof ScopeError) throw error;
     throw new ScopeError(503, 'Company lookup failed');
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** @returns {Promise<string|null>} the caller's company id, or null when the user has no company */
+export async function callerCompanyId(req) {
+  return (await callerAccess(req)).companyId;
 }
 
 /** Keeps only the rows that belong to the company (a caller without company sees nothing). */
