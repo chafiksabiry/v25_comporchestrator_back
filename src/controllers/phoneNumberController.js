@@ -22,7 +22,10 @@ import { analyzeVoicemail } from '../services/voicemailAnalysis.js';
 import { ingestRecording } from '../services/voicemailStorage.js';
 import { notifyCompany } from '../services/companyNotificationService.js';
 import { createVoiceToken, VOICE_TOKEN_TTL_S } from '../services/voiceTokenService.js';
-import { journalUnansweredCall } from '../services/journalCall.js';
+import { journalForwardedCall, journalUnansweredCall } from '../services/journalCall.js';
+import ReachSettings from '../models/ReachSettings.js';
+import { decideInboundRoute, mobileTarget, shouldRingMobileAfter } from '../services/reach.js';
+import { callPayload, notifyOwners, voicemailPayload } from '../services/webPush.js';
 import { getInboundTest, receiveInboundCall, startInboundTest as startInboundTestSession } from '../services/inboundTestService.js';
 
 /** In-memory status for live test-call monitoring (popup). */
@@ -1684,17 +1687,22 @@ class PhoneNumberController {
         ? (await PhoneNumber.findOne({ phoneNumber: to })) || (await PhoneNumber.findOne({ phoneNumber: to.replace(/^\+/, '') }))
         : null;
       const identities = line?.companyId ? availableIdentities(line.companyId) : [];
+      const reach = line?.companyId ? await ReachSettings.findOne({ companyId: line.companyId }).lean().catch((e) => { console.error('ReachSettings read:', e.message); return null; }) : null;
+      const route = decideInboundRoute({ identities, reach, linePhone: to });
       // Chaque appel est consigné : niveau de service, abandon et attente en sont calculés (inbound-stats).
       if (line?.companyId && callSid) {
         await InboundCall.updateOne(
           { callSid },
-          { $setOnInsert: { companyId: line.companyId, gigId: line.gigId || null, phoneNumber: to, from, callSid, startedAt: new Date(), status: identities.length ? 'ringing' : 'no_agent', waitSeconds: identities.length ? null : 0 } },
+          { $setOnInsert: { companyId: line.companyId, gigId: line.gigId || null, phoneNumber: to, from, callSid, startedAt: new Date(), status: route.first === 'voicemail' ? 'no_agent' : 'ringing', waitSeconds: route.first === 'voicemail' ? 0 : null, route: route.first, mobileTried: route.first === 'mobile' } },
           { upsert: true }
         ).catch((e) => console.error('InboundCall log:', e.message));
       }
       const settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
       const baseUrl = `https://${req.get('host')}`;
-      console.log(`📞 Appel entrant sur ${to} depuis ${from} : ${identities.length ? `sonnerie chez ${identities.length} conseiller(s)` : `aucun conseiller disponible pour l'entreprise de la ligne ${line?.companyId ?? '(ligne inconnue)'} ; présents : ${JSON.stringify(presenceSummary())}`}`);
+      const where = route.first === 'browser' ? `sonnerie chez ${identities.length} conseiller(s)${route.mobileNext ? ', puis le mobile du titulaire' : ''}` : route.first === 'mobile' ? "aucun navigateur présent : sonnerie du mobile du titulaire" : `aucun conseiller disponible pour l'entreprise de la ligne ${line?.companyId ?? '(ligne inconnue)'} ; présents : ${JSON.stringify(presenceSummary())}`;
+      console.log(`📞 Appel entrant sur ${to} depuis ${from} : ${where}`);
+      // Aucun navigateur présent : le titulaire est prévenu par notification (elle réveille, elle ne décroche pas l'appel).
+      if (line?.companyId && !identities.length) void notifyOwners({ companyId: line.companyId }, callPayload({ from, to, callSid }));
       return reply(buildInboundTwiml({
         settings,
         baseUrl,
@@ -1702,6 +1710,8 @@ class PhoneNumberController {
         identities,
         from,
         resultUrl: `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result`,
+        mobile: route.first === 'mobile' ? route.mobile : null,
+        linePhone: to,
       }));
     } catch (error) {
       console.error('Error in handleTwilioInboundCall:', error);
@@ -1716,19 +1726,35 @@ class PhoneNumberController {
       const callSid = String(req.body?.CallSid || '').trim();
       const dialStatus = String(req.body?.DialCallStatus || '').toLowerCase();
       const dialDuration = Number(req.body?.DialCallDuration);
+      const leg = req.query?.leg === 'mobile' ? 'mobile' : 'browser';
       const call = callSid ? await InboundCall.findOne({ callSid }) : null;
       const answered = dialStatus === 'completed' || dialStatus === 'answered';
+      const reach = call?.companyId ? await ReachSettings.findOne({ companyId: call.companyId }).lean().catch(() => null) : null;
+      // Le navigateur n'a pas décroché : le mobile du titulaire sonne avant le répondeur (jamais deux fois).
+      const mobile = leg === 'browser' && call && !call.mobileTried ? mobileTarget(reach, call.phoneNumber) : null;
+      const ringMobile = shouldRingMobileAfter({ leg, dialStatus, mobile });
+      const baseUrl = `https://${req.get('host')}`;
       if (call) {
         const elapsed = Math.max(0, (Date.now() - new Date(call.startedAt).getTime()) / 1000);
-        call.status = answered ? 'answered' : dialStatus === 'canceled' ? 'abandoned' : 'missed';
-        call.waitSeconds = answered && Number.isFinite(dialDuration) ? Math.max(0, Math.round(elapsed - dialDuration)) : Math.round(elapsed);
-        call.talkSeconds = answered && Number.isFinite(dialDuration) ? dialDuration : null;
+        if (ringMobile) {
+          call.mobileTried = true;
+          call.route = 'mobile';
+        } else {
+          call.status = answered ? 'answered' : dialStatus === 'canceled' ? 'abandoned' : 'missed';
+          call.waitSeconds = answered && Number.isFinite(dialDuration) ? Math.max(0, Math.round(elapsed - dialDuration)) : Math.round(elapsed);
+          call.talkSeconds = answered && Number.isFinite(dialDuration) ? dialDuration : null;
+          if (answered) call.answeredOn = leg;
+        }
         await call.save();
-        // Appel que personne n'a pris : il apparaît au journal d'appels (sonnerie sans réponse, abandon).
-        if (!answered) void journalUnansweredCall({ callSid, companyId: call.companyId, gigId: call.gigId, from: call.from, to: call.phoneNumber, startedAt: call.startedAt });
+        if (!ringMobile) {
+          // Appel que personne n'a pris : il apparaît au journal d'appels (sonnerie sans réponse, abandon).
+          if (!answered) void journalUnansweredCall({ callSid, companyId: call.companyId, gigId: call.gigId, from: call.from, to: call.phoneNumber, startedAt: call.startedAt });
+          // Décroché sur le mobile : le navigateur n'a rien à inscrire, le serveur le fait.
+          else if (leg === 'mobile') void journalForwardedCall({ callSid, companyId: call.companyId, gigId: call.gigId, from: call.from, to: call.phoneNumber, startedAt: call.startedAt, durationSeconds: Number.isFinite(dialDuration) ? dialDuration : 0 });
+        }
       }
       const settings = call?.companyId ? await InboundSettings.findOne({ companyId: call.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
-      return reply(buildNoAnswerTwiml({ settings, baseUrl: `https://${req.get('host')}`, companyId: call?.companyId ? String(call.companyId) : '', dialStatus }));
+      return reply(buildNoAnswerTwiml({ settings, baseUrl, companyId: call?.companyId ? String(call.companyId) : '', dialStatus, mobile: ringMobile ? mobile : null, linePhone: call?.phoneNumber || '', resultUrl: `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result` }));
     } catch (error) {
       console.error('Error in handleTwilioInboundDialResult:', error);
       return reply('<Hangup/>');
@@ -1782,6 +1808,7 @@ class PhoneNumberController {
           gigId: line.gigId || null,
           actionPath: '/app/voicemails',
         });
+        void notifyOwners({ companyId: line.companyId }, voicemailPayload({ from: v.from, durationSeconds: v.durationSeconds, recordingSid: v.recordingSid }));
         const created = await Voicemail.findOne({ recordingSid: v.recordingSid }).select('_id').lean();
         // HARX rapatrie et conserve l'audio (puis supprime l'original chez Twilio), avant l'analyse.
         if (created) ingestRecording(created._id).then(() => analyzeVoicemail(created._id)).catch((e) => console.error('analyzeVoicemail:', e.message));

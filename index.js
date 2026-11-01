@@ -18,6 +18,7 @@ import { paymentCheckoutRoutes } from './src/routes/paymentCheckout.js';
 import { inboundSettingsRoutes } from './src/routes/inboundSettings.js';
 import { voicemailRoutes } from './src/routes/voicemails.js';
 import { followUpRoutes } from './src/routes/followUps.js';
+import { reachRoutes } from './src/routes/reach.js';
 import { integrationsRoutes } from './src/routes/integrations.js';
 import { publicApiRoutes } from './src/routes/publicApi.js';
 import { startIntegrationsWorker } from './src/integrations/runtime.js';
@@ -132,6 +133,7 @@ app.use('/api/public/v1', publicApiRoutes);
 app.use('/api/inbound-settings', inboundSettingsRoutes);
 app.use('/api/voicemails', voicemailRoutes);
 app.use('/api/follow-ups', followUpRoutes);
+app.use('/api/reach', reachRoutes);
 app.use('/api/company-notifications', companyNotificationRoutes);
 
 // Health check to verify deployment
