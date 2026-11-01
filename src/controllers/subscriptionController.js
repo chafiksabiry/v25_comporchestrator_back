@@ -3,6 +3,7 @@ import { SubscriptionPlan } from '../models/SubscriptionPlan.js';
 import { Subscription } from '../models/Subscription.js';
 import CompanyPayment from '../models/CompanyPayment.js';
 import { stripeService } from '../services/stripeService.js';
+import { callcenterTierFromMetadata } from '../services/callcenterTier.js';
 import { paypalService } from '../services/paypalService.js';
 import {
   resolvePlanByPriceId,
@@ -246,6 +247,8 @@ export const subscriptionController = {
               features: displayFeatures,
               marketingFeatures,
               metadata: product.metadata || {},
+              /** Palier canonique (nomad_solo, accueil, full_scope, multi_clients) ; anciennes valeurs converties. */
+              callcenterTier: callcenterTierFromMetadata(product.metadata),
               isPopular: Boolean(dbPlan.isPopular),
               maxGigs: stripeLimits.maxGigs,
               maxReps: stripeLimits.maxReps,
@@ -308,12 +311,36 @@ export const subscriptionController = {
   /** Popup checkout init — Stripe subscription or PayPal (first month). */
   initPopupCheckout: async (req, res) => {
     try {
-      const { userId, companyId, priceId, planName, provider, returnUrl, apiBaseUrl, uiMode } = req.body;
+      const { userId, companyId, priceId, planName, provider, returnUrl, apiBaseUrl, uiMode, promotionCode } = req.body;
       if (!userId || !companyId || !priceId || !provider) {
         return res.status(400).json({ error: 'userId, companyId, priceId and provider are required' });
       }
       if (!['stripe', 'paypal'].includes(provider)) {
         return res.status(400).json({ error: "provider must be 'stripe' or 'paypal'" });
+      }
+
+      // Code promotionnel (offre de lancement) : abonnement Stripe uniquement, résolu avant toute création de paiement.
+      let promotionCodeId = null;
+      let promotionCodeText = null;
+      if (promotionCode != null && String(promotionCode).trim()) {
+        if (provider !== 'stripe') {
+          return res.status(400).json({
+            error: 'promotion_code_unsupported',
+            message: 'Le code promotionnel n\u2019est disponible que pour le paiement par carte (Stripe).',
+          });
+        }
+        if (!stripeService.isConfigured()) {
+          return res.status(503).json({ error: 'Stripe not configured', message: 'Définissez STRIPE_SECRET_KEY.' });
+        }
+        try {
+          promotionCodeId = await stripeService.resolvePromotionCode(promotionCode);
+          promotionCodeText = String(promotionCode).trim();
+        } catch (err) {
+          if (err?.code === 'invalid_promotion_code') {
+            return res.status(400).json({ error: 'invalid_promotion_code', message: err.message });
+          }
+          throw err;
+        }
       }
 
       let resolved;
@@ -345,7 +372,8 @@ export const subscriptionController = {
           companyId: String(companyId),
           stripePriceId: effectivePriceId,
           planId: plan._id,
-          planName: planName || plan.name
+          planName: planName || plan.name,
+          ...(promotionCodeText ? { promotionCode: promotionCodeText } : {})
         }
       });
 
@@ -390,7 +418,8 @@ export const subscriptionController = {
           const session = await stripeService.createEmbeddedSubscriptionSession(
             userId,
             effectivePriceId,
-            metadata
+            metadata,
+            promotionCodeId
           );
           payment.providerRef = session.id;
           payment.checkoutUrl = '';
@@ -425,7 +454,8 @@ export const subscriptionController = {
           effectivePriceId,
           successUrl,
           cancelUrl,
-          metadata
+          metadata,
+          promotionCodeId
         );
         checkoutUrl = session.url;
         payment.providerRef = session.id;

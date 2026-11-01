@@ -1,5 +1,6 @@
 import Stripe from 'stripe';
 import { config } from '../config/env.js';
+import { resolvePromotionCodeId, withPromotion } from './promotionCode.js';
 
 function getStripe() {
   if (!config.stripeSecretKey) {
@@ -450,9 +451,9 @@ export const stripeService = {
   captureCheckoutSession,
   cancelCheckoutAuthorization,
   refundCheckoutSession,
-  createCheckoutSession: async (userId, priceId, successUrl, cancelUrl, metadata = {}) => {
+  createCheckoutSession: async (userId, priceId, successUrl, cancelUrl, metadata = {}, promotionCodeId = null) => {
     try {
-      const session = await getStripe().checkout.sessions.create({
+      const session = await getStripe().checkout.sessions.create(withPromotion({
         payment_method_types: ['card'],
         line_items: [
           {
@@ -461,7 +462,6 @@ export const stripeService = {
           },
         ],
         mode: 'subscription',
-        allow_promotion_codes: true,
         payment_method_collection: 'if_required',
         success_url: successUrl,
         cancel_url: cancelUrl,
@@ -478,7 +478,7 @@ export const stripeService = {
             ...metadata
           },
         },
-      });
+      }, promotionCodeId));
       return session;
     } catch (error) {
       console.error('Error creating Stripe checkout session:', error);
@@ -490,13 +490,12 @@ export const stripeService = {
    * Create an EMBEDDED Stripe Checkout Session (UI rendered inside HARX as a modal).
    * No redirect: the front uses onComplete + confirm endpoint.
    */
-  createEmbeddedSubscriptionSession: async (userId, priceId, metadata = {}) => {
-    return getStripe().checkout.sessions.create({
+  createEmbeddedSubscriptionSession: async (userId, priceId, metadata = {}, promotionCodeId = null) => {
+    return getStripe().checkout.sessions.create(withPromotion({
       ui_mode: 'embedded_page',
       mode: 'subscription',
       payment_method_types: ['card'],
       line_items: [{ price: priceId, quantity: 1 }],
-      allow_promotion_codes: true,
       // Skip asking for a card when nothing is actually due today (free
       // trial, or a 100%-off promo code applied) — Stripe still collects
       // one automatically before any future real charge becomes due.
@@ -508,7 +507,13 @@ export const stripeService = {
         trial_period_days: 7,
         metadata: { userId: userId.toString(), ...metadata },
       },
-    });
+    }, promotionCodeId));
+  },
+
+  /** Résout un code promotionnel d'abonnement en id Stripe (null si aucun code) ; lève `invalid_promotion_code`. */
+  resolvePromotionCode: async (code) => {
+    if (code == null || !String(code).trim()) return null;
+    return resolvePromotionCodeId(getStripe(), code);
   },
 
   handleWebhook: async (signature, rawBody) => {

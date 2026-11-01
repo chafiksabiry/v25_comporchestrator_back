@@ -1,5 +1,6 @@
 import { Subscription } from '../models/Subscription.js';
 import { stripeService } from './stripeService.js';
+import { CALLCENTER_TIER_LINES, callcenterTierFromMetadata } from './callcenterTier.js';
 
 function numberOrNull(value) {
   const n = Number(value);
@@ -18,9 +19,6 @@ function metadataObject(metadata) {
  * Quotas for the company's current plan.
  * Stripe product metadata wins over the copied numeric fields.
  */
-/** Lignes au maximum par palier Call Centre (`callcenter_tier` du produit Stripe) quand le produit ne fixe pas de limite. */
-const CALLCENTER_TIER_LINES = { essentiel: 1 };
-
 export async function loadCompanyPlanLimits(companyId) {
   if (!companyId) return null;
   const subscription = await Subscription.findOne({
@@ -44,7 +42,7 @@ export async function loadCompanyPlanLimits(companyId) {
       numberOrNull(fromMeta.activeLocalNumbers) ??
       numberOrNull(plan.activeLocalNumbers) ??
       (productEntry && String(productEntry[1] ?? '').trim().toLowerCase() === 'callcenter'
-        ? numberOrNull(CALLCENTER_TIER_LINES[String(metadata.callcenter_tier ?? '').trim().toLowerCase()])
+        ? numberOrNull(CALLCENTER_TIER_LINES[callcenterTierFromMetadata(metadata)])
         : null),
     aiToken: fromMeta.aiToken || (plan.aiToken ? String(plan.aiToken) : null),
     aiTokensIncluded: numberOrNull(fromMeta.aiTokensIncluded) ?? numberOrNull(plan.aiTokensIncluded),
