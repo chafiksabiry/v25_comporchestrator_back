@@ -35,6 +35,8 @@ export async function loadCompanyPlanLimits(companyId) {
     planName: plan.name ? String(plan.name) : null,
     /** Produit du forfait (metadata `harx_product`), ex. `callcenter` ; null pour les forfaits TaaS. */
     product: productEntry ? String(productEntry[1] ?? '').trim().toLowerCase() || null : null,
+    /** Palier Call Centre canonique (metadata `callcenter_tier`), null sinon. */
+    callcenterTier: callcenterTierFromMetadata(metadata),
     maxGigs: numberOrNull(fromMeta.maxGigs) ?? numberOrNull(plan.maxGigs),
     maxReps: numberOrNull(fromMeta.maxReps) ?? numberOrNull(plan.maxReps),
     communicationMinutes: numberOrNull(fromMeta.communicationMinutes) ?? numberOrNull(plan.communicationMinutes),
