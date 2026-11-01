@@ -45,8 +45,18 @@ const normalize = (settings) => (settings && 'greetingValidated' in settings ? {
 
 export const wrapResponse = (body) => `<?xml version="1.0" encoding="UTF-8"?><Response>${body}</Response>`;
 
-/** TwiML (corps de <Response>) d'un appel entrant réel. */
-export function buildInboundTwiml({ settings, baseUrl, companyId, identities = [], from = '', resultUrl, voicemailUrls } = {}) {
+/** Sonnerie du mobile du titulaire : le numéro de la ligne est l'identifiant d'appelant (l'action revient avec leg=mobile). */
+export function buildMobileDialTwiml({ number, ringSeconds = 25, callerId = '', resultUrl }) {
+  const caller = String(callerId).replace(/[^+\d]/g, '');
+  const callerAttr = caller ? ` callerId="${caller}"` : '';
+  return `<Dial timeout="${ringSeconds}" answerOnBridge="true" action="${xmlEscape(`${resultUrl}?leg=mobile`)}" method="POST"${callerAttr}><Number>${xmlEscape(number)}</Number></Dial>`;
+}
+
+/**
+ * TwiML (corps de <Response>) d'un appel entrant réel.
+ * `mobile` ({ number, ringSeconds }, voir reach.mobileTarget) + `linePhone` : sans navigateur présent, le mobile sonne avant le répondeur.
+ */
+export function buildInboundTwiml({ settings, baseUrl, companyId, identities = [], from = '', resultUrl, voicemailUrls, mobile = null, linePhone = '' } = {}) {
   const s = normalize(settings);
   const hello = greeting(s, baseUrl, companyId);
   if (identities.length) {
@@ -54,15 +64,18 @@ export function buildInboundTwiml({ settings, baseUrl, companyId, identities = [
     const callerId = String(from).replace(/[^+\d]/g, '');
     return `${hello}<Dial timeout="${s.ringTimeoutSeconds}" answerOnBridge="true" action="${xmlEscape(resultUrl)}" method="POST" callerId="${callerId}">${clients}</Dial>`;
   }
+  if (mobile) return `${hello}${buildMobileDialTwiml({ ...mobile, callerId: linePhone, resultUrl })}`;
   if (s.voicemailEnabled) return `${hello}${voicemailRecord(s, baseUrl, companyId, voicemailUrls)}`;
   return `${hello}${say(NO_AGENT_MESSAGE, 'nova')}<Hangup/>`;
 }
 
 /** TwiML après la sonnerie : décroché → raccrocher ; appelant parti → rien ; sinon répondeur ou message de repli. */
-export function buildNoAnswerTwiml({ settings, baseUrl, companyId, dialStatus = '', voicemailUrls } = {}) {
+export function buildNoAnswerTwiml({ settings, baseUrl, companyId, dialStatus = '', voicemailUrls, mobile = null, linePhone = '', resultUrl = '' } = {}) {
   const status = String(dialStatus).toLowerCase();
   if (status === 'completed' || status === 'answered') return '<Hangup/>';
   if (status === 'canceled') return '<Hangup/>';
+  // Le navigateur n'a pas décroché : le mobile du titulaire sonne avant le répondeur (`mobile` n'est fourni que pour la sonnerie du navigateur).
+  if (mobile && resultUrl) return buildMobileDialTwiml({ ...mobile, callerId: linePhone, resultUrl });
   const s = normalize(settings);
   if (s.voicemailEnabled) return voicemailRecord(s, baseUrl, companyId, voicemailUrls);
   return `${say(NO_ANSWER_MESSAGE, 'nova')}<Hangup/>`;

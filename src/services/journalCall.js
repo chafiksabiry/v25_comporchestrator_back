@@ -36,3 +36,37 @@ export async function journalUnansweredCall(params, { fetchImpl = fetch, env = p
     return false;
   }
 }
+
+/** Corps de `POST /calls/center-call` pour un appel entrant décroché sur le mobile du titulaire (renvoi). */
+export function buildForwardedBody({ callSid, companyId, gigId, from, to, startedAt, durationSeconds = 0 }) {
+  const start = new Date(startedAt || Date.now());
+  return {
+    sid: String(callSid),
+    companyId: String(companyId),
+    gigId: gigId ? String(gigId) : undefined,
+    direction: 'inbound',
+    status: 'completed',
+    from: from || undefined,
+    to: to || undefined,
+    durationSeconds: Math.max(0, Number(durationSeconds) || 0),
+    startTime: start.toISOString(),
+    endTime: new Date().toISOString(),
+  };
+}
+
+/** Inscrit au journal un appel décroché sur le mobile du titulaire. Ne lève jamais. */
+export async function journalForwardedCall(params, { fetchImpl = fetch, env = process.env } = {}) {
+  try {
+    const apiBase = resolveDashCallsApi(env);
+    if (!apiBase || !params?.callSid || !params?.companyId) return false;
+    const res = await fetchImpl(`${apiBase}/calls/center-call`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${signServiceToken()}` },
+      body: JSON.stringify(buildForwardedBody(params)),
+    });
+    return res.ok;
+  } catch (e) {
+    console.error('[journal] appel renvoyé non inscrit:', e.message);
+    return false;
+  }
+}

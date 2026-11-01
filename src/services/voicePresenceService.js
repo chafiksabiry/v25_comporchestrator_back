@@ -2,8 +2,10 @@
  * Présence des conseillers prêts à prendre les appels entrants dans l'application Call Centre.
  * Chaque navigateur disponible envoie un signal toutes les ~20 s ; sans signal pendant `PRESENCE_TTL_MS`,
  * le conseiller n'est plus appelé. Suivi en mémoire (une seule instance du serveur).
+ * 90 s : un onglet en arrière-plan voit ses minuteurs ralentis par le navigateur (jusqu'à un par minute), ce qui faisait
+ * expirer l'ancien délai de 45 s alors que l'application était bien ouverte.
  */
-export const PRESENCE_TTL_MS = 45 * 1000;
+export const PRESENCE_TTL_MS = 90 * 1000;
 
 const agents = new Map();
 
