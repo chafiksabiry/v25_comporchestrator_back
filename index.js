@@ -17,6 +17,7 @@ import { tokensCompanyRoutes } from './src/routes/tokensCompany.js';
 import { paymentCheckoutRoutes } from './src/routes/paymentCheckout.js';
 import { inboundSettingsRoutes } from './src/routes/inboundSettings.js';
 import { voicemailRoutes } from './src/routes/voicemails.js';
+import { followUpRoutes } from './src/routes/followUps.js';
 import { internalRoutes } from './src/routes/internal.js';
 import { companyNotificationRoutes } from './src/routes/companyNotifications.js';
 import { scanLowResources } from './src/services/companyNotificationService.js';
@@ -125,6 +126,7 @@ app.use('/api/payments/checkout', paymentCheckoutRoutes);
 app.use('/api/internal', internalRoutes);
 app.use('/api/inbound-settings', inboundSettingsRoutes);
 app.use('/api/voicemails', voicemailRoutes);
+app.use('/api/follow-ups', followUpRoutes);
 app.use('/api/company-notifications', companyNotificationRoutes);
 
 // Health check to verify deployment
