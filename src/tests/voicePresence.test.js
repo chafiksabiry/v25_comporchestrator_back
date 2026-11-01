@@ -27,4 +27,13 @@ assert.deepEqual(presenceSummary(t0 + PRESENCE_TTL_MS + 1), [], 'les signaux pé
 assert.equal(isAvailable('a', t0 + 1000), true);
 assert.equal(isAvailable('a', t0 + PRESENCE_TTL_MS + 1), false);
 assert.equal(isAvailable('inconnu'), false);
+// agent partagé : un « indisponible » tardif de l'ancien centre ne coupe pas la présence du centre ouvert ensuite
+clearPresence();
+markAvailable({ userId: 'm', companyId: 'cA' }, t0);
+markAvailable({ userId: 'm', companyId: 'cB' }, t0 + 1);
+markUnavailable('m', 'cA');
+assert.deepEqual(availableIdentities('cB', t0 + 2), [voiceIdentity('m')], 'toujours présent chez cB');
+assert.deepEqual(availableIdentities('cA', t0 + 2), [], 'ne sonne plus pour cA');
+markUnavailable('m', 'cB');
+assert.deepEqual(availableIdentities('cB', t0 + 3), []);
 console.log('voicePresence OK');

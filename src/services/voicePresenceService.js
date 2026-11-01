@@ -21,7 +21,14 @@ export function markAvailable({ userId, companyId, name = '' }, now = Date.now()
   return identity;
 }
 
-export function markUnavailable(userId) {
+/**
+ * Retire le conseiller. Avec `companyId`, seulement si sa présence actuelle est celle de ce centre : un « indisponible »
+ * tardif de l'ancien centre (changement de centre) ne coupe pas sa présence dans le centre qu'il vient d'ouvrir.
+ */
+export function markUnavailable(userId, companyId) {
+  const a = agents.get(voiceIdentity(userId));
+  if (!a) return;
+  if (companyId !== undefined && companyId !== null && a.companyId !== String(companyId)) return;
   agents.delete(voiceIdentity(userId));
 }
 

@@ -1639,7 +1639,7 @@ class PhoneNumberController {
       const { companyId, available } = req.body || {};
       if (!userId) return res.status(401).json({ error: 'Authentication required' });
       if (available === false) {
-        markUnavailable(userId);
+        markUnavailable(userId, companyId);
         return res.json({ success: true, data: { available: false } });
       }
       if (!isAvailable(userId)) console.log(`🎧 Conseiller ${userId} disponible pour l'entreprise ${companyId}`);

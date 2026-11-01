@@ -49,9 +49,13 @@ export async function callerAccess(req) {
     const payload = await res.json();
     const d = payload?.data || {};
     const role = d.isAgent ? 'agent' : d.isOwner === false ? 'member' : 'owner';
+    const companyId = d.companyId ? String(d.companyId) : null;
+    // An agent can work for several centres: every active employment is one of "his" companies (default: just his one).
+    const companyIds = Array.isArray(d.companyIds) && d.companyIds.length ? d.companyIds.map(String) : companyId ? [companyId] : [];
     const access = {
       userId: String(userId),
-      companyId: d.companyId ? String(d.companyId) : null,
+      companyId,
+      companyIds,
       role,
       permissions: d.permissions && typeof d.permissions === 'object' ? d.permissions : {},
     };
@@ -68,6 +72,11 @@ export async function callerAccess(req) {
 /** @returns {Promise<string|null>} the caller's company id, or null when the user has no company */
 export async function callerCompanyId(req) {
   return (await callerAccess(req)).companyId;
+}
+
+/** @returns {Promise<string[]>} every company the caller may act for (owner/member: one; agent: all his employments) */
+export async function callerCompanyIds(req) {
+  return (await callerAccess(req)).companyIds;
 }
 
 /** Keeps only the rows that belong to the company (a caller without company sees nothing). */
