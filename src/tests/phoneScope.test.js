@@ -56,6 +56,14 @@ assert.equal(await run(guard(companyFrom('companyId')), { body: {} }), 400, 'mis
 assert.equal(await run(guard(companyFrom('companyId')), { params: { companyId: MINE } }), 200, 'companyId in the path');
 assert.equal(await run(guard(companyFrom('companyId')), { query: { companyId: OTHER } }), 403, 'companyId in the query');
 
+// --- an agent shared between two centres may act for each of them, and for no other
+clearCompanyCache();
+global.fetch = async () => ({ ok: true, json: async () => ({ success: true, data: { isAgent: true, companyId: MINE, companyIds: [MINE, OTHER] } }) });
+assert.equal(await run(guard(companyFrom('companyId')), { body: { companyId: MINE } }), 200, 'first centre');
+assert.equal(await run(guard(companyFrom('companyId')), { body: { companyId: OTHER } }), 200, 'second centre');
+assert.equal(await run(guard(companyFrom('companyId')), { body: { companyId: '64b0000000000000000000e3' } }), 403, 'a centre outside his employments');
+callerIs(MINE);
+
 // --- a line: the id of someone else's line cannot be used with my own companyId (assign-gig, terminate)
 const assign = guard(companyFrom('companyId'), ofNumber);
 assert.equal(await run(assign, { body: { companyId: MINE, id: 'L_MINE' } }), 200);

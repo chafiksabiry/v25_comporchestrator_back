@@ -2,7 +2,7 @@ import { PhoneNumber } from '../models/PhoneNumber.js';
 import Voicemail from '../models/Voicemail.js';
 import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
 import { authenticate } from './auth.js';
-import { callerCompanyId, ScopeError } from './companyScope.js';
+import { callerCompanyIds, ScopeError } from './companyScope.js';
 
 /**
  * Access control of the phone-number routes: a valid login, and for everything that targets a company, a line or
@@ -56,10 +56,10 @@ export const requireCompany = (resolveCompanyIds) => async (req, res, next) => {
   try {
     const targets = (await resolveCompanyIds(req)).filter((id) => id !== undefined && id !== null);
     if (targets.length === 0) return next();
-    const mine = await callerCompanyId(req);
-    if (mine && targets.every((id) => String(id) === String(mine))) return next();
+    const mine = await callerCompanyIds(req);
+    if (mine.length && targets.every((id) => mine.includes(String(id)))) return next();
     if (String(process.env.COMPANY_SCOPE_MODE || '').toLowerCase() === 'log') {
-      console.warn(`[phoneScope] would deny user ${req.user?.userId} (company ${mine}) on ${req.method} ${req.originalUrl}`);
+      console.warn(`[phoneScope] would deny user ${req.user?.userId} (companies ${mine.join(',')}) on ${req.method} ${req.originalUrl}`);
       return next();
     }
     return res.status(403).json({ error: 'Not allowed for this company' });

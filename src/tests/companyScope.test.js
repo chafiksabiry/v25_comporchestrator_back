@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 
 process.env.REGISTRATION_BACKEND_URL = 'https://registration.test/';
-const { callerCompanyId, onlyCompanyRows, clearCompanyCache, ScopeError } = await import('../middleware/companyScope.js');
+const { callerCompanyId, callerCompanyIds, onlyCompanyRows, clearCompanyCache, ScopeError } = await import('../middleware/companyScope.js');
 
 const req = (userId = 'u1', token = 'tok') => ({ user: { userId }, headers: { authorization: `Bearer ${token}` } });
 const lookup = (impl) => { global.fetch = impl; };
@@ -43,5 +43,17 @@ const rows = [
 assert.deepEqual(onlyCompanyRows(rows, 'c1').map((r) => r.phoneNumber), ['+1', '+3']);
 assert.deepEqual(onlyCompanyRows(rows, null), []);
 assert.deepEqual(onlyCompanyRows(rows, 'nobody'), []);
+
+// An agent shared between several centres: every active employment is his, nothing else.
+clearCompanyCache();
+lookup(async () => ({ ok: true, json: async () => ({ success: true, data: { isAgent: true, companyId: 'c1', companyIds: ['c1', 'c2'] } }) }));
+assert.deepEqual(await callerCompanyIds(req('multi')), ['c1', 'c2']);
+// Older registration backend (no companyIds): falls back to the single company.
+clearCompanyCache();
+lookup(async () => ({ ok: true, json: async () => ({ success: true, data: { companyId: 'c9' } }) }));
+assert.deepEqual(await callerCompanyIds(req('single')), ['c9']);
+clearCompanyCache();
+lookup(async () => ({ ok: true, json: async () => ({ success: true, data: { companyId: null } }) }));
+assert.deepEqual(await callerCompanyIds(req('none')), []);
 
 console.log('companyScope tests passed');
