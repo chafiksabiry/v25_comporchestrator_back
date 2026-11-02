@@ -95,6 +95,12 @@ router.get('/inbound-test/status', ...guard(companyFrom('companyId')), phoneNumb
 // Téléphone du navigateur : jeton Twilio Voice et disponibilité du conseiller pour les appels entrants
 router.post('/voice/token', ...guard(companyFrom('companyId')), phoneNumberController.voiceToken.bind(phoneNumberController));
 router.post('/voice/presence', ...guard(companyFrom('companyId')), phoneNumberController.voicePresence.bind(phoneNumberController));
+// Appel sortant du navigateur (application TwiML « connect » du jeton vocal avec outbound=true)
+router.post(
+  '/webhooks/twilio/browser-outbound',
+  express.urlencoded({ extended: false }),
+  phoneNumberController.handleBrowserOutbound.bind(phoneNumberController)
+);
 router.post(
   '/webhooks/twilio/inbound-call',
   express.urlencoded({ extended: false }),
