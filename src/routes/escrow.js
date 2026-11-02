@@ -9,7 +9,7 @@ router.get('/wallet/:companyId', authenticate, escrowController.getWallet);
 router.get('/transactions/:companyId', authenticate, escrowController.getTransactions);
 router.post('/deposit', authenticate, escrowController.deposit);
 router.post('/withdraw', authenticate, escrowController.withdraw);
-router.post('/buy-minutes', authenticate, escrowController.buyMinutes);
+// POST /buy-minutes retiré : crédit de minutes sans vérification de paiement (voir /api/payments/checkout).
 router.post('/lock', authenticate, escrowController.lockFunds);
 router.post('/release/:contractId', authenticate, escrowController.releaseFunds);
 router.post('/refund/:contractId', authenticate, escrowController.refundFunds);
