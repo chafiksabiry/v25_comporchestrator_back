@@ -22,6 +22,8 @@ import { analyzeVoicemail } from '../services/voicemailAnalysis.js';
 import { ingestRecording } from '../services/voicemailStorage.js';
 import { notifyCompany } from '../services/companyNotificationService.js';
 import { createVoiceToken, VOICE_TOKEN_TTL_S } from '../services/voiceTokenService.js';
+import MinutesCompany from '../models/MinutesCompany.js';
+import { decideOutboundCall, ensureOutboundApp, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, refusal, signOutboundTicket, verifyOutboundTicket } from '../services/browserOutbound.js';
 import { journalForwardedCall, journalUnansweredCall } from '../services/journalCall.js';
 import ReachSettings from '../models/ReachSettings.js';
 import { decideInboundRoute, mobileTarget, shouldRingMobileAfter } from '../services/reach.js';
@@ -1627,11 +1629,56 @@ class PhoneNumberController {
         return res.status(500).json({ error: 'Server Configuration', message: 'La configuration téléphonie du serveur est incomplète.' });
       }
       const identity = voiceIdentity(userId);
-      const token = await createVoiceToken({ client: phoneNumberService.twilioClient, accountSid: config.twilioAccountSid, identity });
+      const client = phoneNumberService.twilioClient;
+      // Appel sortant du navigateur (« Mon poste ») : le jeton porte l'application TwiML sortante et une preuve signée
+      // de l'entreprise pour laquelle il est émis (le contrôle d'appartenance a été fait par le garde de la route).
+      if (req.body?.outbound === true) {
+        const companyId = String(req.body?.companyId || '');
+        if (!mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ error: 'Invalid companyId' });
+        const appSid = await ensureOutboundApp(client, `https://${req.get('host')}${OUTBOUND_WEBHOOK_PATH}`);
+        const outboundToken = await createVoiceToken({ client, accountSid: config.twilioAccountSid, identity, outgoingApplicationSid: appSid });
+        const ticket = signOutboundTicket({ secret: config.twilioAuthToken, companyId, identity });
+        return res.json({ success: true, data: { token: outboundToken, identity, expiresIn: VOICE_TOKEN_TTL_S, params: { CompanyId: companyId, Ticket: ticket } } });
+      }
+      const token = await createVoiceToken({ client, accountSid: config.twilioAccountSid, identity });
       res.json({ success: true, data: { token, identity, expiresIn: VOICE_TOKEN_TTL_S } });
     } catch (error) {
       console.error('Error in voiceToken:', error.message);
       res.status(500).json({ error: 'Failed to create voice token', message: 'Téléphone du navigateur indisponible pour le moment.' });
+    }
+  }
+
+  /**
+   * Webhook Twilio de l'application d'appel sortant du navigateur. Reçoit To / From / CompanyId / Ticket : l'entreprise
+   * n'est crue que si la preuve signée (délivrée avec le jeton) correspond à la personne (`From=client:<identité>`).
+   * Compose le numéro depuis une ligne Twilio de CETTE entreprise, si elle a un abonnement actif et des minutes.
+   * Ne demande ni opération, ni créneau, ni formation : un titulaire Nomad Solo n'a aucune opération visible.
+   */
+  async handleBrowserOutbound(req, res) {
+    const send = (xml) => res.type('text/xml').status(200).send(xml);
+    try {
+      const { To, From, CompanyId, Ticket, Caller } = req.body || {};
+      const companyId = String(CompanyId || '');
+      const identity = String(From || Caller || '').replace(/^client:/, '');
+      if (!mongoose.Types.ObjectId.isValid(companyId) || !verifyOutboundTicket({ secret: config.twilioAuthToken, companyId, identity, ticket: Ticket })) {
+        return send(refusal('Appel non autorisé.'));
+      }
+      const to = normalizeOutboundDestination(To);
+      const [limits, wallet, line] = await Promise.all([
+        loadCompanyPlanLimits(companyId),
+        MinutesCompany.findOne({ companyId }).select('minutes').lean(),
+        PhoneNumber.findOne({ companyId, provider: 'twilio', twilioId: { $exists: true, $ne: null }, status: 'active', billingStatus: { $ne: 'suspended' } }).sort({ createdAt: 1 }).lean(),
+      ]);
+      const decision = decideOutboundCall({ to, line, subscribed: Boolean(limits), minutes: wallet?.minutes });
+      if (!decision.ok) {
+        console.warn(`[browser-outbound] refusé pour l'entreprise ${companyId} : ${decision.message}`);
+        return send(refusal(decision.message));
+      }
+      console.log(`📞 Appel sortant du navigateur (entreprise ${companyId}) vers ${to.slice(0, 6)}… depuis ${line.phoneNumber}`);
+      return send(decision.twiml);
+    } catch (error) {
+      console.error('Error in handleBrowserOutbound:', error);
+      return send(refusal('Une erreur est survenue.'));
     }
   }
 

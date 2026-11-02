@@ -42,3 +42,11 @@ export function callcenterTierFromMetadata(metadata) {
  * src/domain/plans.ts du front (Full Scope et Multi-clients).
  */
 export const CALLCENTER_TIERS_WITH_INTEGRATIONS = ['full_scope', 'multi_clients'];
+
+/** Métadonnées d'un produit Call Centre : `harx_product=callcenter`, clé et valeur lues sans tenir compte de la casse ni des espaces. */
+export function isCallcenterMetadata(metadata) {
+  if (!metadata || typeof metadata !== 'object') return false;
+  const entries = metadata instanceof Map ? [...metadata.entries()] : Object.entries(metadata);
+  const entry = entries.find(([k]) => String(k).trim().toLowerCase() === 'harx_product');
+  return String(entry?.[1] ?? '').trim().toLowerCase() === 'callcenter';
+}
