@@ -11,6 +11,16 @@ function getStripe() {
   return new Stripe(config.stripeSecretKey);
 }
 
+let sharedClient = null;
+/** Client Stripe partagé (réutilisé pour le cache des prix de sièges) ; null si Stripe n'est pas configuré. */
+function getSharedClient() {
+  if (!config.stripeSecretKey) return null;
+  if (!sharedClient || sharedClient.key !== config.stripeSecretKey) {
+    sharedClient = { key: config.stripeSecretKey, client: new Stripe(config.stripeSecretKey) };
+  }
+  return sharedClient.client;
+}
+
 /**
  * Create a one-shot Stripe Checkout Session for company purchases
  * (wallet deposit, minutes pack, phone line).
@@ -446,6 +456,7 @@ async function resolveSubscriptionPriceId({ priceId, planName }) {
 
 export const stripeService = {
   isConfigured,
+  getSharedClient,
   createOneShotCheckoutSession,
   retrieveSession,
   captureCheckoutSession,

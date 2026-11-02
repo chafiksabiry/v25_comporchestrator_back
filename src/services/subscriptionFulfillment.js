@@ -4,6 +4,7 @@ import { Subscription } from '../models/Subscription.js';
 import { stripeService } from './stripeService.js';
 import { ensurePlanMinutesGranted } from './planMinutesGrant.js';
 import { ensurePlanTokensGranted } from './planTokensGrant.js';
+import { pickPlanItem } from './seats.js';
 
 export async function resolvePlanByPriceId(priceId) {
   let plan = await SubscriptionPlan.findOne({ stripePriceId: priceId });
@@ -147,7 +148,8 @@ export async function activateFromStripeCheckoutSession(session) {
   }
 
   const stripeSubscription = await stripeService.getSubscription(stripeSubscriptionId);
-  const priceId = stripeSubscription.items.data[0].price.id;
+  // Le forfait, pas une éventuelle ligne « siège en plus » (voir seats.js).
+  const priceId = pickPlanItem(stripeSubscription.items.data).price.id;
   const resolved = await resolvePlanByPriceId(priceId);
   if (!resolved?.plan) {
     throw new Error(`Plan not found for price ${priceId}`);
