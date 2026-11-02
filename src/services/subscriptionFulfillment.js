@@ -4,6 +4,8 @@ import { Subscription } from '../models/Subscription.js';
 import { stripeService } from './stripeService.js';
 import { ensurePlanMinutesGranted } from './planMinutesGrant.js';
 import { ensurePlanTokensGranted } from './planTokensGrant.js';
+import { subscriptionPeriod, supersededStripeSubscriptionId } from './subscriptionPeriod.js';
+import { isCallcenterMetadata } from './callcenterTier.js';
 
 export async function resolvePlanByPriceId(priceId) {
   let plan = await SubscriptionPlan.findOne({ stripePriceId: priceId });
@@ -161,14 +163,21 @@ export async function activateFromStripeCheckoutSession(session) {
   // confirm call) would each compute a different grantKey for the exact same
   // period and both pass ensurePlanMinutesGranted's idempotency check,
   // double-crediting the plan's included minutes.
-  const stableStart = stripeSubscription.current_period_start
+  // Selon la version de l'API Stripe, les dates de période sont sur l'abonnement ou sur sa première ligne.
+  const period = subscriptionPeriod(stripeSubscription);
+  const stableStart = (period.start ? period.start.getTime() / 1000 : null)
     || stripeSubscription.start_date
     || stripeSubscription.created;
   const periodStart = stableStart ? new Date(stableStart * 1000) : new Date();
-  const periodEnd = stripeSubscription.current_period_end
-    ? new Date(stripeSubscription.current_period_end * 1000)
-    : new Date((stableStart || Math.floor(Date.now() / 1000)) * 1000 + 30 * 24 * 60 * 60 * 1000);
+  const periodEnd = period.end
+    || (stripeSubscription.trial_end ? new Date(stripeSubscription.trial_end * 1000) : null)
+    || new Date((stableStart || Math.floor(Date.now() / 1000)) * 1000 + 30 * 24 * 60 * 60 * 1000);
 
+  // L'abonnement précédent (autre offre) est lu AVANT d'être remplacé, puis résilié APRÈS : son événement
+  // « customer.subscription.deleted » ne doit pas retrouver notre enregistrement sous son ancien identifiant.
+  // Seulement Call Centre -> Call Centre : un abonnement d'un autre produit (TaaS) n'est jamais résilié par ce changement.
+  const previousRecord = await Subscription.findOne({ userId }).populate('planId').lean();
+  const previous = isCallcenterMetadata(previousRecord?.planId?.metadata) && isCallcenterMetadata(resolved.plan.metadata) ? previousRecord : null;
   await Subscription.findOneAndUpdate(
     { userId },
     {
@@ -186,6 +195,16 @@ export async function activateFromStripeCheckoutSession(session) {
     },
     { upsert: true, new: true }
   );
+
+  const superseded = supersededStripeSubscriptionId(previous, stripeSubscriptionId);
+  if (superseded) {
+    try {
+      await stripeService.cancelSubscription(superseded);
+      console.log(`[subscription] ancien abonnement ${superseded} résilié (remplacé par ${stripeSubscriptionId})`);
+    } catch (err) {
+      console.warn(`[subscription] résiliation de l'ancien abonnement ${superseded} impossible :`, err?.message || err);
+    }
+  }
 
   if (companyId) {
     const nameLower = resolved.plan.name.toLowerCase();
