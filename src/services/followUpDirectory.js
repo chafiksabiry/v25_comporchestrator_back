@@ -35,3 +35,15 @@ export async function loadUserName(userId) {
     return '';
   }
 }
+
+/** Nom et adresse e-mail d'une personne (lecture du compte) ; chaînes vides si introuvable. Sert d'adresse de réponse aux e-mails. */
+export async function loadUserProfile(userId) {
+  const origin = registrationOrigin();
+  if (!origin || !/^[A-Za-z0-9_-]{1,64}$/.test(String(userId))) return { name: '', email: '' };
+  try {
+    const j = await getJson(`${origin}/api/users/${encodeURIComponent(String(userId))}`);
+    return { name: String(j?.data?.fullName || '').slice(0, 120), email: String(j?.data?.email || '').trim().toLowerCase().slice(0, 254) };
+  } catch {
+    return { name: '', email: '' };
+  }
+}

@@ -1,0 +1,268 @@
+// Run: JWT_SECRET=test node src/tests/secretariat.test.js
+import assert from 'node:assert/strict';
+import jwt from 'jsonwebtoken';
+
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret';
+process.env.REGISTRATION_BACKEND_URL = 'https://registration.test';
+for (const k of ['BREVO_API_KEY', 'BREVO_SENDER_EMAIL', 'BREVO_FROM_EMAIL', 'SMTP_FROM_EMAIL']) delete process.env[k];
+
+const I = await import('../services/ics.js');
+const V = await import('../services/visio.js');
+const E = await import('../services/emailService.js');
+const F = await import('../services/followUps.js');
+const { clearCompanyCache } = await import('../middleware/companyScope.js');
+const { default: FollowUpItem } = await import('../models/FollowUpItem.js');
+const { default: EmailLog } = await import('../models/EmailLog.js');
+const { emailController: mail } = await import('../controllers/emailController.js');
+const { followUpController: fu } = await import('../controllers/followUpController.js');
+
+// ---------- ICS (RFC 5545)
+const base = { id: '64b0000000000000000000a1', title: 'Rendez-vous avec Mme Durand', dueAt: '2026-11-03T09:00:00Z', durationMinutes: 45, status: 'todo', sequence: 0, updatedAt: '2026-11-02T10:00:00Z' };
+assert.equal(I.escapeText('a,b;c\\d\ne'), 'a\\,b\;c\\\\d\\ne', 'échappement , ; \\ et retour à la ligne');
+assert.equal(I.escapeText('x\r\ny'), 'x\\ny');
+const long = 'é'.repeat(100);
+const folded = I.foldLine(`SUMMARY:${long}`);
+for (const l of folded.split('\r\n')) assert.ok(Buffer.byteLength(l, 'utf8') <= 75, 'ligne repliée à 75 octets');
+assert.equal(folded.split('\r\n').map((l, i) => (i ? l.slice(1) : l)).join(''), `SUMMARY:${long}`, 'le repli ne perd ni ne coupe aucun caractère');
+assert.ok(!folded.includes('�'));
+assert.equal(I.foldLine('SHORT:x'), 'SHORT:x');
+
+let ics = I.buildAppointmentIcs(base);
+assert.ok(ics.startsWith('BEGIN:VCALENDAR\r\nVERSION:2.0\r\n') && ics.endsWith('END:VCALENDAR\r\n'));
+assert.ok(!/[^\r]\n/.test(ics), 'toutes les fins de ligne sont CRLF');
+assert.match(ics, /UID:64b0000000000000000000a1@harx\.ai\r\n/);
+assert.match(ics, /TZID:Europe\/Paris\r\n/);
+assert.match(ics, /DTSTART;TZID=Europe\/Paris:20261103T100000\r\n/, 'novembre : heure d’hiver, 09:00 UTC = 10:00 Paris');
+assert.match(ics, /DTEND;TZID=Europe\/Paris:20261103T104500\r\n/);
+assert.match(ics, /DTSTAMP:20261102T100000Z\r\n/);
+assert.match(ics, /RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU/);
+assert.match(ics, /STATUS:CONFIRMED/);
+assert.equal(I.buildAppointmentIcs(base), ics, 'sortie déterministe, UID stable');
+assert.match(I.buildAppointmentIcs({ ...base, dueAt: '2026-07-14T08:00:00Z' }), /DTSTART;TZID=Europe\/Paris:20260714T100000/, 'été : +2 h');
+// bascule d'heure d'été : 25 octobre 2026, 00:30 UTC = 02:30 CEST ; la fin traverse le changement d'heure
+assert.match(I.buildAppointmentIcs({ ...base, dueAt: '2026-10-25T00:30:00Z', durationMinutes: 120 }), /DTSTART;TZID=Europe\/Paris:20261025T023000[\s\S]*DTEND;TZID=Europe\/Paris:20261025T033000/, 'deux heures réelles à travers la bascule : 02:30 CEST -> 03:30 CET');
+assert.equal(I.icsFilename(base), 'rendez-vous-20261103-1000.ics');
+const rich = I.buildAppointmentIcs({ ...base, title: 'Point; budget, Q4', contactName: 'Mme Durand', note: 'ligne 1\nligne 2', videoUrl: 'https://meet.jit.si/HARX-abcDEF123456', sequence: 3, status: 'canceled', assignee: { name: 'Marie' } });
+assert.match(rich, /SUMMARY:Point\; budget\\, Q4\r\n/);
+assert.match(rich, /URL:https:\/\/meet\.jit\.si\/HARX-abcDEF123456\r\n/);
+assert.match(rich, /SEQUENCE:3\r\n/);
+assert.match(rich, /STATUS:CANCELLED/);
+assert.ok(!rich.includes('VALARM'), 'pas de rappel pour un rendez-vous annulé');
+assert.ok(rich.replace(/\r\n /g, '').includes('Visio : https://meet.jit.si/HARX-abcDEF123456\\n'), 'visio dans la description');
+assert.throws(() => I.buildAppointmentIcs({ ...base, dueAt: null }), /sans date/);
+// aucune injection de ligne depuis un titre malveillant
+const evil = I.buildAppointmentIcs({ ...base, title: 'x\r\nATTENDEE:mailto:pirate@x.fr' });
+assert.ok(!/\r\nATTENDEE:/.test(evil), 'un retour à la ligne dans le titre ne crée pas de propriété');
+
+// ---------- visio Jitsi
+const url = V.newVisioUrl();
+assert.match(url, /^https:\/\/meet\.jit\.si\/HARX-[A-Za-z0-9]{12}$/);
+assert.ok(V.isVisioUrl(url));
+assert.equal(new Set(Array.from({ length: 500 }, () => V.newVisioUrl())).size, 500, 'salles toutes différentes');
+assert.ok(!V.isVisioUrl('https://meet.jit.si/HARX-short') && !V.isVisioUrl('https://evil.test/HARX-abcDEF123456') && !V.isVisioUrl('http://meet.jit.si/HARX-abcDEF123456'));
+// octets >= 248 écartés (équiprobabilité) : une source qui n'en donne que au début doit quand même aboutir
+let calls = 0;
+const stub = (n) => { calls += 1; return calls === 1 ? Buffer.alloc(n, 255) : Buffer.alloc(n, 3); };
+assert.equal(V.newVisioUrl(stub), 'https://meet.jit.si/HARX-DDDDDDDDDDDD');
+
+// ---------- validation d'e-mail
+for (const ok of ['a@b.fr', 'prenom.nom+tag@sous.domaine.com', 'x_y@ex-ample.co']) assert.ok(E.isValidEmail(ok), ok);
+for (const no of ['', 'a@b', 'a@@b.fr', 'a b@c.fr', 'a@b.fr\r\nBcc: x@y.fr', '.a@b.fr', 'a..b@c.fr', '<a@b.fr>', 'a@-b.fr', 'a@b.fr,c@d.fr', 'x'.repeat(250) + '@b.fr']) assert.equal(E.isValidEmail(no), false, JSON.stringify(no));
+assert.deepEqual(E.parseRecipients(' A@B.fr ; a@b.fr, c@d.fr ').value, ['a@b.fr', 'c@d.fr'], 'minuscules, dédoublonné');
+assert.match(E.parseRecipients('').error, /au moins/);
+assert.match(E.parseRecipients('ok@x.fr, pasmail').error, /invalide : pasmail/);
+assert.match(E.parseRecipients(Array.from({ length: 6 }, (_, i) => `u${i}@x.fr`)).error, /Cinq/);
+const send = (o = {}) => E.validateSend({ to: 'a@b.fr', subject: 'Objet', body: 'Bonjour', ...o });
+assert.deepEqual(send().value.to, ['a@b.fr']);
+assert.match(send({ subject: 'a\nBcc: x@y.fr' }).error, /une seule ligne/);
+assert.match(send({ subject: ' ' }).error, /objet/);
+assert.match(send({ body: 'x'.repeat(5001) }).error, /5000/);
+assert.match(send({ template: 'inconnu' }).error, /Modèle/);
+assert.match(send({ followUpId: 'zz' }).error, /invalide/);
+assert.match(send({ attachIcs: true }).error, /rendez-vous/);
+assert.equal(send({ followUpId: '64b0000000000000000000a1', attachIcs: true }).value.attachIcs, true);
+assert.equal(E.cleanDisplayName('Centre "Acme" <x@y>\r\nBcc: z'), 'Centre Acme x y Bcc: z');
+assert.equal(E.cleanDisplayName('', 'HARX'), 'HARX');
+
+// ---------- charge utile : expéditeur au nom du centre, réponse = utilisateur, HTML échappé
+const payload = E.buildPayload({ senderEmail: 'noreply@harx.ai', centerName: 'Centre Acme', replyTo: { email: 'chef@acme.fr', name: 'Chef' }, to: ['c@d.fr'], subject: 'S', text: 'Bonjour <b>x</b>\nVisio : https://meet.jit.si/HARX-abcDEF123456.', icsContent: ics });
+assert.deepEqual(payload.sender, { name: 'Centre Acme', email: 'noreply@harx.ai' });
+assert.deepEqual(payload.replyTo, { email: 'chef@acme.fr', name: 'Chef' });
+assert.ok(payload.htmlContent.includes('&lt;b&gt;x&lt;/b&gt;') && !payload.htmlContent.includes('<b>x'), 'HTML échappé');
+assert.ok(payload.htmlContent.includes('<a href="https://meet.jit.si/HARX-abcDEF123456">'), 'lien cliquable sans le point final');
+assert.equal(payload.attachment[0].name, 'rendez-vous.ics');
+assert.equal(Buffer.from(payload.attachment[0].content, 'base64').toString('utf8'), ics);
+assert.equal(E.buildPayload({ senderEmail: 'a@b.fr', centerName: 'X', replyTo: { email: 'r@x.fr', name: '' }, to: ['c@d.fr'], subject: 'S', text: 't' }).attachment, undefined);
+
+// ---------- limitation de débit par centre
+const lim = E.limits({});
+assert.deepEqual(lim, { perHour: 30, perDay: 200 });
+assert.deepEqual(E.limits({ EMAIL_MAX_PER_HOUR: '5', EMAIL_MAX_PER_DAY: 'x' }), { perHour: 5, perDay: 200 });
+assert.equal(E.checkRate({ hour: 29, day: 29 }, lim).ok, true);
+assert.match(E.checkRate({ hour: 30, day: 30 }, lim).message, /par heure/);
+assert.match(E.checkRate({ hour: 3, day: 200 }, lim).message, /par jour/);
+
+// ---------- éléments de suivi : visio, durée, adresse
+const NOW = Date.parse('2026-11-02T10:00:00Z');
+const OWNER = { userId: 'owner1', role: 'owner', permissions: {} };
+const c = F.validateCreate({ model: 'appointment', contactName: 'Mme Durand', dueAt: '2026-11-03T09:00:00Z', videoLink: true, contactEmail: ' Mme@Durand.FR ' }, OWNER, NOW).value;
+assert.equal(c.videoLink, true); assert.equal(c.contactEmail, 'mme@durand.fr');
+assert.equal(F.validateCreate({ model: 'transfer', assigneeId: 'u2', videoLink: true }, OWNER, NOW).value.videoLink, false, 'pas de visio hors rendez-vous');
+assert.match(F.validateCreate({ model: 'appointment', contactName: 'A', dueAt: '2026-11-03T09:00:00Z', contactEmail: 'pasmail' }, OWNER, NOW).error, /e-mail/);
+const appt = { model: 'appointment', status: 'todo' };
+assert.equal(F.validatePatch({ durationMinutes: 60 }, appt, NOW).value.durationMinutes, 60);
+assert.match(F.validatePatch({ durationMinutes: 2 }, appt, NOW).error, /durée/);
+assert.match(F.validatePatch({ durationMinutes: 30 }, { model: 'transfer' }, NOW).error, /rendez-vous/);
+assert.equal(F.validatePatch({ videoLink: true }, appt, NOW).value.videoLink, true);
+assert.match(F.validatePatch({ videoLink: 'oui' }, appt, NOW).error, /invalide/);
+assert.equal(F.validatePatch({ dueAt: '2026-11-04T09:00:00Z' }, appt, NOW).value.dueAt.toISOString(), '2026-11-04T09:00:00.000Z', 'déplacer');
+assert.match(F.validatePatch({ dueAt: '2026-11-01T09:00:00Z' }, appt, NOW).error, /futur/);
+assert.equal(F.validatePatch({ contactEmail: '' }, appt, NOW).value.contactEmail, '');
+assert.ok(!F.allowedPatchFields({ role: 'agent' }).includes('videoLink'));
+assert.ok(F.allowedPatchFields({ role: 'owner' }).includes('durationMinutes'));
+assert.deepEqual(F.parseListFilters({ model: 'appointment', from: '2026-11-02T00:00:00Z', to: '2026-11-09T00:00:00Z' }).value.dueAt.$lt, new Date('2026-11-09T00:00:00Z'));
+assert.match(F.parseListFilters({ model: 'x' }).error, /inconnu/);
+assert.match(F.parseListFilters({ from: 'hier' }).error, /Période/);
+assert.deepEqual(F.parseListFilters({}).value, {});
+
+// ---------- contrôleurs (base et services externes simulés)
+const COMPANY = '64b0000000000000000000c1';
+const APPT = '64b0000000000000000000a1';
+const tok = jwt.sign({ userId: 'owner1' }, process.env.JWT_SECRET);
+let me = { isOwner: true, companyId: COMPANY, permissions: {} };
+global.fetch = async (u) => {
+  u = String(u);
+  if (u.includes('/company-members/me')) return { ok: true, json: async () => ({ data: me }) };
+  if (u.includes('/api/users/')) return { ok: true, json: async () => ({ data: { fullName: 'Chef de centre', email: 'Chef@Acme.fr' } }) };
+  if (u.includes('/api/company-members?')) return { ok: true, json: async () => ({ data: [{ userId: 'owner1', fullName: 'Chef', isOwner: true }] }) };
+  if (u.includes('/call-center/agents')) return { ok: true, json: async () => ({ data: [] }) };
+  throw new Error(`fetch inattendu ${u}`);
+};
+const logs = [];
+EmailLog.create = async (d) => { const r = { _id: `l${logs.length + 1}`, createdAt: new Date(), ...d }; logs.push(r); return r; };
+EmailLog.countDocuments = async (f) => logs.filter((l) => String(l.companyId) === String(f.companyId) && l.createdAt >= f.createdAt.$gte).length;
+EmailLog.find = (f) => ({ sort() { return this; }, limit() { return this; }, lean: async () => logs.filter((l) => !f.followUpId || String(l.followUpId) === String(f.followUpId)).reverse() });
+const apptDoc = { _id: APPT, model: 'appointment', title: 'Rendez-vous avec Mme Durand', contactName: 'Mme Durand', dueAt: new Date('2026-11-03T09:00:00Z'), durationMinutes: 30, status: 'todo', assigneeId: 'owner1', assigneeName: 'Chef', videoUrl: 'https://meet.jit.si/HARX-abcDEF123456', sequence: 2, createdAt: new Date('2026-11-01T10:00:00Z'), updatedAt: new Date('2026-11-02T10:00:00Z'), transfers: [] };
+apptDoc.toObject = () => ({ ...apptDoc });
+apptDoc.save = async () => apptDoc;
+FollowUpItem.findOne = async (f) => (String(f._id) === APPT && String(f.companyId) === COMPANY ? apptDoc : null);
+
+async function call(fn, { user = 'owner1', body = {}, params = {}, query = {} } = {}) {
+  clearCompanyCache();
+  return new Promise((resolve) => {
+    const headers = {};
+    const res = {
+      code: 200, headers, status(x) { this.code = x; return this; },
+      setHeader(k, v) { headers[k] = v; },
+      json(b) { resolve({ code: this.code, body: b, headers }); return this; },
+      send(b) { resolve({ code: this.code, text: b, headers }); return this; },
+    };
+    fn({ user: { userId: user }, headers: { authorization: `Bearer ${tok}` }, body, params, query, method: 'POST', originalUrl: '/x' }, res);
+  });
+}
+
+// aucun envoi sans service d'e-mail configuré : message clair, aucune trace
+let sent = [];
+E.setMailTransport(async (p) => { sent.push(p); return { messageId: 'sim' }; });
+const msg = { companyId: COMPANY, to: 'client@exemple.fr', subject: 'Votre rendez-vous', body: 'Bonjour', template: 'appointment_confirmation', followUpId: APPT, attachIcs: true, centerName: 'Centre Acme' };
+let r = await call(mail.send, { body: msg });
+assert.equal(r.code, 503); assert.equal(r.body.error, 'email_not_configured'); assert.match(r.body.message, /pas encore activé/);
+assert.equal(sent.length, 0, 'rien n’est envoyé'); assert.equal(logs.length, 0, 'rien n’est journalisé');
+r = await call(mail.config);
+assert.equal(r.body.data.configured, false);
+
+// service configuré
+process.env.BREVO_API_KEY = 'cle-de-test'; process.env.BREVO_SENDER_EMAIL = 'noreply@harx.ai';
+r = await call(mail.config);
+assert.equal(r.body.data.configured, true); assert.equal(r.body.data.remainingThisHour, 30);
+r = await call(mail.send, { body: { ...msg, to: 'pasunmail' } });
+assert.equal(r.code, 400); assert.equal(sent.length, 0);
+r = await call(mail.send, { body: { ...msg, followUpId: '64b0000000000000000000ff' } });
+assert.equal(r.code, 404, 'élément d’origine inconnu');
+r = await call(mail.send, { body: msg });
+assert.equal(r.code, 201, JSON.stringify(r.body));
+assert.equal(sent.length, 1);
+assert.deepEqual(sent[0].sender, { name: 'Centre Acme', email: 'noreply@harx.ai' }, 'expéditeur au nom du centre');
+assert.equal(sent[0].replyTo.email, 'chef@acme.fr', 'réponse = utilisateur connecté');
+assert.match(Buffer.from(sent[0].attachment[0].content, 'base64').toString(), /UID:64b0000000000000000000a1@harx\.ai/);
+assert.match(Buffer.from(sent[0].attachment[0].content, 'base64').toString(), /SEQUENCE:2/);
+const entry = logs[0];
+assert.deepEqual([entry.status, entry.sentById, entry.sentByName, entry.to, entry.subject, entry.template, String(entry.followUpId), entry.withIcs], ['sent', 'owner1', 'Chef de centre', ['client@exemple.fr'], 'Votre rendez-vous', 'appointment_confirmation', APPT, true]);
+assert.ok(!JSON.stringify(entry).includes('Bonjour'), 'le contenu du message n’est pas journalisé');
+r = await call(mail.list, { query: { followUpId: APPT } });
+assert.equal(r.body.data.items.length, 1); assert.equal(r.body.data.items[0].followUpId, APPT);
+assert.equal(r.body.data.items[0].body, undefined);
+
+// pièce jointe refusée pour un élément qui n'est pas un rendez-vous
+const keep = apptDoc.model; apptDoc.model = 'transfer';
+r = await call(mail.send, { body: msg });
+assert.equal(r.code, 422); apptDoc.model = keep;
+
+// échec du transport : 502, journalisé en échec, sans détail technique pour l'utilisateur
+E.setMailTransport(async () => { throw new Error('Brevo : clé refusée'); });
+r = await call(mail.send, { body: { ...msg, attachIcs: false } });
+assert.equal(r.code, 502); assert.ok(!/Brevo/.test(r.body.message));
+assert.equal(logs[1].status, 'failed');
+
+// limitation de débit par centre
+E.setMailTransport(async (p) => { sent.push(p); return {}; });
+process.env.EMAIL_MAX_PER_HOUR = '3';
+r = await call(mail.send, { body: { ...msg, attachIcs: false } });
+assert.equal(r.code, 201, 'troisième envoi de l’heure accepté');
+r = await call(mail.send, { body: { ...msg, attachIcs: false } });
+assert.equal(r.code, 429); assert.equal(r.body.error, 'email_rate_limited'); assert.match(r.body.message, /3 e-mails par heure/);
+logs.push({ _id: 'autre', companyId: '64b0000000000000000000d9', createdAt: new Date(), status: 'sent' });
+delete process.env.EMAIL_MAX_PER_HOUR;
+
+// droits : un agent ne peut pas envoyer ni lire le journal ; un membre sans droit d'appels non plus ; un membre avec, oui
+me = { isOwner: false, isAgent: true, companyId: COMPANY, permissions: {} };
+const before = sent.length;
+r = await call(mail.send, { user: 'agent1', body: msg });
+assert.equal(r.code, 403); assert.equal(sent.length, before);
+r = await call(mail.list, { user: 'agent1' });
+assert.equal(r.code, 403);
+me = { isOwner: false, isAgent: false, companyId: COMPANY, permissions: { 'calls.view': false } };
+r = await call(mail.send, { user: 'm1', body: msg });
+assert.equal(r.code, 403);
+me = { isOwner: false, isAgent: false, companyId: COMPANY, permissions: { 'calls.view': true } };
+r = await call(mail.send, { user: 'm1', body: { ...msg, attachIcs: false } });
+assert.equal(r.code, 201, 'un membre avec le droit d’appels peut envoyer');
+me = { isOwner: true, companyId: COMPANY, permissions: {} };
+r = await call(mail.send, { body: { ...msg, companyId: '64b0000000000000000000d2' } });
+assert.equal(r.code, 403, 'autre centre refusé');
+
+// export .ics : en-têtes, contenu, droits
+r = await call(fu.ics, { params: { id: APPT } });
+assert.equal(r.code, 200); assert.match(r.headers['Content-Type'], /text\/calendar/); assert.match(r.headers['Content-Disposition'], /rendez-vous-20261103-1000\.ics/);
+assert.match(r.text, /BEGIN:VEVENT[\s\S]*END:VEVENT/);
+r = await call(fu.ics, { params: { id: '64b0000000000000000000ff' } });
+assert.equal(r.code, 404);
+me = { isOwner: false, isAgent: true, companyId: COMPANY, permissions: {} };
+r = await call(fu.ics, { user: 'agent1', params: { id: APPT } });
+assert.equal(r.code, 404, 'un agent ne télécharge pas le rendez-vous d’un autre');
+me = { isOwner: true, companyId: COMPANY, permissions: {} };
+apptDoc.model = 'transfer';
+r = await call(fu.ics, { params: { id: APPT } });
+assert.equal(r.code, 422); apptDoc.model = keep;
+
+// création avec visio, déplacement, annulation (la révision monte à chaque changement)
+const store = [];
+FollowUpItem.create = async (doc) => { const d = { _id: `64b00000000000000000${String(store.length + 1).padStart(4, '0')}`, status: 'todo', sequence: 0, createdAt: new Date(), updatedAt: new Date(), transfers: [], ...doc, save: async () => d, toObject() { const { save, toObject, ...rest } = d; return rest; } }; store.push(d); return d; };
+FollowUpItem.exists = async () => false;
+r = await call(fu.create, { body: { companyId: COMPANY, model: 'appointment', contactName: 'Mme Durand', contactEmail: 'mme@durand.fr', dueAt: new Date(Date.now() + 5 * 86400000).toISOString(), videoLink: true } });
+assert.equal(r.code, 201, JSON.stringify(r.body));
+assert.ok(V.isVisioUrl(r.body.data.videoUrl), 'salle Jitsi générée à la création'); assert.equal(r.body.data.contactEmail, 'mme@durand.fr');
+const created = store[0];
+FollowUpItem.findOne = async (f) => (String(f._id) === String(created._id) ? created : null);
+r = await call(fu.patch, { params: { id: created._id }, body: { dueAt: new Date(Date.now() + 6 * 86400000).toISOString(), durationMinutes: 60 } });
+assert.equal(r.code, 200); assert.equal(r.body.data.sequence, 1, 'déplacer fait monter la révision'); assert.equal(r.body.data.durationMinutes, 60);
+const room = created.videoUrl;
+r = await call(fu.patch, { params: { id: created._id }, body: { videoLink: true } });
+assert.equal(created.videoUrl, room, 'la salle existante est conservée');
+r = await call(fu.patch, { params: { id: created._id }, body: { videoLink: false } });
+assert.equal(r.body.data.videoUrl, '');
+r = await call(fu.patch, { params: { id: created._id }, body: { status: 'canceled' } });
+assert.equal(r.body.data.status, 'canceled'); assert.equal(r.body.data.sequence, 4);
+assert.match(I.buildAppointmentIcs(r.body.data) , /STATUS:CANCELLED/);
+
+console.log('secretariat: ok');

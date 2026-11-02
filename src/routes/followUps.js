@@ -10,6 +10,7 @@ router.get('/assignees', authenticate, c.directory);
 router.get('/missed-calls', authenticate, c.missedCalls);
 router.post('/', authenticate, c.create);
 router.patch('/:id', authenticate, c.patch);
+router.get('/:id/ics', authenticate, c.ics);
 router.post('/:id/transfer', authenticate, c.transfer);
 
 export const followUpRoutes = router;

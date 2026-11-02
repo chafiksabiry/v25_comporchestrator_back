@@ -27,6 +27,8 @@ const schema = new mongoose.Schema(
     note: { type: String, default: '', maxlength: 1000 },
     contactName: { type: String, default: '', maxlength: 120 },
     contactPhone: { type: String, default: '', maxlength: 40 },
+    /** Adresse e-mail de la personne (facultatif) : pré-remplit l'e-mail de confirmation du secrétariat. */
+    contactEmail: { type: String, default: '', maxlength: 254 },
     /** Échéance : date du rappel planifié, début du rendez-vous. */
     dueAt: { type: Date, default: null },
     durationMinutes: { type: Number, default: null },
@@ -39,6 +41,10 @@ const schema = new mongoose.Schema(
     closedById: { type: String, default: '' },
     /** Historique des transferts (qui a confié à qui, avec quelle note). */
     transfers: { type: [transferSchema], default: [] },
+    /** Lien de visio public (salle Jitsi Meet non devinable) d'un rendez-vous ; vide sans visio. */
+    videoUrl: { type: String, default: '', maxlength: 100 },
+    /** Révision du rendez-vous pour le fichier agenda (.ics) : augmente à chaque modification, pour que l'agenda mette à jour. */
+    sequence: { type: Number, default: 0, min: 0 },
     /** Proposé par l'IA puis validé par une personne (information seulement). */
     fromAiPlan: { type: Boolean, default: false },
     /**

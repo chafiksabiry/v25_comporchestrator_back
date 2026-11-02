@@ -18,6 +18,7 @@ import { paymentCheckoutRoutes } from './src/routes/paymentCheckout.js';
 import { inboundSettingsRoutes } from './src/routes/inboundSettings.js';
 import { voicemailRoutes } from './src/routes/voicemails.js';
 import { followUpRoutes } from './src/routes/followUps.js';
+import { emailRoutes } from './src/routes/emails.js';
 import { reachRoutes } from './src/routes/reach.js';
 import { integrationsRoutes } from './src/routes/integrations.js';
 import { publicApiRoutes } from './src/routes/publicApi.js';
@@ -50,6 +51,7 @@ app.use((req, res, next) => {
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, x-user-id, x-agent-id, X-Api-Key');
   res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Expose-Headers', 'Content-Disposition');
 
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
@@ -133,6 +135,7 @@ app.use('/api/public/v1', publicApiRoutes);
 app.use('/api/inbound-settings', inboundSettingsRoutes);
 app.use('/api/voicemails', voicemailRoutes);
 app.use('/api/follow-ups', followUpRoutes);
+app.use('/api/emails', emailRoutes);
 app.use('/api/reach', reachRoutes);
 app.use('/api/company-notifications', companyNotificationRoutes);
 
