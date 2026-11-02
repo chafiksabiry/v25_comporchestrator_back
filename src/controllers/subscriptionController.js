@@ -3,7 +3,8 @@ import { SubscriptionPlan } from '../models/SubscriptionPlan.js';
 import { Subscription } from '../models/Subscription.js';
 import CompanyPayment from '../models/CompanyPayment.js';
 import { stripeService } from '../services/stripeService.js';
-import { callcenterTierFromMetadata } from '../services/callcenterTier.js';
+import { callcenterTierFromMetadata, isCallcenterMetadata } from '../services/callcenterTier.js';
+import { subscriptionUpdateFields } from '../services/subscriptionPeriod.js';
 import { paypalService } from '../services/paypalService.js';
 import {
   resolvePlanByPriceId,
@@ -139,8 +140,9 @@ function sanitizeReturnUrl(url, fallback) {
   return fallback;
 }
 
-function isCallcenterProduct(product) {
-  return metadataObject(product?.metadata).harx_product === 'callcenter';
+/** Produit Call Centre (voir isCallcenterMetadata) ; exporté pour les tests. */
+export function isCallcenterProduct(product) {
+  return isCallcenterMetadata(product?.metadata);
 }
 
 /** Inscrit en base les prix Stripe actifs et récurrents des produits Call Centre qui n'y sont pas encore. */
@@ -156,6 +158,11 @@ async function registerCallcenterPlans(stripePrices) {
         currency: price.currency || 'eur',
         stripePriceId: price.id,
         description: product.description || '',
+        // Les métadonnées du produit (palier, limites) sont lues par les autres services dès le premier achat : la
+        // limite de lignes et de sièges de Nomad Solo ne doit pas attendre la première lecture de l'abonnement.
+        metadata: Object.fromEntries(
+          Object.entries(metadataObject(product.metadata)).map(([key, value]) => [key, String(value ?? '')])
+        ),
       });
     } catch (err) {
       console.warn('[subscriptions/plans] Call Centre plan registration failed:', err.message);
@@ -682,14 +689,10 @@ async function handleCheckoutSessionCompleted(session) {
 }
 
 async function handleSubscriptionUpdated(subscription) {
+  // Statut (trialing, active, past_due, canceled…) toujours à jour ; les dates seulement si Stripe les fournit.
   await Subscription.findOneAndUpdate(
     { stripeSubscriptionId: subscription.id },
-    {
-      status: subscription.status,
-      currentPeriodStart: new Date(subscription.current_period_start * 1000),
-      currentPeriodEnd: new Date(subscription.current_period_end * 1000),
-      cancelAtPeriodEnd: subscription.cancel_at_period_end,
-    }
+    subscriptionUpdateFields(subscription)
   );
 }
 
