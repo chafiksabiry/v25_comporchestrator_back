@@ -599,6 +599,11 @@ export const stripeService = {
     return await getStripe().subscriptions.retrieve(subscriptionId);
   },
 
+  /** Résilie un abonnement Stripe tout de suite (celui qu'un changement d'offre vient de remplacer). */
+  cancelSubscription: async (subscriptionId) => {
+    return await getStripe().subscriptions.cancel(subscriptionId);
+  },
+
   /**
    * PAY-19: does this Stripe customer have a payment method Stripe can charge
    * off-session (default on the customer, or at least one card on file)?
