@@ -5,8 +5,10 @@ import InboundCall from '../models/InboundCall.js';
 import { callerAccess, ScopeError } from '../middleware/companyScope.js';
 import { loadDirectory, loadUserName } from '../services/followUpDirectory.js';
 import { syncAppointment } from '../services/calendarSync.js';
+import { buildAppointmentIcs, icsFilename } from '../services/ics.js';
+import { newVisioUrl } from '../services/visio.js';
 import {
-  allowedPatchFields, canManage, canSeeItem, canUse, MISSED_STATUSES, sortItems, toItem, validateCreate, validatePatch,
+  allowedPatchFields, canManage, canSeeItem, canUse, MISSED_STATUSES, parseListFilters, sortItems, toItem, validateCreate, validatePatch,
   validateTransfer, visibilityFilter,
 } from '../services/followUps.js';
 
@@ -49,6 +51,9 @@ export const followUpController = {
       if (status === 'open') filter.status = 'todo';
       else if (status === 'done' || status === 'canceled' || status === 'todo') filter.status = status;
       else if (status !== undefined) return fail(res, 400, 'Statut invalide.');
+      const extra = parseListFilters(req.query);
+      if (extra.error) return fail(res, 400, extra.error);
+      Object.assign(filter, extra.value);
       const limit = Math.min(200, Math.max(1, Math.floor(Number(req.query.limit)) || 100));
       const base = visibilityFilter(access, new mongoose.Types.ObjectId(access.companyId));
       const [rows, open, mine, overdue] = await Promise.all([
@@ -118,7 +123,8 @@ export const followUpController = {
 
       const item = await FollowUpItem.create({
         companyId, model: v.model, originType: v.originType, originId: v.originId, title: v.title, note: v.note,
-        contactName: v.contactName, contactPhone: v.contactPhone || origin?.from || '',
+        contactName: v.contactName, contactPhone: v.contactPhone || origin?.from || '', contactEmail: v.contactEmail,
+        videoUrl: v.videoLink ? newVisioUrl() : '',
         dueAt: v.dueAt, durationMinutes: v.durationMinutes, assigneeId: assignee.id, assigneeName: assignee.name,
         createdById: access.userId, createdByName: me?.name || '', fromAiPlan: v.fromAiPlan,
         transfers: v.model === 'transfer' ? [{ fromId: access.userId, fromName: me?.name || '', toId: assignee.id, toName: assignee.name, note: v.note }] : [],
@@ -148,7 +154,12 @@ export const followUpController = {
       if (checked.error) return fail(res, 400, checked.error);
       const allowed = allowedPatchFields(access);
       if (Object.keys(checked.value).some((k) => !allowed.includes(k))) return fail(res, 403, 'Vous pouvez seulement clore cet élément ou ajouter une note.');
-      Object.assign(item, checked.value);
+      const { videoLink, ...fields } = checked.value;
+      Object.assign(item, fields);
+      if (videoLink === true && !item.videoUrl) item.videoUrl = newVisioUrl();
+      if (videoLink === false) item.videoUrl = '';
+      // Chaque modification d'un rendez-vous (déplacement, annulation, visio) fait monter la révision du fichier agenda.
+      if (item.model === 'appointment') item.sequence = (item.sequence || 0) + 1;
       if (checked.value.status) {
         const closing = checked.value.status !== 'todo';
         item.closedAt = closing ? new Date() : null;
@@ -162,6 +173,25 @@ export const followUpController = {
     } catch (error) {
       console.error('followUps patch:', error.message);
       fail(res, 500, 'Mise à jour impossible.');
+    }
+  },
+
+  /** Fichier agenda (.ics, RFC 5545) d'un rendez-vous. */
+  async ics(req, res) {
+    try {
+      const access = await context(req, res);
+      if (!access) return;
+      const item = validId(req.params.id) ? await FollowUpItem.findOne({ _id: req.params.id, companyId: access.companyId }) : null;
+      if (!item || !canSeeItem(access, item)) return fail(res, 404, 'Élément introuvable.');
+      if (item.model !== 'appointment' || !item.dueAt) return fail(res, 422, 'Seul un rendez-vous peut être exporté vers un agenda.');
+      const view = toItem(item);
+      res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${icsFilename(view)}"`);
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(200).send(buildAppointmentIcs(view));
+    } catch (error) {
+      console.error('followUps ics:', error.message);
+      fail(res, 500, 'Export du rendez-vous impossible.');
     }
   },
 

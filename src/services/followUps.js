@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { isValidEmail } from './emailService.js';
 
 /**
  * Logique pure des éléments de suivi (écran « À traiter ») : validation, droits et tri. Aucun accès base ni réseau.
@@ -59,6 +60,9 @@ export function validateCreate(body, access, now = Date.now()) {
   if (typeof b.note === 'string' && b.note.length > MAX_NOTE) return bad(`La note doit faire ${MAX_NOTE} caractères au maximum.`);
   const contactName = text(b.contactName, 120);
   const contactPhone = text(b.contactPhone, 40);
+  const contactEmail = typeof b.contactEmail === 'string' ? b.contactEmail.trim().toLowerCase() : '';
+  if (contactEmail && !isValidEmail(contactEmail)) return bad('Adresse e-mail invalide.');
+  if (b.videoLink !== undefined && typeof b.videoLink !== 'boolean') return bad('Option de visio invalide.');
   if (model === 'appointment' && !contactName) return bad('Indiquez la personne concernée par le rendez-vous.');
 
   const due = parseDate(b.dueAt);
@@ -84,7 +88,8 @@ export function validateCreate(body, access, now = Date.now()) {
     value: {
       model, originType, originId, title,
       note: typeof b.note === 'string' ? b.note.trim() : '',
-      contactName, contactPhone,
+      contactName, contactPhone, contactEmail,
+      videoLink: model === 'appointment' && b.videoLink === true,
       dueAt: due.date || null,
       durationMinutes,
       assigneeId,
@@ -118,6 +123,22 @@ export function validatePatch(body, item, now = Date.now()) {
     if (due.date && due.date.getTime() < now - PAST_TOLERANCE_MS && (item.model === 'missed_callback' || item.model === 'appointment')) return bad('La date et l’heure doivent être dans le futur.');
     set.dueAt = due.date || null;
   }
+  if (b.durationMinutes !== undefined) {
+    if (item.model !== 'appointment') return bad('La durée ne concerne que les rendez-vous.');
+    const n = Math.round(Number(b.durationMinutes));
+    if (!Number.isFinite(n) || n < 5 || n > 480) return bad('La durée doit être comprise entre 5 et 480 minutes.');
+    set.durationMinutes = n;
+  }
+  if (b.videoLink !== undefined) {
+    if (item.model !== 'appointment') return bad('Le lien de visio ne concerne que les rendez-vous.');
+    if (typeof b.videoLink !== 'boolean') return bad('Option de visio invalide.');
+    set.videoLink = b.videoLink;
+  }
+  if (b.contactEmail !== undefined) {
+    const e = typeof b.contactEmail === 'string' ? b.contactEmail.trim().toLowerCase() : null;
+    if (e === null || (e && !isValidEmail(e))) return bad('Adresse e-mail invalide.');
+    set.contactEmail = e;
+  }
   if (Object.keys(set).length === 0) return bad('Rien à modifier.');
   return { value: set };
 }
@@ -141,7 +162,7 @@ export const canManage = (access) => access.role !== 'agent' && canUse(access);
 export const canSeeItem = (access, item) => canUse(access) && (access.role !== 'agent' || String(item.assigneeId) === String(access.userId));
 /** Un agent peut clore ou annoter ses éléments ; il ne les retitre pas et ne change pas l'échéance. */
 export function allowedPatchFields(access) {
-  return access.role === 'agent' ? ['status', 'note'] : ['status', 'note', 'title', 'dueAt'];
+  return access.role === 'agent' ? ['status', 'note'] : ['status', 'note', 'title', 'dueAt', 'durationMinutes', 'videoLink', 'contactEmail'];
 }
 
 /** Filtre Mongo des éléments visibles par cette personne. */
@@ -175,6 +196,7 @@ export function toItem(i) {
     note: o.note || '',
     contactName: o.contactName || '',
     contactPhone: o.contactPhone || '',
+    contactEmail: o.contactEmail || '',
     dueAt: o.dueAt || null,
     durationMinutes: o.durationMinutes ?? null,
     assignee: { id: o.assigneeId || '', name: o.assigneeName || '' },
@@ -183,6 +205,9 @@ export function toItem(i) {
     createdAt: o.createdAt,
     closedAt: o.closedAt || null,
     transfers: (o.transfers || []).map((t) => ({ from: { id: t.fromId, name: t.fromName }, to: { id: t.toId, name: t.toName }, note: t.note || '', at: t.at })),
+    videoUrl: o.videoUrl || '',
+    sequence: o.sequence || 0,
+    updatedAt: o.updatedAt || null,
     fromAiPlan: o.fromAiPlan === true,
     calendar: { status: o.calendarStatus || 'not_connected', provider: o.calendarProvider || null },
   };
@@ -205,4 +230,24 @@ export function parseDirectory(membersPayload, agentsPayload) {
     out.set(id, { id, name: text(a.fullName, 120) || text(a.email, 120) || 'Agent', kind: 'agent' });
   }
   return [...out.values()];
+}
+
+/**
+ * Filtres facultatifs de la liste : `model` et période d'échéance (`from`, `to`, dates ISO). Sert la vue semaine de l'agenda.
+ * @returns {{error: string} | {value: {model?: string, dueAt?: {$gte?: Date, $lt?: Date}}}}
+ */
+export function parseListFilters(query) {
+  const q = query && typeof query === 'object' ? query : {};
+  const value = {};
+  if (q.model !== undefined) {
+    if (!MODELS.includes(q.model)) return bad('Modèle de suivi inconnu.');
+    value.model = q.model;
+  }
+  for (const [key, op] of [['from', '$gte'], ['to', '$lt']]) {
+    if (q[key] === undefined || q[key] === '') continue;
+    const d = new Date(q[key]);
+    if (Number.isNaN(d.getTime())) return bad('Période invalide.');
+    value.dueAt = { ...(value.dueAt || {}), [op]: d };
+  }
+  return { value };
 }
