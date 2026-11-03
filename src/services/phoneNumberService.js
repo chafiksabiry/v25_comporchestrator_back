@@ -1,4 +1,5 @@
 import { buildLocalSearchOptions } from './numberSearchOptions.js';
+import { isRejectedRange, rememberRejectedRange } from './rejectedNumberRanges.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { config } from '../config/env.js';
 import telnyx from 'telnyx';
@@ -242,7 +243,7 @@ class PhoneNumberService {
       // are actually compatible with our approved bundle — otherwise the user
       // pays for a line Twilio will refuse (error 21649).
       const compatible = numbers.filter((n) =>
-        this.isCompatibleWithLocalBundle(n.phoneNumber, countryCode)
+        this.isCompatibleWithLocalBundle(n.phoneNumber, countryCode) && !isRejectedRange(n.phoneNumber)
       );
 
       if (compatible.length !== numbers.length) {
@@ -669,6 +670,11 @@ class PhoneNumberService {
       console.log('✅ Twilio purchase successful:', JSON.stringify(purchasedNumber, null, 2));
     } catch (twilioError) {
       console.error('❌ detailed Twilio API Error:', JSON.stringify(twilioError, Object.getOwnPropertyNames(twilioError), 2));
+      if (twilioError.code === 21649) {
+        // Dossier approuvé et du bon type, mais l'opérateur refuse ce numéro : on ne repropose plus sa plage.
+        const range = rememberRejectedRange(phoneNumber);
+        if (range) console.warn(`[telephony] plage ${range} refusée par l'opérateur (21649) : elle n'est plus proposée.`);
+      }
       const error = new Error(`Twilio Purchase Failed: ${twilioError.message}`);
       error.code = twilioError.code;
       error.status = twilioError.status;
