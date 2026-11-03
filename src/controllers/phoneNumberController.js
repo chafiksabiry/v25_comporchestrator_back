@@ -613,7 +613,7 @@ class PhoneNumberController {
         ...base,
         error: 'Regulatory Bundle Required',
         message: withRefund(
-          'Ce numéro ne peut pas être provisionné avec le dossier réglementaire actuel (type de régulation incompatible). Choisissez une ligne géographique fixe (+33 2/3/4/5) ou mettez à jour le Regulatory Bundle France Local dans la console Twilio.'
+          'L’opérateur a refusé ce numéro précis. Choisissez-en un autre ; si le refus se répète sur plusieurs numéros, contactez le support.'
         ),
         moreInfo: error.moreInfo || 'https://www.twilio.com/docs/errors/21649'
       });
