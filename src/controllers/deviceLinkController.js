@@ -71,6 +71,8 @@ export function createDeviceLinkController({
         const stale = active.slice(MAX_ACTIVE_PER_USER).map((d) => d._id);
         if (stale.length) await model.deleteMany({ _id: { $in: stale } });
 
+        // Diagnostic : jamais le code ni le jeton, seulement 4 caractères de l'empreinte et l'échéance.
+        console.log(`[device-link] created h=${hashCode(code).slice(0, 4)} expiresAt=${expiresAt.toISOString()}`);
         return res.status(201).json({ code, expiresAt: expiresAt.toISOString() });
       } catch (e) {
         console.error('[device-link] create failed:', e?.name);
@@ -89,7 +91,18 @@ export function createDeviceLinkController({
         if (!normalized) return res.status(400).json(INVALID);
         // Suppression atomique : un code ne peut être échangé qu'une fois, même en concurrence.
         const doc = await model.findOneAndDelete({ codeHash: hashCode(normalized), expiresAt: { $gt: new Date(now()) } }).lean();
-        if (!doc) return res.status(400).json(INVALID);
+        if (!doc) {
+          // Diagnostic : le code existe-t-il (expiré) ou est-il inconnu (déjà échangé, jamais créé, autre base) ?
+          let reason = 'unknown';
+          try {
+            const h = hashCode(normalized);
+            const any = typeof model.findOne === 'function' ? await model.findOne({ codeHash: h }).select('expiresAt').lean() : null;
+            if (any) reason = 'expired';
+            console.log(`[device-link] redeem miss h=${h.slice(0, 4)} reason=${reason} len=${normalized.length}`);
+          } catch { /* le diagnostic ne doit jamais gêner la réponse */ }
+          return res.status(400).json(INVALID);
+        }
+        console.log(`[device-link] redeem ok h=${hashCode(normalized).slice(0, 4)}`);
         return res.json({ token: doc.bearerToken, userId: doc.userId, companyId: doc.companyId ?? null });
       } catch (e) {
         console.error('[device-link] redeem failed:', e?.name);
