@@ -30,7 +30,7 @@ export function createPortalHandlers(deps = {}) {
       if (!access.companyId) {
         return res.status(404).json({ success: false, error: 'Aucun abonnement à gérer.' });
       }
-      if (access.role === 'agent') {
+      if (access.role !== 'owner') {
         return res.status(403).json({ success: false, error: 'Accès refusé.' });
       }
       try {
