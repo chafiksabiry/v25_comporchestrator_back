@@ -665,13 +665,27 @@ class PhoneNumberService {
       if (currentBundleSid) purchaseOptions.bundleSid = currentBundleSid;
       if (currentAddressSid) purchaseOptions.addressSid = currentAddressSid;
 
-      purchasedNumber = await this.twilioClient.incomingPhoneNumbers
-        .create(purchaseOptions);
+      try {
+        purchasedNumber = await this.twilioClient.incomingPhoneNumbers.create(purchaseOptions);
+      } catch (firstError) {
+        // Twilio classe certains numéros +33 1… « national » : ils exigent le dossier National, pas le dossier Local.
+        const nationalBundle = config.twilioFrenchNationalBundleSid;
+        const canRetry = firstError?.code === 21649 && !bundleSid && phoneNumber.startsWith('+33')
+          && nationalBundle && nationalBundle !== currentBundleSid;
+        if (!canRetry) throw firstError;
+        console.warn(`[telephony] ${phoneNumber} refusé avec le dossier Local (21649) : nouvel essai avec le dossier National ${nationalBundle}.`);
+        purchasedNumber = await this.twilioClient.incomingPhoneNumbers.create({
+          ...purchaseOptions,
+          bundleSid: nationalBundle,
+          ...(config.twilioFrenchNationalAddressSid ? { addressSid: config.twilioFrenchNationalAddressSid } : {}),
+        });
+        console.log('[telephony] achat réussi avec le dossier National.');
+      }
       console.log('✅ Twilio purchase successful:', JSON.stringify(purchasedNumber, null, 2));
     } catch (twilioError) {
       console.error('❌ detailed Twilio API Error:', JSON.stringify(twilioError, Object.getOwnPropertyNames(twilioError), 2));
       if (twilioError.code === 21649) {
-        // Dossier approuvé et du bon type, mais l'opérateur refuse ce numéro : on ne repropose plus sa plage.
+        // Refusé avec les dossiers Local puis National : on ne repropose plus sa plage.
         const range = rememberRejectedRange(phoneNumber);
         if (range) console.warn(`[telephony] plage ${range} refusée par l'opérateur (21649) : elle n'est plus proposée.`);
       }
