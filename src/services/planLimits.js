@@ -65,4 +65,4 @@ export function localNumberLimitPayload(limits, existingCount) {
   };
 }
 
-export { isLineTrialAllowed } from './lineTrialPolicy.js';
+export { isLineTrialAllowed, isLineIncluded } from './lineTrialPolicy.js';

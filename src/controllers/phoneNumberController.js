@@ -9,7 +9,7 @@ import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { getPhoneLinePricing } from '../services/platformPricingService.js';
 import { isFrenchCountry, resolvePhoneProvider } from '../utils/phoneProvider.js';
-import { isLineTrialAllowed, loadCompanyPlanLimits, localNumberLimitPayload } from '../services/planLimits.js';
+import { isLineIncluded, isLineTrialAllowed, loadCompanyPlanLimits, localNumberLimitPayload } from '../services/planLimits.js';
 import { availableIdentities, isAvailable, markAvailable, markUnavailable, presenceSummary, voiceIdentity } from '../services/voicePresenceService.js';
 import InboundCall from '../models/InboundCall.js';
 import { computeInboundStats } from '../services/inboundStats.js';
@@ -272,6 +272,7 @@ class PhoneNumberController {
       // Free trial gate
       // ──────────────────────────────────────────────────────────────────
       let isTrial = false;
+      let isIncluded = false;
       let payment = null;
 
       if (companyId && mongoose.Types.ObjectId.isValid(companyId)) {
@@ -280,11 +281,12 @@ class PhoneNumberController {
         const blocked = localNumberLimitPayload(limits, existingCount);
         if (blocked) return res.status(403).json(blocked);
         isTrial = existingCount === 0 && isLineTrialAllowed(limits);
+        isIncluded = isLineIncluded(limits, existingCount);
       }
 
       const linePricing = await getPhoneLinePricing();
 
-      if (!isTrial) {
+      if (!isTrial && !isIncluded) {
         if (paymentId && mongoose.Types.ObjectId.isValid(paymentId)) {
           payment = await PhoneNumberPayment.findById(paymentId);
         }
@@ -312,6 +314,8 @@ class PhoneNumberController {
             message: 'The payment was not authorized for this exact phone number.'
           });
         }
+      } else if (isIncluded) {
+        console.log(`🎁 Included Nomad Solo line for company ${companyId} — no payment required.`);
       } else {
         console.log(`🎁 First phone line for company ${companyId} — granting ${linePricing.trialDays}-day free trial.`);
       }
@@ -453,6 +457,7 @@ class PhoneNumberController {
       // on the absence of any existing PhoneNumber document for this company.
       // ──────────────────────────────────────────────────────────────────
       let isTrial = false;
+      let isIncluded = false;
       let payment = null;
 
       if (companyId && mongoose.Types.ObjectId.isValid(companyId)) {
@@ -461,11 +466,12 @@ class PhoneNumberController {
         const blocked = localNumberLimitPayload(limits, existingCount);
         if (blocked) return res.status(403).json(blocked);
         isTrial = existingCount === 0 && isLineTrialAllowed(limits);
+        isIncluded = isLineIncluded(limits, existingCount);
       }
 
       const linePricing = await getPhoneLinePricing();
 
-      if (!isTrial) {
+      if (!isTrial && !isIncluded) {
         if (paymentId && mongoose.Types.ObjectId.isValid(paymentId)) {
           payment = await PhoneNumberPayment.findById(paymentId);
         }
@@ -493,6 +499,8 @@ class PhoneNumberController {
             message: 'The payment was not authorized for this exact phone number.'
           });
         }
+      } else if (isIncluded) {
+        console.log(`🎁 Included Nomad Solo line for company ${companyId} — no payment required.`);
       } else {
         console.log(`🎁 First phone line for company ${companyId} — granting ${linePricing.trialDays}-day free trial.`);
       }
