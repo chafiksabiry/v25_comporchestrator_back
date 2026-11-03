@@ -456,6 +456,8 @@ async function resolveSubscriptionPriceId({ priceId, planName }) {
 
 export const stripeService = {
   isConfigured,
+  /** Client Stripe partagé pour les lectures publiques mises en cache (offres de lancement) ; null si Stripe n'est pas configuré. */
+  sharedClient: getSharedClient,
   getSharedClient,
   createOneShotCheckoutSession,
   retrieveSession,
