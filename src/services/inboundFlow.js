@@ -4,11 +4,11 @@ import { FEMALE_VOICES, toPublicSettings } from './inboundSettings.js';
  * Construction pure du TwiML des appels entrants réels (aucun accès réseau ni base).
  * `settings` : réglages publics (voir toPublicSettings) ou null/undefined = valeurs par défaut.
  */
-export const DEFAULT_VOICEMAIL_PROMPT = "Aucun conseiller n'est disponible pour le moment. Laissez votre message après le bip, nous vous rappelons rapidement.";
+export const DEFAULT_VOICEMAIL_PROMPT = "Aucun conseiller n'est disponible pour le moment. Votre message sera enregistré. Laissez-le après le bip, nous vous rappelons rapidement.";
 export const NO_ANSWER_MESSAGE = "Aucun conseiller n'a pu répondre. Veuillez rappeler plus tard. Au revoir.";
 export const NO_AGENT_MESSAGE = "Cette ligne est active sur la plateforme Harx. Aucun conseiller n'est disponible pour le moment. Au revoir.";
 // Variante Nomad Solo : le titulaire est seul, l'appelant entend sa voix, pas celle d'un centre.
-export const SOLO_VOICEMAIL_PROMPT = 'Je ne suis pas disponible pour le moment. Laissez votre message après le bip, je vous rappelle rapidement.';
+export const SOLO_VOICEMAIL_PROMPT = 'Je ne suis pas disponible pour le moment. Votre message sera enregistré. Laissez-le après le bip, je vous rappelle rapidement.';
 export const SOLO_NO_ANSWER_MESSAGE = "Je n'ai pas pu vous répondre. Veuillez rappeler plus tard. Au revoir.";
 export const SOLO_NO_AGENT_MESSAGE = 'Cette ligne n\'est pas joignable pour le moment. Veuillez rappeler plus tard. Au revoir.';
 export const VOICEMAIL_THANKS = 'Merci, votre message a bien été enregistré. Au revoir.';
