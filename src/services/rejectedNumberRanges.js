@@ -1,11 +1,9 @@
 /**
- * Plages de numéros que l'opérateur refuse d'activer avec notre dossier réglementaire (Twilio 21649, alors que le dossier
- * est approuvé et de type « local »). Constat dans les journaux : tous les refus portent sur la plage +33 1 62 04 ; les
- * plages 01 88, 02 19, 03 53 et 04 23 passent. Ces numéros ne sont plus proposés. Toute nouvelle plage refusée est
- * mémorisée jusqu'au prochain redémarrage (le serveur ne la reproposera pas).
+ * Plages de numéros que l'opérateur refuse d'activer même après essai du dossier Local puis du dossier National (Twilio
+ * 21649). Une plage refusée est mémorisée jusqu'au prochain redémarrage : le serveur ne la reproposera plus.
  */
 const PREFIX_LENGTH = 8; // « +3316204 » : indicatif pays, chiffre de zone et les 3 suivants
-const rejected = new Set(['+3316204']);
+const rejected = new Set();
 
 const normalize = (phoneNumber) => String(phoneNumber || '').replace(/[^\d+]/g, '');
 
