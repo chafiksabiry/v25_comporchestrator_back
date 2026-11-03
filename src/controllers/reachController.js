@@ -7,9 +7,9 @@ import { isAvailable } from '../services/voicePresenceService.js';
 import { notifyOwners, pushAvailable, PUSH_UNAVAILABLE_MESSAGE, validateSubscription, vapidConfig } from '../services/webPush.js';
 
 const fail = (res, status, message) => res.status(status).json({ success: false, error: message, message });
-const NOT_OWNER = 'Réservé au titulaire du centre.';
+const NOT_OWNER = 'Réservé au titulaire du compte.';
 
-/** Titulaire authentifié de son centre ; répond lui-même et renvoie null en cas de refus. */
+/** Titulaire authentifié de son compte ; répond lui-même et renvoie null en cas de refus. */
 async function ownerContext(req, res) {
   let access;
   try {
@@ -18,11 +18,11 @@ async function ownerContext(req, res) {
     if (e instanceof ScopeError) { fail(res, e.status, e.message); return null; }
     throw e;
   }
-  if (!access.companyId) { fail(res, 403, 'Aucun centre rattaché à votre compte.'); return null; }
+  if (!access.companyId) { fail(res, 403, 'Aucun compte rattaché.'); return null; }
   if (access.role !== 'owner') { fail(res, 403, NOT_OWNER); return null; }
   const asked = req.query?.companyId ?? req.body?.companyId;
-  if (asked && String(asked) !== access.companyId) { fail(res, 403, 'Ce centre n’est pas le vôtre.'); return null; }
-  if (!mongoose.Types.ObjectId.isValid(access.companyId)) { fail(res, 400, 'Centre invalide.'); return null; }
+  if (asked && String(asked) !== access.companyId) { fail(res, 403, 'Ce compte n’est pas le vôtre.'); return null; }
+  if (!mongoose.Types.ObjectId.isValid(access.companyId)) { fail(res, 400, 'Compte invalide.'); return null; }
   return access;
 }
 

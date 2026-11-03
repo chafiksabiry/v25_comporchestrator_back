@@ -1,6 +1,6 @@
 // Run: node src/tests/inboundFlow.test.js
 import assert from 'node:assert/strict';
-import { buildInboundTwiml, buildNoAnswerTwiml, buildVoicemailDoneTwiml, xmlEscape, pollyVoice, DEFAULT_VOICEMAIL_PROMPT } from '../services/inboundFlow.js';
+import { buildInboundTwiml, buildNoAnswerTwiml, buildVoicemailDoneTwiml, xmlEscape, pollyVoice, DEFAULT_VOICEMAIL_PROMPT, SOLO_VOICEMAIL_PROMPT, SOLO_NO_ANSWER_MESSAGE, SOLO_NO_AGENT_MESSAGE } from '../services/inboundFlow.js';
 import { toPublicSettings } from '../services/inboundSettings.js';
 
 const base = 'https://orch.test';
@@ -75,4 +75,16 @@ assert.equal(buildVoicemailDoneTwiml(), '<Say language="fr-FR" voice="Polly.Lea"
 
 // settings déjà publics acceptés
 assert.ok(buildInboundTwiml({ ...common, settings: toPublicSettings(validated), identities: [] }).includes('greeting/abc123def456.mp3'));
+
+// Variante Nomad Solo : texte à la première personne ; l'entreprise garde les textes actuels.
+const esc = (t) => t.replace(/'/g, '&apos;');
+const soloVm = buildInboundTwiml({ ...common, settings: null, identities: [], solo: true });
+assert.ok(soloVm.includes(esc(SOLO_VOICEMAIL_PROMPT)) && !soloVm.includes('conseiller'));
+assert.ok(buildInboundTwiml({ ...common, settings: { voicemailText: 'Laissez un mot' }, identities: [], solo: true }).includes('>Laissez un mot</Say><Record'), 'le texte personnalisé prime');
+const soloNoAgent = buildInboundTwiml({ ...common, settings: { voicemailEnabled: false }, identities: [], solo: true });
+assert.ok(soloNoAgent.includes(esc(SOLO_NO_AGENT_MESSAGE)) && !soloNoAgent.includes('Harx') && !soloNoAgent.includes('conseiller'));
+const soloNa = buildNoAnswerTwiml({ baseUrl: base, companyId, dialStatus: 'no-answer', settings: { voicemailEnabled: false }, solo: true });
+assert.ok(soloNa.includes(esc(SOLO_NO_ANSWER_MESSAGE)) && !soloNa.includes('conseiller'));
+assert.ok(buildNoAnswerTwiml({ baseUrl: base, companyId, dialStatus: 'no-answer', settings: null, solo: true }).includes(esc(SOLO_VOICEMAIL_PROMPT)));
+assert.ok(buildNoAnswerTwiml({ baseUrl: base, companyId, dialStatus: 'no-answer', settings: { voicemailEnabled: false } }).includes('Aucun conseiller n&apos;a pu répondre'), 'entreprise : texte inchangé');
 console.log('inboundFlow OK');

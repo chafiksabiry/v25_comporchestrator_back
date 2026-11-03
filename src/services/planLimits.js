@@ -54,14 +54,14 @@ export async function loadCompanyPlanLimits(companyId) {
 export function localNumberLimitPayload(limits, existingCount) {
   const max = limits?.activeLocalNumbers;
   if (max == null || existingCount < max) return null;
-  const plan = limits.planName || 'actuel';
+  const plan = limits.planName || 'actuelle';
   return {
     error: 'Active local number limit',
     code: 'ACTIVE_LOCAL_NUMBER_LIMIT',
     max,
     existingCount,
     planName: limits.planName,
-    message: `Le plan ${plan} inclut ${max} numéro${max > 1 ? 's' : ''} local${max > 1 ? 'aux' : ''} actif${max > 1 ? 's' : ''}. Passez à un plan supérieur pour en ajouter.`,
+    message: `L'offre ${plan} inclut ${max} numéro${max > 1 ? 's' : ''} local${max > 1 ? 'aux' : ''} actif${max > 1 ? 's' : ''}. Passez à une offre supérieure pour en ajouter.`,
   };
 }
 

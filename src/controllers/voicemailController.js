@@ -126,7 +126,7 @@ export const voicemailController = {
       const to = pickDestination(vm);
       if (!to) return fail(res, 422, 'Aucun numéro à rappeler : l’appelant n’a pas laissé de numéro exploitable.');
       const line = await callbackLine(vm);
-      if (!line) return fail(res, 422, 'Le rappel n’est disponible que depuis une ligne Twilio de votre centre : la ligne qui a reçu ce message est introuvable.');
+      if (!line) return fail(res, 422, 'Le rappel n’est disponible que depuis la ligne qui a reçu ce message, et elle est introuvable.');
       if (!config.twilioAccountSid || !config.twilioAuthToken) return fail(res, 500, 'La configuration téléphonie du serveur est incomplète.');
       const client = phoneNumberService.twilioClient;
       const appSid = await ensureCallbackApp(client, `https://${req.get('host')}${CALLBACK_WEBHOOK_PATH}`);

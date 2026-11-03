@@ -30,6 +30,18 @@ import { decideInboundRoute, mobileTarget, shouldRingMobileAfter } from '../serv
 import { callPayload, notifyOwners, voicemailPayload } from '../services/webPush.js';
 import { getInboundTest, receiveInboundCall, startInboundTest as startInboundTestSession } from '../services/inboundTestService.js';
 
+/** Titulaire Nomad Solo (une seule personne) : l'appelant entend des messages à la première personne. Toute erreur = texte entreprise. */
+const isSoloCompany = async (companyId) => {
+  if (!companyId) return false;
+  try {
+    const limits = await loadCompanyPlanLimits(companyId);
+    return limits?.product === 'callcenter' && limits?.callcenterTier === 'nomad_solo';
+  } catch (e) {
+    console.error('isSoloCompany:', e.message);
+    return false;
+  }
+};
+
 /** In-memory status for live test-call monitoring (popup). */
 const testCallSessions = new Map();
 
@@ -1240,7 +1252,7 @@ class PhoneNumberController {
       if (!line) {
         return res.status(404).json({
           error: 'Not Found',
-          message: "Ce numéro n'appartient pas à votre entreprise ou n'est plus actif.",
+          message: "Ce numéro n'est pas le vôtre ou n'est plus actif.",
         });
       }
 
@@ -1574,7 +1586,7 @@ class PhoneNumberController {
         return res.status(400).json({ error: 'Bad Request', message: 'Numéro invalide. Utilisez le format international (+…).' });
       }
       if (!line) {
-        return res.status(404).json({ error: 'Not Found', message: "Ce numéro n'appartient pas à votre entreprise ou n'est plus actif." });
+        return res.status(404).json({ error: 'Not Found', message: "Ce numéro n'est pas le vôtre ou n'est plus actif." });
       }
       const provider = String(line.provider || (line.twilioId ? 'twilio' : line.telnyxId ? 'telnyx' : '')).toLowerCase();
       if (provider !== 'twilio' && !line.twilioId) {
@@ -1608,7 +1620,7 @@ class PhoneNumberController {
       const { phoneNumber, companyId } = req.query || {};
       const { e164, line } = await this.findCompanyLine(phoneNumber, companyId);
       if (!e164 || !line) {
-        return res.status(404).json({ error: 'Not Found', message: "Ce numéro n'appartient pas à votre entreprise ou n'est plus actif." });
+        return res.status(404).json({ error: 'Not Found', message: "Ce numéro n'est pas le vôtre ou n'est plus actif." });
       }
       const session = getInboundTest(e164);
       res.json({
@@ -1761,7 +1773,9 @@ class PhoneNumberController {
       console.log(`📞 Appel entrant sur ${to} depuis ${from} : ${where}`);
       // Aucun navigateur présent : le titulaire est prévenu par notification (elle réveille, elle ne décroche pas l'appel).
       if (line?.companyId && !identities.length) void notifyOwners({ companyId: line.companyId }, callPayload({ from, to, callSid }));
+      const solo = await isSoloCompany(line?.companyId);
       return reply(buildInboundTwiml({
+        solo,
         settings,
         baseUrl,
         companyId: line?.companyId ? String(line.companyId) : '',
@@ -1812,7 +1826,8 @@ class PhoneNumberController {
         }
       }
       const settings = call?.companyId ? await InboundSettings.findOne({ companyId: call.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
-      return reply(buildNoAnswerTwiml({ settings, baseUrl, companyId: call?.companyId ? String(call.companyId) : '', dialStatus, mobile: ringMobile ? mobile : null, linePhone: call?.phoneNumber || '', resultUrl: `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result` }));
+      const solo = await isSoloCompany(call?.companyId);
+      return reply(buildNoAnswerTwiml({ solo, settings, baseUrl, companyId: call?.companyId ? String(call.companyId) : '', dialStatus, mobile: ringMobile ? mobile : null, linePhone: call?.phoneNumber || '', resultUrl: `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result` }));
     } catch (error) {
       console.error('Error in handleTwilioInboundDialResult:', error);
       return reply('<Hangup/>');
