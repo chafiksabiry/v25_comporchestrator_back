@@ -966,8 +966,10 @@ export async function syncMinutesFromCalls(companyId) {
     }
 
     if (newKeys.length === 0) return;
+    // Garde atomique : si une lecture concurrente a déjà inscrit l'un de ces appels, on ne débite pas deux fois
+    // (les appels restants seront repris à la lecture suivante).
     await MinutesCompany.findOneAndUpdate(
-      { companyId },
+      { companyId, chargedCallSids: { $nin: newKeys } },
       {
         $inc: {
           minutes: -addedMinutes,
