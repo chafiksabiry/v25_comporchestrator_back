@@ -61,6 +61,19 @@ export function decideOutboundCall({ to, line, subscribed, minutes }) {
   return { ok: true, twiml: buildCallbackTwiml({ callerId: line.phoneNumber, to }) };
 }
 
+/**
+ * Solde de minutes À JOUR avant de décider d'un appel sortant. Le débit d'un appel n'a lieu qu'à la lecture du solde
+ * (syncMinutesFromCalls) et l'octroi des minutes de la période aussi (ensurePlanMinutesGranted) : lire le portefeuille
+ * brut, comme le faisait le webhook, décidait sur un solde périmé tant que personne n'avait relu le solde.
+ * `sync` / `grant` / `readWallet` sont injectés ; un échec de mise à jour n'empêche pas la lecture (solde alors périmé).
+ */
+export async function freshMinutesBalance(companyId, { sync, grant, readWallet }) {
+  try { await grant(companyId); } catch (e) { console.warn('[browser-outbound] octroi des minutes ignoré:', e?.message || e); }
+  try { await sync(companyId); } catch (e) { console.warn('[browser-outbound] débit des appels ignoré:', e?.message || e); }
+  const wallet = await readWallet(companyId);
+  return wallet?.minutes;
+}
+
 export const refusal = buildRefusalTwiml;
 export { xmlEscape };
 

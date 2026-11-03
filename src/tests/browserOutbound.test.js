@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   allowedPrefixes,
   decideOutboundCall,
+  freshMinutesBalance,
   normalizeOutboundDestination,
   OUTBOUND_TICKET_TTL_MS,
   signOutboundTicket,
@@ -45,6 +46,22 @@ for (const [args, msg] of [
   const r = decideOutboundCall(args);
   assert.equal(r.ok, false);
   assert.match(r.message, msg);
+}
+
+// solde frais : l'octroi de la période et le débit des appels passent AVANT la lecture du portefeuille
+{
+  const order = [];
+  let minutes = 0;
+  const deps = {
+    grant: async () => { order.push('grant'); minutes += 30; },
+    sync: async () => { order.push('sync'); minutes -= 30; },
+    readWallet: async () => { order.push('read'); return { minutes }; },
+  };
+  assert.equal(await freshMinutesBalance('c1', deps), 0, 'crédit puis débit appliqués avant la décision');
+  assert.deepEqual(order, ['grant', 'sync', 'read']);
+  const failing = { grant: async () => { throw new Error('x'); }, sync: async () => { throw new Error('y'); }, readWallet: async () => ({ minutes: 4 }) };
+  assert.equal(await freshMinutesBalance('c1', failing), 4, 'un échec de mise à jour ne bloque pas la lecture');
+  assert.equal(await freshMinutesBalance('c1', { ...failing, readWallet: async () => null }), undefined, 'sans portefeuille : refus par decideOutboundCall');
 }
 
 console.log('browserOutbound.test.js OK');

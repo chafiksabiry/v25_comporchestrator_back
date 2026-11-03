@@ -23,7 +23,9 @@ import { ingestRecording } from '../services/voicemailStorage.js';
 import { notifyCompany } from '../services/companyNotificationService.js';
 import { createVoiceToken, pushCredentialFor, VOICE_TOKEN_TTL_S } from '../services/voiceTokenService.js';
 import MinutesCompany from '../models/MinutesCompany.js';
-import { decideOutboundCall, ensureOutboundApp, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, refusal, signOutboundTicket, verifyOutboundTicket } from '../services/browserOutbound.js';
+import { syncMinutesFromCalls } from './escrowController.js';
+import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
+import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, refusal, signOutboundTicket, verifyOutboundTicket } from '../services/browserOutbound.js';
 import { journalForwardedCall, journalUnansweredCall } from '../services/journalCall.js';
 import ReachSettings from '../models/ReachSettings.js';
 import { decideInboundRoute, mobileTarget, shouldRingMobileAfter } from '../services/reach.js';
@@ -1687,12 +1689,12 @@ class PhoneNumberController {
         return send(refusal('Appel non autorisé.'));
       }
       const to = normalizeOutboundDestination(To);
-      const [limits, wallet, line] = await Promise.all([
+      const [limits, minutes, line] = await Promise.all([
         loadCompanyPlanLimits(companyId),
-        MinutesCompany.findOne({ companyId }).select('minutes').lean(),
+        freshMinutesBalance(companyId, { sync: syncMinutesFromCalls, grant: ensurePlanMinutesGranted, readWallet: (id) => MinutesCompany.findOne({ companyId: id }).select('minutes').lean() }),
         PhoneNumber.findOne({ companyId, provider: 'twilio', twilioId: { $exists: true, $ne: null }, status: 'active', billingStatus: { $ne: 'suspended' } }).sort({ createdAt: 1 }).lean(),
       ]);
-      const decision = decideOutboundCall({ to, line, subscribed: Boolean(limits), minutes: wallet?.minutes });
+      const decision = decideOutboundCall({ to, line, subscribed: Boolean(limits), minutes });
       if (!decision.ok) {
         console.warn(`[browser-outbound] refusé pour l'entreprise ${companyId} : ${decision.message}`);
         return send(refusal(decision.message));
