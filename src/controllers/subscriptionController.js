@@ -1,3 +1,4 @@
+import { createLaunchOffersService } from '../services/launchOffers.js';
 import mongoose from 'mongoose';
 import { SubscriptionPlan } from '../models/SubscriptionPlan.js';
 import { Subscription } from '../models/Subscription.js';
@@ -170,7 +171,15 @@ async function registerCallcenterPlans(stripePrices) {
   }
 }
 
+const launchOffers = createLaunchOffersService({ getClient: () => stripeService.sharedClient() });
+
 export const subscriptionController = {
+  /** GET /api/subscriptions/launch-offers (public) : remises de lancement Call Centre lues dans Stripe, mises en cache 5 min. */
+  getLaunchOffers: async (_req, res) => {
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json(await launchOffers.get());
+  },
+
   getPlans: async (req, res) => {
     try {
       const callcenterOnly = req.query.product === 'callcenter';
