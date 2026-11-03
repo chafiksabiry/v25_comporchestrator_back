@@ -674,21 +674,47 @@ class PhoneNumberService {
           && nationalBundle && nationalBundle !== currentBundleSid;
         if (!canRetry) throw firstError;
         console.warn(`[telephony] ${phoneNumber} refusé avec le dossier Local (21649) : nouvel essai avec le dossier National ${nationalBundle}.`);
-        // L'adresse doit être l'une de celles rattachées au dossier National : on la lit dans le dossier lui-même.
-        let nationalAddress = null;
+        // L'adresse doit être contenue dans le dossier National. On essaie, dans l'ordre : la dernière qui a fonctionné,
+        // celles rattachées au dossier, celle configurée, puis les adresses françaises validées du compte.
+        const candidates = [];
+        const add = (sid) => { if (sid && !candidates.includes(sid)) candidates.push(sid); };
+        add(this._nationalAddressSid);
         try {
           const assignments = await this.twilioClient.numbers.v2.regulatoryCompliance.bundles(nationalBundle).itemAssignments.list({ limit: 50 });
-          nationalAddress = addressSidFromAssignments(assignments);
+          console.log(`[telephony] éléments du dossier National : ${assignments.map((a) => a.objectSid).join(', ') || '(aucun)'}`);
+          add(addressSidFromAssignments(assignments));
         } catch (assignErr) {
           console.warn(`[telephony] éléments du dossier ${nationalBundle} illisibles:`, assignErr.message);
         }
-        nationalAddress = nationalAddress || config.twilioFrenchNationalAddressSid || null;
-        console.log(`[telephony] dossier National ${nationalBundle}, adresse ${nationalAddress || '(aucune)'}`);
-        purchasedNumber = await this.twilioClient.incomingPhoneNumbers.create({
-          ...purchaseOptions,
-          bundleSid: nationalBundle,
-          ...(nationalAddress ? { addressSid: nationalAddress } : {}),
-        });
+        add(config.twilioFrenchNationalAddressSid);
+        try {
+          const addresses = await this.twilioClient.addresses.list({ limit: 50 });
+          addresses.filter((ad) => ad.isoCountry === 'FR' && ad.validated).forEach((ad) => add(ad.sid));
+        } catch (listErr) {
+          console.warn('[telephony] adresses du compte illisibles:', listErr.message);
+        }
+        console.log(`[telephony] dossier National ${nationalBundle}, adresses à essayer : ${candidates.join(', ') || '(aucune)'}`);
+        let lastError = firstError;
+        for (const addressSid of candidates.length ? candidates.slice(0, 8) : [null]) {
+          try {
+            purchasedNumber = await this.twilioClient.incomingPhoneNumbers.create({
+              ...purchaseOptions,
+              bundleSid: nationalBundle,
+              ...(addressSid ? { addressSid } : {}),
+            });
+            if (addressSid) {
+              this._nationalAddressSid = addressSid;
+              console.log(`[telephony] adresse ${addressSid} acceptée par le dossier National.`);
+            }
+            lastError = null;
+            break;
+          } catch (tryError) {
+            lastError = tryError;
+            if (!/not contained in bundle/i.test(String(tryError?.message || ''))) break;
+            console.warn(`[telephony] adresse ${addressSid} absente du dossier National, suivante.`);
+          }
+        }
+        if (lastError) throw lastError;
         console.log('[telephony] achat réussi avec le dossier National.');
       }
       console.log('✅ Twilio purchase successful:', JSON.stringify(purchasedNumber, null, 2));
