@@ -23,3 +23,9 @@ export function rememberRejectedRange(phoneNumber) {
 export function rejectedRanges() {
   return [...rejected];
 }
+
+/** Adresse (SID « AD… ») parmi les éléments rattachés à un dossier réglementaire ; null si aucune. */
+export function addressSidFromAssignments(assignments) {
+  const hit = (assignments || []).map((a) => String(a?.objectSid || a?.object_sid || '')).find((sid) => /^AD[0-9a-f]{32}$/i.test(sid));
+  return hit || null;
+}

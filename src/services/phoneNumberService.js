@@ -1,5 +1,5 @@
 import { buildLocalSearchOptions } from './numberSearchOptions.js';
-import { isRejectedRange, rememberRejectedRange } from './rejectedNumberRanges.js';
+import { addressSidFromAssignments, isRejectedRange, rememberRejectedRange } from './rejectedNumberRanges.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { config } from '../config/env.js';
 import telnyx from 'telnyx';
@@ -674,10 +674,20 @@ class PhoneNumberService {
           && nationalBundle && nationalBundle !== currentBundleSid;
         if (!canRetry) throw firstError;
         console.warn(`[telephony] ${phoneNumber} refusé avec le dossier Local (21649) : nouvel essai avec le dossier National ${nationalBundle}.`);
+        // L'adresse doit être l'une de celles rattachées au dossier National : on la lit dans le dossier lui-même.
+        let nationalAddress = null;
+        try {
+          const assignments = await this.twilioClient.numbers.v2.regulatoryCompliance.bundles(nationalBundle).itemAssignments.list({ limit: 50 });
+          nationalAddress = addressSidFromAssignments(assignments);
+        } catch (assignErr) {
+          console.warn(`[telephony] éléments du dossier ${nationalBundle} illisibles:`, assignErr.message);
+        }
+        nationalAddress = nationalAddress || config.twilioFrenchNationalAddressSid || null;
+        console.log(`[telephony] dossier National ${nationalBundle}, adresse ${nationalAddress || '(aucune)'}`);
         purchasedNumber = await this.twilioClient.incomingPhoneNumbers.create({
           ...purchaseOptions,
           bundleSid: nationalBundle,
-          ...(config.twilioFrenchNationalAddressSid ? { addressSid: config.twilioFrenchNationalAddressSid } : {}),
+          ...(nationalAddress ? { addressSid: nationalAddress } : {}),
         });
         console.log('[telephony] achat réussi avec le dossier National.');
       }
