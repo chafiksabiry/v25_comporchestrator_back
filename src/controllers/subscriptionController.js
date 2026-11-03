@@ -97,7 +97,7 @@ async function resolveLivePlanLimits(plan) {
   }
 }
 
-function returnBase() {
+export function returnBase() {
   return (
     process.env.STRIPE_RETURN_BASE_URL
     || process.env.PAYPAL_RETURN_BASE_URL
@@ -109,7 +109,7 @@ function publicApiBase() {
   return config.publicApiBaseUrl;
 }
 
-function sanitizeReturnUrl(url, fallback) {
+export function sanitizeReturnUrl(url, fallback) {
   if (!url || typeof url !== 'string') return fallback;
   try {
     const parsed = new URL(url);
