@@ -44,6 +44,9 @@ export const config = {
   twilioFrenchBundleSid: process.env.TWILIO_FRENCH_BUNDLE_SID || 'BUf007aeefc1a71ad9ac096a4d205563b0',
   twilioFrenchAddressSid: process.env.TWILIO_FRENCH_ADDRESS_SID || 'ADfa022505e9b0433a23c8b4f6e56cf15a',
   // Dossier « France: National - Business » (approuvé) et son adresse : requis pour les numéros que Twilio classe « national » (ex. +33 1 62 04).
+  // Clés de notification push Twilio (console Twilio > Voice > Push Credentials) : APNs VoIP pour iOS, FCM pour Android.
+  twilioPushCredentialSidIos: process.env.TWILIO_PUSH_CREDENTIAL_SID_IOS || '',
+  twilioPushCredentialSidAndroid: process.env.TWILIO_PUSH_CREDENTIAL_SID_ANDROID || '',
   twilioFrenchNationalBundleSid: process.env.TWILIO_FRENCH_NATIONAL_BUNDLE_SID || 'BUe5aead3361e804e3aa18d455178dd069',
   twilioFrenchNationalAddressSid: process.env.TWILIO_FRENCH_NATIONAL_ADDRESS_SID || 'AD5d0160ef54cf901e419ac73e873b970e',
   twilioFrenchBusinessInfo: {

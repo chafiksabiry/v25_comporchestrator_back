@@ -21,7 +21,7 @@ import { mapTwilioCallStatus } from '../services/twilioTestCallStatus.js';
 import { analyzeVoicemail } from '../services/voicemailAnalysis.js';
 import { ingestRecording } from '../services/voicemailStorage.js';
 import { notifyCompany } from '../services/companyNotificationService.js';
-import { createVoiceToken, VOICE_TOKEN_TTL_S } from '../services/voiceTokenService.js';
+import { createVoiceToken, pushCredentialFor, VOICE_TOKEN_TTL_S } from '../services/voiceTokenService.js';
 import MinutesCompany from '../models/MinutesCompany.js';
 import { decideOutboundCall, ensureOutboundApp, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, refusal, signOutboundTicket, verifyOutboundTicket } from '../services/browserOutbound.js';
 import { journalForwardedCall, journalUnansweredCall } from '../services/journalCall.js';
@@ -1639,18 +1639,20 @@ class PhoneNumberController {
       }
       const identity = voiceIdentity(userId);
       const client = phoneNumberService.twilioClient;
+      // Application native : le jeton porte la clé push de sa plateforme pour recevoir les appels application fermée.
+      const pushCredentialSid = pushCredentialFor(req.body?.platform, config);
       // Appel sortant du navigateur (« Mon poste ») : le jeton porte l'application TwiML sortante et une preuve signée
       // de l'entreprise pour laquelle il est émis (le contrôle d'appartenance a été fait par le garde de la route).
       if (req.body?.outbound === true) {
         const companyId = String(req.body?.companyId || '');
         if (!mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ error: 'Invalid companyId' });
         const appSid = await ensureOutboundApp(client, `https://${req.get('host')}${OUTBOUND_WEBHOOK_PATH}`);
-        const outboundToken = await createVoiceToken({ client, accountSid: config.twilioAccountSid, identity, outgoingApplicationSid: appSid });
+        const outboundToken = await createVoiceToken({ client, accountSid: config.twilioAccountSid, identity, outgoingApplicationSid: appSid, pushCredentialSid });
         const ticket = signOutboundTicket({ secret: config.twilioAuthToken, companyId, identity });
         return res.json({ success: true, data: { token: outboundToken, identity, expiresIn: VOICE_TOKEN_TTL_S, params: { CompanyId: companyId, Ticket: ticket } } });
       }
-      const token = await createVoiceToken({ client, accountSid: config.twilioAccountSid, identity });
-      res.json({ success: true, data: { token, identity, expiresIn: VOICE_TOKEN_TTL_S } });
+      const token = await createVoiceToken({ client, accountSid: config.twilioAccountSid, identity, pushCredentialSid });
+      res.json({ success: true, data: { token, identity, expiresIn: VOICE_TOKEN_TTL_S, ...(pushCredentialSid ? { push: true } : {}) } });
     } catch (error) {
       console.error('Error in voiceToken:', error.message);
       res.status(500).json({ error: 'Failed to create voice token', message: 'Téléphone du navigateur indisponible pour le moment.' });

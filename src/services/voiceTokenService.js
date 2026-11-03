@@ -23,11 +23,23 @@ export async function signingKey(client) {
   return cached;
 }
 
-/** `outgoingApplicationSid` : autorise aussi les appels sortants du navigateur (rappels), traités par cette application TwiML. */
-export async function createVoiceToken({ client, accountSid, identity, outgoingApplicationSid }) {
+/**
+ * Clé de notification push (iOS : APNs VoIP, Android : Firebase) à joindre au jeton d'une application native : sans elle,
+ * Twilio ne peut pas réveiller l'application fermée pour un appel entrant. Null si la plateforme est inconnue ou non configurée.
+ */
+export function pushCredentialFor(platform, cfg) {
+  const sid = platform === 'ios' ? cfg?.twilioPushCredentialSidIos : platform === 'android' ? cfg?.twilioPushCredentialSidAndroid : null;
+  return typeof sid === 'string' && /^CR[0-9a-f]{32}$/i.test(sid) ? sid : null;
+}
+
+/**
+ * `outgoingApplicationSid` : autorise aussi les appels sortants du navigateur (rappels), traités par cette application TwiML.
+ * `pushCredentialSid` : jeton d'une application native (réception des appels application fermée).
+ */
+export async function createVoiceToken({ client, accountSid, identity, outgoingApplicationSid, pushCredentialSid }) {
   const key = await signingKey(client);
   const { AccessToken } = twilio.jwt;
   const token = new AccessToken(accountSid, key.sid, key.secret, { identity, ttl: VOICE_TOKEN_TTL_S });
-  token.addGrant(new AccessToken.VoiceGrant({ incomingAllow: true, ...(outgoingApplicationSid ? { outgoingApplicationSid } : {}) }));
+  token.addGrant(new AccessToken.VoiceGrant({ incomingAllow: true, ...(outgoingApplicationSid ? { outgoingApplicationSid } : {}), ...(pushCredentialSid ? { pushCredentialSid } : {}) }));
   return token.toJwt();
 }
