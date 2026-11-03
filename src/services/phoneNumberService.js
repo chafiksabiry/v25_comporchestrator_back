@@ -1,3 +1,4 @@
+import { buildLocalSearchOptions } from './numberSearchOptions.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { config } from '../config/env.js';
 import telnyx from 'telnyx';
@@ -230,23 +231,7 @@ class PhoneNumberService {
       // without it Twilio AvailablePhoneNumbers often returns only ~10 rows.
       // Twilio SDK param is voiceEnabled (not voice).
       const pageSize = Math.min(Math.max(limit, 50), 100);
-      if (countryCode === 'FR' && !areaCode) {
-        numbers = await listWithTimeout({
-          limit: pageSize,
-          pageSize,
-          voiceEnabled: true
-        });
-      } else {
-        const searchOptions = {
-          limit: pageSize,
-          pageSize,
-          voiceEnabled: true
-        };
-        if (areaCode) {
-          searchOptions.areaCode = areaCode;
-        }
-        numbers = await listWithTimeout(searchOptions);
-      }
+      numbers = await listWithTimeout(buildLocalSearchOptions({ pageSize, areaCode, locality: searchParams.locality }));
 
       console.log(`✅ Found ${numbers.length} numbers for ${countryCode}`);
 
