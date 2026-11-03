@@ -216,13 +216,14 @@ class PhoneNumberController {
 
   async searchTwilioNumbers(req, res) {
     try {
-      const { countryCode, areaCode, limit } = req.query;
+      const { countryCode, areaCode, limit, locality } = req.query;
       console.log("countryCode", countryCode);
       console.log("areaCode", areaCode);
       console.log("limit", limit);
       const numbers = await phoneNumberService.searchTwilioNumbers({
         countryCode: countryCode || 'US',
         areaCode,
+        locality,
         limit: parseInt(limit) || 50
       });
       res.json(numbers);
