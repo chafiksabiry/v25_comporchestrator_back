@@ -2,7 +2,12 @@ import Stripe from 'stripe';
 import { config } from '../config/env.js';
 import { resolvePromotionCodeId, withPromotion } from './promotionCode.js';
 
+let stripeOverride = null;
+/** Réservé aux tests : injecte un faux client Stripe (null pour revenir au vrai). */
+export function __setStripeClientForTests(client) { stripeOverride = client; }
+
 function getStripe() {
+  if (stripeOverride) return stripeOverride;
   if (!config.stripeSecretKey) {
     const err = new Error('Stripe not configured (STRIPE_SECRET_KEY)');
     err.code = 'STRIPE_NOT_CONFIGURED';
@@ -475,7 +480,8 @@ export const stripeService = {
           },
         ],
         mode: 'subscription',
-        payment_method_collection: 'if_required',
+        // Plus d'essai sans carte : la carte est demandée dès la souscription.
+        payment_method_collection: 'always',
         success_url: successUrl,
         cancel_url: cancelUrl,
         redirect_on_completion: 'always',
@@ -485,7 +491,6 @@ export const stripeService = {
           ...metadata
         },
         subscription_data: {
-          trial_period_days: 7, 
           metadata: {
             userId: userId.toString(),
             ...metadata
@@ -509,15 +514,12 @@ export const stripeService = {
       mode: 'subscription',
       payment_method_types: ['card'],
       line_items: [{ price: priceId, quantity: 1 }],
-      // Skip asking for a card when nothing is actually due today (free
-      // trial, or a 100%-off promo code applied) — Stripe still collects
-      // one automatically before any future real charge becomes due.
-      payment_method_collection: 'if_required',
+      // Plus d'essai sans carte : la carte est demandée dès la souscription.
+      payment_method_collection: 'always',
       redirect_on_completion: 'never',
       client_reference_id: userId.toString(),
       metadata: { userId: userId.toString(), ...metadata },
       subscription_data: {
-        trial_period_days: 7,
         metadata: { userId: userId.toString(), ...metadata },
       },
     }, promotionCodeId));
