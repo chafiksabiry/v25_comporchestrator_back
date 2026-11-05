@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import FollowUpItem from '../models/FollowUpItem.js';
 import Voicemail from '../models/Voicemail.js';
+import ReceptionDirectory from '../models/ReceptionDirectory.js';
 import InboundCall from '../models/InboundCall.js';
 import { callerAccess, scopeToCompany, ScopeError } from '../middleware/companyScope.js';
 import { loadDirectory, loadUserName } from '../services/followUpDirectory.js';
@@ -87,9 +88,18 @@ async function context(req, res) {
 
 const bearer = (req) => req.headers.authorization?.split(' ')[1];
 
+/**
+ * Une secrétaire peut réserver un rendez-vous pour une personne de l'annuaire de son entreprise (celles qui ont un compte) : c'est la seule
+ * liste de collaborateurs qu'elle voit. Elle ne lit pas les listes de membres et de secrétaires de l'entreprise.
+ */
+async function directoryPeople(access) {
+  const doc = await ReceptionDirectory.findOne({ companyId: new mongoose.Types.ObjectId(access.companyId) }).lean();
+  return (doc?.entries || []).filter((e) => e.userId && e.userId !== access.userId).map((e) => ({ id: e.userId, name: e.name, kind: e.kind === 'owner' ? 'owner' : 'member' }));
+}
+
 /** Collaborateurs assignables : annuaire du centre + soi-même. Un agent ne peut se confier les éléments qu'à lui-même. */
 async function assignees(req, access) {
-  const list = canManage(access) ? await loadDirectory({ companyId: access.companyId, token: bearer(req) }) : [];
+  const list = canManage(access) ? await loadDirectory({ companyId: access.companyId, token: bearer(req) }) : await directoryPeople(access);
   if (!list.some((p) => p.id === access.userId)) list.unshift({ id: access.userId, name: (await loadUserName(access.userId)) || 'Moi', kind: access.role === 'owner' ? 'owner' : access.role });
   return list;
 }
@@ -109,13 +119,15 @@ export const followUpController = {
       Object.assign(filter, extra.value);
       const limit = Math.min(200, Math.max(1, Math.floor(Number(req.query.limit)) || 100));
       const base = visibilityFilter(access, new mongoose.Types.ObjectId(access.companyId));
-      const [rows, open, mine, overdue] = await Promise.all([
+      const [rows, open, mine, overdue, unseen] = await Promise.all([
         FollowUpItem.find(filter).sort({ createdAt: -1 }).limit(limit).lean(),
         FollowUpItem.countDocuments({ ...base, status: 'todo' }),
         FollowUpItem.countDocuments({ companyId: base.companyId, assigneeId: access.userId, status: 'todo' }),
         FollowUpItem.countDocuments({ ...base, status: 'todo', dueAt: { $lt: new Date() } }),
+        // Messages pris à l'accueil et pas encore ouverts par la personne visée (alerte de l'application).
+        FollowUpItem.countDocuments({ companyId: base.companyId, model: 'message_taken', assigneeId: access.userId, status: 'todo', seenAt: null }),
       ]);
-      res.json({ success: true, data: { items: sortItems(rows).map(toItem), counts: { open, mine, overdue } } });
+      res.json({ success: true, data: { items: sortItems(rows).map(toItem), counts: { open, mine, overdue, newMessages: unseen } } });
     } catch (error) {
       console.error('followUps list:', error.message);
       fail(res, 500, 'Lecture des éléments à traiter impossible.');
@@ -155,7 +167,8 @@ export const followUpController = {
     try {
       const access = await context(req, res);
       if (!access) return;
-      if (!canManage(access)) return fail(res, 403, NOT_ALLOWED);
+      // Titulaire et responsables créent tout ; une secrétaire réserve seulement des rendez-vous (pour elle ou une personne de l'annuaire).
+      if (!canManage(access) && !(access.role === 'agent' && req.body?.model === 'appointment')) return fail(res, 403, NOT_ALLOWED);
       const checked = validateCreate(req.body, access);
       if (checked.error) return fail(res, 400, checked.error);
       const v = checked.value;
@@ -313,6 +326,7 @@ export const followUpController = {
       const me = people.find((p) => p.id === access.userId);
       item.transfers.push({ fromId: item.assigneeId, fromName: item.assigneeName, toId: to.id, toName: to.name, note: checked.value.note, at: new Date() });
       item.assigneeId = to.id; item.assigneeName = to.name;
+      if (item.model === 'message_taken') item.seenAt = null; // le nouveau destinataire est alerté
       await item.save();
       console.log(`[followUps] transfert ${item._id} par ${me?.id || access.userId}`);
       res.json({ success: true, data: toItem(item) });
