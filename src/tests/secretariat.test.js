@@ -340,4 +340,15 @@ r = await call(fu.patch, { params: { id: created._id }, body: { status: 'cancele
 assert.equal(r.body.data.status, 'canceled'); assert.equal(r.body.data.sequence, 4);
 assert.match(I.buildAppointmentIcs(r.body.data) , /STATUS:CANCELLED/);
 
+// signature : ajoutée une fois, jamais en double si le message se termine déjà par elle
+{
+  const { appendSignature } = await import('../services/emailService.js');
+  assert.equal(appendSignature('Bonjour', 'Chafik SABIRY\nDIGITAL ASSURANCE'), 'Bonjour\n\nChafik SABIRY\nDIGITAL ASSURANCE');
+  const withSig = 'Bonjour,\n\ntest\n\nCordialement,\nChafik SABIRY\nDIGITAL ASSURANCE';
+  assert.equal(appendSignature(withSig, 'Chafik SABIRY\nDIGITAL ASSURANCE'), withSig, 'déjà signé : rien n’est ajouté');
+  assert.equal(appendSignature(withSig, '  chafik  sabiry digital assurance '), withSig, 'sans tenir compte de la casse ni des espaces');
+  assert.equal(appendSignature('Bonjour', ''), 'Bonjour');
+  assert.equal(appendSignature('Bonjour', undefined), 'Bonjour');
+  assert.equal(appendSignature('Bonjour DIGITAL ASSURANCE merci', 'DIGITAL ASSURANCE'), 'Bonjour DIGITAL ASSURANCE merci\n\nDIGITAL ASSURANCE', 'une simple mention au milieu ne compte pas');
+}
 console.log('secretariat: ok');
