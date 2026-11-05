@@ -10,7 +10,14 @@ import { zohoAccountsUrl } from './adapters/zoho.js';
  * Dynamics 365 : pas d'OAuth HARX (jeton à renouveler non géré) ; le centre utilise l'application Azure de son locataire.
  * Points d'accès Zoho OAuth : À VÉRIFIER (documentation non joignable).
  */
-export const OAUTH_ENV = { zoho: ['ZOHO_OAUTH_CLIENT_ID', 'ZOHO_OAUTH_CLIENT_SECRET', 'ZOHO_OAUTH_REDIRECT_URI', 'INTEGRATIONS_RETURN_URL'] };
+export const OAUTH_ENV = {
+  zoho: ['ZOHO_OAUTH_CLIENT_ID', 'ZOHO_OAUTH_CLIENT_SECRET', 'ZOHO_OAUTH_REDIRECT_URI', 'INTEGRATIONS_RETURN_URL'],
+  // Secrétariat (services/secretariatConnections.js) : clés préfixées pour ne jamais se mélanger aux fournisseurs CRM.
+  // Les URI de redirection (GOOGLE_REDIRECT_URI, MICROSOFT_REDIRECT_URI, ZOOM_REDIRECT_URI) ont une valeur par défaut : non exigées ici.
+  'secretariat:google': ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'],
+  'secretariat:microsoft': ['MICROSOFT_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET'],
+  'secretariat:zoom': ['ZOOM_CLIENT_ID', 'ZOOM_CLIENT_SECRET'],
+};
 
 export function oauthStatus(provider, env = process.env) {
   const needed = OAUTH_ENV[provider];

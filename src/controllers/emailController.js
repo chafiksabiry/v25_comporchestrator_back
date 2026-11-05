@@ -5,6 +5,8 @@ import { callerAccess, ScopeError } from '../middleware/companyScope.js';
 import { loadUserProfile } from '../services/followUpDirectory.js';
 import { canManage, toItem } from '../services/followUps.js';
 import { buildAppointmentIcs } from '../services/ics.js';
+import { sendViaConnection } from '../services/secretariatActions.js';
+import { SecretariatError } from '../services/secretariatProviders/common.js';
 import { loadEmailIdentity } from '../services/secretariatTools.js';
 import {
   buildPayload, checkRate, isEmailConfigured, isValidEmail, limits, NOT_CONFIGURED_MESSAGE, sendMail, senderEmail, validateSend,
@@ -13,6 +15,8 @@ import {
 const fail = (res, status, message, code) => res.status(status).json({ success: false, error: code || message, message });
 const NOT_ALLOWED = 'Seuls le titulaire et les membres autorisés à gérer les appels peuvent envoyer des e-mails.';
 const HOUR = 3600_000;
+const REFUSED = 'Votre messagerie connectée a refusé l\'envoi. Reconnectez-la dans Paramétrage > Outils.';
+const UNAVAILABLE = 'Votre messagerie connectée est momentanément indisponible. Aucun e-mail n’a été envoyé : réessayez dans un instant.';
 
 /** Droits de l'appelant : titulaire, ou membre avec le droit d'appels ; jamais un agent. Répond lui-même et renvoie null en cas de refus. */
 async function context(req, res) {
@@ -52,7 +56,9 @@ export const emailController = {
       if (!access) return;
       const max = limits();
       const used = await usage(new mongoose.Types.ObjectId(access.companyId));
-      res.json({ success: true, data: { configured: isEmailConfigured(), limits: max, remainingThisHour: Math.max(0, max.perHour - used.hour), remainingToday: Math.max(0, max.perDay - used.day) } });
+      const { provider } = await loadEmailIdentity(access.companyId);
+      // Messagerie connectée (google / microsoft) : l'envoi ne dépend pas du service d'e-mail HARX.
+      res.json({ success: true, data: { configured: provider !== 'platform' || isEmailConfigured(), provider, limits: max, remainingThisHour: Math.max(0, max.perHour - used.hour), remainingToday: Math.max(0, max.perDay - used.day) } });
     } catch (error) {
       console.error('emails config:', error.message);
       fail(res, 500, 'Lecture de la configuration des e-mails impossible.');
@@ -81,8 +87,11 @@ export const emailController = {
     try {
       const access = await context(req, res);
       if (!access) return;
-      // Rien ne part sans service d'e-mail : message clair, aucune trace d'envoi.
-      if (!isEmailConfigured()) return fail(res, 503, NOT_CONFIGURED_MESSAGE, 'email_not_configured');
+      // Fournisseur d'envoi du centre : `platform` (expéditeur HARX) ou la messagerie connectée (google / microsoft).
+      const identity = await loadEmailIdentity(access.companyId);
+      const connected = identity.provider === 'google' || identity.provider === 'microsoft';
+      // Rien ne part sans service d'e-mail : message clair, aucune trace d'envoi. (Le service HARX n'est pas requis pour une messagerie connectée.)
+      if (!connected && !isEmailConfigured()) return fail(res, 503, NOT_CONFIGURED_MESSAGE, 'email_not_configured');
       const checked = validateSend(req.body);
       if (checked.error) return fail(res, 400, checked.error);
       const v = checked.value;
@@ -93,8 +102,7 @@ export const emailController = {
 
       const me = await loadUserProfile(access.userId);
       // Identité d'envoi du centre (écran « Outils ») : nom affiché, adresse de réponse et signature, quand ils sont renseignés.
-      // L'adresse d'expédition technique reste celle de la plateforme.
-      const identity = await loadEmailIdentity(access.companyId);
+      // Fournisseur `platform` : l'adresse d'expédition technique reste celle de la plateforme.
       if (!identity.replyTo && !isValidEmail(me.email)) return fail(res, 422, 'L’adresse e-mail de votre compte est introuvable : impossible de fixer l’adresse de réponse.');
 
       let icsContent = null;
@@ -114,8 +122,20 @@ export const emailController = {
       });
       const base = { companyId, sentById: access.userId, sentByName: me.name, to: v.to, subject: v.subject, template: v.template, followUpId: v.followUpId, withIcs: Boolean(icsContent) };
       try {
-        await sendMail(payload);
+        if (connected) {
+          // Envoi par le compte du centre (From = compte connecté). Un refus n'est JAMAIS rattrapé par l'expéditeur HARX.
+          await sendViaConnection(access.companyId, identity.provider, {
+            fromName: centerName, to: v.to, subject: v.subject, text: payload.textContent, html: payload.htmlContent, replyTo: payload.replyTo,
+            attachments: (payload.attachment || []).map((a) => ({ name: a.name, contentType: 'text/calendar; charset=UTF-8; method=PUBLISH', contentBase64: a.content })),
+          });
+        } else await sendMail(payload);
       } catch (error) {
+        if (connected) {
+          const e = error instanceof SecretariatError ? error : new SecretariatError('provider_error', '');
+          console.error(`emails send (${identity.provider}): ${e.code}`);
+          await EmailLog.create({ ...base, status: 'failed', error: `provider_${e.code}` }).catch(() => {});
+          return e.code === 'provider_error' ? fail(res, 502, UNAVAILABLE, 'email_provider_unavailable') : fail(res, e.code === 'unavailable' ? 503 : 502, REFUSED, 'email_provider_refused');
+        }
         console.error('emails send:', error.message);
         await EmailLog.create({ ...base, status: 'failed', error: String(error.message || '').slice(0, 200) }).catch(() => {});
         return fail(res, 502, 'L’e-mail n’a pas pu être envoyé. Réessayez dans un instant.', 'email_send_failed');

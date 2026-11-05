@@ -42,14 +42,19 @@ const schema = new mongoose.Schema(
     /** Historique des transferts (qui a confié à qui, avec quelle note). */
     transfers: { type: [transferSchema], default: [] },
     /** Lien de visio d'un rendez-vous (salle Jitsi non devinable, ou lien permanent du centre) ; vide sans visio. */
-    videoUrl: { type: String, default: '', maxlength: 300 },
+    videoUrl: { type: String, default: '', maxlength: 600 },
+    /** Fournisseur qui a CRÉÉ le lien (`google_meet`, `teams`, `zoom`) ; vide pour jitsi / lien permanent. Seul le serveur l'écrit. */
+    videoProvider: { type: String, enum: ['', 'google_meet', 'teams', 'zoom'], default: '' },
+    /** Identifiant chez le fournisseur de l'événement (Meet, Teams) ou de la réunion (Zoom) à l'origine du lien. */
+    videoExternalId: { type: String, default: '', maxlength: 300 },
     /** Révision du rendez-vous pour le fichier agenda (.ics) : augmente à chaque modification, pour que l'agenda mette à jour. */
     sequence: { type: Number, default: 0, min: 0 },
     /** Proposé par l'IA puis validé par une personne (information seulement). */
     fromAiPlan: { type: Boolean, default: false },
     /**
-     * Point d'extension : synchronisation avec un agenda externe (Google, Microsoft 365, Zoom). Non branchée : tant qu'aucun
-     * fournisseur n'est connecté, `calendarStatus` reste `not_connected` et rien n'est envoyé à l'extérieur (services/calendarSync.js).
+     * Synchronisation avec l'agenda externe du centre (Google, Microsoft 365) : fournisseur, identifiant de l'événement et statut.
+     * Sans agenda connecté, `calendarStatus` reste `not_connected` et rien n'est envoyé à l'extérieur (services/calendarSync.js).
+     * `failed` est conservé et visible : un échec ne bloque jamais le rendez-vous HARX.
      */
     calendarProvider: { type: String, default: null },
     calendarExternalId: { type: String, default: null },
