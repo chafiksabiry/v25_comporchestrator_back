@@ -62,7 +62,7 @@ const baseData = (extra = {}) => ({
     { companyId: C, userId: 'm3', email: 'm3@x.fr', kind: 'member', status: 'accepted' }, // déjà dans memberships s'il est accepté
   ],
   subscriptions: [{ companyId: C, status: 'active', stripeSubscriptionId: 'sub_1', planId: PLAN, createdAt: 1 }],
-  subscriptionplans: [{ _id: PLAN, metadata: { harx_product: 'callcenter', callcenter_tier: 'accueil' } }],
+  subscriptionplans: [{ _id: PLAN, metadata: { harx_product: 'callcenter', callcenter_tier: 'full_scope' } }],
   ...extra,
 });
 
@@ -114,11 +114,11 @@ const s1 = fakeStripe({ items: [planItem] });
 let r = await syncSeats({ db: fakeDb(baseData()), stripe: s1, companyId: C });
 assert.equal(r.action, 'created');
 assert.equal(r.extra, 4);
-assert.equal(r.unitPrice, 39);
-assert.equal(r.monthlyTotal, 156);
+assert.equal(r.unitPrice, 59);
+assert.equal(r.monthlyTotal, 236);
 assert.equal(s1.calls[0][1].quantity, 4);
 assert.equal(s1.calls[0][1].proration_behavior, 'create_prorations');
-assert.equal(s1.calls[0][1].price, 'price_a');
+assert.equal(s1.calls[0][1].price, 'price_f');
 r = await syncSeats({ db: fakeDb(baseData()), stripe: s1, companyId: C });
 assert.equal(r.action, 'unchanged');
 assert.equal(s1.calls.length, 1, 'deuxième appel identique : aucune écriture Stripe');
@@ -218,5 +218,41 @@ const failed = await call(boomHandlers.syncSeats, {});
 console.error = origErr;
 assert.equal(failed.code, 200);
 assert.equal(failed.body.success, false);
+
+// --- Accueil / Secrétariat : seules les secrétaires comptent, deux sont incluses pour la ligne --------------------------------
+const accueilPlan = [{ _id: PLAN, metadata: { harx_product: 'callcenter', callcenter_tier: 'accueil' } }];
+const accueilData = (extra = {}) => baseData({ subscriptionplans: accueilPlan, ...extra });
+assert.equal(extraSeats(2, 2), 0);
+assert.equal(extraSeats(3, 2), 1);
+// baseData : le titulaire, le responsable m1 (membre) ne comptent pas ; secrétaires = a1, m1 (même personne que le membre, compte agent), a2 -> seuls a1 et a2 (+ m1 compte agent) = 3
+assert.equal(await countSeatsUsed(fakeDb(accueilData()), C, { secretariesOnly: true }), 3);
+// sans aucune secrétaire (responsable seul) : 0
+assert.equal(await countSeatsUsed(fakeDb(baseData({ users: [], agentinvitations: [] })), C, { secretariesOnly: true }), 0);
+// la première secrétaire et la deuxième sont comprises : aucune facturation
+clearSeatPriceCache();
+const sa = fakeStripe({ items: [planItem] });
+const twoSecretaries = accueilData({ companymemberships: [], users: [{ _id: 'a1', email: 'a1@x.fr', employerCompanyId: C, typeUser: 'rep' }], agentinvitations: [{ companyId: C, userId: 'a2', email: 'a2@x.fr', kind: 'agent', status: 'pending' }] });
+r = await syncSeats({ db: fakeDb(twoSecretaries), stripe: sa, companyId: C });
+assert.equal(r.used, 2);
+assert.equal(r.included, 2);
+assert.equal(r.extra, 0);
+assert.equal(r.action, 'unchanged');
+assert.equal(sa.calls.length, 0, 'deux secrétaires : rien n’est facturé');
+// un responsable invité en plus n'est jamais un siège
+const withManager = accueilData({ ...twoSecretaries, agentinvitations: [...twoSecretaries.agentinvitations, { companyId: C, email: 'resp@x.fr', kind: 'member', status: 'pending' }] });
+r = await getSeatsState({ db: fakeDb(withManager), stripe: sa, companyId: C });
+assert.equal(r.used, 2);
+assert.equal(r.extra, 0);
+// la troisième secrétaire est facturée 39 €
+const threeSecretaries = accueilData({ companymemberships: [], users: [{ _id: 'a1', email: 'a1@x.fr', employerCompanyId: C, typeUser: 'rep' }], agentinvitations: [
+  { companyId: C, userId: 'a2', email: 'a2@x.fr', kind: 'agent', status: 'pending' }, { companyId: C, userId: 'a4', email: 'a4@x.fr', kind: 'agent', status: 'accepted' }] });
+r = await syncSeats({ db: fakeDb(threeSecretaries), stripe: sa, companyId: C });
+assert.equal(r.extra, 1);
+assert.equal(r.unitPrice, 39);
+assert.equal(r.action, 'created');
+assert.equal(sa.calls[0][1].quantity, 1);
+assert.equal(sa.calls[0][1].price, 'price_a');
+// l'offre Full Scope garde sa règle : titulaire compris, 1 inclus
+assert.equal((await getSeatsState({ db: fakeDb(baseData()), stripe: fakeStripe({ items: [planItem] }), companyId: C })).included, 1);
 
 console.log('seats OK');
