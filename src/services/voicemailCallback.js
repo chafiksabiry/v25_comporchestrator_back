@@ -48,8 +48,11 @@ export function verifyTicket({ secret, voicemailId, identity, ticket, now = Date
 
 const wrap = (inner) => `<?xml version="1.0" encoding="UTF-8"?><Response>${inner}</Response>`;
 
-export const buildCallbackTwiml = ({ callerId, to }) =>
-  wrap(`<Dial callerId="${xmlEscape(callerId)}" answerOnBridge="true" timeout="30"><Number>${xmlEscape(to)}</Number></Dial>`);
+/** `maxSeconds` (optionnel) : durée maximale de l'appel, au-delà Twilio raccroche (attribut timeLimit de <Dial>). */
+export const buildCallbackTwiml = ({ callerId, to, maxSeconds }) => {
+  const limit = Number.isFinite(maxSeconds) && maxSeconds > 0 ? ` timeLimit="${Math.floor(maxSeconds)}"` : '';
+  return wrap(`<Dial callerId="${xmlEscape(callerId)}" answerOnBridge="true" timeout="30"${limit}><Number>${xmlEscape(to)}</Number></Dial>`);
+};
 
 export const buildRefusalTwiml = (message) =>
   wrap(`<Say language="fr-FR" voice="Polly.Lea">${xmlEscape(message)}</Say><Hangup/>`);

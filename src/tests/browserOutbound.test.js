@@ -4,6 +4,7 @@ import {
   allowedPrefixes,
   decideOutboundCall,
   freshMinutesBalance,
+  maxSecondsForBalance,
   normalizeOutboundDestination,
   OUTBOUND_TICKET_TTL_MS,
   signOutboundTicket,
@@ -36,7 +37,13 @@ const line = { phoneNumber: '+33219122061' };
 const ok = decideOutboundCall({ to: '+33612345678', line, subscribed: true, minutes: 10 });
 assert.equal(ok.ok, true);
 assert(ok.twiml.includes('callerId="+33219122061"') && ok.twiml.includes('<Number>+33612345678</Number>'));
+// le solde plafonne la durée : minutes entières × 60 s (jamais plus que ce qui est payé), 4 h au maximum
+assert.equal(ok.maxSeconds, 600);
+assert(ok.twiml.includes('timeLimit="600"'));
+assert.equal(decideOutboundCall({ to: '+33612345678', line, subscribed: true, minutes: 1.9 }).maxSeconds, 60, 'minute entamée = minute facturée');
+assert.equal(decideOutboundCall({ to: '+33612345678', line, subscribed: true, minutes: 100000 }).maxSeconds, 14400);
 for (const [args, msg] of [
+  [{ to: '+33612345678', line, subscribed: true, minutes: 0.5 }, /minutes/],
   [{ to: '', line, subscribed: true, minutes: 10 }, /Numéro non autorisé/],
   [{ to: '+33612345678', line, subscribed: false, minutes: 10 }, /abonnement/],
   [{ to: '+33612345678', line: null, subscribed: true, minutes: 10 }, /ligne/],
@@ -63,5 +70,8 @@ for (const [args, msg] of [
   assert.equal(await freshMinutesBalance('c1', failing), 4, 'un échec de mise à jour ne bloque pas la lecture');
   assert.equal(await freshMinutesBalance('c1', { ...failing, readWallet: async () => null }), undefined, 'sans portefeuille : refus par decideOutboundCall');
 }
+
+// plafond de durée selon le solde (aussi utilisé par le rappel depuis la messagerie)
+assert.deepEqual([0, 0.99, 1, 1.5, 30, 1e9, undefined, -3, NaN].map(maxSecondsForBalance), [0, 0, 60, 60, 1800, 14400, 0, 0, 0]);
 
 console.log('browserOutbound.test.js OK');

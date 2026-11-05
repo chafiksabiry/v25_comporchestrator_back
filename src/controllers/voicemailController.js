@@ -7,6 +7,10 @@ import { config } from '../config/env.js';
 import { phoneNumberService } from '../services/phoneNumberService.js';
 import { createVoiceToken } from '../services/voiceTokenService.js';
 import { voiceIdentity } from '../services/voicePresenceService.js';
+import MinutesCompany from '../models/MinutesCompany.js';
+import { syncMinutesFromCalls } from './escrowController.js';
+import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
+import { freshMinutesBalance, maxSecondsForBalance } from '../services/browserOutbound.js';
 import { buildCallbackTwiml, buildRefusalTwiml, CALLBACK_WEBHOOK_PATH, ensureCallbackApp, pickDestination, signTicket, verifyTicket } from '../services/voicemailCallback.js';
 
 const FOLLOW_UPS = ['new', 'to_call', 'called', 'closed'];
@@ -154,7 +158,12 @@ export const voicemailController = {
       const to = vm ? pickDestination(vm) : '';
       const line = vm ? await callbackLine(vm) : null;
       if (!vm || !to || !line) return send(buildRefusalTwiml('Impossible de rappeler ce numéro.'));
-      return send(buildCallbackTwiml({ callerId: line.phoneNumber, to }));
+      // Un rappel est un appel sortant : il consomme des minutes, donc seulement avec des minutes disponibles, et il est
+      // coupé quand elles sont écoulées.
+      const minutes = await freshMinutesBalance(String(vm.companyId), { sync: syncMinutesFromCalls, grant: ensurePlanMinutesGranted, readWallet: (id) => MinutesCompany.findOne({ companyId: id }).select('minutes').lean() });
+      const maxSeconds = maxSecondsForBalance(minutes);
+      if (!maxSeconds) return send(buildRefusalTwiml('Solde de minutes insuffisant.'));
+      return send(buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds }));
     } catch (error) {
       console.error('[voicemail] callbackVoice failed:', error.message);
       return send(buildRefusalTwiml('Une erreur est survenue.'));
