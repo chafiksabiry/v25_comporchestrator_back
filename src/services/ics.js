@@ -3,31 +3,13 @@
  *  - lignes terminées par CRLF et repliées à 75 octets (UTF-8, sans couper un caractère) ;
  *  - texte échappé (`\`, `;`, `,` et retours à la ligne) ;
  *  - UID stable (identifiant de l'élément) : réimporter le fichier met à jour l'événement au lieu d'en créer un autre ;
- *  - fuseau Europe/Paris explicite (VTIMEZONE avec règles d'heure d'été) ; SEQUENCE croissant à chaque déplacement.
+ *  - horaires en UTC (suffixe Z), sans TZID ni VTIMEZONE : valide, et affiché à l'heure locale du lecteur quel que soit le fuseau
+ *    du rendez-vous ; SEQUENCE croissant à chaque déplacement.
  */
-export const ICS_TIMEZONE = 'Europe/Paris';
+import { DEFAULT_TIME_ZONE, formatWallTime, isValidTimeZone } from './timeZone.js';
+
 export const ICS_UID_DOMAIN = 'harx.ai';
 const CRLF = '\r\n';
-
-const VTIMEZONE_PARIS = [
-  'BEGIN:VTIMEZONE',
-  'TZID:Europe/Paris',
-  'BEGIN:DAYLIGHT',
-  'TZOFFSETFROM:+0100',
-  'TZOFFSETTO:+0200',
-  'TZNAME:CEST',
-  'DTSTART:19700329T020000',
-  'RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU',
-  'END:DAYLIGHT',
-  'BEGIN:STANDARD',
-  'TZOFFSETFROM:+0200',
-  'TZOFFSETTO:+0100',
-  'TZNAME:CET',
-  'DTSTART:19701025T030000',
-  'RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU',
-  'END:STANDARD',
-  'END:VTIMEZONE',
-];
 
 /** Échappement d'une valeur TEXT (RFC 5545, 3.3.11). */
 export function escapeText(value) {
@@ -67,20 +49,10 @@ export function formatUtc(date) {
   return `${pad(date.getUTCFullYear(), 4)}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}T${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}Z`;
 }
 
-const PARIS = new Intl.DateTimeFormat('en-GB', {
-  timeZone: ICS_TIMEZONE, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
-});
-
-/** Heure murale de Paris au format `20261103T100000` (sans « Z »). */
-export function formatParis(date) {
-  const p = Object.fromEntries(PARIS.formatToParts(date).map((x) => [x.type, x.value]));
-  return `${p.year}${p.month}${p.day}T${p.hour}${p.minute}${p.second}`;
-}
-
 /** Nom de fichier proposé au téléchargement. */
 export function icsFilename(item) {
   const d = new Date(item.dueAt);
-  const stamp = Number.isNaN(d.getTime()) ? 'rendez-vous' : formatParis(d).slice(0, 13).replace('T', '-');
+  const stamp = Number.isNaN(d.getTime()) ? 'rendez-vous' : formatWallTime(d, item.timeZone && isValidTimeZone(item.timeZone) ? item.timeZone : DEFAULT_TIME_ZONE).slice(0, 13).replace('T', '-');
   return `rendez-vous-${stamp}.ics`;
 }
 
@@ -113,8 +85,8 @@ function eventLines(item) {
     'BEGIN:VEVENT',
     `UID:${icsUid(item)}`,
     `DTSTAMP:${formatUtc(stamp)}`,
-    `DTSTART;TZID=${ICS_TIMEZONE}:${formatParis(start)}`,
-    `DTEND;TZID=${ICS_TIMEZONE}:${formatParis(end)}`,
+    `DTSTART:${formatUtc(start)}`,
+    `DTEND:${formatUtc(end)}`,
     `SEQUENCE:${Math.max(0, Math.floor(Number(item.sequence) || 0))}`,
     `SUMMARY:${escapeText(item.title || 'Rendez-vous')}`,
     ...(description ? [`DESCRIPTION:${escapeText(description)}`] : []),
@@ -133,7 +105,6 @@ const calendarHeader = (extra = []) => [
   'CALSCALE:GREGORIAN',
   'METHOD:PUBLISH',
   ...extra,
-  ...VTIMEZONE_PARIS,
 ];
 
 export function buildAppointmentIcs(item) {

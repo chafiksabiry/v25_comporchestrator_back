@@ -37,17 +37,28 @@ let ics = I.buildAppointmentIcs(base);
 assert.ok(ics.startsWith('BEGIN:VCALENDAR\r\nVERSION:2.0\r\n') && ics.endsWith('END:VCALENDAR\r\n'));
 assert.ok(!/[^\r]\n/.test(ics), 'toutes les fins de ligne sont CRLF');
 assert.match(ics, /UID:64b0000000000000000000a1@harx\.ai\r\n/);
-assert.match(ics, /TZID:Europe\/Paris\r\n/);
-assert.match(ics, /DTSTART;TZID=Europe\/Paris:20261103T100000\r\n/, 'novembre : heure d’hiver, 09:00 UTC = 10:00 Paris');
-assert.match(ics, /DTEND;TZID=Europe\/Paris:20261103T104500\r\n/);
+assert.ok(!/TZID|VTIMEZONE|RRULE/.test(ics), 'aucun fuseau nommé : horaires en UTC');
+assert.match(ics, /DTSTART:20261103T090000Z\r\n/, 'novembre : 10:00 à Paris (heure d’hiver) = 09:00 UTC');
+assert.match(ics, /DTEND:20261103T094500Z\r\n/);
 assert.match(ics, /DTSTAMP:20261102T100000Z\r\n/);
-assert.match(ics, /RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU/);
 assert.match(ics, /STATUS:CONFIRMED/);
 assert.equal(I.buildAppointmentIcs(base), ics, 'sortie déterministe, UID stable');
-assert.match(I.buildAppointmentIcs({ ...base, dueAt: '2026-07-14T08:00:00Z' }), /DTSTART;TZID=Europe\/Paris:20260714T100000/, 'été : +2 h');
+assert.match(I.buildAppointmentIcs({ ...base, dueAt: '2026-07-14T08:00:00Z' }), /DTSTART:20260714T080000Z/, 'été : 10:00 à Paris = 08:00 UTC');
+// rendez-vous 10:30 heure locale : même fichier quel que soit le fuseau, seuls les instants comptent
+const at = (iso, tz) => ({ ...base, dueAt: iso, durationMinutes: 60, timeZone: tz });
+const startEnd = (x) => [x.match(/DTSTART:(\S+)\r\n/)[1], x.match(/DTEND:(\S+)\r\n/)[1]];
+assert.deepEqual(startEnd(I.buildAppointmentIcs(at('2026-11-03T09:30:00Z', 'Europe/Paris'))), ['20261103T093000Z', '20261103T103000Z'], 'Paris hiver 10:30 = 09:30 UTC');
+assert.deepEqual(startEnd(I.buildAppointmentIcs(at('2026-07-14T08:30:00Z', 'Europe/Paris'))), ['20260714T083000Z', '20260714T093000Z'], 'Paris été 10:30 = 08:30 UTC');
+assert.deepEqual(startEnd(I.buildAppointmentIcs(at('2026-11-03T15:30:00Z', 'America/New_York'))), ['20261103T153000Z', '20261103T163000Z'], 'New York hiver (UTC-5) 10:30 = 15:30 UTC');
+assert.deepEqual(startEnd(I.buildAppointmentIcs(at('2026-07-14T14:30:00Z', 'America/New_York'))), ['20260714T143000Z', '20260714T153000Z'], 'New York été (UTC-4) 10:30 = 14:30 UTC');
+assert.deepEqual(startEnd(I.buildAppointmentIcs(at('2026-11-03T01:30:00Z', 'Asia/Tokyo'))), ['20261103T013000Z', '20261103T023000Z'], 'Tokyo (UTC+9) 10:30 = 01:30 UTC');
+assert.ok(!/TZID|VTIMEZONE/.test(I.buildAppointmentIcs(at('2026-11-03T01:30:00Z', 'Asia/Tokyo'))));
+// rétrocompatibilité : un élément sans timeZone donne exactement le même fichier qu'avec timeZone null
+assert.equal(I.buildAppointmentIcs({ ...base, timeZone: null }), I.buildAppointmentIcs(base));
 // bascule d'heure d'été : 25 octobre 2026, 00:30 UTC = 02:30 CEST ; la fin traverse le changement d'heure
-assert.match(I.buildAppointmentIcs({ ...base, dueAt: '2026-10-25T00:30:00Z', durationMinutes: 120 }), /DTSTART;TZID=Europe\/Paris:20261025T023000[\s\S]*DTEND;TZID=Europe\/Paris:20261025T033000/, 'deux heures réelles à travers la bascule : 02:30 CEST -> 03:30 CET');
-assert.equal(I.icsFilename(base), 'rendez-vous-20261103-1000.ics');
+assert.match(I.buildAppointmentIcs({ ...base, dueAt: '2026-10-25T00:30:00Z', durationMinutes: 120 }), /DTSTART:20261025T003000Z[\s\S]*DTEND:20261025T023000Z/, 'deux heures réelles à travers la bascule (instants UTC)');
+assert.equal(I.icsFilename(base), 'rendez-vous-20261103-1000.ics', 'sans fuseau : Paris, comme avant');
+assert.equal(I.icsFilename({ ...base, timeZone: 'Asia/Tokyo' }), 'rendez-vous-20261103-1800.ics', 'nom de fichier à l’heure du fuseau du rendez-vous');
 const rich = I.buildAppointmentIcs({ ...base, title: 'Point; budget, Q4', contactName: 'Mme Durand', note: 'ligne 1\nligne 2', videoUrl: 'https://meet.jit.si/HARX-abcDEF123456', sequence: 3, status: 'canceled', assignee: { name: 'Marie' } });
 assert.match(rich, /SUMMARY:Point\; budget\\, Q4\r\n/);
 assert.match(rich, /URL:https:\/\/meet\.jit\.si\/HARX-abcDEF123456\r\n/);

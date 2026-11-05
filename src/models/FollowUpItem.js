@@ -32,6 +32,8 @@ const schema = new mongoose.Schema(
     /** Échéance : date du rappel planifié, début du rendez-vous. */
     dueAt: { type: Date, default: null },
     durationMinutes: { type: Number, default: null },
+    /** Fuseau IANA du rendez-vous (ex. 'America/New_York') ; null = fuseau du centre, à défaut Europe/Paris (voir services/timeZone.js). */
+    timeZone: { type: String, default: null, maxlength: 64 },
     assigneeId: { type: String, default: '' },
     assigneeName: { type: String, default: '' },
     status: { type: String, enum: ['todo', 'done', 'canceled'], default: 'todo' },

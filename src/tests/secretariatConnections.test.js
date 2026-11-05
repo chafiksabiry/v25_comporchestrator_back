@@ -399,6 +399,8 @@ try {
   assert.equal(c.url, 'https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=none'); assert.equal(c.headers.Authorization, 'Bearer T');
   assert.deepEqual(c.body, { summary: 'Rendez-vous Mme Durand', description: 'Rendez-vous avec Mme Durand', location: '', start: { dateTime: '2026-11-10T09:00:00.000Z', timeZone: 'Europe/Paris' }, end: { dateTime: '2026-11-10T09:45:00.000Z', timeZone: 'Europe/Paris' } });
   assert.ok(!('attendees' in c.body) && !('conferenceData' in c.body), 'aucun invité : aucun e-mail envoyé à des tiers');
+  await PROVIDERS.google.upsertEvent({ http, accessToken: 'T', event: { ...ev, timeZone: 'America/New_York' } });
+  assert.deepEqual([httpCalls.at(-1).body.start, httpCalls.at(-1).body.end], [{ dateTime: '2026-11-10T09:00:00.000Z', timeZone: 'America/New_York' }, { dateTime: '2026-11-10T09:45:00.000Z', timeZone: 'America/New_York' }], 'Google reçoit le fuseau de l’événement');
   await PROVIDERS.google.upsertEvent({ http, accessToken: 'T', id: 'ev1', event: { ...ev, title: 'Déplacé' } });
   assert.equal(httpCalls.at(-1).method, 'PATCH'); assert.equal(httpCalls.at(-1).body.summary, 'Déplacé');
   await PROVIDERS.google.deleteEvent({ http, accessToken: 'T', id: 'ev1' }); assert.equal(httpCalls.at(-1).method, 'DELETE');
@@ -696,6 +698,28 @@ try {
   on('POST', /graph\.microsoft\.com\/v1\.0\/me\/events$/, () => ({ status: 201, json: { id: 'AAMk=ev9' } })); on('DELETE', /me\/events\/AAMk%3Dev9/, () => ({ status: 204, json: null }));
   a = await create(); item = store.at(-1); setTools({ agenda: { provider: 'google' } });
   await patch(item, { status: 'canceled' }); assert.equal(callsTo(/graph\.microsoft\.com.*events\//).filter((x) => x.method === 'DELETE').length, 1); assert.equal(callsTo(/googleapis\.com\/calendar/).length, 0);
+
+  // fuseau horaire : rendez-vous > centre > Europe/Paris, transmis à Google Agenda
+  const gStart = () => callsTo(/primary\/events/).at(-1).body;
+  setTools({ agenda: { provider: 'google' } }); reset(); std(); putConnection(C1, 'google');
+  on('POST', /calendar\/v3\/calendars\/primary\/events\?sendUpdates=none$/, gEvent); on('PATCH', /primary\/events\/evG1/, gEvent);
+  a = await create(); assert.equal(a.code, 201); assert.equal(a.body.data.timeZone, null);
+  assert.deepEqual([gStart().start.timeZone, gStart().end.timeZone], ['Europe/Paris', 'Europe/Paris'], 'ni rendez-vous ni centre : Paris (historique)');
+  a = await create({ timeZone: 'Asia/Tokyo' }); assert.equal(a.code, 201); assert.equal(a.body.data.timeZone, 'Asia/Tokyo');
+  assert.deepEqual([gStart().start.timeZone, gStart().end.timeZone], ['Asia/Tokyo', 'Asia/Tokyo'], 'fuseau du rendez-vous');
+  a = await create({ timeZone: 'Mars/Olympus' }); assert.equal(a.code, 400); assert.equal(a.body.error, 'Fuseau horaire inconnu.');
+  setTools({ agenda: { provider: 'google' }, timeZone: 'America/New_York' });
+  a = await create(); assert.equal(a.code, 201); assert.equal(a.body.data.timeZone, null, 'la vue garde la valeur du rendez-vous');
+  assert.equal(gStart().start.timeZone, 'America/New_York', 'fuseau du centre');
+  item = store.at(-1);
+  p = await patch(item, { timeZone: 'Africa/Casablanca' });
+  assert.equal(p.code, 200); assert.equal(p.body.data.timeZone, 'Africa/Casablanca');
+  const patched = callsTo(/primary\/events\/evG1/).filter((x) => x.method === 'PATCH').at(-1);
+  assert.equal(patched.body.start.timeZone, 'Africa/Casablanca', 'changer le fuseau remet l’événement à jour chez Google');
+  p = await patch(item, { timeZone: 'Mars/Olympus' }); assert.equal(p.code, 400); assert.equal(p.body.error, 'Fuseau horaire inconnu.');
+  p = await patch(item, { timeZone: null }); assert.equal(p.body.data.timeZone, null);
+  assert.equal(callsTo(/primary\/events\/evG1/).filter((x) => x.method === 'PATCH').at(-1).body.start.timeZone, 'America/New_York', 'effacé : retour au fuseau du centre');
+  setTools({ agenda: { provider: 'google' } });
 
   // visio Google Meet : même événement que l'agenda Google
   const MEET = 'https://meet.google.com/abc-defg-hij';

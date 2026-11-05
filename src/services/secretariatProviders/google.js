@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { call, ensure, eventWindow, SecretariatError, TIME_ZONE, VIDEO_LINK_RE } from './common.js';
+import { call, ensure, eventWindow, SecretariatError, VIDEO_LINK_RE } from './common.js';
+import { DEFAULT_TIME_ZONE } from '../timeZone.js';
 import { buildMime, toBase64Url } from './mime.js';
 
 /**
@@ -52,9 +53,10 @@ export const google = {
    */
   async upsertEvent({ http, accessToken, id, event, addMeeting = false }) {
     const { start, end } = eventWindow(event);
+    const timeZone = event.timeZone || DEFAULT_TIME_ZONE; // fuseau résolu par l'appelant (resolveItemTimeZone)
     const body = {
       summary: event.title, description: event.description || '', location: event.location || '',
-      start: { dateTime: start.toISOString(), timeZone: TIME_ZONE }, end: { dateTime: end.toISOString(), timeZone: TIME_ZONE },
+      start: { dateTime: start.toISOString(), timeZone }, end: { dateTime: end.toISOString(), timeZone },
     };
     if (addMeeting) body.conferenceData = { createRequest: { requestId: randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } } };
     const q = `sendUpdates=none${addMeeting ? '&conferenceDataVersion=1' : ''}`;

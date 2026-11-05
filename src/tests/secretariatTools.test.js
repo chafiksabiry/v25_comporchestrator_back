@@ -152,7 +152,7 @@ try {
   assert.equal((await req('GET', '/tools/pas-un-id', { user: 'owner1' })).status, 403);
 
   // lecture : défauts, pour tout membre rattaché
-  const defaults = { success: true, data: { email: { provider: 'platform', fromName: '', replyTo: '', signature: '' }, visio: { provider: 'jitsi', customUrl: '' }, agenda: { provider: 'none', feedUrl: null }, configured: { email: false, visio: false, agenda: false } } };
+  const defaults = { success: true, data: { email: { provider: 'platform', fromName: '', replyTo: '', signature: '' }, visio: { provider: 'jitsi', customUrl: '' }, agenda: { provider: 'none', feedUrl: null }, timeZone: '', configured: { email: false, visio: false, agenda: false } } };
   for (const user of ['owner1', 'member1', 'memberNoCalls', 'agent1']) assert.deepEqual((await req('GET', `/tools/${C1}`, { user })).body, defaults, user);
 
   // écriture : titulaire / responsable seulement
@@ -182,6 +182,26 @@ try {
   assert.equal((await req('GET', `/tools/${C1}`, { user: 'agent1' })).body.data.visio.customUrl, mine);
   assert.deepEqual((await req('GET', `/tools/${C2}`, { user: 'other1' })).body, defaults, 'un autre centre ne voit pas ces réglages');
 
+  // fuseau du centre : lisible par tout membre, modifiable comme les autres réglages, validé
+  for (const user of ['agent1', 'memberNoCalls']) assert.equal((await req('PUT', `/tools/${C1}`, { user, body: { timeZone: 'America/New_York' } })).status, 403, user);
+  assert.equal(toolsDocs[0].timeZone, undefined, 'un refus n’écrit rien');
+  for (const bad of ['Mars/Olympus', 'Paris', 42, '+01:00']) {
+    r = await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { timeZone: bad } });
+    assert.equal(r.status, 400, String(bad)); assert.equal(r.body.error, 'Fuseau horaire inconnu.');
+  }
+  assert.equal(toolsDocs[0].timeZone, undefined, 'un fuseau invalide n’écrit rien');
+  r = await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { timeZone: 'America/New_York' } });
+  assert.equal(r.status, 200); assert.equal(r.body.data.timeZone, 'America/New_York');
+  assert.equal(r.body.data.visio.customUrl, mine, 'PUT partiel : les autres réglages sont conservés');
+  assert.deepEqual(r.body.data.configured, { email: true, visio: false, agenda: false }, 'configured ne dépend pas du fuseau');
+  for (const user of ['owner1', 'member1', 'memberNoCalls', 'agent1']) assert.equal((await req('GET', `/tools/${C1}`, { user })).body.data.timeZone, 'America/New_York', user);
+  assert.equal((await req('GET', `/tools/${C2}`, { user: 'other1' })).body.data.timeZone, '', 'un autre centre n’est pas touché');
+  r = await req('PUT', `/tools/${C1}`, { user: 'member1', body: { timeZone: 'asia/tokyo' } });
+  assert.equal(r.body.data.timeZone, 'Asia/Tokyo', 'nom canonique enregistré');
+  r = await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { timeZone: '' } });
+  assert.equal(r.status, 200); assert.equal(r.body.data.timeZone, '', 'chaîne vide : fuseau effacé');
+  assert.equal(T.toView({}).timeZone, '', 'document ancien sans fuseau');
+
   // flux agenda : création, jeton non relisible, régénération
   r = await req('POST', `/tools/${C1}/agenda-feed`, { user: 'owner1' });
   assert.equal(r.status, 201);
@@ -210,14 +230,14 @@ try {
   assert.ok(f.text.startsWith('BEGIN:VCALENDAR\r\n') && f.text.endsWith('END:VCALENDAR\r\n'));
   const flat = f.text.replace(/\r\n /g, '');
   assert.equal((flat.match(/BEGIN:VEVENT/g) || []).length, 3, 'les rendez-vous du centre seulement');
-  assert.ok(flat.includes('SUMMARY:Rendez-vous Mme Durand') && flat.includes('DTSTART;TZID=Europe/Paris:'));
+  assert.ok(flat.includes('SUMMARY:Rendez-vous Mme Durand') && /DTSTART:\d{8}T\d{6}Z/.test(flat));
   assert.ok(flat.includes('URL:https://meet.jit.si/HARX-abcDEF123456'), 'visio jitsi');
   assert.ok(flat.includes(`URL:${mine}`), 'lien permanent enregistré par ce centre');
   assert.ok(!flat.includes('evil.example'), 'un lien qui n’est pas celui du centre n’est pas diffusé');
   assert.ok(!flat.includes('Autre centre'));
   assert.ok(/STATUS:CANCELLED/.test(flat));
   for (const secret of ['secret.client', '+33612345678', 'note privée', 'ATTENDEE', 'mailto:']) assert.ok(!flat.includes(secret), `donnée personnelle absente : ${secret}`);
-  assert.ok(/DTEND;TZID=Europe\/Paris:/.test(flat));
+  assert.ok(/DTEND:\d{8}T\d{6}Z/.test(flat) && !/TZID|VTIMEZONE/.test(flat), 'flux en UTC, sans fuseau nommé');
   assert.ok(!('contactEmail' in lastFollowQuery) && lastFollowQuery.model === 'appointment');
 
   // jeton inconnu / mal formé : même 404 générique

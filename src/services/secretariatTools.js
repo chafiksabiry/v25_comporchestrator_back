@@ -4,6 +4,7 @@ import SecretariatTools from '../models/SecretariatTools.js';
 import { config } from '../config/env.js';
 import { isValidEmail } from './emailService.js';
 import { validateCustomVisioUrl } from './visio.js';
+import { normalizeTimeZone, UNKNOWN_TIME_ZONE_MESSAGE } from './timeZone.js';
 
 /**
  * Outils du secrétariat : fournisseur et identité d'envoi des e-mails, agenda connecté, choix de la visio, abonnement agenda (.ics).
@@ -30,6 +31,7 @@ export const DEFAULT_TOOLS = Object.freeze({
   email: { provider: 'platform', fromName: '', replyTo: '', signature: '' },
   agenda: { provider: 'none' },
   visio: { provider: 'jitsi', customUrl: '', chosen: false },
+  timeZone: '',
   agendaFeed: { tokenHash: null },
 });
 
@@ -38,12 +40,13 @@ export const mergedTools = (doc) => ({
   email: { ...DEFAULT_TOOLS.email, ...(doc?.email || {}) },
   agenda: { ...DEFAULT_TOOLS.agenda, ...(doc?.agenda || {}) },
   visio: { ...DEFAULT_TOOLS.visio, ...(doc?.visio || {}) },
+  timeZone: typeof doc?.timeZone === 'string' ? doc.timeZone : DEFAULT_TOOLS.timeZone,
   agendaFeed: { ...DEFAULT_TOOLS.agendaFeed, ...(doc?.agendaFeed || {}) },
 });
 const merged = mergedTools;
 
 /**
- * Valide un corps partiel `{ email?, agenda?, visio? }` et le fusionne avec les réglages actuels.
+ * Valide un corps partiel `{ email?, agenda?, visio?, timeZone? }` et le fusionne avec les réglages actuels.
  * `connected` = fournisseurs dont le compte est connecté (Set) : choisir un fournisseur non connecté est refusé.
  * @returns {{error: string} | {set: Record<string, any>}} `set` = champs à écrire (chemins pointés pour Mongo)
  */
@@ -51,7 +54,16 @@ export function validateToolsPatch(body, current, connected = new Set()) {
   const b = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
   const cur = merged(current);
   const set = {};
-  if (b.email === undefined && b.visio === undefined && b.agenda === undefined) return bad('Rien à modifier.');
+  if (b.email === undefined && b.visio === undefined && b.agenda === undefined && b.timeZone === undefined) return bad('Rien à modifier.');
+
+  if (b.timeZone !== undefined) {
+    if (b.timeZone === null || b.timeZone === '') set.timeZone = '';
+    else {
+      const tz = normalizeTimeZone(b.timeZone);
+      if (!tz) return bad(UNKNOWN_TIME_ZONE_MESSAGE);
+      set.timeZone = tz;
+    }
+  }
 
   if (b.email !== undefined) {
     const e = b.email;
@@ -127,6 +139,7 @@ export function toView(doc, feedUrl = null) {
     email,
     visio: { provider: t.visio.provider, customUrl: t.visio.customUrl },
     agenda: { provider: t.agenda.provider, feedUrl: feedUrl || null },
+    timeZone: t.timeZone,
     configured: {
       email: Boolean(email.fromName || email.replyTo || email.signature) || email.provider !== 'platform',
       // Vrai seulement si un fournisseur connecté (Google Meet, Teams, Zoom) est choisi ; 'jitsi' / 'custom' = aucune visio.
