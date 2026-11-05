@@ -20,8 +20,8 @@ const transferSchema = new mongoose.Schema(
 const schema = new mongoose.Schema(
   {
     companyId: { type: mongoose.Schema.Types.ObjectId, required: true, index: true },
-    model: { type: String, enum: ['voicemail_callback', 'missed_callback', 'appointment', 'transfer'], required: true },
-    originType: { type: String, enum: ['voicemail', 'missed_call', 'none'], default: 'none' },
+    model: { type: String, enum: ['voicemail_callback', 'missed_callback', 'appointment', 'transfer', 'message_taken'], required: true },
+    originType: { type: String, enum: ['voicemail', 'missed_call', 'call', 'none'], default: 'none' },
     originId: { type: mongoose.Schema.Types.ObjectId, default: null },
     title: { type: String, required: true, maxlength: 120 },
     note: { type: String, default: '', maxlength: 1000 },
@@ -37,6 +37,15 @@ const schema = new mongoose.Schema(
     assigneeId: { type: String, default: '' },
     assigneeName: { type: String, default: '' },
     status: { type: String, enum: ['todo', 'done', 'canceled'], default: 'todo' },
+    /** Modèle `message_taken` (message pris à l'accueil) : société de l'appelant, personne demandée (entrée de l'annuaire), urgence, prévenue ou non. */
+    callerCompany: { type: String, default: '', maxlength: 120 },
+    forEntryId: { type: String, default: '', maxlength: 40 },
+    forName: { type: String, default: '', maxlength: 120 },
+    urgency: { type: String, enum: ['normal', 'urgent'], default: 'normal' },
+    /** Vu par la personne visée (null = nouveau : badge / alerte dans l'application). */
+    seenAt: { type: Date, default: null },
+    /** Prévenue par e-mail depuis la messagerie connectée de l'entreprise : `sent`, `failed`, `not_connected`, `needs_reauth`, `no_recipient`, `limit`. Jamais depuis HARX. */
+    emailStatus: { type: String, default: '', maxlength: 20 },
     createdById: { type: String, default: '' },
     createdByName: { type: String, default: '' },
     closedAt: { type: Date, default: null },

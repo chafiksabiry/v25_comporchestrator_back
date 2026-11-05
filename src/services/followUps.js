@@ -13,6 +13,8 @@ import { normalizeTimeZone, UNKNOWN_TIME_ZONE_MESSAGE } from './timeZone.js';
  * Aucune relance automatique : chaque élément est créé par une personne.
  */
 export const MODELS = ['voicemail_callback', 'missed_callback', 'appointment', 'transfer'];
+/** Message pris à l'accueil : créé par `POST /api/reception/messages` (pas par la création générique), mais listé et filtrable comme les autres. */
+export const MESSAGE_MODEL = 'message_taken';
 export const STATUSES = ['todo', 'done', 'canceled'];
 export const ORIGIN_TYPES = ['voicemail', 'missed_call', 'none'];
 /** Statuts d'appel entrant que l'on peut réellement détecter comme « manqués » (InboundCall). */
@@ -191,7 +193,7 @@ export function visibilityFilter(access, companyId, { mine = false } = {}) {
 
 /** À faire d'abord (échéance la plus proche en tête, sans échéance ensuite), puis les clos du plus récent au plus ancien. */
 export function sortItems(items) {
-  const rank = (i) => (i.status === 'todo' ? 0 : 1);
+  const rank = (i) => (i.status === 'todo' ? (i.urgency === 'urgent' ? -1 : 0) : 1); // les messages urgents d'abord
   return [...items].sort((a, b) => {
     if (rank(a) !== rank(b)) return rank(a) - rank(b);
     if (a.status === 'todo') {
@@ -228,6 +230,12 @@ export function toItem(i) {
     updatedAt: o.updatedAt || null,
     fromAiPlan: o.fromAiPlan === true,
     calendar: { status: o.calendarStatus || 'not_connected', provider: o.calendarProvider || null },
+    ...(o.model === MESSAGE_MODEL ? {
+      message: {
+        callerCompany: o.callerCompany || '', forEntryId: o.forEntryId || '', forName: o.forName || '', urgency: o.urgency === 'urgent' ? 'urgent' : 'normal',
+        seen: Boolean(o.seenAt), email: o.emailStatus || '',
+      },
+    } : {}),
   };
 }
 
@@ -258,7 +266,7 @@ export function parseListFilters(query) {
   const q = query && typeof query === 'object' ? query : {};
   const value = {};
   if (q.model !== undefined) {
-    if (!MODELS.includes(q.model)) return bad('Modèle de suivi inconnu.');
+    if (!MODELS.includes(q.model) && q.model !== MESSAGE_MODEL) return bad('Modèle de suivi inconnu.');
     value.model = q.model;
   }
   for (const [key, op] of [['from', '$gte'], ['to', '$lt']]) {
