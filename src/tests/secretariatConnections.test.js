@@ -540,7 +540,7 @@ try {
   const mime = Buffer.from(gm.body.raw, 'base64url').toString('utf8');
   assert.match(mime, /\r\nFrom: "Nom du formulaire" <centre@gmail\.test>\r\n/, 'From = compte connecté (fromName des réglages ignoré)'); assert.match(mime, /\r\nReply-To: "Nom du formulaire" <centre@gmail\.test>\r\n/, 'Reply-To = la boîte connectée (replyTo des réglages ignoré)'); assert.ok(!mime.includes('contact@acme.fr') && !mime.includes('Centre Acme')); assert.match(mime, /\r\nTo: client@exemple\.fr\r\n/); assert.match(mime, /\r\nSubject: Votre rendez-vous\r\n/);
   const [plain, html] = decodeParts(gm.body.raw);
-  assert.match(plain, /^Bonjour\n\nCordialement,\nL’équipe Acme\n\nMessage envoyé via HARX pour le compte de Nom du formulaire/); assert.ok(html.includes('Cordialement'));
+  assert.match(plain, /^Bonjour\n\nCordialement,\nL’équipe Acme$/, 'la signature termine le message'); assert.ok(!/HARX/.test(plain) && !/HARX/.test(html), 'aucune mention HARX dans un message envoyé depuis la boîte de l’entreprise'); assert.ok(html.includes('Cordialement'));
   assert.equal(logs.at(-1).status, 'sent'); assert.ok(!JSON.stringify(logs).includes('Cordialement'));
   // même sans service d'e-mail HARX : la messagerie connectée suffit
   const bk = process.env.BREVO_API_KEY; delete process.env.BREVO_API_KEY;
@@ -559,6 +559,9 @@ try {
   assert.equal(e.code, 409); assert.equal(e.body.success, false); assert.equal(e.body.code, 'mailbox_needs_reauth'); assert.equal(e.body.error, 'mailbox_needs_reauth');
   assert.match(e.body.message, /expiré ou a été révoquée\. Reconnectez-la dans Paramétrage > Outils/); assert.equal(brevo.length, 0); assert.equal(httpCalls.length, nNet, 'aucun appel réseau');
   r = await call(mail.config); assert.deepEqual([r.body.data.configured, r.body.data.provider, r.body.data.account], [false, null, null]);
+  // le choix explicite (Google) est à reconnecter alors que Microsoft est actif : on le dit, on n'envoie jamais depuis l'autre boîte
+  putConnection(C1, 'microsoft');
+  e = await call(mail.send, msg); assert.equal(e.code, 409); assert.equal(e.body.code, 'mailbox_needs_reauth'); assert.equal(httpCalls.length, nNet, 'aucun appel réseau, aucun envoi depuis l’autre messagerie');
   conns.length = 0;
   e = await call(mail.send, msg);
   assert.equal(e.code, 409); assert.equal(e.body.code, 'mailbox_not_connected'); assert.equal(e.body.message, 'Connectez votre messagerie (Gmail ou Outlook) dans Paramétrage > Outils pour envoyer des e-mails.');

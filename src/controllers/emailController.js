@@ -119,7 +119,7 @@ export const emailController = {
       // `email.fromName` et `email.replyTo` ne sont plus utilisés : le Reply-To est la boîte connectée elle-même.
       const centerName = v.centerName || 'HARX';
       const payload = buildPayload({
-        senderEmail: mailbox.account, centerName, to: v.to, subject: v.subject, text: v.body, signature: identity.signature, icsContent,
+        senderEmail: mailbox.account, centerName, to: v.to, subject: v.subject, text: v.body, signature: identity.signature, icsContent, harxFooter: false,
         replyTo: { email: mailbox.account, name: centerName },
       });
       const base = { companyId, sentById: access.userId, sentByName: me.name, to: v.to, subject: v.subject, template: v.template, followUpId: v.followUpId, withIcs: Boolean(icsContent) };

@@ -181,6 +181,8 @@ export async function resolveMailbox(companyId, preferred) {
   const pick = (r) => ({ provider: r.provider, account: r.accountEmail });
   const chosen = active.find((r) => r.provider === preferred);
   if (chosen) return pick(chosen);
+  // Le choix explicite est à reconnecter : on le dit, on n'envoie JAMAIS depuis une autre boîte à sa place.
+  if (rows.some((r) => r.provider === preferred && r.status === 'needs_reauth')) return { error: 'needs_reauth', provider: preferred };
   if (active.length === 1) return pick(active[0]);
   const stale = rows.find((r) => r.status === 'needs_reauth' && r.provider === preferred) || rows.find((r) => r.status === 'needs_reauth');
   return stale ? { error: 'needs_reauth', provider: stale.provider } : { error: 'not_connected', provider: null };

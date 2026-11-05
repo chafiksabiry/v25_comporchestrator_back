@@ -271,7 +271,7 @@ try {
   assert.match(pm.mime, /\r\nFrom: "Nom du formulaire" <centre@gmail\.test>\r\n/, 'From = compte connecté ; fromName des réglages ignoré');
   assert.match(pm.mime, /\r\nReply-To: "Nom du formulaire" <centre@gmail\.test>\r\n/, 'Reply-To = boîte connectée ; replyTo des réglages ignoré');
   assert.ok(!pm.mime.includes('contact@acme.fr') && !pm.mime.includes('Centre Acme'));
-  assert.match(pm.texts[0], /^Bonjour\n\nCordialement,\nL’équipe Acme\n\nMessage envoyé via HARX pour le compte de Nom du formulaire/);
+  assert.match(pm.texts[0], /^Bonjour\n\nCordialement,\nL’équipe Acme$/); assert.ok(!/HARX/.test(pm.texts[0]), 'aucune mention HARX');
   assert.ok(pm.texts[1].includes('Cordialement'));
   assert.ok(!JSON.stringify(logs).includes('Cordialement'), 'ni message ni signature dans le journal');
 
@@ -284,7 +284,7 @@ try {
   // identité partielle : seulement la signature
   toolsDocs.push({ companyId: C1, email: { signature: 'Bien à vous' } });
   await call(mail.send, msg);
-  g = net.filter((x) => /messages\/send/.test(x.url)); assert.match(partsOf(g[2]).texts[0], /Bonjour\n\nBien à vous\n\n/);
+  g = net.filter((x) => /messages\/send/.test(x.url)); assert.match(partsOf(g[2]).texts[0], /^Bonjour\n\nBien à vous$/);
   // un autre centre n'hérite pas de l'identité de celui-ci
   toolsDocs.length = 0; toolsDocs.push({ companyId: C2, email: { signature: 'Autre sig' } });
   await call(mail.send, msg);
