@@ -106,7 +106,8 @@ export async function requireCompanyParam(req, res, next) {
   }
   try {
     const access = await callerAccess(req);
-    if (!access.companyId || access.companyId !== wanted) {
+    const mine = new Set([access.companyId, ...(access.companyIds || [])].filter(Boolean).map(String));
+    if (!mine.has(wanted)) {
       return res.status(403).json({ error: 'Forbidden: not your company' });
     }
     req.companyAccess = access;

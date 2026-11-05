@@ -23,6 +23,7 @@ const directory = {
   member1: { companyId: 'c1', isOwner: false },
   agent1: { companyId: 'c1', isOwner: false, isAgent: true },
   other1: { companyId: 'c2', isOwner: true },
+  multi1: { companyId: 'c2', companyIds: ['c2', 'c1'], isOwner: false, isAgent: true },
   nobody: { companyId: null, isOwner: true },
 };
 let registrationDown = false;
@@ -56,6 +57,10 @@ try {
   assert.equal((await get('/current/c1', sign({ userId: 'other1' }))).status, 403);
   assert.equal((await get('/current/c1', sign({ userId: 'nobody' }))).status, 403);
   assert.equal(reads, 0);
+
+  // Agent salarié de plusieurs entreprises : accès à chacune d'elles.
+  assert.equal((await get('/current/c1', sign({ userId: 'multi1' }))).status, 200);
+  reads = 0;
 
   // Propriétaire, membre, agent salarié : 200 avec le même corps qu'avant.
   const expected = { success: true, data: sub, limits: { planName: 'Solo', maxReps: null, maxGigs: null, communicationMinutes: null, activeLocalNumbers: null, aiToken: null, aiTokensIncluded: null, repsPerGig: false, metadata: { harx_product: 'callcenter' } } };
