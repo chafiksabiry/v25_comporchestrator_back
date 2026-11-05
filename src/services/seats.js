@@ -2,7 +2,9 @@ import mongoose from 'mongoose';
 import { callcenterTierFromMetadata } from './callcenterTier.js';
 
 /**
- * Sièges en plus : chaque offre Call Centre inclut 1 siège (le titulaire). Un siège = une personne rattachée au centre
+ * Sièges en plus : Full Scope et Multi-clients incluent 1 siège (le titulaire). Accueil / Secrétariat compte les SECRÉTAIRES
+ * seulement (ni le titulaire ni les responsables) et en inclut 2 pour la ligne comprise ; au-delà, chaque secrétaire est facturée.
+ * Pour les autres offres : 1 siège inclus (le titulaire). Un siège = une personne rattachée au centre
  * (membres et agents, invités ou actifs, titulaire compris). Au-delà du premier, chaque siège est facturé chaque mois
  * (Accueil, Full Scope, Multi-clients) ; Nomad Solo n'en accepte aucun. Le code de lancement ne s'applique pas aux sièges.
  *
@@ -13,6 +15,10 @@ import { callcenterTierFromMetadata } from './callcenterTier.js';
 
 export const SEAT_PRODUCT = 'callcenter_seat';
 export const INCLUDED_SEATS = 1;
+/** Offre Accueil / Secrétariat : deux secrétaires comprises pour une ligne. */
+export const INCLUDED_SEATS_BY_TIER = { accueil: 2 };
+export const SECRETARIES_ONLY_TIERS = ['accueil'];
+export const includedSeatsFor = (tier) => INCLUDED_SEATS_BY_TIER[tier] ?? INCLUDED_SEATS;
 export const SEAT_TIERS = ['accueil', 'full_scope', 'multi_clients'];
 export const ENTITLED_STATUSES = ['active', 'trialing'];
 export const NOT_CONFIGURED_MESSAGE =
@@ -25,11 +31,11 @@ export function clearSeatPriceCache() {
   priceCache = null;
 }
 
-/** Sièges en plus à facturer, pour `used` sièges occupés (titulaire compris). */
-export function extraSeats(used) {
+/** Sièges en plus à facturer, pour `used` sièges occupés (`included` : sièges compris dans l'offre, 1 par défaut). */
+export function extraSeats(used, included = INCLUDED_SEATS) {
   const n = Math.floor(Number(used));
   if (!Number.isFinite(n)) return 0;
-  return Math.max(0, n - INCLUDED_SEATS);
+  return Math.max(0, n - included);
 }
 
 function metadataEntries(metadata) {
@@ -66,7 +72,7 @@ function oid(value) {
  * `GET /api/company-members` et `GET /api/call-center/agents` du service d'inscription.
  * @param {{ collection: (name: string) => any }} db
  */
-export async function countSeatsUsed(db, companyId) {
+export async function countSeatsUsed(db, companyId, { secretariesOnly = false } = {}) {
   const company = oid(companyId);
   const companyDoc = await db.collection('companies').findOne({ _id: company });
   const ownerId = companyDoc?.userId ? String(companyDoc.userId) : null;
@@ -77,11 +83,14 @@ export async function countSeatsUsed(db, companyId) {
   };
   const isOwner = (userId) => Boolean(ownerId && userId && String(userId) === ownerId);
 
-  if (ownerId) add(ownerId, null);
-  else people.add('owner');
+  // Accueil / Secrétariat : seules les secrétaires (agents) occupent un siège, ni le titulaire ni les responsables (membres).
+  if (!secretariesOnly) {
+    if (ownerId) add(ownerId, null);
+    else people.add('owner');
 
-  const memberships = await db.collection('companymemberships').find({ companyId: company }).toArray();
-  for (const m of memberships) if (!isOwner(m.userId)) add(m.userId, m.email);
+    const memberships = await db.collection('companymemberships').find({ companyId: company }).toArray();
+    for (const m of memberships) if (!isOwner(m.userId)) add(m.userId, m.email);
+  }
 
   const agentUsers = await db.collection('users').find({ employerCompanyId: company, typeUser: 'rep' }).toArray();
   for (const u of agentUsers) if (!isOwner(u._id)) add(u._id, u.email);
@@ -89,6 +98,7 @@ export async function countSeatsUsed(db, companyId) {
   const invitations = await db.collection('agentinvitations').find({ companyId: company }).toArray();
   for (const i of invitations) {
     const status = String(i.status || '');
+    if (secretariesOnly && i.kind === 'member') continue;
     const open = i.kind === 'member' ? status === 'pending' : status === 'pending' || status === 'accepted';
     if (open && !isOwner(i.userId)) add(i.userId, i.email);
   }
@@ -163,11 +173,13 @@ function euros(cents) {
 }
 
 function base(used, tier, price) {
-  const extra = extraSeats(used);
+  const included = includedSeatsFor(tier);
+  const extra = extraSeats(used, included);
   return {
     tier,
     used,
-    included: INCLUDED_SEATS,
+    included,
+    secretariesOnly: SECRETARIES_ONLY_TIERS.includes(tier),
     extra,
     unitPrice: price ? euros(price.unitAmount) : null,
     unitAmount: price ? price.unitAmount : null,
@@ -184,8 +196,8 @@ function notApplicable(reason, used, tier, message) {
  * État des sièges d'un centre. Ne lève jamais d'erreur Stripe : sans configuration, `configured` vaut false.
  */
 export async function getSeatsState({ db, stripe, companyId }) {
-  const used = await countSeatsUsed(db, companyId);
   const { subscription, tier } = await loadSeatContext(db, companyId);
+  const used = await countSeatsUsed(db, companyId, { secretariesOnly: SECRETARIES_ONLY_TIERS.includes(tier) });
   if (!subscription || !tier) {
     return notApplicable('no_subscription', used, tier, "Aucun abonnement Call Centre actif ou en essai : pas de siège à facturer.");
   }
@@ -227,7 +239,7 @@ function withLock(key, fn) {
 }
 
 /**
- * Aligne la quantité de la ligne « siège en plus » de l'abonnement Stripe sur max(0, sièges − 1), avec proration.
+ * Aligne la quantité de la ligne « siège en plus » de l'abonnement Stripe sur max(0, sièges − sièges inclus), avec proration.
  * Idempotent : la quantité cible est comparée à celle de Stripe, sans écriture si elle est déjà bonne.
  * @returns {Promise<object>} état des sièges + `action` : 'created' | 'updated' | 'removed' | 'unchanged' | 'skipped'
  */
