@@ -76,11 +76,24 @@ export function textToHtml(text) {
   return text.split(/\n{2,}/).map((p) => `<p style="margin:0 0 14px">${link(escapeHtml(p)).replace(/\n/g, '<br>')}</p>`).join('');
 }
 
+/**
+ * Ajoute la signature du centre à la fin du message, sauf si le message se termine déjà par elle (les modèles de message
+ * proposent « Cordialement, <nom> » : la signature ne doit pas apparaître deux fois). Comparaison sans tenir compte de la
+ * casse, des espaces ni des retours à la ligne.
+ */
+export function appendSignature(body, signature) {
+  const sig = String(signature ?? '').trim();
+  if (!sig) return body;
+  const squash = (v) => String(v).replace(/\s+/g, ' ').trim().toLowerCase();
+  if (squash(body).endsWith(squash(sig))) return body;
+  return `${body}\n\n${sig}`;
+}
+
 /** Charge utile de l'API Brevo (pure, testable). */
 export function buildPayload({ senderEmail, centerName, replyTo, to, subject, text: body, signature = '', icsContent, harxFooter = true }) {
   const name = cleanDisplayName(centerName);
   // Signature du centre (texte brut, déjà validée à l'enregistrement) : ajoutée à la fin du message, avant la mention HARX.
-  const text = signature ? `${body}\n\n${signature}` : body;
+  const text = appendSignature(body, signature);
   // Mention HARX : seulement pour les envois qui partent réellement de la plateforme ; jamais pour un message envoyé depuis la boîte de l'entreprise.
   const footer = harxFooter ? `\n\nMessage envoyé via HARX pour le compte de ${name}. Vous pouvez répondre directement à ce message.` : '';
   return {
