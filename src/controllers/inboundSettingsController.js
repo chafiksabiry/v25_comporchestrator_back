@@ -3,6 +3,14 @@ import InboundSettings from '../models/InboundSettings.js';
 import { KINDS, audioVersion, isMp3, toPublicSettings, validateSettingsInput } from '../services/inboundSettings.js';
 import { callerAccess, ScopeError } from '../middleware/companyScope.js';
 import { phoneNumberController } from './phoneNumberController.js';
+import { COUNTRY_CATALOG, validatePrefixList } from '../services/outboundDestinations.js';
+import { resolveOutboundPolicy } from '../services/outboundPolicy.js';
+
+/** Pays autorisés pour les appels sortants, avec le catalogue pour les cocher (réglages du responsable). */
+const outboundView = async (companyId) => {
+  const p = await resolveOutboundPolicy(companyId);
+  return { countries: COUNTRY_CATALOG, selected: p.prefixes, customized: p.customized, defaults: p.defaults, companyCountry: p.companyCountry };
+};
 
 const NO_BYTES = '-greetingAudio.data -voicemailAudio.data';
 const validId = (v) => mongoose.Types.ObjectId.isValid(String(v)) && String(v).length === 24;
@@ -14,7 +22,7 @@ export const inboundSettingsController = {
       const { companyId } = req.query || {};
       if (!validId(companyId)) return fail(res, 400, 'companyId invalide.');
       const doc = await InboundSettings.findOne({ companyId }).select(NO_BYTES).lean();
-      res.json({ success: true, data: toPublicSettings(doc) });
+      res.json({ success: true, data: { ...toPublicSettings(doc), outbound: await outboundView(companyId) } });
     } catch (error) {
       console.error('inbound-settings get:', error.message);
       fail(res, 500, "Lecture des réglages d'accueil impossible.");
@@ -32,12 +40,25 @@ export const inboundSettingsController = {
         const access = await callerAccess(req).catch((e) => { if (e instanceof ScopeError) return null; throw e; });
         if (!access || access.role === 'agent') return fail(res, 403, 'Seul le responsable peut régler les appels sortants des secrétaires.');
       }
+      // Pays autorisés pour les appels sortants : liste d'indicatifs connus, ou null pour revenir au réglage par défaut.
+      // Réservé au responsable (même règle que l'autorisation des secrétaires) ; validé par le serveur.
+      const update = { $set: value, $setOnInsert: { companyId } };
+      if (req.body.outboundPrefixes !== undefined) {
+        const access = await callerAccess(req).catch((e) => { if (e instanceof ScopeError) return null; throw e; });
+        if (!access || access.role === 'agent') return fail(res, 403, 'Seul le responsable peut choisir les pays autorisés pour les appels sortants.');
+        if (req.body.outboundPrefixes === null) update.$unset = { outboundPrefixes: '' };
+        else {
+          const checked = validatePrefixList(req.body.outboundPrefixes);
+          if (!checked.ok) return fail(res, 400, checked.error);
+          update.$set.outboundPrefixes = checked.value;
+        }
+      }
       const doc = await InboundSettings.findOneAndUpdate(
         { companyId },
-        { $set: value, $setOnInsert: { companyId } },
+        update,
         { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
       ).select(NO_BYTES).lean();
-      const data = toPublicSettings(doc);
+      const data = { ...toPublicSettings(doc), outbound: await outboundView(companyId) };
       // Le répondeur doit fonctionner même si aucun conseiller n'est connecté : on branche les lignes tout de suite.
       if (data.voicemailEnabled) {
         const voiceUrl = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/inbound-call`;
