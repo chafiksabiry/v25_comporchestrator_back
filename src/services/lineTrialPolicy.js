@@ -7,9 +7,15 @@ export function isLineTrialAllowed(limits) {
 }
 
 /**
- * Nomad Solo inclut sa ligne (une seule) dans l'abonnement : le premier numéro s'achète sans paiement, sans essai
- * ni facturation de ligne. Les autres paliers, et toute ligne au-delà de la première, restent payants.
+ * Chaque offre Call Centre inclut une ligne (catalogue : « 1 incluse ») : le premier numéro s'achète sans paiement, sans
+ * essai ni facturation de ligne. Les numéros ajoutés ensuite restent payants.
  */
+const TIERS_WITH_INCLUDED_LINE = ['nomad_solo', 'accueil', 'full_scope', 'multi_clients'];
+
 export function isLineIncluded(limits, existingCount) {
-  return limits?.product === 'callcenter' && limits?.callcenterTier === 'nomad_solo' && Number(existingCount) === 0;
+  return (
+    limits?.product === 'callcenter' &&
+    TIERS_WITH_INCLUDED_LINE.includes(limits?.callcenterTier) &&
+    Number(existingCount) === 0
+  );
 }
