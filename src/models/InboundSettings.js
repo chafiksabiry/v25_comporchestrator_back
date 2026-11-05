@@ -23,6 +23,8 @@ const schema = new mongoose.Schema(
     voicemailEnabled: { type: Boolean, default: true },
     /** Les secrétaires (rôle agent) peuvent passer des appels sortants depuis leur navigateur. Autorisé par défaut. */
     secretaryOutbound: { type: Boolean, default: true },
+    /** Indicatifs pays autorisés pour les appels sortants. Absent : pays de l'entreprise + liste globale de l'environnement. */
+    outboundPrefixes: { type: [String], default: undefined },
     greetingAudio: { type: audioSchema, default: undefined },
     voicemailAudio: { type: audioSchema, default: undefined },
     validatedAt: { type: Date, default: null },

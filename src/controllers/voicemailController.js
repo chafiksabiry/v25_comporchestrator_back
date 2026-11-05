@@ -10,6 +10,7 @@ import { voiceIdentity } from '../services/voicePresenceService.js';
 import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
+import { isPremiumRate, MESSAGES as DESTINATION_MESSAGES } from '../services/outboundDestinations.js';
 import { freshMinutesBalance, maxSecondsForBalance, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed } from '../services/browserOutbound.js';
 import InboundSettings from '../models/InboundSettings.js';
 import { callerAccess } from '../middleware/companyScope.js';
@@ -131,6 +132,8 @@ export const voicemailController = {
       if (!vm) return fail(res, 404, 'Message introuvable.');
       const to = pickDestination(vm);
       if (!to) return fail(res, 422, 'Aucun numéro à rappeler : l’appelant n’a pas laissé de numéro exploitable.');
+      // Le numéro de rappel est celui que l'appelant a dicté : jamais un numéro surtaxé.
+      if (isPremiumRate(to)) return fail(res, 422, DESTINATION_MESSAGES.premium_rate);
       const line = await callbackLine(vm);
       if (!line) return fail(res, 422, 'Le rappel n’est disponible que depuis la ligne qui a reçu ce message, et elle est introuvable.');
       if (!config.twilioAccountSid || !config.twilioAuthToken) return fail(res, 500, 'La configuration téléphonie du serveur est incomplète.');
@@ -164,7 +167,7 @@ export const voicemailController = {
       const vm = await Voicemail.findById(VoicemailId).lean();
       const to = vm ? pickDestination(vm) : '';
       const line = vm ? await callbackLine(vm) : null;
-      if (!vm || !to || !line) return send(buildRefusalTwiml('Impossible de rappeler ce numéro.'));
+      if (!vm || !to || !line || isPremiumRate(to)) return send(buildRefusalTwiml('Impossible de rappeler ce numéro.'));
       // Un rappel est un appel sortant : il consomme des minutes, donc seulement avec des minutes disponibles, et il est
       // coupé quand elles sont écoulées.
       const minutes = await freshMinutesBalance(String(vm.companyId), { sync: syncMinutesFromCalls, grant: ensurePlanMinutesGranted, readWallet: (id) => MinutesCompany.findOne({ companyId: id }).select('minutes').lean() });

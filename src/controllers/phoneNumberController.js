@@ -1,5 +1,8 @@
 import { phoneNumberService } from '../services/phoneNumberService.js';
-import { callerAccess, callerCompanyId, onlyCompanyRows } from '../middleware/companyScope.js';
+import { callerAccess } from '../middleware/companyScope.js';
+import { listLinesFor } from '../services/phoneNumberList.js';
+import { checkCompanyDestination } from '../services/outboundPolicy.js';
+import { isPremiumRate, MESSAGES as DESTINATION_MESSAGES, DESTINATION_NOT_ALLOWED } from '../services/outboundDestinations.js';
 import { paypalService } from '../services/paypalService.js';
 import { stripeService } from '../services/stripeService.js';
 import { config } from '../config/env.js';
@@ -1171,10 +1174,8 @@ class PhoneNumberController {
 
   async getAllNumbers(req, res) {
     try {
-      // Each company only sees its own lines (the list used to contain every company's numbers).
-      const companyId = await callerCompanyId(req);
-      const numbers = await phoneNumberService.getAllPhoneNumbers();
-      res.json(onlyCompanyRows(numbers, companyId));
+      // Filtrage côté serveur : une entreprise ne reçoit jamais les lignes d'une autre (voir services/phoneNumberList.js).
+      res.json(await listLinesFor(req));
     } catch (error) {
       if (error.status) return res.status(error.status).json({ error: error.message });
       console.error('Error fetching phone numbers:', error);
@@ -1241,6 +1242,10 @@ class PhoneNumberController {
           error: 'Bad Request',
           message: 'Numéros invalides. Utilisez le format international (+…).',
         });
+      }
+
+      if (isPremiumRate(destE164)) {
+        return res.status(422).json({ error: DESTINATION_NOT_ALLOWED, message: DESTINATION_MESSAGES.premium_rate });
       }
 
       const companyFilter =
@@ -1682,6 +1687,23 @@ class PhoneNumberController {
   }
 
   /**
+   * Contrôle préalable d'une destination (écran « Appeler ») : même décision que le webhook, mais avec une réponse lisible
+   * (code `destination_not_allowed` + message). Ce n'est qu'un confort : le webhook refuse de toute façon.
+   */
+  async outboundCheck(req, res) {
+    try {
+      const companyId = String(req.body?.companyId || '');
+      if (!mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ success: false, error: 'invalid_company', message: 'Entreprise invalide.' });
+      const decision = await checkCompanyDestination(companyId, req.body?.to);
+      if (!decision.ok) return res.status(422).json({ success: false, error: decision.code, reason: decision.reason, message: decision.message });
+      return res.json({ success: true, data: { to: decision.to } });
+    } catch (error) {
+      console.error('Error in outboundCheck:', error.message);
+      res.status(500).json({ success: false, error: 'outbound_check_failed', message: 'Vérification de la destination impossible pour le moment.' });
+    }
+  }
+
+  /**
    * Webhook Twilio de l'application d'appel sortant du navigateur. Reçoit To / From / CompanyId / Ticket : l'entreprise
    * n'est crue que si la preuve signée (délivrée avec le jeton) correspond à la personne (`From=client:<identité>`).
    * Compose le numéro depuis une ligne Twilio de CETTE entreprise, si elle a un abonnement actif et des minutes.
@@ -1700,7 +1722,13 @@ class PhoneNumberController {
         const settings = await InboundSettings.findOne({ companyId }).select('secretaryOutbound').lean();
         if (!secretaryOutboundAllowed(settings)) return send(refusal(SECRETARY_OUTBOUND_BLOCKED));
       }
-      const to = normalizeOutboundDestination(To);
+      // Destination : E.164 strict, pays activé pour CETTE entreprise, jamais de numéro surtaxé (décision du serveur).
+      const destination = await checkCompanyDestination(companyId, To);
+      if (!destination.ok) {
+        console.warn(`[browser-outbound] destination refusée pour l'entreprise ${companyId} : ${destination.reason}`);
+        return send(refusal(destination.message));
+      }
+      const to = destination.to;
       const [limits, minutes, line] = await Promise.all([
         loadCompanyPlanLimits(companyId),
         freshMinutesBalance(companyId, { sync: syncMinutesFromCalls, grant: ensurePlanMinutesGranted, readWallet: (id) => MinutesCompany.findOne({ companyId: id }).select('minutes').lean() }),
