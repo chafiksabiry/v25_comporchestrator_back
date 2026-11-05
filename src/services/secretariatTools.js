@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import SecretariatTools from '../models/SecretariatTools.js';
 import { config } from '../config/env.js';
 import { isValidEmail } from './emailService.js';
-import { newVisioUrl, validateCustomVisioUrl } from './visio.js';
+import { validateCustomVisioUrl } from './visio.js';
 
 /**
  * Outils du secrétariat : fournisseur et identité d'envoi des e-mails, agenda connecté, choix de la visio, abonnement agenda (.ics).
@@ -12,6 +12,7 @@ import { newVisioUrl, validateCustomVisioUrl } from './visio.js';
 export const MAX_FROM_NAME = 80;
 export const MAX_SIGNATURE = 500;
 export const TOKEN_BYTES = 32;
+/** 'jitsi' et 'custom' = AUCUNE visio choisie (valeurs conservées pour compatibilité) : HARX ne fournit aucun outil de visio. */
 export const PROVIDERS = ['jitsi', 'custom', 'google_meet', 'teams', 'zoom'];
 /** 'platform' = AUCUNE messagerie choisie (valeur conservée pour compatibilité) : les e-mails ne partent jamais de HARX. */
 export const EMAIL_PROVIDERS = ['platform', 'google', 'microsoft'];
@@ -111,7 +112,6 @@ export function validateToolsPatch(body, current, connected = new Set()) {
         customUrl = checked.value;
       }
     }
-    if (provider === 'custom' && !customUrl) return bad('Indiquez le lien de votre salle de visio pour utiliser votre propre outil.');
     set['visio.provider'] = provider;
     set['visio.customUrl'] = customUrl;
     set['visio.chosen'] = true;
@@ -129,7 +129,8 @@ export function toView(doc, feedUrl = null) {
     agenda: { provider: t.agenda.provider, feedUrl: feedUrl || null },
     configured: {
       email: Boolean(email.fromName || email.replyTo || email.signature) || email.provider !== 'platform',
-      visio: t.visio.provider === 'custom' ? Boolean(t.visio.customUrl) : t.visio.chosen === true,
+      // Vrai seulement si un fournisseur connecté (Google Meet, Teams, Zoom) est choisi ; 'jitsi' / 'custom' = aucune visio.
+      visio: Object.hasOwn(VISIO_NEEDS, t.visio.provider),
       agenda: (typeof t.agendaFeed.tokenHash === 'string' && t.agendaFeed.tokenHash.length > 0) || t.agenda.provider !== 'none',
     },
   };
@@ -161,12 +162,4 @@ export const loadTools = (companyId) => SecretariatTools.findOne({ companyId: oi
 /** Identité d'envoi des e-mails du centre (champs vides si non renseignée). */
 export async function loadEmailIdentity(companyId) {
   return merged(await loadTools(companyId)).email;
-}
-
-/** Lien « sans compte » (réglages déjà lus) : le lien permanent du centre s'il l'a choisi, sinon une salle Jitsi. */
-export const localMeetingUrl = (visio) => (visio.provider === 'custom' && visio.customUrl ? visio.customUrl : newVisioUrl());
-
-/** Lien de visio sans compte d'un nouveau rendez-vous (jitsi / lien permanent). Les visios Meet, Teams et Zoom passent par secretariatActions.js. */
-export async function newMeetingUrl(companyId) {
-  return localMeetingUrl(merged(await loadTools(companyId)).visio);
 }

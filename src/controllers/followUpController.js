@@ -18,7 +18,10 @@ const fail = (res, status, message) => res.status(status).json({ success: false,
 const NOT_ALLOWED = 'Vous n’avez pas accès à cet écran.';
 
 /** Erreur d'un fournisseur connecté (lien de visio) : message clair, 409 si la connexion est à refaire, 502 sinon. */
-const providerFail = (res, error) => fail(res, error.code === 'not_connected' || error.code === 'needs_reauth' ? 409 : 502, error.message);
+const providerFail = (res, error) => {
+  if (error.code === 'visio_not_connected' || error.code === 'visio_needs_reauth') return res.status(409).json({ success: false, code: error.code, error: error.code, message: error.message });
+  return fail(res, error.code === 'not_connected' || error.code === 'needs_reauth' ? 409 : 502, error.message);
+};
 
 /** Rendez-vous tel que le voient les adaptateurs d'agenda (vue publique + centre, événement et visio chez le fournisseur). */
 const extView = (item) => ({

@@ -58,11 +58,11 @@ ko({ email: { signature: 'a\u0000b' } }, /non autorisés/);
 ko({ email: { fromName: 5 } }, /texte/);
 assert.deepEqual(ok({ visio: { provider: 'jitsi' } }), { 'visio.provider': 'jitsi', 'visio.customUrl': '', 'visio.chosen': true });
 assert.deepEqual(ok({ visio: { provider: 'custom', customUrl: mine } }), { 'visio.provider': 'custom', 'visio.customUrl': mine, 'visio.chosen': true });
-ko({ visio: { provider: 'custom' } }, /Indiquez le lien/);
+assert.deepEqual(ok({ visio: { provider: 'custom' } }), { 'visio.provider': 'custom', 'visio.customUrl': '', 'visio.chosen': true }, "'custom' sans lien : accepté (= aucune visio)");
 ko({ visio: { provider: 'skype' } }, /inconnu/);
 ko({ visio: { provider: 'custom', customUrl: 'http://x.fr/a' } }, /https/);
 assert.equal(ok({ visio: { provider: 'custom' } }, { visio: { provider: 'jitsi', customUrl: mine } })['visio.customUrl'], mine, 'fusion avec l’existant');
-ko({ visio: { customUrl: '' } }, /Indiquez le lien/, { visio: { provider: 'custom', customUrl: mine } });
+assert.equal(ok({ visio: { customUrl: '' } }, { visio: { provider: 'custom', customUrl: mine } })['visio.customUrl'], '', 'vider reste permis');
 
 // ---------- jeton du flux
 const tk = T.newFeedToken();
@@ -175,7 +175,10 @@ try {
   assert.equal(r.status, 200, 'membre avec le droit d’appels : écriture permise');
   assert.deepEqual(r.body.data.visio, { provider: 'custom', customUrl: mine });
   assert.equal(r.body.data.email.fromName, 'Centre Acme', 'mise à jour partielle : l’e-mail est conservé');
-  assert.deepEqual(r.body.data.configured, { email: true, visio: true, agenda: false });
+  assert.deepEqual(r.body.data.configured, { email: true, visio: false, agenda: false }, "'custom' = aucune visio : non configurée");
+  assert.equal(T.toView({ visio: { provider: 'jitsi', chosen: true } }).configured.visio, false);
+  for (const p of ['google_meet', 'teams', 'zoom']) assert.equal(T.toView({ visio: { provider: p } }).configured.visio, true, p);
+  assert.equal(T.newMeetingUrl, undefined, 'plus aucune fabrique de lien sans compte'); assert.equal(T.localMeetingUrl, undefined);
   assert.equal((await req('GET', `/tools/${C1}`, { user: 'agent1' })).body.data.visio.customUrl, mine);
   assert.deepEqual((await req('GET', `/tools/${C2}`, { user: 'other1' })).body, defaults, 'un autre centre ne voit pas ces réglages');
 
@@ -295,22 +298,24 @@ try {
   e = await call(mail.send, msg); assert.equal(e.code, 409); assert.equal(e.body.code, 'mailbox_not_connected'); assert.equal(net.length, n0);
   assert.equal(brevo.length, 0, 'aucun appel Brevo pour le secrétariat');
 
-  // ---------- visio d'un rendez-vous : jitsi par défaut, lien permanent si choisi
+  // ---------- visio d'un rendez-vous : aucun lien Jitsi ni permanent, seulement un compte connecté
   const store = [];
   FollowUpItem.create = async (doc) => { const d = { _id: `64b00000000000000000${String(store.length + 1).padStart(4, '0')}`, status: 'todo', sequence: 0, createdAt: new Date(), updatedAt: new Date(), transfers: [], ...doc, save: async () => d, toObject() { const { save, toObject, ...rest } = d; return rest; } }; store.push(d); return d; };
   FollowUpItem.exists = async () => false;
   const when = () => new Date(Date.now() + 5 * 86400000).toISOString();
   const create = (extra = {}) => call(fu.create, { companyId: C1, model: 'appointment', contactName: 'Mme Durand', dueAt: when(), videoLink: true, ...extra });
+  const NOT_CONN = 'Connectez Google Meet, Microsoft Teams ou Zoom dans Paramétrage > Outils pour créer un lien de visio.';
   let c = await create();
-  assert.equal(c.code, 201, JSON.stringify(c.body));
-  assert.ok(V.isVisioUrl(c.body.data.videoUrl), 'sans réglage : salle Jitsi');
+  assert.equal(c.code, 409, JSON.stringify(c.body));
+  assert.deepEqual(c.body, { success: false, code: 'visio_not_connected', error: 'visio_not_connected', message: NOT_CONN }, 'sans réglage ni connexion : refus, aucune salle Jitsi');
   toolsDocs.push({ companyId: C1, visio: { provider: 'custom', customUrl: mine } });
   c = await create();
-  assert.equal(c.body.data.videoUrl, mine, 'lien permanent du centre');
+  assert.equal(c.code, 409); assert.equal(c.body.code, 'visio_not_connected', 'le lien permanent n’est plus utilisé');
+  assert.equal(store.length, 0, 'aucun rendez-vous enregistré');
   c = await create({ videoLink: false });
   assert.equal(c.body.data.videoUrl, '', 'pas de visio demandée : aucun lien');
   // PATCH : ajout du lien sur un rendez-vous sans visio, puis suppression
-  const item = store[2];
+  const item = store[0];
   FollowUpItem.findOne = async (f) => (String(f._id) === String(item._id) ? item : null);
   const patch = (body) => new Promise((resolve) => {
     clearCompanyCache();
@@ -318,9 +323,15 @@ try {
     fu.patch({ user: { userId: 'owner1' }, headers: { authorization: `Bearer ${tok}` }, body, params: { id: item._id }, query: {}, method: 'PATCH', originalUrl: '/x' }, res);
   });
   let p = await patch({ videoLink: true });
-  assert.equal(p.body.data.videoUrl, mine);
+  assert.equal(p.code, 409); assert.equal(p.body.code, 'visio_not_connected'); assert.equal(item.videoUrl, '');
+  // ancien rendez-vous avec un lien Jitsi ou permanent : conservé tel quel
+  for (const legacy of [V.newVisioUrl(), mine]) {
+    item.videoUrl = legacy;
+    p = await patch({ videoLink: true });
+    assert.equal(p.code, 200); assert.equal(p.body.data.videoUrl, legacy, 'ancien lien conservé');
+  }
   p = await patch({ videoLink: false });
-  assert.equal(p.body.data.videoUrl, '', 'la suppression du lien fonctionne aussi avec le lien permanent');
+  assert.equal(p.body.data.videoUrl, '', 'la suppression explicite du lien fonctionne toujours');
   // le client ne peut pas imposer son propre lien
   p = await patch({ videoUrl: 'https://evil.example/x' });
   assert.equal(p.code, 400); assert.equal(item.videoUrl, '');
