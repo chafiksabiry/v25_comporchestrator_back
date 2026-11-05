@@ -330,7 +330,7 @@ class PhoneNumberController {
           });
         }
       } else if (isIncluded) {
-        console.log(`🎁 Included Nomad Solo line for company ${companyId} — no payment required.`);
+        console.log(`🎁 Included plan line (first number) for company ${companyId} — no payment required.`);
       } else {
         console.log(`🎁 First phone line for company ${companyId} — granting ${linePricing.trialDays}-day free trial.`);
       }
@@ -515,7 +515,7 @@ class PhoneNumberController {
           });
         }
       } else if (isIncluded) {
-        console.log(`🎁 Included Nomad Solo line for company ${companyId} — no payment required.`);
+        console.log(`🎁 Included plan line (first number) for company ${companyId} — no payment required.`);
       } else {
         console.log(`🎁 First phone line for company ${companyId} — granting ${linePricing.trialDays}-day free trial.`);
       }
