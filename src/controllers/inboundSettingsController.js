@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import InboundSettings from '../models/InboundSettings.js';
 import { KINDS, audioVersion, isMp3, toPublicSettings, validateSettingsInput } from '../services/inboundSettings.js';
+import { callerAccess, ScopeError } from '../middleware/companyScope.js';
 import { phoneNumberController } from './phoneNumberController.js';
 
 const NO_BYTES = '-greetingAudio.data -voicemailAudio.data';
@@ -26,6 +27,11 @@ export const inboundSettingsController = {
       if (!validId(companyId)) return fail(res, 400, 'companyId invalide.');
       const { ok, errors, value } = validateSettingsInput(req.body);
       if (!ok) return res.status(400).json({ success: false, error: errors[0], message: errors[0], errors });
+      // Seul le responsable (titulaire ou membre) autorise ou interdit les appels sortants : une secrétaire ne se l'accorde pas.
+      if (value.secretaryOutbound !== undefined) {
+        const access = await callerAccess(req).catch((e) => { if (e instanceof ScopeError) return null; throw e; });
+        if (!access || access.role === 'agent') return fail(res, 403, 'Seul le responsable peut régler les appels sortants des secrétaires.');
+      }
       const doc = await InboundSettings.findOneAndUpdate(
         { companyId },
         { $set: value, $setOnInsert: { companyId } },
