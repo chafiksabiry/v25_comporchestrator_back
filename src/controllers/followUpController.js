@@ -56,7 +56,7 @@ async function syncExternal(item, { wasStatus, keys, videoChanged }) {
     }
     const removed = await removeVideoResource(before.companyId, before);
     if (item.videoProvider && ok && removed) { item.videoUrl = ''; item.videoProvider = ''; item.videoExternalId = ''; } // le lien n'existe plus chez le fournisseur
-  } else if (!canceled && (wasStatus === 'canceled' || videoChanged || keys.some((k) => ['dueAt', 'title', 'durationMinutes'].includes(k)))) {
+  } else if (!canceled && (wasStatus === 'canceled' || videoChanged || keys.some((k) => ['dueAt', 'timeZone', 'title', 'durationMinutes'].includes(k)))) {
     if (item.videoProvider && item.videoExternalId && item.videoExternalId !== item.calendarExternalId) await updateVideoResource(String(item.companyId), extView(item));
     const op = item.calendarExternalId ? 'update' : 'push';
     applySync(item, await syncAppointment(extView(item), { op }), op);
@@ -172,7 +172,7 @@ export const followUpController = {
       // Lien de visio, une fois les vérifications passées (rien d'orphelin chez le fournisseur). Échec du fournisseur : le rendez-vous
       // n'est pas enregistré et l'erreur est claire (jamais de faux lien).
       const video = v.videoLink
-        ? await createVideo(access.companyId, { title: v.title, contactName: v.contactName, dueAt: v.dueAt, durationMinutes: v.durationMinutes })
+        ? await createVideo(access.companyId, { title: v.title, contactName: v.contactName, dueAt: v.dueAt, durationMinutes: v.durationMinutes, timeZone: v.timeZone })
         : { url: '', provider: '', externalId: '', sharesCalendar: false, eventProvider: '' };
       let item;
       try {
@@ -180,7 +180,7 @@ export const followUpController = {
           companyId, model: v.model, originType: v.originType, originId: v.originId, title: v.title, note: v.note,
           contactName: v.contactName, contactPhone: v.contactPhone || origin?.from || '', contactEmail: v.contactEmail,
           videoUrl: video.url, videoProvider: video.provider, videoExternalId: video.externalId,
-          dueAt: v.dueAt, durationMinutes: v.durationMinutes, assigneeId: assignee.id, assigneeName: assignee.name,
+          dueAt: v.dueAt, timeZone: v.timeZone, durationMinutes: v.durationMinutes, assigneeId: assignee.id, assigneeName: assignee.name,
           createdById: access.userId, createdByName: me?.name || '', fromAiPlan: v.fromAiPlan,
           transfers: v.model === 'transfer' ? [{ fromId: access.userId, fromName: me?.name || '', toId: assignee.id, toName: assignee.name, note: v.note }] : [],
         });
@@ -221,7 +221,7 @@ export const followUpController = {
       Object.assign(item, fields);
       if (videoLink === true && !item.videoUrl) {
         // Échec du fournisseur : réponse d'erreur, rien n'est enregistré (le document modifié en mémoire n'est pas sauvegardé).
-        const video = await createVideo(item.companyId, { title: item.title, contactName: item.contactName, dueAt: item.dueAt, durationMinutes: item.durationMinutes }, { calendar: { provider: item.calendarProvider, externalId: item.calendarExternalId } });
+        const video = await createVideo(item.companyId, { title: item.title, contactName: item.contactName, dueAt: item.dueAt, durationMinutes: item.durationMinutes, timeZone: item.timeZone }, { calendar: { provider: item.calendarProvider, externalId: item.calendarExternalId } });
         item.videoUrl = video.url; item.videoProvider = video.provider; item.videoExternalId = video.externalId;
         if (video.sharesCalendar && !item.calendarExternalId) { item.calendarProvider = video.eventProvider; item.calendarExternalId = video.externalId; item.calendarStatus = 'synced'; }
       }

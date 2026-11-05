@@ -27,6 +27,8 @@ const schema = new mongoose.Schema(
       /** Vrai dès que le centre a enregistré un choix (même « jitsi ») : sert à l'indicateur « configuré ». */
       chosen: { type: Boolean, default: false },
     },
+    /** Fuseau IANA par défaut des rendez-vous du centre ('' = non réglé : Europe/Paris). */
+    timeZone: { type: String, default: '', maxlength: 64 },
     agendaFeed: {
       tokenHash: { type: String, default: null },
       createdAt: { type: Date, default: null },

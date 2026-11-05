@@ -68,6 +68,33 @@ assert.equal(F.visibilityFilter(AGENT, 'C').assigneeId, 'agent1');
 assert.equal(F.visibilityFilter(OWNER, 'C').assigneeId, undefined);
 assert.equal(F.visibilityFilter(OWNER, 'C', { mine: true }).assigneeId, 'owner1');
 
+// --- fuseau horaire du rendez-vous (nom IANA)
+const TZ = await import('../services/timeZone.js');
+const apptBody = { model: 'appointment', contactName: 'Mme Durand', dueAt: '2026-11-06T09:30:00Z' };
+assert.equal(F.validateCreate(apptBody, OWNER, NOW).value.timeZone, null, 'fuseau facultatif : null par défaut');
+for (const tz of ['Africa/Casablanca', 'America/New_York', 'Asia/Tokyo', 'Europe/Paris', 'UTC']) {
+  assert.equal(F.validateCreate({ ...apptBody, timeZone: tz }, OWNER, NOW).value.timeZone, tz, tz);
+  assert.deepEqual(F.validatePatch({ timeZone: tz }, item, NOW).value, { timeZone: tz }, tz);
+}
+assert.equal(F.validateCreate({ ...apptBody, timeZone: ' europe/paris ' }, OWNER, NOW).value.timeZone, 'Europe/Paris', 'nom canonique');
+for (const tz of ['Mars/Olympus', 'Paris', 'GMT+25', '+01:00', 42, {}, 'x'.repeat(200)]) {
+  assert.deepEqual(F.validateCreate({ ...apptBody, timeZone: tz }, OWNER, NOW), { error: 'Fuseau horaire inconnu.' }, String(tz));
+  assert.deepEqual(F.validatePatch({ timeZone: tz }, item, NOW), { error: 'Fuseau horaire inconnu.' }, String(tz));
+}
+assert.deepEqual(F.validatePatch({ timeZone: null }, item, NOW).value, { timeZone: null }, 'null efface le fuseau');
+assert.deepEqual(F.validatePatch({ timeZone: '' }, item, NOW).value, { timeZone: null });
+assert.ok(F.allowedPatchFields(OWNER).includes('timeZone') && !F.allowedPatchFields(AGENT).includes('timeZone'), 'modifiable par ceux qui modifient la date');
+assert.equal(F.toItem({ _id: 'i1', model: 'appointment', title: 'x', status: 'todo', timeZone: 'Asia/Tokyo' }).timeZone, 'Asia/Tokyo');
+assert.equal(F.toItem({ _id: 'i1', model: 'appointment', title: 'x', status: 'todo' }).timeZone, null, 'ancien élément : null');
+// résolution : élément > centre > Paris
+assert.equal(TZ.resolveItemTimeZone({ timeZone: 'Asia/Tokyo' }, { timeZone: 'America/New_York' }), 'Asia/Tokyo');
+assert.equal(TZ.resolveItemTimeZone({ timeZone: null }, { timeZone: 'America/New_York' }), 'America/New_York');
+assert.equal(TZ.resolveItemTimeZone({}, { timeZone: 'America/New_York' }), 'America/New_York');
+assert.equal(TZ.resolveItemTimeZone({ timeZone: null }, { timeZone: '' }), 'Europe/Paris');
+assert.equal(TZ.resolveItemTimeZone({}, {}), 'Europe/Paris');
+assert.equal(TZ.resolveItemTimeZone(undefined, undefined), 'Europe/Paris', 'comportement historique');
+assert.equal(TZ.resolveItemTimeZone({ timeZone: 'n’importe quoi' }, { timeZone: 'Asia/Tokyo' }), 'Asia/Tokyo', 'valeur invalide ignorée');
+
 // --- tri : à faire par échéance, sans échéance ensuite, clos en dernier
 const sorted = F.sortItems([
   { id: 'a', status: 'done', createdAt: '2026-11-01' }, { id: 'b', status: 'todo', dueAt: null, createdAt: '2026-11-01' },

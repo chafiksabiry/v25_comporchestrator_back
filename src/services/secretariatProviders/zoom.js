@@ -1,4 +1,5 @@
-import { call, ensure, eventWindow, SecretariatError, TIME_ZONE, VIDEO_LINK_RE } from './common.js';
+import { call, ensure, eventWindow, SecretariatError, VIDEO_LINK_RE } from './common.js';
+import { DEFAULT_TIME_ZONE } from '../timeZone.js';
 
 /**
  * Zoom : création de réunions. Points d'accès publics standards ; AUCUN essayé avec un vrai compte : tout est « À VÉRIFIER ».
@@ -33,7 +34,7 @@ export const zoom = {
   /** POST /users/me/meetings (type 2 = réunion planifiée). @returns {Promise<{id: string, joinUrl: string}>} */
   async createMeeting({ http, accessToken, event }) {
     const { start, end } = eventWindow(event);
-    const body = { topic: event.title, type: 2, start_time: start.toISOString().slice(0, 19) + 'Z', duration: Math.max(1, Math.round((end - start) / 60000)), timezone: TIME_ZONE, agenda: event.description || '' };
+    const body = { topic: event.title, type: 2, start_time: start.toISOString().slice(0, 19) + 'Z', duration: Math.max(1, Math.round((end - start) / 60000)), timezone: event.timeZone || DEFAULT_TIME_ZONE, agenda: event.description || '' };
     const res = ensure(await call(http, { method: 'POST', url: `${API}/users/me/meetings`, headers: { Authorization: `Bearer ${accessToken}` }, body }), 'Création de la réunion Zoom', [201]);
     const joinUrl = String(res.json?.join_url || '');
     if (res.json?.id === undefined || !VIDEO_LINK_RE.zoom.test(joinUrl)) throw new SecretariatError('invalid_link', 'Zoom n’a pas fourni de lien de visio utilisable.');
@@ -42,7 +43,7 @@ export const zoom = {
 
   async updateMeeting({ http, accessToken, id, event }) {
     const { start, end } = eventWindow(event);
-    const body = { topic: event.title, start_time: start.toISOString().slice(0, 19) + 'Z', duration: Math.max(1, Math.round((end - start) / 60000)), timezone: TIME_ZONE };
+    const body = { topic: event.title, start_time: start.toISOString().slice(0, 19) + 'Z', duration: Math.max(1, Math.round((end - start) / 60000)), timezone: event.timeZone || DEFAULT_TIME_ZONE };
     ensure(await call(http, { method: 'PATCH', url: `${API}/meetings/${encodeURIComponent(id)}`, headers: { Authorization: `Bearer ${accessToken}` }, body }), 'Mise à jour de la réunion Zoom', [200, 204]);
   },
 

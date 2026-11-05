@@ -3,6 +3,7 @@ import { connectedAccount, messages, resolveVisio, withConnection } from './secr
 import { SecretariatError } from './secretariatProviders/common.js';
 import { PROVIDERS } from './secretariatProviders/index.js';
 import { loadTools, mergedTools, VISIO_NEEDS } from './secretariatTools.js';
+import { resolveItemTimeZone } from './timeZone.js';
 
 /**
  * Actions du secrétariat qui passent par un compte connecté : envoi d'e-mail, événements d'agenda, liens de visio.
@@ -32,15 +33,19 @@ export async function sendViaConnection(companyId, provider, message) {
 
 // ---------- événements d'agenda
 const describe = (i) => [i.contactName ? `Rendez-vous avec ${i.contactName}` : '', i.videoUrl ? `Visio : ${i.videoUrl}` : ''].filter(Boolean).join('\n');
-function eventOf(item) {
+/** `tools` = réglages du centre (fuseau par défaut) ; le fuseau envoyé au fournisseur est celui du rendez-vous (resolveItemTimeZone). */
+function eventOf(item, tools) {
   const start = new Date(item.dueAt);
-  return { title: item.title, description: describe(item), location: item.videoUrl || '', startsAt: start, endsAt: new Date(start.getTime() + (Number(item.durationMinutes) || DEFAULT_MINUTES) * 60000) };
+  return { timeZone: resolveItemTimeZone(item, tools), title: item.title, description: describe(item), location: item.videoUrl || '', startsAt: start, endsAt: new Date(start.getTime() + (Number(item.durationMinutes) || DEFAULT_MINUTES) * 60000) };
 }
 
 /** Adaptateur d'agenda d'UN centre pour calendarSync (rendez-vous = vue `toItem` + companyId + calendarExternalId). */
 function calendarAdapter(companyId, provider) {
   const P = PROVIDERS[provider];
-  const upsert = (item, id) => withConnection(companyId, provider, (accessToken, http) => P.upsertEvent({ http, accessToken, id, event: eventOf(item) }));
+  const upsert = async (item, id) => {
+    const tools = mergedTools(await loadTools(companyId));
+    return withConnection(companyId, provider, (accessToken, http) => P.upsertEvent({ http, accessToken, id, event: eventOf(item, tools) }));
+  };
   const push = async (item) => ({ provider, externalId: (await upsert(item, null)).id });
   return {
     id: provider,
@@ -65,7 +70,7 @@ registerCompanyCalendarResolver(async (companyId, hint) => {
  * (choisi, ou unique connexion possible) : SecretariatError `visio_not_connected` / `visio_needs_reauth`. Meet / Teams : un événement du compte connecté (c'est l'événement
  * d'agenda du rendez-vous quand l'agenda est le même fournisseur, sinon un événement dédié au lien). Zoom : une réunion planifiée.
  * En cas d'échec : SecretariatError claire, jamais de faux lien.
- * @param {{title: string, contactName?: string, dueAt: Date|string, durationMinutes?: number|null}} appt
+ * @param {{title: string, contactName?: string, dueAt: Date|string, durationMinutes?: number|null, timeZone?: string|null}} appt
  * @param {{calendar?: {provider: string|null, externalId: string|null}|null}} [options] événement d'agenda déjà créé pour ce rendez-vous
  * @returns {Promise<{url: string, provider: '' | 'google_meet' | 'teams' | 'zoom', externalId: string, sharesCalendar: boolean, eventProvider: string}>}
  */
@@ -75,7 +80,7 @@ export async function createVideo(companyId, appt, { calendar = null } = {}) {
   if (resolved.error) throw new SecretariatError(`visio_${resolved.error}`, resolved.error === 'needs_reauth' ? messages.needsReauth(resolved.account) : VISIO_NOT_CONNECTED_MESSAGE, { status: 409 });
   const kind = resolved.provider;
   const account = VISIO_NEEDS[kind];
-  const event = eventOf({ ...appt, videoUrl: '' });
+  const event = eventOf({ ...appt, videoUrl: '' }, tools);
   try {
     if (kind === 'zoom') {
       const r = await withConnection(companyId, 'zoom', (accessToken, http) => PROVIDERS.zoom.createMeeting({ http, accessToken, event }));
@@ -95,7 +100,7 @@ export async function createVideo(companyId, appt, { calendar = null } = {}) {
 export async function updateVideoResource(companyId, item) {
   if (!item.videoProvider || !item.videoExternalId) return true;
   try {
-    const event = eventOf({ ...item, videoUrl: '' });
+    const event = eventOf({ ...item, videoUrl: '' }, mergedTools(await loadTools(companyId)));
     if (item.videoProvider === 'zoom') await withConnection(companyId, 'zoom', (accessToken, http) => PROVIDERS.zoom.updateMeeting({ http, accessToken, id: item.videoExternalId, event }));
     else if (item.videoExternalId !== item.calendarExternalId) {
       const account = VISIO_NEEDS[item.videoProvider];

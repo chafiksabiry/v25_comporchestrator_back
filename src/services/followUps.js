@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { isValidEmail } from './emailService.js';
+import { normalizeTimeZone, UNKNOWN_TIME_ZONE_MESSAGE } from './timeZone.js';
 
 /**
  * Logique pure des éléments de suivi (écran « À traiter ») : validation, droits et tri. Aucun accès base ni réseau.
@@ -33,6 +34,13 @@ const isObjectId = (v) => typeof v === 'string' && /^[0-9a-fA-F]{24}$/.test(v) &
 const text = (v, max) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : '');
 const bad = (message) => ({ error: message });
 
+/** Fuseau facultatif : absent / null / '' = aucun (null) ; sinon nom IANA reconnu (forme canonique). */
+function parseTimeZone(v) {
+  if (v === undefined || v === null || v === '') return { value: null };
+  const tz = normalizeTimeZone(v);
+  return tz ? { value: tz } : { invalid: true };
+}
+
 function parseDate(v) {
   if (v === undefined || v === null || v === '') return { empty: true };
   const d = new Date(v);
@@ -65,6 +73,9 @@ export function validateCreate(body, access, now = Date.now()) {
   if (b.videoLink !== undefined && typeof b.videoLink !== 'boolean') return bad('Option de visio invalide.');
   if (model === 'appointment' && !contactName) return bad('Indiquez la personne concernée par le rendez-vous.');
 
+  const zone = parseTimeZone(b.timeZone);
+  if (zone.invalid) return bad(UNKNOWN_TIME_ZONE_MESSAGE);
+
   const due = parseDate(b.dueAt);
   if (due.invalid) return bad('Date et heure invalides.');
   if ((model === 'missed_callback' || model === 'appointment') && due.empty) return bad(model === 'appointment' ? 'Indiquez la date et l’heure du rendez-vous.' : 'Indiquez la date et l’heure du rappel.');
@@ -91,6 +102,7 @@ export function validateCreate(body, access, now = Date.now()) {
       contactName, contactPhone, contactEmail,
       videoLink: model === 'appointment' && b.videoLink === true,
       dueAt: due.date || null,
+      timeZone: zone.value,
       durationMinutes,
       assigneeId,
       fromAiPlan: b.fromAiPlan === true,
@@ -122,6 +134,11 @@ export function validatePatch(body, item, now = Date.now()) {
     if (due.date && due.date.getTime() > now + MAX_AHEAD_MS) return bad('La date est trop lointaine.');
     if (due.date && due.date.getTime() < now - PAST_TOLERANCE_MS && (item.model === 'missed_callback' || item.model === 'appointment')) return bad('La date et l’heure doivent être dans le futur.');
     set.dueAt = due.date || null;
+  }
+  if (b.timeZone !== undefined) {
+    const zone = parseTimeZone(b.timeZone);
+    if (zone.invalid) return bad(UNKNOWN_TIME_ZONE_MESSAGE);
+    set.timeZone = zone.value;
   }
   if (b.durationMinutes !== undefined) {
     if (item.model !== 'appointment') return bad('La durée ne concerne que les rendez-vous.');
@@ -162,7 +179,7 @@ export const canManage = (access) => access.role !== 'agent' && canUse(access);
 export const canSeeItem = (access, item) => canUse(access) && (access.role !== 'agent' || String(item.assigneeId) === String(access.userId));
 /** Un agent peut clore ou annoter ses éléments ; il ne les retitre pas et ne change pas l'échéance. */
 export function allowedPatchFields(access) {
-  return access.role === 'agent' ? ['status', 'note'] : ['status', 'note', 'title', 'dueAt', 'durationMinutes', 'videoLink', 'contactEmail'];
+  return access.role === 'agent' ? ['status', 'note'] : ['status', 'note', 'title', 'dueAt', 'timeZone', 'durationMinutes', 'videoLink', 'contactEmail'];
 }
 
 /** Filtre Mongo des éléments visibles par cette personne. */
@@ -199,6 +216,7 @@ export function toItem(i) {
     contactEmail: o.contactEmail || '',
     dueAt: o.dueAt || null,
     durationMinutes: o.durationMinutes ?? null,
+    timeZone: o.timeZone || null,
     assignee: { id: o.assigneeId || '', name: o.assigneeName || '' },
     status: o.status,
     createdBy: { id: o.createdById || '', name: o.createdByName || '' },

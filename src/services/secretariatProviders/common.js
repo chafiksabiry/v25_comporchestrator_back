@@ -46,8 +46,6 @@ export function eventWindow(event) {
   return { start, end };
 }
 
-export const TIME_ZONE = 'Europe/Paris';
-
 /**
  * Liens de visio acceptés par fournisseur (forme stricte). Un lien créé par un fournisseur n'est stocké que s'il a cette forme ;
  * le flux agenda ne diffuse un lien externe que s'il a cette forme ET que le rendez-vous a été créé par ce fournisseur (visio.js).
