@@ -131,7 +131,7 @@ assert.equal(S.readState(jwt.sign(base, '', { algorithm: 'none' }), 'google'), n
 // ---------- faux modèles
 const conns = [];
 const toolsDocs = [];
-const sameFilter = (d, f) => Object.entries(f).every(([k, x]) => (x && typeof x === 'object' && !(x instanceof Date) && '$set' in x ? true : String(d[k]) === String(x)));
+const sameFilter = (d, f) => Object.entries(f).every(([k, x]) => (x && typeof x === 'object' && !(x instanceof Date) && '$set' in x ? true : x && typeof x === 'object' && '$in' in x ? x.$in.includes(d[k]) : String(d[k]) === String(x)));
 const chain = (v) => ({ select() { return this; }, lean: async () => (v ? JSON.parse(JSON.stringify(v)) : (Array.isArray(v) ? [] : null)), then(r, j) { return Promise.resolve(Array.isArray(v) ? v.map((x) => ({ ...x })) : v ? { ...v } : null).then(r, j); } });
 SecretariatConnection.findOne = (f) => chain(conns.find((d) => sameFilter(d, f)));
 SecretariatConnection.find = (f) => chain(conns.filter((d) => sameFilter(d, f)));
@@ -151,6 +151,13 @@ SecretariatTools.findOneAndUpdate = (f, upd, opts) => {
   if (!d) { assert.ok(opts.upsert); d = { companyId: String(f.companyId) }; toolsDocs.push(d); }
   for (const [path, val] of Object.entries(upd.$set)) { const keys = path.split('.'); const last = keys.pop(); keys.reduce((a, k) => (a[k] = a[k] || {}), d)[last] = val; }
   return tchain(d);
+};
+SecretariatTools.updateOne = async (f, upd, opts = {}) => {
+  let d = toolsDocs.find((x) => Object.entries(f).every(([k, v]) => String(getPath(x, k)) === String(v)));
+  if (!d && opts.upsert) { d = { companyId: String(f.companyId) }; toolsDocs.push(d); }
+  if (!d) return { matchedCount: 0 };
+  for (const [path, val] of Object.entries(upd.$set)) { const keys = path.split('.'); const last = keys.pop(); keys.reduce((a, k) => (a[k] = a[k] || {}), d)[last] = val; }
+  return { matchedCount: 1 };
 };
 const putConnection = (companyId, provider, over = {}, creds = {}) => {
   const row = {
@@ -262,6 +269,7 @@ try {
   r = await cb('google', { code: 'CODE_SECRET_123', state: state('google'), companyId: C2 });
   assert.equal(r.status, 302); assert.equal(r.location, 'https://portal.test/telephony/app/tools?connected=google', 'retour sans jeton ni détail');
   assert.equal(conns.length, 1); const g = conns[0];
+  assert.equal(toolsDocs.find((d) => d.companyId === C1)?.email?.provider, 'google', 'aucune messagerie choisie : la première connectée est choisie automatiquement');
   assert.equal(g.companyId, C1, 'le centre vient de l’état signé, jamais de la requête'); assert.equal(g.accountEmail, 'centre@gmail.test');
   assert.equal(g.status, 'connected'); assert.equal(g.connectedBy, 'owner1'); assert.ok(g.scopes.includes('https://www.googleapis.com/auth/gmail.send'));
   const tokenReq = callsTo(/oauth2\.googleapis\.com\/token/)[0];
@@ -520,19 +528,19 @@ try {
   const logs = [];
   EmailLog.create = async (d) => { const x = { _id: `l${logs.length + 1}`, createdAt: new Date(), ...d }; logs.push(x); return x; };
   EmailLog.countDocuments = async () => 0;
-  const brevo = []; E.setMailTransport(async (p) => { brevo.push(p); return {}; });
+  const brevo = []; E.setMailTransport(async (p) => { brevo.push(p); return {}; }); // tripwire : ne doit JAMAIS servir au secrétariat
   const msg = { companyId: C1, to: 'client@exemple.fr', subject: 'Votre rendez-vous', body: 'Bonjour', template: 'free', centerName: 'Nom du formulaire' };
   const decodeParts = (raw) => [...Buffer.from(raw, 'base64url').toString('utf8').matchAll(/Content-Transfer-Encoding: base64\r\n\r\n([A-Za-z0-9+/=\r\n]+?)(?=\r\n--|\r\n$)/g)].map((x) => Buffer.from(x[1].replace(/\r\n/g, ''), 'base64').toString('utf8'));
   toolsDocs.length = 0; toolsDocs.push({ companyId: C1, email: { provider: 'google', fromName: 'Centre Acme', replyTo: 'contact@acme.fr', signature: 'Cordialement,\nL’équipe Acme' } });
-  reset(); std(); putConnection(C1, 'google');
+  conns.length = 0; reset(); std(); putConnection(C1, 'google');
   on('POST', /gmail\.googleapis\.com\/gmail\/v1\/users\/me\/messages\/send/, () => ({ status: 200, json: { id: 'msg1' } }));
   let e = await call(mail.send, msg);
   assert.equal(e.code, 201, JSON.stringify(e.body)); assert.equal(brevo.length, 0, 'rien ne part par la plateforme HARX');
   const gm = callsTo(/messages\/send/)[0]; assert.equal(gm.headers.Authorization, 'Bearer ACCESS_SECRET_G1'); assert.deepEqual(Object.keys(gm.body), ['raw']);
   const mime = Buffer.from(gm.body.raw, 'base64url').toString('utf8');
-  assert.match(mime, /\r\nFrom: "Centre Acme" <centre@gmail\.test>\r\n/, 'From = compte connecté'); assert.match(mime, /\r\nReply-To: "Centre Acme" <contact@acme\.fr>\r\n/); assert.match(mime, /\r\nTo: client@exemple\.fr\r\n/); assert.match(mime, /\r\nSubject: Votre rendez-vous\r\n/);
+  assert.match(mime, /\r\nFrom: "Nom du formulaire" <centre@gmail\.test>\r\n/, 'From = compte connecté (fromName des réglages ignoré)'); assert.match(mime, /\r\nReply-To: "Nom du formulaire" <centre@gmail\.test>\r\n/, 'Reply-To = la boîte connectée (replyTo des réglages ignoré)'); assert.ok(!mime.includes('contact@acme.fr') && !mime.includes('Centre Acme')); assert.match(mime, /\r\nTo: client@exemple\.fr\r\n/); assert.match(mime, /\r\nSubject: Votre rendez-vous\r\n/);
   const [plain, html] = decodeParts(gm.body.raw);
-  assert.match(plain, /^Bonjour\n\nCordialement,\nL’équipe Acme\n\nMessage envoyé via HARX pour le compte de Centre Acme/); assert.ok(html.includes('Cordialement'));
+  assert.match(plain, /^Bonjour\n\nCordialement,\nL’équipe Acme$/, 'la signature termine le message'); assert.ok(!/HARX/.test(plain) && !/HARX/.test(html), 'aucune mention HARX dans un message envoyé depuis la boîte de l’entreprise'); assert.ok(html.includes('Cordialement'));
   assert.equal(logs.at(-1).status, 'sent'); assert.ok(!JSON.stringify(logs).includes('Cordialement'));
   // même sans service d'e-mail HARX : la messagerie connectée suffit
   const bk = process.env.BREVO_API_KEY; delete process.env.BREVO_API_KEY;
@@ -546,9 +554,18 @@ try {
   e = await call(mail.send, msg); assert.equal(e.code, 502); assert.match(e.body.message, /momentanément indisponible/); assert.equal(brevo.length, 0);
   // connexion à renouveler / absente
   conns.find((x) => x.provider === 'google').status = 'needs_reauth';
-  e = await call(mail.send, msg); assert.equal(e.code, 502); assert.match(e.body.message, /Reconnectez-la dans Paramétrage > Outils/); assert.equal(brevo.length, 0);
+  const nNet = httpCalls.length;
+  e = await call(mail.send, msg);
+  assert.equal(e.code, 409); assert.equal(e.body.success, false); assert.equal(e.body.code, 'mailbox_needs_reauth'); assert.equal(e.body.error, 'mailbox_needs_reauth');
+  assert.match(e.body.message, /expiré ou a été révoquée\. Reconnectez-la dans Paramétrage > Outils/); assert.equal(brevo.length, 0); assert.equal(httpCalls.length, nNet, 'aucun appel réseau');
+  r = await call(mail.config); assert.deepEqual([r.body.data.configured, r.body.data.provider, r.body.data.account], [false, null, null]);
+  // le choix explicite (Google) est à reconnecter alors que Microsoft est actif : on le dit, on n'envoie jamais depuis l'autre boîte
+  putConnection(C1, 'microsoft');
+  e = await call(mail.send, msg); assert.equal(e.code, 409); assert.equal(e.body.code, 'mailbox_needs_reauth'); assert.equal(httpCalls.length, nNet, 'aucun appel réseau, aucun envoi depuis l’autre messagerie');
   conns.length = 0;
-  e = await call(mail.send, msg); assert.equal(e.code, 502); assert.equal(brevo.length, 0, 'connexion supprimée : toujours pas de repli');
+  e = await call(mail.send, msg);
+  assert.equal(e.code, 409); assert.equal(e.body.code, 'mailbox_not_connected'); assert.equal(e.body.message, 'Connectez votre messagerie (Gmail ou Outlook) dans Paramétrage > Outils pour envoyer des e-mails.');
+  assert.equal(brevo.length, 0, 'connexion supprimée : jamais de repli sur HARX'); assert.equal(httpCalls.length, nNet);
   // Microsoft : Graph /me/sendMail
   toolsDocs.length = 0; toolsDocs.push({ companyId: C1, email: { provider: 'microsoft', fromName: 'Centre Acme', replyTo: 'contact@acme.fr', signature: 'Bien à vous' } });
   reset(); std(); putConnection(C1, 'microsoft');
@@ -556,17 +573,57 @@ try {
   e = await call(mail.send, msg); assert.equal(e.code, 201, JSON.stringify(e.body)); assert.equal(brevo.length, 0);
   const gr = callsTo(/me\/sendMail/)[0]; assert.equal(gr.headers.Authorization, 'Bearer ACCESS_SECRET_M1'); assert.equal(gr.body.saveToSentItems, true);
   assert.equal(gr.body.message.subject, 'Votre rendez-vous'); assert.deepEqual(gr.body.message.toRecipients, [{ emailAddress: { address: 'client@exemple.fr' } }]);
-  assert.deepEqual(gr.body.message.replyTo, [{ emailAddress: { address: 'contact@acme.fr', name: 'Centre Acme' } }]); assert.equal(gr.body.message.body.contentType, 'HTML');
+  assert.deepEqual(gr.body.message.replyTo, [{ emailAddress: { address: 'centre@contoso.test', name: 'Nom du formulaire' } }], 'Reply-To = boîte connectée'); assert.equal(gr.body.message.body.contentType, 'HTML');
   assert.ok(gr.body.message.body.content.includes('Bien à vous')); assert.ok(!('from' in gr.body.message), 'expéditeur = boîte connectée');
   await PROVIDERS.microsoft.sendMail({ http, accessToken: 'T', message: { to: ['a@b.fr'], subject: 's', text: 't', html: '<p>t</p>', attachments: [{ name: 'rendez-vous.ics', contentType: 'text/calendar', contentBase64: 'QkVHSU4=' }] } });
   assert.deepEqual(httpCalls.at(-1).body.message.attachments, [{ '@odata.type': '#microsoft.graph.fileAttachment', name: 'rendez-vous.ics', contentType: 'text/calendar', contentBytes: 'QkVHSU4=' }]);
   on('POST', /me\/sendMail/, () => ({ status: 401, json: null }));
   e = await call(mail.send, msg); assert.equal(e.code, 502); assert.match(e.body.message, /a refusé l'envoi/); assert.equal(brevo.length, 0);
   assert.equal(callsTo(/microsoftonline\.com\/common\/oauth2\/v2\.0\/token/).length, 1, '401 : un seul rafraîchissement forcé');
-  // plateforme (défaut) : Brevo, comme avant
+  // 'platform' = aucune messagerie choisie : jamais d'envoi par HARX
   toolsDocs.length = 0; toolsDocs.push({ companyId: C1, email: { provider: 'platform', fromName: 'Centre Acme' } });
   conns.length = 0; reset(); std();
-  e = await call(mail.send, msg); assert.equal(e.code, 201); assert.equal(brevo.length, 1); assert.deepEqual(brevo[0].sender, { name: 'Centre Acme', email: 'noreply@harx.ai' }); assert.equal(httpCalls.length, 0);
+  e = await call(mail.send, msg); assert.equal(e.code, 409); assert.equal(e.body.code, 'mailbox_not_connected'); assert.equal(brevo.length, 0); assert.equal(httpCalls.length, 0);
+  // une seule messagerie connectée, aucun choix : elle sert
+  putConnection(C1, 'microsoft'); on('POST', /me\/sendMail/, () => ({ status: 202, json: null }));
+  e = await call(mail.send, msg); assert.equal(e.code, 201, JSON.stringify(e.body)); assert.equal(callsTo(/me\/sendMail/).length, 1); assert.equal(brevo.length, 0);
+  r = await call(mail.config); assert.deepEqual([r.body.data.configured, r.body.data.provider, r.body.data.account], [true, 'microsoft', 'centre@contoso.test']);
+  assert.equal(r.body.data.remainingThisHour, 30, 'les autres champs de /emails/config sont conservés'); assert.deepEqual(Object.keys(r.body.data).sort(), ['account', 'configured', 'limits', 'provider', 'remainingThisHour', 'remainingToday']);
+  // deux connectées : le choix des réglages ; sans choix, refus
+  putConnection(C1, 'google'); reset(); std();
+  on('POST', /me\/sendMail/, () => ({ status: 202, json: null })); on('POST', /messages\/send/, () => ({ status: 200, json: { id: 'x' } }));
+  e = await call(mail.send, msg); assert.equal(e.code, 409); assert.equal(e.body.code, 'mailbox_not_connected', 'deux messageries sans choix : ambigu'); assert.equal(httpCalls.length, 0);
+  toolsDocs.length = 0; toolsDocs.push({ companyId: C1, email: { provider: 'microsoft' } });
+  assert.equal((await call(mail.send, msg)).code, 201); assert.equal(callsTo(/me\/sendMail/).length, 1); assert.equal(callsTo(/messages\/send/).length, 0);
+  toolsDocs[0].email.provider = 'google';
+  assert.equal((await call(mail.send, msg)).code, 201); assert.equal(callsTo(/messages\/send/).length, 1); assert.equal(callsTo(/me\/sendMail/).length, 1);
+  assert.equal(brevo.length, 0, 'plus aucun appel Brevo pour le secrétariat');
+
+  // ---------- 10b. cohérence des réglages : connexion -> bascule automatique, déconnexion -> retour à 'platform'
+  conns.length = 0; toolsDocs.length = 0; reset(); std();
+  const emailOf = () => toolsDocs.find((d) => d.companyId === C1)?.email?.provider;
+  r = await cb('microsoft', { code: 'CODE_SECRET_123', state: state('microsoft') }); assert.match(r.location, /connected=microsoft/);
+  assert.equal(emailOf(), 'microsoft', 'aucun réglage : la messagerie connectée est choisie');
+  toolsDocs.length = 0; toolsDocs.push({ companyId: C1, email: { provider: 'platform', signature: 'Sig' }, agenda: { provider: 'none' }, visio: { provider: 'jitsi', chosen: false } });
+  r = await cb('google', { code: 'CODE_SECRET_123', state: state('google') }); assert.match(r.location, /connected=google/);
+  assert.equal(emailOf(), 'google', "'platform' (= aucun choix) bascule sur la messagerie connectée");
+  assert.equal(toolsDocs[0].email.signature, 'Sig'); assert.deepEqual([toolsDocs[0].agenda.provider, toolsDocs[0].visio.provider], ['none', 'jitsi'], 'agenda et visio ne changent pas');
+  r = await cb('microsoft', { code: 'CODE_SECRET_123', state: state('microsoft') });
+  assert.equal(emailOf(), 'google', 'un choix déjà fait n’est pas écrasé par une nouvelle connexion');
+  // connexion d'un autre fournisseur (Zoom) : aucun effet sur l'e-mail
+  toolsDocs.length = 0; toolsDocs.push({ companyId: C1, email: { provider: 'platform' } });
+  r = await cb('zoom', { code: 'CODE_SECRET_123', state: state('zoom') }); assert.equal(emailOf(), 'platform');
+  // déconnexion du fournisseur NON choisi : le choix reste ; du fournisseur choisi : retour à 'platform'
+  toolsDocs.length = 0; toolsDocs.push({ companyId: C1, email: { provider: 'google' }, agenda: { provider: 'google' }, visio: { provider: 'google_meet', chosen: true } });
+  await req('DELETE', `/connections/${C1}/microsoft`, { user: 'owner1' }); assert.equal(emailOf(), 'google');
+  r = await req('DELETE', `/connections/${C1}/google`, { user: 'owner1' }); assert.equal(r.status, 200);
+  assert.equal(emailOf(), 'platform', 'fournisseur choisi déconnecté : aucune messagerie choisie');
+  assert.deepEqual([toolsDocs[0].agenda.provider, toolsDocs[0].visio.provider], ['google', 'google_meet'], 'agenda et visio ne changent pas');
+  e = await call(mail.send, msg); assert.equal(e.code, 409); assert.equal(e.body.code, 'mailbox_not_connected');
+  // déconnexion d'un autre centre : aucun effet
+  toolsDocs.length = 0; toolsDocs.push({ companyId: C2, email: { provider: 'google' } });
+  await req('DELETE', `/connections/${C1}/google`, { user: 'owner1' }); assert.equal(toolsDocs[0].email.provider, 'google');
+  toolsDocs.length = 0;
 
   // ---------- 11. rendez-vous : agenda connecté et liens de visio
   const store = [];

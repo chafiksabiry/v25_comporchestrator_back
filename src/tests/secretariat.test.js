@@ -5,6 +5,8 @@ import jwt from 'jsonwebtoken';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret';
 process.env.REGISTRATION_BACKEND_URL = 'https://registration.test';
 for (const k of ['BREVO_API_KEY', 'BREVO_SENDER_EMAIL', 'BREVO_FROM_EMAIL', 'SMTP_FROM_EMAIL']) delete process.env[k];
+// Les e-mails ne partent que de la messagerie connectée du centre (réseau SIMULÉ : aucun appel réel).
+process.env.INTEGRATIONS_ENC_KEY = 'ab'.repeat(32);
 
 const I = await import('../services/ics.js');
 const V = await import('../services/visio.js');
@@ -14,6 +16,9 @@ const { clearCompanyCache } = await import('../middleware/companyScope.js');
 const { default: FollowUpItem } = await import('../models/FollowUpItem.js');
 const { default: EmailLog } = await import('../models/EmailLog.js');
 const { default: SecretariatTools } = await import('../models/SecretariatTools.js');
+const { default: SecretariatConnection } = await import('../models/SecretariatConnection.js');
+const S = await import('../services/secretariatConnections.js');
+const { encryptJson, loadKey } = await import('../integrations/crypto.js');
 const { emailController: mail } = await import('../controllers/emailController.js');
 const { followUpController: fu } = await import('../controllers/followUpController.js');
 
@@ -140,7 +145,8 @@ global.fetch = async (u) => {
   throw new Error(`fetch inattendu ${u}`);
 };
 // Réglages « Outils » du centre : aucun réglage enregistré ici (comportement historique) ; voir secretariatTools.test.js pour le reste.
-SecretariatTools.findOne = () => ({ lean: async () => null });
+let toolsDoc = null; // réglages du centre simulés (null = jamais enregistrés)
+SecretariatTools.findOne = () => ({ select() { return this; }, lean: async () => toolsDoc });
 const logs = [];
 EmailLog.create = async (d) => { const r = { _id: `l${logs.length + 1}`, createdAt: new Date(), ...d }; logs.push(r); return r; };
 EmailLog.countDocuments = async (f) => logs.filter((l) => String(l.companyId) === String(f.companyId) && l.createdAt >= f.createdAt.$gte).length;
@@ -164,31 +170,64 @@ async function call(fn, { user = 'owner1', body = {}, params = {}, query = {} } 
   });
 }
 
-// aucun envoi sans service d'e-mail configuré : message clair, aucune trace
-let sent = [];
-E.setMailTransport(async (p) => { sent.push(p); return { messageId: 'sim' }; });
+// ---------- messagerie connectée : les e-mails ne partent JAMAIS de HARX (Brevo n'est plus jamais appelé)
+const brevo = [];
+E.setMailTransport(async (p) => { brevo.push(p); return { messageId: 'sim' }; });
+const conns = [];
+const chain = (v) => ({ select() { return this; }, lean: async () => (v ? JSON.parse(JSON.stringify(v)) : null), then(res, rej) { return this.lean().then(res, rej); } });
+const matches = (d, f) => Object.entries(f).every(([k, x]) => (x && typeof x === 'object' && '$in' in x ? x.$in.includes(d[k]) : String(d[k]) === String(x)));
+SecretariatConnection.find = (f) => ({ select() { return this; }, lean: async () => JSON.parse(JSON.stringify(conns.filter((d) => matches(d, f)))) });
+SecretariatConnection.findOne = (f) => chain(conns.find((d) => matches(d, f)));
+SecretariatConnection.updateOne = async () => ({});
+const connect = (provider, over = {}) => {
+  const i = conns.findIndex((c) => c.provider === provider); if (i >= 0) conns.splice(i, 1);
+  conns.push({ companyId: COMPANY, provider, accountEmail: provider === 'google' ? 'centre@gmail.test' : 'centre@contoso.test', status: 'connected',
+    credentialsEnc: encryptJson({ accessToken: 'ACCESS_SECRET', refreshToken: 'REFRESH_SECRET', expiresAt: Date.now() + 3600_000 }, { context: `secretariat:${COMPANY}:${provider}`, key: loadKey() }), ...over });
+};
+let providerStatus = 200;
+const net = [];
+S.setConnectionsHttp(async (rq) => {
+  net.push(rq);
+  if (/gmail\.googleapis\.com.*messages\/send/.test(rq.url)) return { status: providerStatus, json: providerStatus === 200 ? { id: 'm1' } : null, headers: {} };
+  if (/graph\.microsoft\.com.*\/me\/sendMail/.test(rq.url)) return { status: providerStatus === 200 ? 202 : providerStatus, json: null, headers: {} };
+  return { status: 599, json: null, headers: {} };
+});
+const gmailSent = () => net.filter((x) => /messages\/send/.test(x.url));
+const mimeOf = (x) => Buffer.from(x.body.raw, 'base64url').toString('utf8');
+const blocks = (mime) => [...mime.matchAll(/\r\n\r\n([A-Za-z0-9+/=\r\n]+?)(?=\r\n--|\r\n$)/g)].map((m) => Buffer.from(m[1].replace(/\r\n/g, ''), 'base64').toString('utf8'));
+const sentCount = () => gmailSent().length;
 const msg = { companyId: COMPANY, to: 'client@exemple.fr', subject: 'Votre rendez-vous', body: 'Bonjour', template: 'appointment_confirmation', followUpId: APPT, attachIcs: true, centerName: 'Centre Acme' };
-let r = await call(mail.send, { body: msg });
-assert.equal(r.code, 503); assert.equal(r.body.error, 'email_not_configured'); assert.match(r.body.message, /pas encore activé/);
-assert.equal(sent.length, 0, 'rien n’est envoyé'); assert.equal(logs.length, 0, 'rien n’est journalisé');
-r = await call(mail.config);
-assert.equal(r.body.data.configured, false);
 
-// service configuré
-process.env.BREVO_API_KEY = 'cle-de-test'; process.env.BREVO_SENDER_EMAIL = 'noreply@harx.ai';
+// aucune messagerie connectée : 409 mailbox_not_connected, aucun envoi, rien journalisé
+let r = await call(mail.send, { body: msg });
+assert.equal(r.code, 409); assert.equal(r.body.success, false); assert.equal(r.body.code, 'mailbox_not_connected'); assert.equal(r.body.error, 'mailbox_not_connected');
+assert.equal(r.body.message, 'Connectez votre messagerie (Gmail ou Outlook) dans Paramétrage > Outils pour envoyer des e-mails.');
+assert.equal(net.length, 0, 'aucun appel réseau'); assert.equal(logs.length, 0, 'rien n’est journalisé'); assert.equal(brevo.length, 0);
 r = await call(mail.config);
-assert.equal(r.body.data.configured, true); assert.equal(r.body.data.remainingThisHour, 30);
+assert.deepEqual([r.body.data.configured, r.body.data.provider, r.body.data.account], [false, null, null]);
+// Brevo configuré ne change rien : la plateforme n'envoie jamais ces e-mails
+process.env.BREVO_API_KEY = 'cle-de-test'; process.env.BREVO_SENDER_EMAIL = 'noreply@harx.ai';
+r = await call(mail.send, { body: msg }); assert.equal(r.code, 409); assert.equal(r.body.code, 'mailbox_not_connected');
+assert.equal((await call(mail.config)).body.data.configured, false, '`configured` ne dépend plus de Brevo');
+
+// une seule messagerie connectée (réglages vides) : elle sert
+connect('google');
+r = await call(mail.config);
+assert.deepEqual([r.body.data.configured, r.body.data.provider, r.body.data.account], [true, 'google', 'centre@gmail.test']);
+assert.equal(r.body.data.remainingThisHour, 30); assert.equal(r.body.data.limits.perDay, 200);
 r = await call(mail.send, { body: { ...msg, to: 'pasunmail' } });
-assert.equal(r.code, 400); assert.equal(sent.length, 0);
+assert.equal(r.code, 400); assert.equal(sentCount(), 0);
 r = await call(mail.send, { body: { ...msg, followUpId: '64b0000000000000000000ff' } });
 assert.equal(r.code, 404, 'élément d’origine inconnu');
 r = await call(mail.send, { body: msg });
 assert.equal(r.code, 201, JSON.stringify(r.body));
-assert.equal(sent.length, 1);
-assert.deepEqual(sent[0].sender, { name: 'Centre Acme', email: 'noreply@harx.ai' }, 'expéditeur au nom du centre');
-assert.equal(sent[0].replyTo.email, 'chef@acme.fr', 'réponse = utilisateur connecté');
-assert.match(Buffer.from(sent[0].attachment[0].content, 'base64').toString(), /UID:64b0000000000000000000a1@harx\.ai/);
-assert.match(Buffer.from(sent[0].attachment[0].content, 'base64').toString(), /SEQUENCE:2/);
+assert.equal(sentCount(), 1); assert.equal(brevo.length, 0, 'plus aucun appel Brevo');
+const m1 = mimeOf(gmailSent()[0]);
+assert.match(m1, /\r\nFrom: "Centre Acme" <centre@gmail\.test>\r\n/, 'From = compte connecté');
+assert.match(m1, /\r\nReply-To: "Centre Acme" <centre@gmail\.test>\r\n/, 'Reply-To = la boîte connectée elle-même');
+assert.equal(gmailSent()[0].headers.Authorization, 'Bearer ACCESS_SECRET');
+assert.match(blocks(m1).join('\n'), /UID:64b0000000000000000000a1@harx\.ai/);
+assert.match(blocks(m1).join('\n'), /SEQUENCE:2/);
 const entry = logs[0];
 assert.deepEqual([entry.status, entry.sentById, entry.sentByName, entry.to, entry.subject, entry.template, String(entry.followUpId), entry.withIcs], ['sent', 'owner1', 'Chef de centre', ['client@exemple.fr'], 'Votre rendez-vous', 'appointment_confirmation', APPT, true]);
 assert.ok(!JSON.stringify(entry).includes('Bonjour'), 'le contenu du message n’est pas journalisé');
@@ -196,32 +235,63 @@ r = await call(mail.list, { query: { followUpId: APPT } });
 assert.equal(r.body.data.items.length, 1); assert.equal(r.body.data.items[0].followUpId, APPT);
 assert.equal(r.body.data.items[0].body, undefined);
 
+// deux messageries connectées : le choix des réglages décide ; sans choix, refus (ambigu)
+connect('microsoft');
+const small = { ...msg, attachIcs: false, followUpId: undefined };
+r = await call(mail.send, { body: small }); assert.equal(r.code, 409); assert.equal(r.body.code, 'mailbox_not_connected', 'deux messageries sans choix : on ne devine pas');
+r = await call(mail.config); assert.deepEqual([r.body.data.configured, r.body.data.provider, r.body.data.account], [false, null, null]);
+toolsDoc = { companyId: COMPANY, email: { provider: 'microsoft', fromName: 'IGNORÉ', replyTo: 'ignore@exemple.fr', signature: 'Cordialement' } };
+const g0 = sentCount();
+r = await call(mail.send, { body: small }); assert.equal(r.code, 201, JSON.stringify(r.body));
+const graph = net.filter((x) => /me\/sendMail/.test(x.url)); assert.equal(graph.length, 1, 'envoyé par Outlook'); assert.equal(sentCount(), g0, 'pas par Gmail');
+assert.deepEqual(graph[0].body.message.replyTo, [{ emailAddress: { address: 'centre@contoso.test', name: 'Centre Acme' } }], 'Reply-To = boîte connectée ; email.replyTo ignoré');
+assert.ok(!('from' in graph[0].body.message)); assert.ok(!JSON.stringify(graph[0].body).includes('IGNORÉ') && !JSON.stringify(graph[0].body).includes('ignore@exemple.fr'));
+assert.ok(graph[0].body.message.body.content.includes('Cordialement'), 'la signature des réglages est ajoutée');
+r = await call(mail.config); assert.deepEqual([r.body.data.configured, r.body.data.provider, r.body.data.account], [true, 'microsoft', 'centre@contoso.test']);
+toolsDoc = { companyId: COMPANY, email: { provider: 'google' } };
+r = await call(mail.send, { body: small }); assert.equal(r.code, 201); assert.equal(sentCount(), g0 + 1, 'choix des réglages : Gmail');
+// choix d'une messagerie qui n'est plus active, une seule autre active : elle sert
+conns.splice(conns.findIndex((c) => c.provider === 'google'), 1);
+r = await call(mail.send, { body: small }); assert.equal(r.code, 201); assert.equal(net.filter((x) => /me\/sendMail/.test(x.url)).length, 2, 'unique messagerie active');
+
+// connexion à refaire : 409 mailbox_needs_reauth, aucun envoi
+const before2 = net.length;
+conns.splice(0, conns.length); connect('google', { status: 'needs_reauth' });
+toolsDoc = { companyId: COMPANY, email: { provider: 'google' } };
+r = await call(mail.send, { body: small });
+assert.equal(r.code, 409); assert.equal(r.body.success, false); assert.equal(r.body.code, 'mailbox_needs_reauth'); assert.equal(r.body.error, 'mailbox_needs_reauth');
+assert.match(r.body.message, /Google a expiré ou a été révoquée|expiré|révoquée/); assert.match(r.body.message, /Reconnectez-la dans Paramétrage > Outils/);
+assert.equal(net.length, before2, 'aucun appel réseau'); assert.equal((await call(mail.config)).body.data.configured, false);
+conns.splice(0, conns.length); toolsDoc = null;
+connect('google'); // retour à l'état de base pour la suite
+
 // pièce jointe refusée pour un élément qui n'est pas un rendez-vous
 const keep = apptDoc.model; apptDoc.model = 'transfer';
 r = await call(mail.send, { body: msg });
 assert.equal(r.code, 422); apptDoc.model = keep;
 
-// échec du transport : 502, journalisé en échec, sans détail technique pour l'utilisateur
-E.setMailTransport(async () => { throw new Error('Brevo : clé refusée'); });
+// refus du fournisseur : 502, journalisé en échec, sans détail technique, sans repli sur la plateforme
+providerStatus = 403;
 r = await call(mail.send, { body: { ...msg, attachIcs: false } });
-assert.equal(r.code, 502); assert.ok(!/Brevo/.test(r.body.message));
-assert.equal(logs[1].status, 'failed');
+assert.equal(r.code, 502); assert.ok(!/Brevo|SECRET/.test(JSON.stringify(r.body)));
+assert.equal(logs.at(-1).status, 'failed'); assert.equal(brevo.length, 0, 'aucun repli sur Brevo');
+providerStatus = 200;
 
 // limitation de débit par centre
-E.setMailTransport(async (p) => { sent.push(p); return {}; });
-process.env.EMAIL_MAX_PER_HOUR = '3';
+const already = logs.filter((l) => String(l.companyId) === COMPANY).length;
+process.env.EMAIL_MAX_PER_HOUR = String(already + 1);
 r = await call(mail.send, { body: { ...msg, attachIcs: false } });
-assert.equal(r.code, 201, 'troisième envoi de l’heure accepté');
+assert.equal(r.code, 201, 'dernier envoi de l’heure accepté');
 r = await call(mail.send, { body: { ...msg, attachIcs: false } });
-assert.equal(r.code, 429); assert.equal(r.body.error, 'email_rate_limited'); assert.match(r.body.message, /3 e-mails par heure/);
+assert.equal(r.code, 429); assert.equal(r.body.error, 'email_rate_limited'); assert.match(r.body.message, new RegExp(`${already + 1} e-mails par heure`));
 logs.push({ _id: 'autre', companyId: '64b0000000000000000000d9', createdAt: new Date(), status: 'sent' });
 delete process.env.EMAIL_MAX_PER_HOUR;
 
 // droits : un agent ne peut pas envoyer ni lire le journal ; un membre sans droit d'appels non plus ; un membre avec, oui
 me = { isOwner: false, isAgent: true, companyId: COMPANY, permissions: {} };
-const before = sent.length;
+const before = sentCount();
 r = await call(mail.send, { user: 'agent1', body: msg });
-assert.equal(r.code, 403); assert.equal(sent.length, before);
+assert.equal(r.code, 403); assert.equal(sentCount(), before);
 r = await call(mail.list, { user: 'agent1' });
 assert.equal(r.code, 403);
 me = { isOwner: false, isAgent: false, companyId: COMPANY, permissions: { 'calls.view': false } };
@@ -233,6 +303,8 @@ assert.equal(r.code, 201, 'un membre avec le droit d’appels peut envoyer');
 me = { isOwner: true, companyId: COMPANY, permissions: {} };
 r = await call(mail.send, { body: { ...msg, companyId: '64b0000000000000000000d2' } });
 assert.equal(r.code, 403, 'autre centre refusé');
+
+assert.equal(brevo.length, 0, 'aucun e-mail du secrétariat n’est jamais parti par la plateforme (Brevo)');
 
 // export .ics : en-têtes, contenu, droits
 r = await call(fu.ics, { params: { id: APPT } });

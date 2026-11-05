@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import SecretariatConnection from '../models/SecretariatConnection.js';
+import SecretariatTools from '../models/SecretariatTools.js';
 import { config } from '../config/env.js';
 import { decryptJson, encryptJson, integrationsEnabled, loadKey } from '../integrations/crypto.js';
 import { defaultHttp } from '../integrations/http.js';
@@ -135,7 +136,56 @@ export async function completeConnection({ state, code }, { http = httpImpl, env
     { $set: { accountEmail, credentialsEnc, scopes: token.scopes.length ? token.scopes : P.scopes, status: 'connected', connectedAt: new Date(), connectedBy: userId } },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
+  await adoptAsEmailProvider(companyId, provider);
   return { companyId, provider, accountEmail };
+}
+
+/** Messageries pouvant envoyer les e-mails du secrétariat (les e-mails ne partent JAMAIS de HARX : seulement de la boîte connectée du centre). */
+export const MAILBOX_PROVIDERS = ['google', 'microsoft'];
+
+/**
+ * Cohérence des réglages à la connexion d'une messagerie : si aucun choix n'est fait (`email.provider` = 'platform', valeur conservée
+ * pour compatibilité avec le sens « aucune messagerie choisie », ou réglages absents), la messagerie qui vient d'être connectée est choisie.
+ * Un choix déjà fait n'est jamais écrasé. agenda.provider et visio.provider ne sont pas modifiés. Au mieux : la connexion reste valide en cas d'échec.
+ */
+async function adoptAsEmailProvider(companyId, provider) {
+  if (!MAILBOX_PROVIDERS.includes(provider)) return;
+  try {
+    const doc = await SecretariatTools.findOne({ companyId: oid(companyId) }).select('email.provider').lean();
+    const current = doc?.email?.provider || 'platform';
+    if (current === 'platform') await SecretariatTools.updateOne({ companyId: oid(companyId) }, { $set: { 'email.provider': provider } }, { upsert: true });
+  } catch (error) {
+    console.error('secretariat connexion : bascule du réglage e-mail impossible:', error.message);
+  }
+}
+
+/** À la déconnexion du fournisseur choisi pour les e-mails : retour à 'platform' (= aucune messagerie choisie). */
+async function releaseEmailProvider(companyId, provider) {
+  if (!MAILBOX_PROVIDERS.includes(provider)) return;
+  try {
+    await SecretariatTools.updateOne({ companyId: oid(companyId), 'email.provider': provider }, { $set: { 'email.provider': 'platform' } });
+  } catch (error) {
+    console.error('secretariat déconnexion : remise du réglage e-mail impossible:', error.message);
+  }
+}
+
+/**
+ * Messagerie d'envoi des e-mails du secrétariat. `preferred` = `email.provider` des réglages.
+ * 1) le fournisseur choisi (google / microsoft) si sa connexion est active ; 2) sinon l'unique messagerie active ;
+ * 3) sinon une erreur : `needs_reauth` si une connexion est à refaire, `not_connected` sinon.
+ * @returns {Promise<{provider: 'google'|'microsoft', account: string} | {error: 'not_connected'|'needs_reauth', provider: string|null}>}
+ */
+export async function resolveMailbox(companyId, preferred) {
+  const rows = await SecretariatConnection.find({ companyId: oid(companyId), provider: { $in: MAILBOX_PROVIDERS } }).select('provider accountEmail status').lean();
+  const active = rows.filter((r) => r.status === 'connected');
+  const pick = (r) => ({ provider: r.provider, account: r.accountEmail });
+  const chosen = active.find((r) => r.provider === preferred);
+  if (chosen) return pick(chosen);
+  // Le choix explicite est à reconnecter : on le dit, on n'envoie JAMAIS depuis une autre boîte à sa place.
+  if (rows.some((r) => r.provider === preferred && r.status === 'needs_reauth')) return { error: 'needs_reauth', provider: preferred };
+  if (active.length === 1) return pick(active[0]);
+  const stale = rows.find((r) => r.status === 'needs_reauth' && r.provider === preferred) || rows.find((r) => r.status === 'needs_reauth');
+  return stale ? { error: 'needs_reauth', provider: stale.provider } : { error: 'not_connected', provider: null };
 }
 
 const markReauth = (companyId, provider) => SecretariatConnection.updateOne({ companyId: oid(companyId), provider }, { $set: { status: 'needs_reauth' } }).catch(() => {});
@@ -240,7 +290,7 @@ export async function connectionsView(companyId, env = process.env) {
 /** Révoque chez le fournisseur au mieux (un échec est toléré) puis supprime les jetons. */
 export async function disconnect(companyId, provider, { http = httpImpl, env = process.env } = {}) {
   const conn = await SecretariatConnection.findOne({ companyId: oid(companyId), provider }).select('+credentialsEnc');
-  if (!conn) return false;
+  if (!conn) { await releaseEmailProvider(companyId, provider); return false; }
   try {
     const cfg = providerConfig(provider, env);
     const P = PROVIDERS[provider];
@@ -250,5 +300,6 @@ export async function disconnect(companyId, provider, { http = httpImpl, env = p
     // Révocation au mieux : les jetons sont supprimés dans tous les cas.
   }
   await SecretariatConnection.deleteOne({ companyId: oid(companyId), provider });
+  await releaseEmailProvider(companyId, provider);
   return true;
 }

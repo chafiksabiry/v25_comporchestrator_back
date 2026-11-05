@@ -77,17 +77,18 @@ export function textToHtml(text) {
 }
 
 /** Charge utile de l'API Brevo (pure, testable). */
-export function buildPayload({ senderEmail, centerName, replyTo, to, subject, text: body, signature = '', icsContent }) {
+export function buildPayload({ senderEmail, centerName, replyTo, to, subject, text: body, signature = '', icsContent, harxFooter = true }) {
   const name = cleanDisplayName(centerName);
   // Signature du centre (texte brut, déjà validée à l'enregistrement) : ajoutée à la fin du message, avant la mention HARX.
   const text = signature ? `${body}\n\n${signature}` : body;
-  const footer = `\n\nMessage envoyé via HARX pour le compte de ${name}. Vous pouvez répondre directement à ce message.`;
+  // Mention HARX : seulement pour les envois qui partent réellement de la plateforme ; jamais pour un message envoyé depuis la boîte de l'entreprise.
+  const footer = harxFooter ? `\n\nMessage envoyé via HARX pour le compte de ${name}. Vous pouvez répondre directement à ce message.` : '';
   return {
     sender: { name, email: senderEmail },
     to: to.map((email) => ({ email })),
     replyTo: { email: replyTo.email, name: cleanDisplayName(replyTo.name, name) },
     subject,
-    htmlContent: `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;color:#1e293b">${textToHtml(text)}<p style="margin:18px 0 0;font-size:12px;color:#64748b">${escapeHtml(footer.trim())}</p></div>`,
+    htmlContent: `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;color:#1e293b">${textToHtml(text)}${footer ? `<p style="margin:18px 0 0;font-size:12px;color:#64748b">${escapeHtml(footer.trim())}</p>` : ''}</div>`,
     textContent: text + footer,
     ...(icsContent ? { attachment: [{ name: ICS_ATTACHMENT_NAME, content: Buffer.from(icsContent, 'utf8').toString('base64') }] } : {}),
   };

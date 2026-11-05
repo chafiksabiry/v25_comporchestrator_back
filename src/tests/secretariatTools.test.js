@@ -6,13 +6,17 @@ import jwt from 'jsonwebtoken';
 
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret';
 process.env.REGISTRATION_BACKEND_URL = 'https://registration.test';
-process.env.BREVO_API_KEY = 'cle-de-test';
+process.env.BREVO_API_KEY = 'cle-de-test'; // présent exprès : la plateforme ne doit JAMAIS envoyer ces e-mails
 process.env.BREVO_SENDER_EMAIL = 'noreply@harx.ai';
+process.env.INTEGRATIONS_ENC_KEY = 'ab'.repeat(32);
 
 const V = await import('../services/visio.js');
 const T = await import('../services/secretariatTools.js');
 const E = await import('../services/emailService.js');
 const { default: SecretariatTools } = await import('../models/SecretariatTools.js');
+const { default: SecretariatConnection } = await import('../models/SecretariatConnection.js');
+const SC = await import('../services/secretariatConnections.js');
+const { encryptJson, loadKey } = await import('../integrations/crypto.js');
 const { default: FollowUpItem } = await import('../models/FollowUpItem.js');
 const { default: EmailLog } = await import('../models/EmailLog.js');
 const { secretariatToolsRoutes } = await import('../routes/secretariatTools.js');
@@ -242,36 +246,54 @@ try {
   const logs = [];
   EmailLog.create = async (d) => { const x = { _id: `l${logs.length + 1}`, createdAt: new Date(), ...d }; logs.push(x); return x; };
   EmailLog.countDocuments = async () => 0;
-  const sent = [];
-  E.setMailTransport(async (p) => { sent.push(p); return {}; });
+  const brevo = [];
+  E.setMailTransport(async (p) => { brevo.push(p); return {}; });
+  // messagerie connectée simulée (réseau simulé : aucun appel réel)
+  const conns = [];
+  const connChain = (v) => ({ select() { return this; }, lean: async () => (v ? JSON.parse(JSON.stringify(v)) : null), then(res, rej) { return this.lean().then(res, rej); } });
+  const hit = (d, f) => Object.entries(f).every(([k, x]) => (x && typeof x === 'object' && '$in' in x ? x.$in.includes(d[k]) : String(d[k]) === String(x)));
+  SecretariatConnection.find = (f) => ({ select() { return this; }, lean: async () => JSON.parse(JSON.stringify(conns.filter((d) => hit(d, f)))) });
+  SecretariatConnection.findOne = (f) => connChain(conns.find((d) => hit(d, f)));
+  conns.push({ companyId: C1, provider: 'google', accountEmail: 'centre@gmail.test', status: 'connected',
+    credentialsEnc: encryptJson({ accessToken: 'ACCESS_SECRET', refreshToken: 'REFRESH_SECRET', expiresAt: Date.now() + 3600_000 }, { context: `secretariat:${C1}:google`, key: loadKey() }) });
+  const net = [];
+  SC.setConnectionsHttp(async (rq) => { net.push(rq); return /messages\/send/.test(rq.url) ? { status: 200, json: { id: 'm1' }, headers: {} } : { status: 599, json: null, headers: {} }; });
+  const partsOf = (x) => { const mime = Buffer.from(x.body.raw, 'base64url').toString('utf8'); return { mime, texts: [...mime.matchAll(/\r\n\r\n([A-Za-z0-9+/=\r\n]+?)(?=\r\n--|\r\n$)/g)].map((m) => Buffer.from(m[1].replace(/\r\n/g, ''), 'base64').toString('utf8')) }; };
   const msg = { companyId: C1, to: 'client@exemple.fr', subject: 'Votre rendez-vous', body: 'Bonjour', template: 'free', centerName: 'Nom du formulaire' };
 
-  // identité renseignée : nom, Reply-To et signature du centre ; expéditeur technique inchangé
-  await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { email: { fromName: 'Centre Acme', replyTo: 'contact@acme.fr', signature: 'Cordialement,\nL’équipe Acme' } } });
+  // signature renseignée : ajoutée à la fin ; nom d'expéditeur et adresse de réponse des réglages IGNORÉS à l'envoi
+  const wput = await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { email: { fromName: 'Centre Acme', replyTo: 'contact@acme.fr', signature: 'Cordialement,\nL’équipe Acme' } } });
+  assert.equal(wput.status, 200, 'fromName et replyTo restent acceptés (rétrocompatibilité), sans rien exiger');
   let e = await call(mail.send, msg);
   assert.equal(e.code, 201, JSON.stringify(e.body));
-  assert.deepEqual(sent[0].sender, { name: 'Centre Acme', email: 'noreply@harx.ai' }, 'nom du centre, adresse technique de la plateforme');
-  assert.deepEqual(sent[0].replyTo, { email: 'contact@acme.fr', name: 'Centre Acme' });
-  assert.match(sent[0].textContent, /^Bonjour\n\nCordialement,\nL’équipe Acme\n\nMessage envoyé via HARX pour le compte de Centre Acme/);
-  assert.ok(sent[0].htmlContent.includes('L’équipe Acme') || sent[0].htmlContent.includes('L&#39;équipe') || sent[0].htmlContent.includes('Cordialement'));
+  let g = net.filter((x) => /messages\/send/.test(x.url)); assert.equal(g.length, 1);
+  let pm = partsOf(g[0]);
+  assert.match(pm.mime, /\r\nFrom: "Nom du formulaire" <centre@gmail\.test>\r\n/, 'From = compte connecté ; fromName des réglages ignoré');
+  assert.match(pm.mime, /\r\nReply-To: "Nom du formulaire" <centre@gmail\.test>\r\n/, 'Reply-To = boîte connectée ; replyTo des réglages ignoré');
+  assert.ok(!pm.mime.includes('contact@acme.fr') && !pm.mime.includes('Centre Acme'));
+  assert.match(pm.texts[0], /^Bonjour\n\nCordialement,\nL’équipe Acme$/); assert.ok(!/HARX/.test(pm.texts[0]), 'aucune mention HARX');
+  assert.ok(pm.texts[1].includes('Cordialement'));
   assert.ok(!JSON.stringify(logs).includes('Cordialement'), 'ni message ni signature dans le journal');
 
-  // identité vide : comportement historique (nom du formulaire, réponse = utilisateur connecté)
+  // réglages vides : rien n'est exigé (ni adresse de réponse, ni nom)
   toolsDocs.length = 0;
   e = await call(mail.send, msg);
   assert.equal(e.code, 201);
-  assert.deepEqual(sent[1].sender, { name: 'Nom du formulaire', email: 'noreply@harx.ai' });
-  assert.deepEqual(sent[1].replyTo, { email: 'chef@acme.fr', name: 'Chef de centre' });
-  assert.ok(!sent[1].textContent.includes('Cordialement'));
+  g = net.filter((x) => /messages\/send/.test(x.url)); pm = partsOf(g[1]);
+  assert.match(pm.mime, /\r\nReply-To: "Nom du formulaire" <centre@gmail\.test>\r\n/); assert.ok(!pm.texts[0].includes('Cordialement'));
   // identité partielle : seulement la signature
   toolsDocs.push({ companyId: C1, email: { signature: 'Bien à vous' } });
   await call(mail.send, msg);
-  assert.equal(sent[2].sender.name, 'Nom du formulaire'); assert.equal(sent[2].replyTo.email, 'chef@acme.fr'); assert.match(sent[2].textContent, /Bonjour\n\nBien à vous\n\n/);
+  g = net.filter((x) => /messages\/send/.test(x.url)); assert.match(partsOf(g[2]).texts[0], /^Bonjour\n\nBien à vous$/);
   // un autre centre n'hérite pas de l'identité de celui-ci
-  toolsDocs.length = 0; toolsDocs.push({ companyId: C2, email: { fromName: 'Autre', replyTo: 'x@autre.fr', signature: 'Autre sig' } });
+  toolsDocs.length = 0; toolsDocs.push({ companyId: C2, email: { signature: 'Autre sig' } });
   await call(mail.send, msg);
-  assert.equal(sent[3].sender.name, 'Nom du formulaire'); assert.ok(!sent[3].textContent.includes('Autre sig'));
+  g = net.filter((x) => /messages\/send/.test(x.url)); assert.ok(!partsOf(g[3]).texts[0].includes('Autre sig'));
   toolsDocs.length = 0;
+  // sans messagerie connectée : 409, plus rien ne part, jamais Brevo
+  conns.length = 0; const n0 = net.length;
+  e = await call(mail.send, msg); assert.equal(e.code, 409); assert.equal(e.body.code, 'mailbox_not_connected'); assert.equal(net.length, n0);
+  assert.equal(brevo.length, 0, 'aucun appel Brevo pour le secrétariat');
 
   // ---------- visio d'un rendez-vous : jitsi par défaut, lien permanent si choisi
   const store = [];
