@@ -13,6 +13,7 @@ const F = await import('../services/followUps.js');
 const { clearCompanyCache } = await import('../middleware/companyScope.js');
 const { default: FollowUpItem } = await import('../models/FollowUpItem.js');
 const { default: EmailLog } = await import('../models/EmailLog.js');
+const { default: SecretariatTools } = await import('../models/SecretariatTools.js');
 const { emailController: mail } = await import('../controllers/emailController.js');
 const { followUpController: fu } = await import('../controllers/followUpController.js');
 
@@ -138,6 +139,8 @@ global.fetch = async (u) => {
   if (u.includes('/call-center/agents')) return { ok: true, json: async () => ({ data: [] }) };
   throw new Error(`fetch inattendu ${u}`);
 };
+// Réglages « Outils » du centre : aucun réglage enregistré ici (comportement historique) ; voir secretariatTools.test.js pour le reste.
+SecretariatTools.findOne = () => ({ lean: async () => null });
 const logs = [];
 EmailLog.create = async (d) => { const r = { _id: `l${logs.length + 1}`, createdAt: new Date(), ...d }; logs.push(r); return r; };
 EmailLog.countDocuments = async (f) => logs.filter((l) => String(l.companyId) === String(f.companyId) && l.createdAt >= f.createdAt.$gte).length;

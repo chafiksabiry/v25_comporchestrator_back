@@ -6,7 +6,7 @@ import { callerAccess, ScopeError } from '../middleware/companyScope.js';
 import { loadDirectory, loadUserName } from '../services/followUpDirectory.js';
 import { syncAppointment } from '../services/calendarSync.js';
 import { buildAppointmentIcs, icsFilename } from '../services/ics.js';
-import { newVisioUrl } from '../services/visio.js';
+import { newMeetingUrl } from '../services/secretariatTools.js';
 import {
   allowedPatchFields, canManage, canSeeItem, canUse, MISSED_STATUSES, parseListFilters, sortItems, toItem, validateCreate, validatePatch,
   validateTransfer, visibilityFilter,
@@ -124,7 +124,7 @@ export const followUpController = {
       const item = await FollowUpItem.create({
         companyId, model: v.model, originType: v.originType, originId: v.originId, title: v.title, note: v.note,
         contactName: v.contactName, contactPhone: v.contactPhone || origin?.from || '', contactEmail: v.contactEmail,
-        videoUrl: v.videoLink ? newVisioUrl() : '',
+        videoUrl: v.videoLink ? await newMeetingUrl(companyId) : '',
         dueAt: v.dueAt, durationMinutes: v.durationMinutes, assigneeId: assignee.id, assigneeName: assignee.name,
         createdById: access.userId, createdByName: me?.name || '', fromAiPlan: v.fromAiPlan,
         transfers: v.model === 'transfer' ? [{ fromId: access.userId, fromName: me?.name || '', toId: assignee.id, toName: assignee.name, note: v.note }] : [],
@@ -156,7 +156,7 @@ export const followUpController = {
       if (Object.keys(checked.value).some((k) => !allowed.includes(k))) return fail(res, 403, 'Vous pouvez seulement clore cet élément ou ajouter une note.');
       const { videoLink, ...fields } = checked.value;
       Object.assign(item, fields);
-      if (videoLink === true && !item.videoUrl) item.videoUrl = newVisioUrl();
+      if (videoLink === true && !item.videoUrl) item.videoUrl = await newMeetingUrl(item.companyId);
       if (videoLink === false) item.videoUrl = '';
       // Chaque modification d'un rendez-vous (déplacement, annulation, visio) fait monter la révision du fichier agenda.
       if (item.model === 'appointment') item.sequence = (item.sequence || 0) + 1;

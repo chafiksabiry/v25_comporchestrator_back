@@ -41,8 +41,8 @@ const schema = new mongoose.Schema(
     closedById: { type: String, default: '' },
     /** Historique des transferts (qui a confié à qui, avec quelle note). */
     transfers: { type: [transferSchema], default: [] },
-    /** Lien de visio public (salle Jitsi Meet non devinable) d'un rendez-vous ; vide sans visio. */
-    videoUrl: { type: String, default: '', maxlength: 100 },
+    /** Lien de visio d'un rendez-vous (salle Jitsi non devinable, ou lien permanent du centre) ; vide sans visio. */
+    videoUrl: { type: String, default: '', maxlength: 300 },
     /** Révision du rendez-vous pour le fichier agenda (.ics) : augmente à chaque modification, pour que l'agenda mette à jour. */
     sequence: { type: Number, default: 0, min: 0 },
     /** Proposé par l'IA puis validé par une personne (information seulement). */
