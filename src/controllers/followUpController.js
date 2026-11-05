@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import FollowUpItem from '../models/FollowUpItem.js';
 import Voicemail from '../models/Voicemail.js';
 import InboundCall from '../models/InboundCall.js';
-import { callerAccess, ScopeError } from '../middleware/companyScope.js';
+import { callerAccess, scopeToCompany, ScopeError } from '../middleware/companyScope.js';
 import { loadDirectory, loadUserName } from '../services/followUpDirectory.js';
 import { syncAppointment } from '../services/calendarSync.js';
 import { buildAppointmentIcs, icsFilename } from '../services/ics.js';
@@ -74,8 +74,13 @@ async function context(req, res) {
     throw e;
   }
   if (!access.companyId) { fail(res, 403, 'Aucun centre rattaché à votre compte.'); return null; }
-  const asked = req.query?.companyId ?? req.body?.companyId;
-  if (asked && String(asked) !== access.companyId) { fail(res, 403, 'Ce centre n’est pas le vôtre.'); return null; }
+  // Un agent employé par plusieurs entreprises travaille sur celle qu'il a choisie (parmi ses emplois), pas seulement sur la première.
+  try {
+    access = scopeToCompany(access, req.query?.companyId ?? req.body?.companyId);
+  } catch (e) {
+    if (e instanceof ScopeError) { fail(res, e.status, e.message); return null; }
+    throw e;
+  }
   if (!canUse(access)) { fail(res, 403, NOT_ALLOWED); return null; }
   return access;
 }
