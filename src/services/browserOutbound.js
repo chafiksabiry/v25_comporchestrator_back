@@ -16,6 +16,8 @@ export const OUTBOUND_WEBHOOK_PATH = '/api/phone-numbers/webhooks/twilio/browser
 export const OUTBOUND_TICKET_TTL_MS = 60 * 60 * 1000;
 /** Préfixes de destination autorisés ; OUTBOUND_ALLOWED_PREFIXES (liste séparée par des virgules) les remplace. */
 export const DEFAULT_ALLOWED_PREFIXES = ['+33'];
+/** Plafond de Twilio pour timeLimit (4 h). */
+export const MAX_CALL_SECONDS = 14400;
 
 export function allowedPrefixes(env = process.env.OUTBOUND_ALLOWED_PREFIXES) {
   const list = String(env ?? '')
@@ -50,6 +52,15 @@ export function verifyOutboundTicket({ secret, companyId, identity, ticket, now 
 }
 
 /**
+ * Durée maximale (secondes) d'un appel pour ce solde de minutes : minutes entières × 60, 4 h au plus ; 0 si le solde ne
+ * couvre pas une minute entière (toute minute commencée est facturée en entier).
+ */
+export function maxSecondsForBalance(minutes) {
+  const whole = Math.floor(Number(minutes));
+  return whole >= 1 ? Math.min(whole * 60, MAX_CALL_SECONDS) : 0;
+}
+
+/**
  * Décision de numérotation, sans accès réseau : renvoie la consigne TwiML à donner à Twilio.
  * `line` est la ligne Twilio de l'entreprise utilisée comme numéro appelant ; `minutes` le solde de minutes.
  */
@@ -57,8 +68,11 @@ export function decideOutboundCall({ to, line, subscribed, minutes }) {
   if (!to) return { ok: false, message: 'Numéro non autorisé.' };
   if (!subscribed) return { ok: false, message: 'Aucun abonnement actif.' };
   if (!line) return { ok: false, message: 'Aucune ligne disponible pour appeler.' };
-  if (!(Number(minutes) > 0)) return { ok: false, message: 'Solde de minutes insuffisant.' };
-  return { ok: true, twiml: buildCallbackTwiml({ callerId: line.phoneNumber, to }) };
+  // Toute minute commencée est facturée en entier : il faut au moins une minute entière, et l'appel est coupé quand
+  // les minutes entières du solde sont écoulées, pour que le solde ne passe jamais sous zéro.
+  const maxSeconds = maxSecondsForBalance(minutes);
+  if (!maxSeconds) return { ok: false, message: 'Solde de minutes insuffisant.' };
+  return { ok: true, maxSeconds, twiml: buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds }) };
 }
 
 /**
