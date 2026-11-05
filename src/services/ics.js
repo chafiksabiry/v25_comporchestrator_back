@@ -92,7 +92,7 @@ export const icsUid = (item) => `${String(item.id)}@${ICS_UID_DOMAIN}`;
  *          createdAt?: string|Date, assignee?: {name?: string}}} item vue de l'élément (voir `toItem`)
  * @returns {string} contenu du fichier .ics
  */
-export function buildAppointmentIcs(item) {
+function eventLines(item) {
   const start = new Date(item.dueAt || NaN);
   if (!item.id || Number.isNaN(start.getTime())) throw new Error('Rendez-vous sans date : export impossible.');
   const minutes = Number.isFinite(Number(item.durationMinutes)) && Number(item.durationMinutes) > 0 ? Number(item.durationMinutes) : 30;
@@ -109,13 +109,7 @@ export function buildAppointmentIcs(item) {
     item.note ? `Note : ${item.note}` : '',
   ].filter(Boolean).join('\n');
 
-  const lines = [
-    'BEGIN:VCALENDAR',
-    'VERSION:2.0',
-    'PRODID:-//HARX//Call Centre Agenda//FR',
-    'CALSCALE:GREGORIAN',
-    'METHOD:PUBLISH',
-    ...VTIMEZONE_PARIS,
+  return [
     'BEGIN:VEVENT',
     `UID:${icsUid(item)}`,
     `DTSTAMP:${formatUtc(stamp)}`,
@@ -129,7 +123,33 @@ export function buildAppointmentIcs(item) {
     'TRANSP:OPAQUE',
     ...(canceled ? [] : ['BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:Rappel de rendez-vous', 'TRIGGER:-PT15M', 'END:VALARM']),
     'END:VEVENT',
-    'END:VCALENDAR',
   ];
+}
+
+const calendarHeader = (extra = []) => [
+  'BEGIN:VCALENDAR',
+  'VERSION:2.0',
+  'PRODID:-//HARX//Call Centre Agenda//FR',
+  'CALSCALE:GREGORIAN',
+  'METHOD:PUBLISH',
+  ...extra,
+  ...VTIMEZONE_PARIS,
+];
+
+export function buildAppointmentIcs(item) {
+  const lines = [...calendarHeader(), ...eventLines(item), 'END:VCALENDAR'];
   return lines.map(foldLine).join(CRLF) + CRLF;
+}
+
+/**
+ * Flux d'abonnement : plusieurs rendez-vous dans un seul calendrier. Un élément inexploitable (sans date) est ignoré
+ * au lieu de faire échouer tout le flux.
+ */
+export function buildCalendarIcs(items, { name = 'Rendez-vous HARX' } = {}) {
+  const events = [];
+  for (const item of items) {
+    try { events.push(...eventLines(item)); } catch { /* rendez-vous sans date : ignoré */ }
+  }
+  const header = calendarHeader([`X-WR-CALNAME:${escapeText(name)}`, 'REFRESH-INTERVAL;VALUE=DURATION:PT1H', 'X-PUBLISHED-TTL:PT1H']);
+  return [...header, ...events, 'END:VCALENDAR'].map(foldLine).join(CRLF) + CRLF;
 }

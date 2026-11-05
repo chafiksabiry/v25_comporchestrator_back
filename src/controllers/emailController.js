@@ -5,6 +5,7 @@ import { callerAccess, ScopeError } from '../middleware/companyScope.js';
 import { loadUserProfile } from '../services/followUpDirectory.js';
 import { canManage, toItem } from '../services/followUps.js';
 import { buildAppointmentIcs } from '../services/ics.js';
+import { loadEmailIdentity } from '../services/secretariatTools.js';
 import {
   buildPayload, checkRate, isEmailConfigured, isValidEmail, limits, NOT_CONFIGURED_MESSAGE, sendMail, senderEmail, validateSend,
 } from '../services/emailService.js';
@@ -91,7 +92,10 @@ export const emailController = {
       if (!rate.ok) return fail(res, 429, rate.message, 'email_rate_limited');
 
       const me = await loadUserProfile(access.userId);
-      if (!isValidEmail(me.email)) return fail(res, 422, 'L’adresse e-mail de votre compte est introuvable : impossible de fixer l’adresse de réponse.');
+      // Identité d'envoi du centre (écran « Outils ») : nom affiché, adresse de réponse et signature, quand ils sont renseignés.
+      // L'adresse d'expédition technique reste celle de la plateforme.
+      const identity = await loadEmailIdentity(access.companyId);
+      if (!identity.replyTo && !isValidEmail(me.email)) return fail(res, 422, 'L’adresse e-mail de votre compte est introuvable : impossible de fixer l’adresse de réponse.');
 
       let icsContent = null;
       if (v.followUpId) {
@@ -103,9 +107,10 @@ export const emailController = {
         }
       }
 
+      const centerName = identity.fromName || v.centerName || 'HARX';
       const payload = buildPayload({
-        senderEmail: senderEmail(), centerName: v.centerName || 'HARX', replyTo: { email: me.email, name: me.name }, to: v.to,
-        subject: v.subject, text: v.body, icsContent,
+        senderEmail: senderEmail(), centerName, to: v.to, subject: v.subject, text: v.body, signature: identity.signature, icsContent,
+        replyTo: identity.replyTo ? { email: identity.replyTo, name: centerName } : { email: me.email, name: me.name },
       });
       const base = { companyId, sentById: access.userId, sentByName: me.name, to: v.to, subject: v.subject, template: v.template, followUpId: v.followUpId, withIcs: Boolean(icsContent) };
       try {
