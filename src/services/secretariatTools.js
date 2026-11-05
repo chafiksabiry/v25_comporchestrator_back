@@ -13,6 +13,7 @@ export const MAX_FROM_NAME = 80;
 export const MAX_SIGNATURE = 500;
 export const TOKEN_BYTES = 32;
 export const PROVIDERS = ['jitsi', 'custom', 'google_meet', 'teams', 'zoom'];
+/** 'platform' = AUCUNE messagerie choisie (valeur conservée pour compatibilité) : les e-mails ne partent jamais de HARX. */
 export const EMAIL_PROVIDERS = ['platform', 'google', 'microsoft'];
 export const AGENDA_PROVIDERS = ['none', 'google', 'microsoft'];
 /** Compte à connecter pour utiliser chaque valeur de réglage. */

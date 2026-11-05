@@ -9,9 +9,11 @@ const schema = new mongoose.Schema(
   {
     companyId: { type: mongoose.Schema.Types.ObjectId, required: true, unique: true },
     email: {
-      /** `platform` = expéditeur HARX (défaut) ; `google` / `microsoft` = envoi par la messagerie connectée du centre. */
+      /** `google` / `microsoft` = messagerie connectée choisie. `platform` (défaut, conservé pour compatibilité) = AUCUNE messagerie choisie : les e-mails ne partent jamais de HARX. */
       provider: { type: String, enum: ['platform', 'google', 'microsoft'], default: 'platform' },
+      /** Hérité : ignoré à l'envoi (l'expéditeur est la boîte connectée). */
       fromName: { type: String, default: '', maxlength: 80 },
+      /** Hérité : ignoré à l'envoi (le Reply-To est la boîte connectée). */
       replyTo: { type: String, default: '', maxlength: 254 },
       signature: { type: String, default: '', maxlength: 500 },
     },
