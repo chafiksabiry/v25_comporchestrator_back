@@ -4,6 +4,7 @@ import FollowUpItem from '../models/FollowUpItem.js';
 import { canManage } from '../services/followUps.js';
 import { buildCalendarIcs } from '../services/ics.js';
 import { isVisioUrl } from '../services/visio.js';
+import { connectedProviders } from '../services/secretariatConnections.js';
 import {
   feedTokenMatches, feedUrlFor, hashFeedToken, isFeedTokenShape, loadTools, newFeedToken, toView, validateToolsPatch,
 } from '../services/secretariatTools.js';
@@ -35,7 +36,10 @@ export const secretariatToolsController = {
       const companyId = companyOid(req);
       if (!companyId) return fail(res, 400, 'Identifiant de centre invalide.');
       if (!mayWrite(req)) return fail(res, 403, NOT_ALLOWED);
-      const checked = validateToolsPatch(req.body, await loadTools(companyId));
+      // Les connexions ne sont lues que si le corps choisit un fournisseur externe (rien à vérifier sinon).
+      const b = req.body && typeof req.body === 'object' ? req.body : {};
+      const external = [b.email?.provider, b.agenda?.provider, b.visio?.provider].some((p) => typeof p === 'string' && !['platform', 'none', 'jitsi', 'custom'].includes(p));
+      const checked = validateToolsPatch(req.body, await loadTools(companyId), external ? await connectedProviders(companyId) : new Set());
       if (checked.error) return fail(res, 400, checked.error);
       const doc = await SecretariatTools.findOneAndUpdate({ companyId }, { $set: checked.set }, { upsert: true, new: true, setDefaultsOnInsert: true }).lean();
       res.json({ success: true, data: toView(doc) });
@@ -77,11 +81,11 @@ export const secretariatToolsController = {
       // Seuls les champs utiles au calendrier sont lus : ni e-mail, ni téléphone, ni note du contact.
       const rows = await FollowUpItem.find({
         companyId: tools.companyId, model: 'appointment', dueAt: { $gte: new Date(Date.now() - FEED_PAST_DAYS * 86400000) },
-      }).sort({ dueAt: 1 }).limit(FEED_MAX_ITEMS).select('title dueAt durationMinutes status videoUrl sequence createdAt updatedAt').lean();
+      }).sort({ dueAt: 1 }).limit(FEED_MAX_ITEMS).select('title dueAt durationMinutes status videoUrl videoProvider sequence createdAt updatedAt').lean();
       const customUrl = tools.visio?.provider === 'custom' ? tools.visio.customUrl : '';
       const items = rows.map((r) => ({
         id: String(r._id), title: r.title, dueAt: r.dueAt, durationMinutes: r.durationMinutes, status: r.status, sequence: r.sequence,
-        createdAt: r.createdAt, updatedAt: r.updatedAt, videoUrl: isVisioUrl(r.videoUrl, customUrl) ? r.videoUrl : '',
+        createdAt: r.createdAt, updatedAt: r.updatedAt, videoUrl: isVisioUrl(r.videoUrl, customUrl, r.videoProvider) ? r.videoUrl : '',
       }));
       res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
       res.setHeader('Cache-Control', 'private, no-store');

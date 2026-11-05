@@ -55,7 +55,7 @@ ko({ email: { fromName: 5 } }, /texte/);
 assert.deepEqual(ok({ visio: { provider: 'jitsi' } }), { 'visio.provider': 'jitsi', 'visio.customUrl': '', 'visio.chosen': true });
 assert.deepEqual(ok({ visio: { provider: 'custom', customUrl: mine } }), { 'visio.provider': 'custom', 'visio.customUrl': mine, 'visio.chosen': true });
 ko({ visio: { provider: 'custom' } }, /Indiquez le lien/);
-ko({ visio: { provider: 'zoom' } }, /inconnu/);
+ko({ visio: { provider: 'skype' } }, /inconnu/);
 ko({ visio: { provider: 'custom', customUrl: 'http://x.fr/a' } }, /https/);
 assert.equal(ok({ visio: { provider: 'custom' } }, { visio: { provider: 'jitsi', customUrl: mine } })['visio.customUrl'], mine, 'fusion avec l’existant');
 ko({ visio: { customUrl: '' } }, /Indiquez le lien/, { visio: { provider: 'custom', customUrl: mine } });
@@ -148,7 +148,7 @@ try {
   assert.equal((await req('GET', '/tools/pas-un-id', { user: 'owner1' })).status, 403);
 
   // lecture : défauts, pour tout membre rattaché
-  const defaults = { success: true, data: { email: { fromName: '', replyTo: '', signature: '' }, visio: { provider: 'jitsi', customUrl: '' }, agenda: { feedUrl: null }, configured: { email: false, visio: false, agenda: false } } };
+  const defaults = { success: true, data: { email: { provider: 'platform', fromName: '', replyTo: '', signature: '' }, visio: { provider: 'jitsi', customUrl: '' }, agenda: { provider: 'none', feedUrl: null }, configured: { email: false, visio: false, agenda: false } } };
   for (const user of ['owner1', 'member1', 'memberNoCalls', 'agent1']) assert.deepEqual((await req('GET', `/tools/${C1}`, { user })).body, defaults, user);
 
   // écriture : titulaire / responsable seulement
@@ -165,7 +165,7 @@ try {
 
   r = await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { email: { fromName: 'Centre Acme', replyTo: 'Contact@Acme.fr', signature: 'Cordialement,\nL’équipe Acme' } } });
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body.data.email, { fromName: 'Centre Acme', replyTo: 'contact@acme.fr', signature: 'Cordialement,\nL’équipe Acme' });
+  assert.deepEqual(r.body.data.email, { provider: 'platform', fromName: 'Centre Acme', replyTo: 'contact@acme.fr', signature: 'Cordialement,\nL’équipe Acme' });
   assert.deepEqual(r.body.data.configured, { email: true, visio: false, agenda: false });
   r = await req('PUT', `/tools/${C1}`, { user: 'member1', body: { visio: { provider: 'custom', customUrl: mine } } });
   assert.equal(r.status, 200, 'membre avec le droit d’appels : écriture permise');

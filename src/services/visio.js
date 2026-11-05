@@ -1,9 +1,10 @@
 import { randomBytes } from 'node:crypto';
+import { VIDEO_LINK_RE } from './secretariatProviders/common.js';
 
 /**
  * Lien de visio SANS COMPTE : une salle Jitsi Meet publique (https://meet.jit.si), au nom impossible à deviner
  * (12 caractères alphanumériques tirés avec le générateur cryptographique). Ce n'est pas une intégration Google Meet,
- * Teams ou Zoom : celles-ci viendront avec la connexion des comptes du centre.
+ * Teams ou Zoom : celles-ci passent par la connexion des comptes du centre (secretariatActions.js).
  */
 export const VISIO_BASE = 'https://meet.jit.si/HARX-';
 export const VISIO_LENGTH = 12;
@@ -26,12 +27,19 @@ const JITSI_RE = /^https:\/\/meet\.jit\.si\/HARX-[A-Za-z0-9]{12}$/;
 
 /**
  * Un lien de visio est accepté s'il s'agit d'une salle Jitsi générée par HARX OU, seulement si `customUrl` est fourni,
- * exactement le lien permanent enregistré par CETTE entreprise (comparaison stricte). Aucun autre lien n'est accepté.
+ * exactement le lien permanent enregistré par CETTE entreprise (comparaison stricte) OU, seulement si `createdBy` est fourni,
+ * un lien de la forme stricte du fournisseur (Meet, Teams, Zoom) sur un rendez-vous que le SERVEUR a créé via ce fournisseur
+ * (`videoProvider` n'est écrit que par le serveur, jamais par le client). Aucun autre lien n'est accepté.
  * @param {string} v lien à contrôler
  * @param {string} [customUrl] lien permanent enregistré pour l'entreprise concernée
+ * @param {string} [createdBy] `videoProvider` du rendez-vous : 'google_meet' | 'teams' | 'zoom'
  */
-export const isVisioUrl = (v, customUrl = '') =>
-  typeof v === 'string' && (JITSI_RE.test(v) || (typeof customUrl === 'string' && customUrl !== '' && v === customUrl));
+export const isVisioUrl = (v, customUrl = '', createdBy = '') =>
+  typeof v === 'string' && (
+    JITSI_RE.test(v)
+    || (typeof customUrl === 'string' && customUrl !== '' && v === customUrl)
+    || (typeof createdBy === 'string' && Object.hasOwn(VIDEO_LINK_RE, createdBy) && v.length <= 600 && VIDEO_LINK_RE[createdBy].test(v))
+  );
 
 export const MAX_CUSTOM_VISIO_URL = 300;
 

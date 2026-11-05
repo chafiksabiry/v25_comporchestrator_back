@@ -9,6 +9,7 @@ const { syncAppointment, hasCalendarProvider } = await import('../services/calen
 const { clearCompanyCache } = await import('../middleware/companyScope.js');
 const { default: FollowUpItem } = await import('../models/FollowUpItem.js');
 const { default: Voicemail } = await import('../models/Voicemail.js');
+const { default: SecretariatTools } = await import('../models/SecretariatTools.js');
 const { followUpController: ctl } = await import('../controllers/followUpController.js');
 
 const NOW = Date.parse('2026-11-02T10:00:00Z');
@@ -98,6 +99,7 @@ global.fetch = async (url) => {
   if (u.includes('/api/users/')) return { ok: true, json: async () => ({ data: { fullName: 'Moi-même' } }) };
   throw new Error(`fetch inattendu ${u}`);
 };
+SecretariatTools.findOne = () => ({ lean: async () => null }); // réglages du secrétariat : défauts (aucun agenda connecté)
 const store = [];
 FollowUpItem.create = async (doc) => { const d = { _id: `id${store.length + 1}`, status: 'todo', createdAt: new Date(), transfers: [], ...doc, save: async () => d, toObject() { const { save, toObject, ...rest } = d; return rest; } }; store.push(d); return d; };
 FollowUpItem.exists = async (f) => store.some((s) => s.originId === f.originId && s.model === f.model && s.status === 'todo');

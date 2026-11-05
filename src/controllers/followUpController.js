@@ -6,7 +6,8 @@ import { callerAccess, ScopeError } from '../middleware/companyScope.js';
 import { loadDirectory, loadUserName } from '../services/followUpDirectory.js';
 import { syncAppointment } from '../services/calendarSync.js';
 import { buildAppointmentIcs, icsFilename } from '../services/ics.js';
-import { newMeetingUrl } from '../services/secretariatTools.js';
+import { createVideo, removeVideoResource, updateVideoResource } from '../services/secretariatActions.js';
+import { SecretariatError } from '../services/secretariatProviders/common.js';
 import {
   allowedPatchFields, canManage, canSeeItem, canUse, MISSED_STATUSES, parseListFilters, sortItems, toItem, validateCreate, validatePatch,
   validateTransfer, visibilityFilter,
@@ -15,6 +16,50 @@ import {
 const validId = (v) => typeof v === 'string' && /^[0-9a-fA-F]{24}$/.test(v) && mongoose.Types.ObjectId.isValid(v);
 const fail = (res, status, message) => res.status(status).json({ success: false, error: message, message });
 const NOT_ALLOWED = 'Vous n’avez pas accès à cet écran.';
+
+/** Erreur d'un fournisseur connecté (lien de visio) : message clair, 409 si la connexion est à refaire, 502 sinon. */
+const providerFail = (res, error) => fail(res, error.code === 'not_connected' || error.code === 'needs_reauth' ? 409 : 502, error.message);
+
+/** Rendez-vous tel que le voient les adaptateurs d'agenda (vue publique + centre, événement et visio chez le fournisseur). */
+const extView = (item) => ({
+  ...toItem(item), companyId: String(item.companyId), calendarProvider: item.calendarProvider || null, calendarExternalId: item.calendarExternalId || null,
+  videoProvider: item.videoProvider || '', videoExternalId: item.videoExternalId || '',
+});
+
+/** Reporte le résultat d'une synchronisation d'agenda sur le rendez-vous. Un échec est CONSERVÉ (`failed`) et ne casse jamais le rendez-vous. */
+function applySync(item, sync, op) {
+  const had = Boolean(item.calendarExternalId);
+  if (op === 'remove') {
+    if (sync.status === 'synced') { item.calendarExternalId = null; item.calendarStatus = 'synced'; } else item.calendarStatus = 'failed';
+  } else if (sync.status === 'synced') {
+    item.calendarProvider = sync.provider; item.calendarExternalId = sync.externalId; item.calendarStatus = 'synced';
+  } else if (sync.status === 'failed') {
+    item.calendarProvider = sync.provider || item.calendarProvider; item.calendarStatus = 'failed';
+  } else if (had) item.calendarStatus = 'failed'; // un événement existe mais l'agenda n'est plus joignable : on ne le cache pas
+  else { item.calendarStatus = 'not_connected'; item.calendarProvider = null; item.calendarExternalId = null; }
+}
+
+/** Répercute une modification d'un rendez-vous sur l'agenda / la visio connectés. Ne lève jamais. */
+async function syncExternal(item, { wasStatus, keys, videoChanged }) {
+  if (item.model !== 'appointment') return;
+  const canceled = item.status === 'canceled';
+  if (canceled && wasStatus !== 'canceled') {
+    const before = extView(item);
+    let ok = true;
+    if (item.calendarExternalId) {
+      const sync = await syncAppointment(before, { op: 'remove' });
+      applySync(item, sync, 'remove');
+      ok = sync.status === 'synced';
+    }
+    const removed = await removeVideoResource(before.companyId, before);
+    if (item.videoProvider && ok && removed) { item.videoUrl = ''; item.videoProvider = ''; item.videoExternalId = ''; } // le lien n'existe plus chez le fournisseur
+  } else if (!canceled && (wasStatus === 'canceled' || videoChanged || keys.some((k) => ['dueAt', 'title', 'durationMinutes'].includes(k)))) {
+    if (item.videoProvider && item.videoExternalId && item.videoExternalId !== item.calendarExternalId) await updateVideoResource(String(item.companyId), extView(item));
+    const op = item.calendarExternalId ? 'update' : 'push';
+    applySync(item, await syncAppointment(extView(item), { op }), op);
+  } else return;
+  await item.save();
+}
 
 /** Droits de l'appelant + sa société. Répond lui-même et renvoie null en cas de refus. */
 async function context(req, res) {
@@ -121,17 +166,30 @@ export const followUpController = {
         if (dup) return fail(res, 409, 'Un suivi de ce type est déjà en cours pour cet élément.');
       }
 
-      const item = await FollowUpItem.create({
-        companyId, model: v.model, originType: v.originType, originId: v.originId, title: v.title, note: v.note,
-        contactName: v.contactName, contactPhone: v.contactPhone || origin?.from || '', contactEmail: v.contactEmail,
-        videoUrl: v.videoLink ? await newMeetingUrl(companyId) : '',
-        dueAt: v.dueAt, durationMinutes: v.durationMinutes, assigneeId: assignee.id, assigneeName: assignee.name,
-        createdById: access.userId, createdByName: me?.name || '', fromAiPlan: v.fromAiPlan,
-        transfers: v.model === 'transfer' ? [{ fromId: access.userId, fromName: me?.name || '', toId: assignee.id, toName: assignee.name, note: v.note }] : [],
-      });
+      // Lien de visio, une fois les vérifications passées (rien d'orphelin chez le fournisseur). Échec du fournisseur : le rendez-vous
+      // n'est pas enregistré et l'erreur est claire (jamais de faux lien).
+      const video = v.videoLink
+        ? await createVideo(access.companyId, { title: v.title, contactName: v.contactName, dueAt: v.dueAt, durationMinutes: v.durationMinutes })
+        : { url: '', provider: '', externalId: '', sharesCalendar: false, eventProvider: '' };
+      let item;
+      try {
+        item = await FollowUpItem.create({
+          companyId, model: v.model, originType: v.originType, originId: v.originId, title: v.title, note: v.note,
+          contactName: v.contactName, contactPhone: v.contactPhone || origin?.from || '', contactEmail: v.contactEmail,
+          videoUrl: video.url, videoProvider: video.provider, videoExternalId: video.externalId,
+          dueAt: v.dueAt, durationMinutes: v.durationMinutes, assigneeId: assignee.id, assigneeName: assignee.name,
+          createdById: access.userId, createdByName: me?.name || '', fromAiPlan: v.fromAiPlan,
+          transfers: v.model === 'transfer' ? [{ fromId: access.userId, fromName: me?.name || '', toId: assignee.id, toName: assignee.name, note: v.note }] : [],
+        });
+      } catch (error) {
+        // Enregistrement impossible : on ne laisse pas de réunion / d'événement orphelin chez le fournisseur.
+        if (video.externalId) await removeVideoResource(access.companyId, { videoProvider: video.provider, videoExternalId: video.externalId });
+        throw error;
+      }
       if (v.model === 'appointment') {
-        const sync = await syncAppointment(toItem(item));
-        item.calendarStatus = sync.status; item.calendarProvider = sync.provider; item.calendarExternalId = sync.externalId;
+        if (video.sharesCalendar) { // l'événement qui porte le lien Meet / Teams est l'événement d'agenda du rendez-vous
+          item.calendarProvider = video.eventProvider; item.calendarExternalId = video.externalId; item.calendarStatus = 'synced';
+        } else applySync(item, await syncAppointment(extView(item)), 'push');
         await item.save();
       }
       if (v.model === 'voicemail_callback' && v.originType === 'voicemail') {
@@ -139,6 +197,7 @@ export const followUpController = {
       }
       res.status(201).json({ success: true, data: toItem(item) });
     } catch (error) {
+      if (error instanceof SecretariatError) return providerFail(res, error);
       console.error('followUps create:', error.message);
       fail(res, 500, 'Création impossible.');
     }
@@ -155,9 +214,18 @@ export const followUpController = {
       const allowed = allowedPatchFields(access);
       if (Object.keys(checked.value).some((k) => !allowed.includes(k))) return fail(res, 403, 'Vous pouvez seulement clore cet élément ou ajouter une note.');
       const { videoLink, ...fields } = checked.value;
+      const wasStatus = item.status;
       Object.assign(item, fields);
-      if (videoLink === true && !item.videoUrl) item.videoUrl = await newMeetingUrl(item.companyId);
-      if (videoLink === false) item.videoUrl = '';
+      if (videoLink === true && !item.videoUrl) {
+        // Échec du fournisseur : réponse d'erreur, rien n'est enregistré (le document modifié en mémoire n'est pas sauvegardé).
+        const video = await createVideo(item.companyId, { title: item.title, contactName: item.contactName, dueAt: item.dueAt, durationMinutes: item.durationMinutes }, { calendar: { provider: item.calendarProvider, externalId: item.calendarExternalId } });
+        item.videoUrl = video.url; item.videoProvider = video.provider; item.videoExternalId = video.externalId;
+        if (video.sharesCalendar && !item.calendarExternalId) { item.calendarProvider = video.eventProvider; item.calendarExternalId = video.externalId; item.calendarStatus = 'synced'; }
+      }
+      if (videoLink === false) {
+        await removeVideoResource(String(item.companyId), extView(item)); // réunion Zoom / événement dédié ; l'événement d'agenda reste
+        item.videoUrl = ''; item.videoProvider = ''; item.videoExternalId = '';
+      }
       // Chaque modification d'un rendez-vous (déplacement, annulation, visio) fait monter la révision du fichier agenda.
       if (item.model === 'appointment') item.sequence = (item.sequence || 0) + 1;
       if (checked.value.status) {
@@ -166,11 +234,13 @@ export const followUpController = {
         item.closedById = closing ? access.userId : '';
       }
       await item.save();
+      await syncExternal(item, { wasStatus, keys: Object.keys(checked.value), videoChanged: videoLink !== undefined });
       if (checked.value.status === 'done' && item.model === 'voicemail_callback' && item.originType === 'voicemail') {
         await Voicemail.updateOne({ _id: item.originId, companyId: item.companyId, followUpStatus: { $in: ['new', 'to_call'] } }, { $set: { followUpStatus: 'called' } }).catch(() => {});
       }
       res.json({ success: true, data: toItem(item) });
     } catch (error) {
+      if (error instanceof SecretariatError) return providerFail(res, error);
       console.error('followUps patch:', error.message);
       fail(res, 500, 'Mise à jour impossible.');
     }

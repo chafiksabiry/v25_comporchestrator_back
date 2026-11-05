@@ -2,19 +2,25 @@ import mongoose from 'mongoose';
 
 /**
  * Outils du secrétariat, un document par centre : identité d'envoi des e-mails, choix de la visio et abonnement agenda.
- * Aucune connexion à un compte externe (Google, Microsoft 365, Zoom) : seulement des réglages saisis par le centre.
+ * Réglages seulement : les comptes externes (Google, Microsoft 365, Zoom) sont dans SecretariatConnection, jetons chiffrés.
  * Le jeton du flux agenda n'est JAMAIS stocké en clair : seul son empreinte SHA-256 l'est (voir services/secretariatTools.js).
  */
 const schema = new mongoose.Schema(
   {
     companyId: { type: mongoose.Schema.Types.ObjectId, required: true, unique: true },
     email: {
+      /** `platform` = expéditeur HARX (défaut) ; `google` / `microsoft` = envoi par la messagerie connectée du centre. */
+      provider: { type: String, enum: ['platform', 'google', 'microsoft'], default: 'platform' },
       fromName: { type: String, default: '', maxlength: 80 },
       replyTo: { type: String, default: '', maxlength: 254 },
       signature: { type: String, default: '', maxlength: 500 },
     },
+    /** Agenda externe connecté où sont créés / déplacés / supprimés les rendez-vous (`none` = HARX seulement). */
+    agenda: {
+      provider: { type: String, enum: ['none', 'google', 'microsoft'], default: 'none' },
+    },
     visio: {
-      provider: { type: String, enum: ['jitsi', 'custom'], default: 'jitsi' },
+      provider: { type: String, enum: ['jitsi', 'custom', 'google_meet', 'teams', 'zoom'], default: 'jitsi' },
       customUrl: { type: String, default: '', maxlength: 300 },
       /** Vrai dès que le centre a enregistré un choix (même « jitsi ») : sert à l'indicateur « configuré ». */
       chosen: { type: Boolean, default: false },
