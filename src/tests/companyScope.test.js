@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 
 process.env.REGISTRATION_BACKEND_URL = 'https://registration.test/';
-const { callerCompanyId, callerCompanyIds, onlyCompanyRows, clearCompanyCache, ScopeError } = await import('../middleware/companyScope.js');
+const { callerCompanyId, callerCompanyIds, onlyCompanyRows, clearCompanyCache, scopeToCompany, ScopeError } = await import('../middleware/companyScope.js');
 
 const req = (userId = 'u1', token = 'tok') => ({ user: { userId }, headers: { authorization: `Bearer ${token}` } });
 const lookup = (impl) => { global.fetch = impl; };
@@ -32,6 +32,15 @@ lookup(async () => ({ ok: false, status: 500 }));
 await assert.rejects(() => callerCompanyId(req('u3')), (e) => e.status === 503);
 lookup(async () => { throw new Error('network'); });
 await assert.rejects(() => callerCompanyId(req('u4')), (e) => e.status === 503);
+
+// scopeToCompany : l'entreprise active d'un agent multi-emplois, jamais une entreprise étrangère.
+const multi = { userId: 'a1', role: 'agent', companyId: 'c1', companyIds: ['c1', 'c2'], permissions: {} };
+assert.equal(scopeToCompany(multi, undefined), multi, 'sans choix : l’entreprise par défaut');
+assert.equal(scopeToCompany(multi, 'c1'), multi);
+assert.equal(scopeToCompany(multi, 'c2').companyId, 'c2', 'choix parmi ses emplois');
+assert.equal(scopeToCompany(multi, 'c2').role, 'agent');
+assert.throws(() => scopeToCompany(multi, 'c3'), (e) => e instanceof ScopeError && e.status === 403);
+assert.throws(() => scopeToCompany({ userId: 'o', role: 'owner', companyId: 'c1', companyIds: ['c1'] }, 'c2'), (e) => e.status === 403);
 
 // Each company only gets its own lines; no company, no lines.
 const rows = [

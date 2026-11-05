@@ -69,6 +69,20 @@ export async function callerAccess(req) {
   }
 }
 
+/**
+ * La société sur laquelle l'appelant travaille pour cette requête. Un agent employé par plusieurs entreprises choisit l'entreprise
+ * active dans l'application (`asked`) : elle est acceptée si elle fait partie de ses emplois (jamais une autre) et devient la
+ * société de la requête ; sans choix, la société par défaut du compte.
+ * @throws {ScopeError} 403 si l'entreprise demandée n'est pas l'une des siennes
+ */
+export function scopeToCompany(access, asked) {
+  const wanted = asked == null || asked === '' ? '' : String(asked);
+  if (!wanted || wanted === access.companyId) return access;
+  const mine = new Set([access.companyId, ...(access.companyIds || [])].filter(Boolean).map(String));
+  if (!mine.has(wanted)) throw new ScopeError(403, 'Vous n’êtes pas rattaché à cette entreprise.');
+  return { ...access, companyId: wanted };
+}
+
 /** @returns {Promise<string|null>} the caller's company id, or null when the user has no company */
 export async function callerCompanyId(req) {
   return (await callerAccess(req)).companyId;

@@ -180,4 +180,15 @@ me = { isOwner: false, isAgent: false, companyId: COMPANY, permissions: { 'calls
 r = await call(ctl.list, { user: 'm9', query: { companyId: COMPANY } });
 assert.equal(r.code, 403);
 
+// un agent employé par plusieurs entreprises travaille sur celle qu'il a choisie, parmi ses emplois (jamais une autre)
+const SECOND = '64b0000000000000000000c2';
+me = { isOwner: false, isAgent: true, companyId: COMPANY, companyIds: [COMPANY, SECOND], permissions: {} };
+r = await call(ctl.list, { user: 'agent1', query: { companyId: SECOND } });
+assert.equal(r.code, 200, 'entreprise active choisie parmi ses emplois : acceptée');
+r = await call(ctl.list, { user: 'agent1', query: { companyId: COMPANY } });
+assert.equal(r.code, 200, 'entreprise par défaut : acceptée');
+r = await call(ctl.list, { user: 'agent1', query: { companyId: '64b0000000000000000000d9' } });
+assert.equal(r.code, 403, 'entreprise qui n’est pas l’un de ses emplois : refusée');
+assert.match(r.body.message, /pas rattaché à cette entreprise/);
+
 console.log('followUps: ok');
