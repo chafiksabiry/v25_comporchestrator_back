@@ -234,13 +234,15 @@ export function validateMessage(body, entryIds, now = Date.now()) {
   }
   const callId = b.callId === undefined || b.callId === null || b.callId === '' ? null : b.callId;
   if (callId !== null && !isObjectId(callId)) return bad('Appel d’origine invalide.');
-  return { value: { callerName, callerCompany, callerPhone, forEntryId: b.forEntryId, reason: multiline(b.reason, MAX_MESSAGE), urgency, callbackBefore, callId } };
+  const scriptId = b.scriptId === undefined || b.scriptId === null || b.scriptId === '' ? '' : b.scriptId;
+  if (scriptId !== '' && !isObjectId(scriptId)) return bad('Motif invalide.');
+  return { value: { scriptId, callerName, callerCompany, callerPhone, forEntryId: b.forEntryId, reason: multiline(b.reason, MAX_MESSAGE), urgency, callbackBefore, callId } };
 }
 
 export const messageTitle = (forName, urgency) => `${urgency === 'urgent' ? 'URGENT · ' : ''}Message pour ${forName}`.slice(0, 120);
 
 /** Texte de l'e-mail qui prévient la personne visée (texte brut). Envoyé depuis la messagerie connectée de l'entreprise, jamais depuis HARX. */
-export function messageEmail({ forName, callerName, callerCompany, callerPhone, reason, urgency, callbackBefore, takenByName, companyName, timeZone }) {
+export function messageEmail({ forName, callerName, callerCompany, callerPhone, reason, urgency, callbackBefore, takenByName, companyName, timeZone, escalationFor }) {
   const one = (s) => String(s || '').replace(/[\r\n]+/g, ' ').trim();
   const when = callbackBefore
     ? new Intl.DateTimeFormat('fr-FR', { timeZone: normalizeTimeZone(timeZone) || DEFAULT_TIME_ZONE, dateStyle: 'full', timeStyle: 'short' }).format(new Date(callbackBefore))
@@ -248,6 +250,8 @@ export function messageEmail({ forName, callerName, callerCompany, callerPhone, 
   const lines = [
     `Bonjour ${one(forName)},`,
     '',
+    escalationFor ? `RELANCE : ce message destiné à ${one(escalationFor)} n’a pas été traité dans le délai prévu. Merci de vous en assurer.` : null,
+    escalationFor ? '' : null,
     `${urgency === 'urgent' ? 'Message URGENT' : 'Message'} pris à l’accueil${companyName ? ` de ${one(companyName)}` : ''}${takenByName ? ` par ${one(takenByName)}` : ''}.`,
     '',
     `Appelant : ${one(callerName)}${callerCompany ? ` (${one(callerCompany)})` : ''}`,

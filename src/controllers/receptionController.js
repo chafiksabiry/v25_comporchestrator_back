@@ -6,6 +6,8 @@ import { callerAccess, registrationOrigin, scopeToCompany, ScopeError } from '..
 import { loadDirectory, loadUserName } from '../services/followUpDirectory.js';
 import { canManage, canUse, toItem } from '../services/followUps.js';
 import { notifyByMail } from '../services/messageNotify.js';
+import { matchesNumber } from '../services/receptionExtras.js';
+import { messagePayload, notifyOwners } from '../services/webPush.js';
 import { loadTools, mergedTools } from '../services/secretariatTools.js';
 import {
   messageTitle, parseAbsences, todayIn, toDirectoryView, validateDirectory, validateMessage,
@@ -122,9 +124,13 @@ export const receptionController = {
       if (v.callId) origin = await InboundCall.findOne({ _id: v.callId, companyId }).select('from').lean();
       const takerName = (await loadUserName(access.userId)) || 'Accueil';
       const tools = mergedTools(await loadTools(access.companyId));
+      // Motif choisi parmi les réponses types de l'entreprise (libellé enregistré) et appelant prioritaire (liste de l'entreprise).
+      const motif = v.scriptId ? (doc?.scripts || []).find((sc) => String(sc._id) === v.scriptId)?.label || '' : '';
+      const callerPhone = v.callerPhone || origin?.from || '';
+      const priorityCaller = Boolean(matchesNumber(doc?.vipNumbers, callerPhone));
       let item = await FollowUpItem.create({
         companyId, model: 'message_taken', originType: origin ? 'call' : 'none', originId: origin ? oid(v.callId) : null,
-        title: messageTitle(entry.name, v.urgency), note: v.reason, contactName: v.callerName, contactPhone: v.callerPhone || origin?.from || '',
+        title: messageTitle(entry.name, v.urgency), note: v.reason, contactName: v.callerName, contactPhone: callerPhone, motif, priorityCaller,
         callerCompany: v.callerCompany, forEntryId: v.forEntryId, forName: entry.name, urgency: v.urgency, dueAt: v.callbackBefore,
         assigneeId: entry.userId || '', assigneeName: entry.name, createdById: access.userId, createdByName: takerName,
       });
@@ -136,6 +142,8 @@ export const receptionController = {
       });
       item.emailStatus = emailStatus;
       await item.save();
+      // Message urgent : push web à la personne visée si elle est abonnée (silencieux sinon ; jamais de SMS ni d'appel).
+      if (v.urgency === 'urgent' && entry.userId) void notifyOwners({ userId: entry.userId }, messagePayload({ callerName: v.callerName, urgent: true, id: String(item._id) }));
       res.status(201).json({ success: true, data: { item: toItem(item), notified: { inApp: true, email: emailStatus, assigned: Boolean(entry.userId) } } });
     } catch (error) {
       console.error('reception takeMessage:', error.message);
