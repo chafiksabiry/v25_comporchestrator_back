@@ -552,43 +552,6 @@ class PhoneNumberService {
     }
   }
 
-  async getAllPhoneNumbers() {
-    try {
-      console.log('📞 Fetching all phone numbers');
-
-      // Récupérer tous les numéros de téléphone de la base de données
-      const numbers = await PhoneNumber.find({})
-        .sort({ createdAt: -1 }) // Les plus récents d'abord
-        .lean();
-
-      return numbers
-        .filter((number) => {
-          const st = String(number.status || '').toLowerCase();
-          return st !== 'cancelled' && st !== 'released' && st !== 'terminated';
-        })
-        .map(number => ({
-          id: number._id,
-          _id: number._id,
-          phoneNumber: number.phoneNumber,
-          provider: number.provider,
-          status: number.status,
-          orderStatus: number.orderStatus,
-          features: number.features,
-          gigId: number.gigId,
-          companyId: number.companyId,
-          createdAt: number.createdAt,
-          updatedAt: number.updatedAt,
-          price: number.price,
-          currency: number.currency,
-          isTrial: Boolean(number.isTrial),
-          trialExpiresAt: number.trialExpiresAt || null,
-        }));
-    } catch (error) {
-      console.error('❌ Error fetching all phone numbers:', error);
-      throw error;
-    }
-  }
-
   async updateNumberOrderStatus({ eventId, occurredAt, orderId, orderStatus, phoneNumbers, requirementsMet, subOrderIds }) {
     try {
       console.log(`📝 Processing number order update for ${phoneNumbers.length} numbers`);
@@ -767,10 +730,6 @@ class PhoneNumberService {
     console.log("newPhoneNumber", newPhoneNumber);
     return newPhoneNumber;
 
-  }
-
-  async getAllPhoneNumbers() {
-    return await PhoneNumber.find();
   }
 
   async getPhoneNumberByNumber(phoneNumber) {

@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { xmlEscape } from './inboundFlow.js';
 import { normalizeDestination, buildRefusalTwiml, buildCallbackTwiml } from './voicemailCallback.js';
+import { isPremiumRate } from './outboundDestinations.js';
 
 /**
  * Appel SORTANT depuis le navigateur (clavier de « Mon poste » de Nomad Solo).
@@ -30,7 +31,7 @@ export function allowedPrefixes(env = process.env.OUTBOUND_ALLOWED_PREFIXES) {
 /** Numéro E.164 à composer, ou '' s'il est invalide ou hors des destinations autorisées. */
 export function normalizeOutboundDestination(raw, prefixes = allowedPrefixes()) {
   const to = normalizeDestination(raw);
-  return to && prefixes.some((p) => to.startsWith(p)) ? to : '';
+  return to && !isPremiumRate(to) && prefixes.some((p) => to.startsWith(p)) ? to : '';
 }
 
 const mac = (secret, companyId, identity, expiresAt, secretary = false) =>
