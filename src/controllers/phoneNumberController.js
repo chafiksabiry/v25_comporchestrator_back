@@ -27,6 +27,7 @@ import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket } from '../services/browserOutbound.js';
+import { transferResult } from './callTransferController.js';
 import { journalForwardedCall, journalUnansweredCall } from '../services/journalCall.js';
 import ReachSettings from '../models/ReachSettings.js';
 import { decideInboundRoute, mobileTarget, shouldRingMobileAfter } from '../services/reach.js';
@@ -1930,6 +1931,11 @@ class PhoneNumberController {
     }
   }
 
+  /** Fin de la sonnerie d'un transfert d'appel : consigne le résultat puis, sans réponse, invite l'appelant à laisser un message. */
+  async handleTwilioTransferResult(req, res) {
+    return transferResult(req, res);
+  }
+
   /** Action du <Record> : remercie l'appelant puis raccroche. */
   async handleTwilioVoicemailDone(req, res) {
     res.type('text/xml').status(200).send(wrapResponse(buildVoicemailDoneTwiml()));
@@ -1945,7 +1951,7 @@ class PhoneNumberController {
       }
       const v = mapped.value;
       // Twilio n'envoie ni From ni To avec ce rappel : l'appel entrant consigné (CallSid) donne la ligne et l'appelant.
-      const call = v.callSid ? await InboundCall.findOne({ callSid: v.callSid }).select('companyId gigId phoneNumber from startedAt').lean() : null;
+      const call = v.callSid ? await InboundCall.findOne({ callSid: v.callSid }).select('companyId gigId phoneNumber from startedAt transfer').lean() : null;
       const to = v.to || call?.phoneNumber || '';
       v.from = v.from || call?.from || '';
       let line = call?.companyId ? { companyId: call.companyId, gigId: call.gigId || null } : null;
@@ -1959,12 +1965,14 @@ class PhoneNumberController {
       }
       const result = await Voicemail.updateOne(
         { recordingSid: v.recordingSid },
-        { $setOnInsert: { companyId: line.companyId, gigId: line.gigId || null, phoneNumber: v.to, from: v.from, callSid: v.callSid, recordingSid: v.recordingSid, recordingUrl: v.recordingUrl, durationSeconds: v.durationSeconds, analysisStatus: 'pending' } },
+        { $setOnInsert: { companyId: line.companyId, gigId: line.gigId || null, phoneNumber: v.to, from: v.from, callSid: v.callSid, recordingSid: v.recordingSid, recordingUrl: v.recordingUrl, durationSeconds: v.durationSeconds, analysisStatus: 'pending', ...(call?.transfer?.startedAt ? { forEntryId: call.transfer.entryId || '', forName: call.transfer.entryName || '' } : {}) } },
         { upsert: true }
       );
       if (result.upsertedCount) {
         if (v.callSid) {
           await InboundCall.updateOne({ callSid: v.callSid, status: { $ne: 'answered' } }, { $set: { status: 'voicemail' } }).catch((e) => console.error('InboundCall voicemail:', e.message));
+          // Transfert resté sans réponse : le message laissé est consigné comme résultat du transfert.
+          if (call?.transfer?.startedAt) await InboundCall.updateOne({ callSid: v.callSid, 'transfer.startedAt': { $ne: null }, 'transfer.result': { $ne: 'answered' } }, { $set: { 'transfer.result': 'message_left', 'transfer.endedAt': new Date() } }).catch((e) => console.error('InboundCall transfer message:', e.message));
           // Le journal d'appels indique que cet appel s'est terminé sur le répondeur.
           void journalUnansweredCall({ callSid: v.callSid, companyId: line.companyId, gigId: line.gigId, from: v.from, to: v.to, startedAt: call?.startedAt, voicemail: true });
         }

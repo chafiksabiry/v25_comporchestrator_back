@@ -122,6 +122,11 @@ router.post(
   phoneNumberController.handleTwilioInboundDialResult.bind(phoneNumberController)
 );
 router.post(
+  '/webhooks/twilio/transfer-result',
+  express.urlencoded({ extended: false }),
+  phoneNumberController.handleTwilioTransferResult.bind(phoneNumberController)
+);
+router.post(
   '/webhooks/twilio/voicemail-done',
   express.urlencoded({ extended: false }),
   phoneNumberController.handleTwilioVoicemailDone.bind(phoneNumberController)

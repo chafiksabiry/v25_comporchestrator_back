@@ -21,6 +21,17 @@ const schema = new mongoose.Schema(
     answeredBy: { type: String, default: '' },
     waitSeconds: { type: Number, default: null },
     talkSeconds: { type: Number, default: null },
+    /** Transfert de l'appel en cours par la secrétaire vers une fiche de l'annuaire (un seul par appel). */
+    transfer: {
+      startedAt: { type: Date, default: null },
+      byUserId: { type: String, default: '' },
+      byName: { type: String, default: '' },
+      entryId: { type: String, default: '' },
+      entryName: { type: String, default: '' },
+      mode: { type: String, enum: ['dial', 'message'], default: 'dial' },
+      result: { type: String, enum: ['ringing', 'answered', 'no_answer', 'busy', 'failed', 'caller_hung_up', 'message_left', 'message_offered'], default: 'ringing' },
+      endedAt: { type: Date, default: null },
+    },
   },
   { timestamps: true, collection: 'inbound_calls' }
 );
