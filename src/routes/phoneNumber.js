@@ -107,6 +107,16 @@ router.post(
   phoneNumberController.handleTwilioInboundCall.bind(phoneNumberController)
 );
 router.post(
+  '/webhooks/twilio/inbound-menu',
+  express.urlencoded({ extended: false }),
+  phoneNumberController.handleTwilioInboundMenu.bind(phoneNumberController)
+);
+router.post(
+  '/webhooks/twilio/inbound-queue-next',
+  express.urlencoded({ extended: false }),
+  phoneNumberController.handleTwilioInboundQueueNext.bind(phoneNumberController)
+);
+router.post(
   '/webhooks/twilio/inbound-dial-result',
   express.urlencoded({ extended: false }),
   phoneNumberController.handleTwilioInboundDialResult.bind(phoneNumberController)

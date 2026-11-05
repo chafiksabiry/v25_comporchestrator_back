@@ -15,7 +15,8 @@ import InboundCall from '../models/InboundCall.js';
 import { computeInboundStats } from '../services/inboundStats.js';
 import InboundSettings from '../models/InboundSettings.js';
 import Voicemail from '../models/Voicemail.js';
-import { buildInboundTwiml, buildNoAnswerTwiml, buildVoicemailDoneTwiml, wrapResponse } from '../services/inboundFlow.js';
+import { buildInboundTwiml, buildNoAnswerTwiml, buildVoicemailDoneTwiml, greetingTwiml, wrapResponse } from '../services/inboundFlow.js';
+import { continueQueuePlan, resolveQueueRoute } from '../services/queueRouting.js';
 import { mapRecordingCallback } from '../services/voicemailMapping.js';
 import { mapTwilioCallStatus } from '../services/twilioTestCallStatus.js';
 import { analyzeVoicemail } from '../services/voicemailAnalysis.js';
@@ -1758,9 +1759,15 @@ class PhoneNumberController {
       const line = to
         ? (await PhoneNumber.findOne({ phoneNumber: to })) || (await PhoneNumber.findOne({ phoneNumber: to.replace(/^\+/, '') }))
         : null;
-      const identities = line?.companyId ? availableIdentities(line.companyId) : [];
+      const online = line?.companyId ? availableIdentities(line.companyId) : [];
+      const settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
+      const baseUrl = `https://${req.get('host')}`;
+      const solo = await isSoloCompany(line?.companyId);
+      // Files d'attente (routage par langues / compétences, menu vocal). null = aucune file, Nomad Solo ou erreur : comportement inchangé.
+      const queueRoute = !solo && line?.companyId ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'call' }) : null;
+      const identities = queueRoute ? (queueRoute.kind === 'ring' ? queueRoute.firstIds : []) : online;
       const reach = line?.companyId ? await ReachSettings.findOne({ companyId: line.companyId }).lean().catch((e) => { console.error('ReachSettings read:', e.message); return null; }) : null;
-      const route = decideInboundRoute({ identities, reach, linePhone: to });
+      const route = queueRoute?.kind === 'menu' ? { first: 'browser', mobileNext: false, mobile: null } : decideInboundRoute({ identities, reach, linePhone: to });
       // Chaque appel est consigné : niveau de service, abandon et attente en sont calculés (inbound-stats).
       if (line?.companyId && callSid) {
         await InboundCall.updateOne(
@@ -1769,21 +1776,27 @@ class PhoneNumberController {
           { upsert: true }
         ).catch((e) => console.error('InboundCall log:', e.message));
       }
-      const settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
-      const baseUrl = `https://${req.get('host')}`;
-      const where = route.first === 'browser' ? `sonnerie chez ${identities.length} conseiller(s)${route.mobileNext ? ', puis le mobile du titulaire' : ''}` : route.first === 'mobile' ? "aucun navigateur présent : sonnerie du mobile du titulaire" : `aucun conseiller disponible pour l'entreprise de la ligne ${line?.companyId ?? '(ligne inconnue)'} ; présents : ${JSON.stringify(presenceSummary())}`;
+      const where = queueRoute?.kind === 'menu' ? "file d'attente : menu vocal" : route.first === 'browser' ? `sonnerie chez ${identities.length} conseiller(s)${route.mobileNext ? ', puis le mobile du titulaire' : ''}` : route.first === 'mobile' ? "aucun navigateur présent : sonnerie du mobile du titulaire" : `aucun conseiller disponible pour l'entreprise de la ligne ${line?.companyId ?? '(ligne inconnue)'} ; présents : ${JSON.stringify(presenceSummary())}`;
       console.log(`📞 Appel entrant sur ${to} depuis ${from} : ${where}`);
       // Aucun navigateur présent : le titulaire est prévenu par notification (elle réveille, elle ne décroche pas l'appel).
-      if (line?.companyId && !identities.length) void notifyOwners({ companyId: line.companyId }, callPayload({ from, to, callSid }));
-      const solo = await isSoloCompany(line?.companyId);
+      if (line?.companyId && !identities.length && queueRoute?.kind !== 'menu') void notifyOwners({ companyId: line.companyId }, callPayload({ from, to, callSid }));
+      const resultUrl = `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result`;
+      // File choisie (menu ou sonnerie dirigée) : accueil puis menu / sonnerie. Toute anomalie : sonnerie existante.
+      if (queueRoute && queueRoute.kind !== 'none') {
+        try {
+          return reply(greetingTwiml(settings, baseUrl, line?.companyId ? String(line.companyId) : '') + queueRoute.body);
+        } catch (e) {
+          console.error('Files d\'attente (accueil) :', e.message);
+        }
+      }
       return reply(buildInboundTwiml({
         solo,
         settings,
         baseUrl,
         companyId: line?.companyId ? String(line.companyId) : '',
-        identities,
+        identities: queueRoute ? (queueRoute.kind === 'none' ? [] : online) : identities,
         from,
-        resultUrl: `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result`,
+        resultUrl,
         mobile: route.first === 'mobile' ? route.mobile : null,
         linePhone: to,
       }));
@@ -1791,6 +1804,77 @@ class PhoneNumberController {
       console.error('Error in handleTwilioInboundCall:', error);
       return reply('<Hangup/>');
     }
+  }
+
+  /**
+   * Retour du menu vocal des files d'attente (action du <Gather>, ou rappel sans touche après le délai) : choisit la file selon
+   * la touche `Digits`, rejoue le menu une fois si la touche est absente ou inconnue, puis la file par défaut.
+   * Comme les autres webhooks Twilio de cette famille, la ligne est retrouvée par le numéro appelé (`To`, sinon `Called`) et la
+   * requête n'est pas signée : elle ne donne accès à rien de plus que `inbound-call` (du TwiML de sonnerie). Toute anomalie
+   * retombe sur la sonnerie existante (toutes les identités présentes, puis mobile, puis répondeur).
+   */
+  async handleTwilioInboundMenu(req, res) {
+    const reply = (body) => res.type('text/xml').status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response>${body}</Response>`);
+    const baseUrl = `https://${req.get('host')}`;
+    let line = null;
+    let settings = null;
+    let solo = false;
+    let to = '';
+    let from = '';
+    try {
+      to = toE164(req.body?.To || req.body?.Called);
+      from = String(req.body?.From || '').trim();
+      const callSid = String(req.body?.CallSid || '').trim();
+      const attempt = Math.min(2, Math.max(1, Number.parseInt(req.query?.a, 10) || 1));
+      line = to ? (await PhoneNumber.findOne({ phoneNumber: to })) || (await PhoneNumber.findOne({ phoneNumber: to.replace(/^\+/, '') })) : null;
+      settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
+      solo = await isSoloCompany(line?.companyId);
+      const queueRoute = !solo && line?.companyId
+        ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'menu', digits: String(req.body?.Digits || '').trim(), attempt })
+        : null;
+      if (queueRoute && (queueRoute.kind === 'menu' || queueRoute.kind === 'ring')) return reply(queueRoute.body);
+      // Aucune file ne couvre ce cas (ou personne d'éligible) : repli existant, sans rejouer l'accueil.
+      const identities = queueRoute ? [] : (line?.companyId ? availableIdentities(line.companyId) : []);
+      const reach = line?.companyId ? await ReachSettings.findOne({ companyId: line.companyId }).lean().catch(() => null) : null;
+      const route = decideInboundRoute({ identities, reach, linePhone: to });
+      if (line?.companyId && callSid) {
+        const set = route.first === 'mobile' ? { route: 'mobile', mobileTried: true } : route.first === 'voicemail' ? { route: 'voicemail', status: 'no_agent', waitSeconds: 0 } : null;
+        if (set) await InboundCall.updateOne({ callSid }, { $set: set }).catch((e) => console.error('InboundCall menu:', e.message));
+      }
+      if (line?.companyId && !identities.length) void notifyOwners({ companyId: line.companyId }, callPayload({ from, to, callSid }));
+      return reply(buildInboundTwiml({
+        solo, settings, baseUrl, companyId: line?.companyId ? String(line.companyId) : '', identities, from,
+        resultUrl: `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result`,
+        mobile: route.first === 'mobile' ? route.mobile : null, linePhone: to, withGreeting: false,
+      }));
+    } catch (error) {
+      console.error('Error in handleTwilioInboundMenu:', error);
+      try {
+        const identities = line?.companyId ? availableIdentities(line.companyId) : [];
+        return reply(buildInboundTwiml({ solo, settings, baseUrl, companyId: line?.companyId ? String(line.companyId) : '', identities, from, resultUrl: `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result`, linePhone: to, withGreeting: false }));
+      } catch (e) {
+        console.error('Error in handleTwilioInboundMenu (repli):', e);
+        return reply('<Hangup/>');
+      }
+    }
+  }
+
+  /**
+   * Suite d'une sonnerie de file à tour de rôle (action de chaque <Dial> du plan signé) : tentative suivante, ou traitement
+   * standard (décroché / mobile / répondeur) quand quelqu'un a décroché, que l'appelant a raccroché ou que le plan est épuisé.
+   * Plan absent, altéré ou expiré : traitement standard aussi.
+   */
+  async handleTwilioInboundQueueNext(req, res) {
+    try {
+      const baseUrl = `https://${req.get('host')}`;
+      const step = continueQueuePlan({ token: req.query?.s, dialStatus: req.body?.DialCallStatus, baseUrl, from: String(req.body?.From || '').trim() });
+      if (step.action === 'dial') return res.type('text/xml').status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response>${step.body}</Response>`);
+      const callSid = String(req.body?.CallSid || '').trim();
+      if (step.answeredBy && callSid) await InboundCall.updateOne({ callSid }, { $set: { answeredBy: step.answeredBy } }).catch((e) => console.error('InboundCall answeredBy:', e.message));
+    } catch (error) {
+      console.error('Files d\'attente (suite de la sonnerie) : traitement standard (' + error.message + ')');
+    }
+    return this.handleTwilioInboundDialResult(req, res);
   }
 
   /** Fin de la sonnerie chez les conseillers : consigne décroché / non décroché / abandonné, puis répond à l'appelant. */

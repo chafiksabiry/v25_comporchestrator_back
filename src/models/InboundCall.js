@@ -17,6 +17,8 @@ const schema = new mongoose.Schema(
     mobileTried: { type: Boolean, default: false },
     /** Où l'appel a été décroché (le statut reste « answered »). */
     answeredOn: { type: String, enum: ['browser', 'mobile'], default: undefined },
+    /** Identité navigateur (`cc-…`) de la secrétaire qui a décroché, connue seulement pour une sonnerie à tour de rôle (files) ; sert à la stratégie « libre depuis le plus longtemps ». */
+    answeredBy: { type: String, default: '' },
     waitSeconds: { type: Number, default: null },
     talkSeconds: { type: Number, default: null },
   },
