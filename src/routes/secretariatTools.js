@@ -1,6 +1,7 @@
 import express from 'express';
 import { secretariatToolsController as c } from '../controllers/secretariatToolsController.js';
 import { secretariatConnectionsController as cx } from '../controllers/secretariatConnectionsController.js';
+import { callQueuesController as q } from '../controllers/callQueuesController.js';
 import { authenticate } from '../middleware/auth.js';
 import { requireCompanyParam } from '../middleware/companyScope.js';
 
@@ -14,6 +15,15 @@ router.post('/tools/:companyId/agenda-feed', authenticate, requireCompanyParam, 
 router.get('/connections/:companyId', authenticate, requireCompanyParam, cx.list);
 router.post('/connections/:companyId/:provider/start', authenticate, requireCompanyParam, cx.start);
 router.delete('/connections/:companyId/:provider', authenticate, requireCompanyParam, cx.remove);
+// Files d'attente (Répartition des appels) et compétences des secrétaires : lecture pour tout membre rattaché, écriture titulaire/responsable (contrôleur).
+router.get('/queues/:companyId', authenticate, requireCompanyParam, q.list);
+router.post('/queues/:companyId', authenticate, requireCompanyParam, q.create);
+router.put('/queues/:companyId', authenticate, requireCompanyParam, q.replace);
+router.put('/queues/:companyId/:queueId', authenticate, requireCompanyParam, q.update);
+router.delete('/queues/:companyId/:queueId', authenticate, requireCompanyParam, q.remove);
+router.get('/staff/:companyId', authenticate, requireCompanyParam, q.listStaff);
+router.put('/staff/:companyId/:userId', authenticate, requireCompanyParam, q.updateStaff);
+router.get('/routing-preview/:companyId', authenticate, requireCompanyParam, q.preview);
 // PUBLIC : retour OAuth du fournisseur. Inoffensif sans état signé valide (JWT 10 min lié au centre, à l'utilisateur et au fournisseur).
 router.get('/oauth/:provider/callback', cx.callback);
 // PUBLIC : abonnement agenda, protégé par un jeton secret (≥ 32 octets aléatoires) et non par une session.

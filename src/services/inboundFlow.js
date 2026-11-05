@@ -47,6 +47,11 @@ function voicemailRecord(s, baseUrl, companyId, voicemailUrls, solo = false) {
 /** Accepte des réglages bruts (document) ou déjà publics (toPublicSettings). */
 const normalize = (settings) => (settings && 'greetingValidated' in settings ? { ...toPublicSettings(null), ...settings } : toPublicSettings(settings));
 
+/** Accueil seul (audio validé, sinon voix de synthèse, sinon rien) : sert aux files d'attente (accueil puis menu vocal). */
+export const greetingTwiml = (settings, baseUrl, companyId) => greeting(normalize(settings), baseUrl, companyId);
+/** Délai de sonnerie des conseillers (secondes) pour ces réglages. */
+export const ringTimeoutOf = (settings) => normalize(settings).ringTimeoutSeconds;
+
 export const wrapResponse = (body) => `<?xml version="1.0" encoding="UTF-8"?><Response>${body}</Response>`;
 
 /** Sonnerie du mobile du titulaire : le numéro de la ligne est l'identifiant d'appelant (l'action revient avec leg=mobile). */
@@ -60,9 +65,9 @@ export function buildMobileDialTwiml({ number, ringSeconds = 25, callerId = '', 
  * TwiML (corps de <Response>) d'un appel entrant réel.
  * `mobile` ({ number, ringSeconds }, voir reach.mobileTarget) + `linePhone` : sans navigateur présent, le mobile sonne avant le répondeur.
  */
-export function buildInboundTwiml({ settings, baseUrl, companyId, identities = [], from = '', resultUrl, voicemailUrls, mobile = null, linePhone = '', solo = false } = {}) {
+export function buildInboundTwiml({ settings, baseUrl, companyId, identities = [], from = '', resultUrl, voicemailUrls, mobile = null, linePhone = '', solo = false, withGreeting = true } = {}) {
   const s = normalize(settings);
-  const hello = greeting(s, baseUrl, companyId);
+  const hello = withGreeting ? greeting(s, baseUrl, companyId) : '';
   if (identities.length) {
     const clients = identities.map((id) => `<Client>${xmlEscape(id)}</Client>`).join('');
     const callerId = String(from).replace(/[^+\d]/g, '');
