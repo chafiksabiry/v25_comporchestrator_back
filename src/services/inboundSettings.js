@@ -12,6 +12,7 @@ export const DEFAULTS = Object.freeze({
   voice: 'nova',
   ringTimeoutSeconds: 30,
   voicemailEnabled: true,
+  secretaryOutbound: true,
 });
 export const KINDS = ['greeting', 'voicemail'];
 export const MIN_AUDIO_BYTES = 1024;
@@ -40,6 +41,10 @@ export function validateSettingsInput(body = {}) {
     if (typeof body.voicemailEnabled !== 'boolean') errors.push("L'activation du répondeur doit être vrai ou faux.");
     else value.voicemailEnabled = body.voicemailEnabled;
   }
+  if (body.secretaryOutbound !== undefined) {
+    if (typeof body.secretaryOutbound !== 'boolean') errors.push("L'autorisation d'appeler des secrétaires doit être vrai ou faux.");
+    else value.secretaryOutbound = body.secretaryOutbound;
+  }
   return { ok: errors.length === 0, errors, value };
 }
 
@@ -57,6 +62,7 @@ export function toPublicSettings(doc) {
     voice: d.voice ?? DEFAULTS.voice,
     ringTimeoutSeconds: d.ringTimeoutSeconds ?? DEFAULTS.ringTimeoutSeconds,
     voicemailEnabled: d.voicemailEnabled ?? DEFAULTS.voicemailEnabled,
+    secretaryOutbound: d.secretaryOutbound ?? DEFAULTS.secretaryOutbound,
   };
   return {
     ...s,

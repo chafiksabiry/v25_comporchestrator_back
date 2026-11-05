@@ -17,6 +17,19 @@ const transferSchema = new mongoose.Schema(
   { _id: false }
 );
 
+/** Appel passé depuis le navigateur pour traiter cet élément (rappel) : qui, quand, combien de temps. */
+const callSchema = new mongoose.Schema(
+  {
+    sid: { type: String, default: '', maxlength: 64 },
+    at: { type: Date, default: Date.now },
+    durationSeconds: { type: Number, default: 0, min: 0 },
+    status: { type: String, enum: ['completed', 'no-answer', 'busy', 'failed', 'canceled', 'rejected'], default: 'completed' },
+    byId: { type: String, default: '' },
+    byName: { type: String, default: '' },
+  },
+  { _id: false }
+);
+
 const schema = new mongoose.Schema(
   {
     companyId: { type: mongoose.Schema.Types.ObjectId, required: true, index: true },
@@ -41,6 +54,8 @@ const schema = new mongoose.Schema(
     createdByName: { type: String, default: '' },
     closedAt: { type: Date, default: null },
     closedById: { type: String, default: '' },
+    /** Appels sortants passés pour traiter cet élément (rappels depuis le navigateur). */
+    calls: { type: [callSchema], default: [] },
     /** Historique des transferts (qui a confié à qui, avec quelle note). */
     transfers: { type: [transferSchema], default: [] },
     /** Lien de visio d'un rendez-vous (salle Jitsi non devinable, ou lien permanent du centre) ; vide sans visio. */

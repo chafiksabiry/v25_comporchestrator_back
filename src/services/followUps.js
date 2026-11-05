@@ -222,6 +222,7 @@ export function toItem(i) {
     createdBy: { id: o.createdById || '', name: o.createdByName || '' },
     createdAt: o.createdAt,
     closedAt: o.closedAt || null,
+    calls: (o.calls || []).map((c) => ({ sid: c.sid || '', at: c.at, durationSeconds: c.durationSeconds || 0, status: c.status || 'completed', by: { id: c.byId || '', name: c.byName || '' } })),
     transfers: (o.transfers || []).map((t) => ({ from: { id: t.fromId, name: t.fromName }, to: { id: t.toId, name: t.toName }, note: t.note || '', at: t.at })),
     videoUrl: o.videoUrl || '',
     sequence: o.sequence || 0,
@@ -229,6 +230,19 @@ export function toItem(i) {
     fromAiPlan: o.fromAiPlan === true,
     calendar: { status: o.calendarStatus || 'not_connected', provider: o.calendarProvider || null },
   };
+}
+
+export const CALL_STATUSES = ['completed', 'no-answer', 'busy', 'failed', 'canceled', 'rejected'];
+export const MAX_CALLS_PER_ITEM = 50;
+
+/** Valide le compte rendu d'un appel passé pour traiter un élément. @returns {{error: string} | {value: object}} */
+export function validateCallLog(body) {
+  const b = body && typeof body === 'object' ? body : {};
+  const status = b.status === undefined ? 'completed' : b.status;
+  if (!CALL_STATUSES.includes(status)) return bad('Résultat d’appel inconnu.');
+  const d = Number(b.durationSeconds ?? 0);
+  if (!Number.isFinite(d) || d < 0 || d > 14400) return bad('Durée d’appel invalide.');
+  return { value: { sid: text(b.sid, 64), status, durationSeconds: Math.round(d) } };
 }
 
 /**

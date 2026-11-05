@@ -7,6 +7,9 @@ import {
   maxSecondsForBalance,
   normalizeOutboundDestination,
   OUTBOUND_TICKET_TTL_MS,
+  outboundTicketRole,
+  SECRETARY_OUTBOUND_BLOCKED,
+  secretaryOutboundAllowed,
   signOutboundTicket,
   verifyOutboundTicket,
 } from '../services/browserOutbound.js';
@@ -31,6 +34,23 @@ assert.equal(verifyOutboundTicket({ ...base, ticket, now: 1000 + OUTBOUND_TICKET
 assert.equal(verifyOutboundTicket({ ...base, ticket: 'x', now: 2000 }), false);
 assert.equal(verifyOutboundTicket({ ...base, ticket: undefined, now: 2000 }), false);
 assert.equal(verifyOutboundTicket({ ...base, secret: '', ticket, now: 2000 }), false);
+
+// rôle scellé dans la preuve : une secrétaire ne peut pas se faire passer pour un autre rôle (ni l'inverse)
+const sTicket = signOutboundTicket({ ...base, now: 1000, secretary: true });
+assert.equal(outboundTicketRole({ ...base, ticket, now: 2000 }), 'standard');
+assert.equal(outboundTicketRole({ ...base, ticket: sTicket, now: 2000 }), 'secretary');
+assert.equal(verifyOutboundTicket({ ...base, ticket: sTicket, now: 2000 }), true, 'preuve de secrétaire valide pour le contrôle générique');
+assert.equal(outboundTicketRole({ ...base, companyId: 'c2', ticket: sTicket, now: 2000 }), null, 'autre entreprise');
+assert.equal(outboundTicketRole({ ...base, ticket: sTicket, now: 1000 + OUTBOUND_TICKET_TTL_MS + 1 }), null, 'périmée');
+assert.notEqual(ticket.split('.')[1], sTicket.split('.')[1], 'signatures distinctes selon le rôle');
+
+// réglage « les secrétaires peuvent appeler » : autorisé par défaut, interdit seulement si le titulaire le coupe explicitement
+assert.equal(secretaryOutboundAllowed(undefined), true);
+assert.equal(secretaryOutboundAllowed(null), true);
+assert.equal(secretaryOutboundAllowed({}), true, 'ancien document sans le champ');
+assert.equal(secretaryOutboundAllowed({ secretaryOutbound: true }), true);
+assert.equal(secretaryOutboundAllowed({ secretaryOutbound: false }), false);
+assert(!/agent|centre d.appels|siège/i.test(SECRETARY_OUTBOUND_BLOCKED), 'vocabulaire du secrétariat');
 
 // décision : numéro valide, abonnement actif, ligne de l'entreprise, minutes restantes
 const line = { phoneNumber: '+33219122061' };

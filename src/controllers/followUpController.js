@@ -9,7 +9,7 @@ import { buildAppointmentIcs, icsFilename } from '../services/ics.js';
 import { createVideo, removeVideoResource, updateVideoResource } from '../services/secretariatActions.js';
 import { SecretariatError } from '../services/secretariatProviders/common.js';
 import {
-  allowedPatchFields, canManage, canSeeItem, canUse, MISSED_STATUSES, parseListFilters, sortItems, toItem, validateCreate, validatePatch,
+  allowedPatchFields, canManage, MAX_CALLS_PER_ITEM, validateCallLog, canSeeItem, canUse, MISSED_STATUSES, parseListFilters, sortItems, toItem, validateCreate, validatePatch,
   validateTransfer, visibilityFilter,
 } from '../services/followUps.js';
 
@@ -251,6 +251,31 @@ export const followUpController = {
       if (error instanceof SecretariatError) return providerFail(res, error);
       console.error('followUps patch:', error.message);
       fail(res, 500, 'Mise à jour impossible.');
+    }
+  },
+
+  /**
+   * Rattache un appel sortant (rappel passé depuis le navigateur) à l'élément, avec le nom de la personne qui a appelé.
+   * Le journal d'appels de la personne est alimenté à part ; ici l'élément garde la trace de ce qui a été tenté.
+   */
+  async logCall(req, res) {
+    try {
+      const access = await context(req, res);
+      if (!access) return;
+      const item = validId(req.params.id) ? await FollowUpItem.findOne({ _id: req.params.id, companyId: access.companyId }) : null;
+      if (!item || !canSeeItem(access, item)) return fail(res, 404, 'Élément introuvable.');
+      const checked = validateCallLog(req.body);
+      if (checked.error) return fail(res, 400, checked.error);
+      if ((item.calls || []).length >= MAX_CALLS_PER_ITEM) return fail(res, 409, 'Trop d’appels enregistrés sur cet élément.');
+      const sid = checked.value.sid;
+      if (!sid || !(item.calls || []).some((c) => c.sid === sid)) {
+        item.calls.push({ ...checked.value, at: new Date(), byId: access.userId, byName: (await loadUserName(access.userId)) || '' });
+        await item.save();
+      }
+      res.json({ success: true, data: toItem(item) });
+    } catch (error) {
+      console.error('followUps logCall:', error.message);
+      fail(res, 500, 'Enregistrement de l’appel impossible.');
     }
   },
 

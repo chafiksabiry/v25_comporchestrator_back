@@ -33,23 +33,41 @@ export function normalizeOutboundDestination(raw, prefixes = allowedPrefixes()) 
   return to && prefixes.some((p) => to.startsWith(p)) ? to : '';
 }
 
-const mac = (secret, companyId, identity, expiresAt) =>
-  crypto.createHmac('sha256', String(secret)).update(`outbound.${companyId}.${identity}.${expiresAt}`).digest('hex');
+const mac = (secret, companyId, identity, expiresAt, secretary = false) =>
+  crypto.createHmac('sha256', String(secret)).update(`outbound${secretary ? '.secretary' : ''}.${companyId}.${identity}.${expiresAt}`).digest('hex');
 
-/** Preuve que cette personne (identity) a le droit d'appeler au nom de cette entreprise : délivrée avec le jeton. */
-export function signOutboundTicket({ secret, companyId, identity, now = Date.now() }) {
+/**
+ * Preuve que cette personne (identity) a le droit d'appeler au nom de cette entreprise : délivrée avec le jeton.
+ * `secretary` : la personne est une secrétaire (rôle `agent`). Le rôle est scellé dans la preuve pour que le serveur
+ * puisse, au moment de composer, relire le réglage « les secrétaires peuvent appeler » sans croire le navigateur.
+ */
+export function signOutboundTicket({ secret, companyId, identity, now = Date.now(), secretary = false }) {
   const expiresAt = now + OUTBOUND_TICKET_TTL_MS;
-  return `${expiresAt}.${mac(secret, companyId, identity, expiresAt)}`;
+  return `${expiresAt}.${mac(secret, companyId, identity, expiresAt, secretary === true)}`;
 }
 
-export function verifyOutboundTicket({ secret, companyId, identity, ticket, now = Date.now() }) {
+/** Rôle scellé dans la preuve : 'secretary', 'standard', ou null si la preuve est invalide ou périmée. */
+export function outboundTicketRole({ secret, companyId, identity, ticket, now = Date.now() }) {
   const [exp, sig] = String(ticket ?? '').split('.');
   const expiresAt = Number(exp);
-  if (!secret || !sig || !Number.isFinite(expiresAt) || expiresAt < now) return false;
+  if (!secret || !sig || !Number.isFinite(expiresAt) || expiresAt < now) return null;
   const a = Buffer.from(sig);
-  const b = Buffer.from(mac(secret, String(companyId), String(identity), expiresAt));
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+  for (const [role, secretary] of [['standard', false], ['secretary', true]]) {
+    const b = Buffer.from(mac(secret, String(companyId), String(identity), expiresAt, secretary));
+    if (a.length === b.length && crypto.timingSafeEqual(a, b)) return role;
+  }
+  return null;
 }
+
+export function verifyOutboundTicket(args) {
+  return outboundTicketRole(args) !== null;
+}
+
+/** Message donné quand le titulaire a interdit les appels sortants aux secrétaires. */
+export const SECRETARY_OUTBOUND_BLOCKED = 'Le responsable a désactivé les appels sortants pour les secrétaires.';
+
+/** Les secrétaires peuvent-elles appeler ? Autorisé par défaut (réglage absent ou ancien document). */
+export const secretaryOutboundAllowed = (settings) => settings?.secretaryOutbound !== false;
 
 /**
  * Durée maximale (secondes) d'un appel pour ce solde de minutes : minutes entières × 60, 4 h au plus ; 0 si le solde ne

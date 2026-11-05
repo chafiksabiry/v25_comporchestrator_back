@@ -1,5 +1,5 @@
 import { phoneNumberService } from '../services/phoneNumberService.js';
-import { callerCompanyId, onlyCompanyRows } from '../middleware/companyScope.js';
+import { callerAccess, callerCompanyId, onlyCompanyRows } from '../middleware/companyScope.js';
 import { paypalService } from '../services/paypalService.js';
 import { stripeService } from '../services/stripeService.js';
 import { config } from '../config/env.js';
@@ -26,7 +26,7 @@ import { createVoiceToken, pushCredentialFor, VOICE_TOKEN_TTL_S } from '../servi
 import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
-import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, refusal, signOutboundTicket, verifyOutboundTicket } from '../services/browserOutbound.js';
+import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket } from '../services/browserOutbound.js';
 import { journalForwardedCall, journalUnansweredCall } from '../services/journalCall.js';
 import ReachSettings from '../models/ReachSettings.js';
 import { decideInboundRoute, mobileTarget, shouldRingMobileAfter } from '../services/reach.js';
@@ -1661,9 +1661,15 @@ class PhoneNumberController {
       if (req.body?.outbound === true) {
         const companyId = String(req.body?.companyId || '');
         if (!mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ error: 'Invalid companyId' });
+        // Une secrétaire (rôle agent) n'appelle que si le responsable l'autorise ; son rôle est scellé dans la preuve.
+        const secretary = (await callerAccess(req)).role === 'agent';
+        if (secretary) {
+          const settings = await InboundSettings.findOne({ companyId }).select('secretaryOutbound').lean();
+          if (!secretaryOutboundAllowed(settings)) return res.status(403).json({ success: false, error: 'secretary_outbound_disabled', message: SECRETARY_OUTBOUND_BLOCKED });
+        }
         const appSid = await ensureOutboundApp(client, `https://${req.get('host')}${OUTBOUND_WEBHOOK_PATH}`);
         const outboundToken = await createVoiceToken({ client, accountSid: config.twilioAccountSid, identity, outgoingApplicationSid: appSid, pushCredentialSid });
-        const ticket = signOutboundTicket({ secret: config.twilioAuthToken, companyId, identity });
+        const ticket = signOutboundTicket({ secret: config.twilioAuthToken, companyId, identity, secretary });
         return res.json({ success: true, data: { token: outboundToken, identity, expiresIn: VOICE_TOKEN_TTL_S, params: { CompanyId: companyId, Ticket: ticket } } });
       }
       const token = await createVoiceToken({ client, accountSid: config.twilioAccountSid, identity, pushCredentialSid });
@@ -1686,8 +1692,12 @@ class PhoneNumberController {
       const { To, From, CompanyId, Ticket, Caller } = req.body || {};
       const companyId = String(CompanyId || '');
       const identity = String(From || Caller || '').replace(/^client:/, '');
-      if (!mongoose.Types.ObjectId.isValid(companyId) || !verifyOutboundTicket({ secret: config.twilioAuthToken, companyId, identity, ticket: Ticket })) {
-        return send(refusal('Appel non autorisé.'));
+      const role = mongoose.Types.ObjectId.isValid(companyId) ? outboundTicketRole({ secret: config.twilioAuthToken, companyId, identity, ticket: Ticket }) : null;
+      if (!role) return send(refusal('Appel non autorisé.'));
+      // Le réglage est relu à chaque appel : si le responsable retire l'autorisation, la preuve encore valide (1 h) ne suffit plus.
+      if (role === 'secretary') {
+        const settings = await InboundSettings.findOne({ companyId }).select('secretaryOutbound').lean();
+        if (!secretaryOutboundAllowed(settings)) return send(refusal(SECRETARY_OUTBOUND_BLOCKED));
       }
       const to = normalizeOutboundDestination(To);
       const [limits, minutes, line] = await Promise.all([

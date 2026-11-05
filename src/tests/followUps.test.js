@@ -191,4 +191,13 @@ r = await call(ctl.list, { user: 'agent1', query: { companyId: '64b0000000000000
 assert.equal(r.code, 403, 'entreprise qui n’est pas l’un de ses emplois : refusée');
 assert.match(r.body.message, /pas rattaché à cette entreprise/);
 
+// Appel rattaché à un élément : validation
+assert.equal(F.validateCallLog({ sid: 'CA1', durationSeconds: 42.4, status: 'completed' }).value.durationSeconds, 42);
+assert.equal(F.validateCallLog({}).value.status, 'completed');
+assert.ok(F.validateCallLog({ status: 'pirate' }).error);
+assert.ok(F.validateCallLog({ durationSeconds: -1 }).error);
+assert.ok(F.validateCallLog({ durationSeconds: 99999 }).error);
+assert.deepEqual(F.toItem({ _id: 'a'.repeat(24), calls: [{ sid: 'CA1', at: NOW, durationSeconds: 5, status: 'completed', byId: 'u1', byName: 'Léa' }] }).calls, [{ sid: 'CA1', at: NOW, durationSeconds: 5, status: 'completed', by: { id: 'u1', name: 'Léa' } }]);
+assert.deepEqual(F.toItem({ _id: 'a'.repeat(24) }).calls, []);
+
 console.log('followUps: ok');
