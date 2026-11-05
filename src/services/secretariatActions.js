@@ -1,8 +1,8 @@
 import { registerCompanyCalendarResolver } from './calendarSync.js';
-import { connectedAccount, withConnection } from './secretariatConnections.js';
+import { connectedAccount, messages, resolveVisio, withConnection } from './secretariatConnections.js';
 import { SecretariatError } from './secretariatProviders/common.js';
 import { PROVIDERS } from './secretariatProviders/index.js';
-import { loadTools, localMeetingUrl, mergedTools, VISIO_NEEDS } from './secretariatTools.js';
+import { loadTools, mergedTools, VISIO_NEEDS } from './secretariatTools.js';
 
 /**
  * Actions du secrétariat qui passent par un compte connecté : envoi d'e-mail, événements d'agenda, liens de visio.
@@ -10,6 +10,7 @@ import { loadTools, localMeetingUrl, mergedTools, VISIO_NEEDS } from './secretar
  */
 const VISIO_LABEL = { google_meet: 'Google Meet', teams: 'Teams', zoom: 'Zoom' };
 const DEFAULT_MINUTES = 30;
+export const VISIO_NOT_CONNECTED_MESSAGE = 'Connectez Google Meet, Microsoft Teams ou Zoom dans Paramétrage > Outils pour créer un lien de visio.';
 
 /** Convertit toute erreur inattendue en erreur générique (aucun détail technique). */
 const safe = (error) => (error instanceof SecretariatError ? error : new SecretariatError('provider_error', 'Le service du fournisseur a rencontré une erreur.'));
@@ -60,7 +61,8 @@ registerCompanyCalendarResolver(async (companyId, hint) => {
 
 // ---------- visio
 /**
- * Lien de visio d'un rendez-vous. jitsi / lien permanent : inchangés. Meet / Teams : un événement du compte connecté (c'est l'événement
+ * Lien de visio d'un rendez-vous. HARX ne fournit AUCUNE visio : jamais de lien Jitsi ni de lien permanent. Sans fournisseur connecté
+ * (choisi, ou unique connexion possible) : SecretariatError `visio_not_connected` / `visio_needs_reauth`. Meet / Teams : un événement du compte connecté (c'est l'événement
  * d'agenda du rendez-vous quand l'agenda est le même fournisseur, sinon un événement dédié au lien). Zoom : une réunion planifiée.
  * En cas d'échec : SecretariatError claire, jamais de faux lien.
  * @param {{title: string, contactName?: string, dueAt: Date|string, durationMinutes?: number|null}} appt
@@ -69,8 +71,9 @@ registerCompanyCalendarResolver(async (companyId, hint) => {
  */
 export async function createVideo(companyId, appt, { calendar = null } = {}) {
   const tools = mergedTools(await loadTools(companyId));
-  const kind = tools.visio.provider;
-  if (!VISIO_NEEDS[kind]) return { url: localMeetingUrl(tools.visio), provider: '', externalId: '', sharesCalendar: false, eventProvider: '' };
+  const resolved = await resolveVisio(companyId, tools.visio.provider);
+  if (resolved.error) throw new SecretariatError(`visio_${resolved.error}`, resolved.error === 'needs_reauth' ? messages.needsReauth(resolved.account) : VISIO_NOT_CONNECTED_MESSAGE, { status: 409 });
+  const kind = resolved.provider;
   const account = VISIO_NEEDS[kind];
   const event = eventOf({ ...appt, videoUrl: '' });
   try {

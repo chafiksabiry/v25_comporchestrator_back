@@ -137,6 +137,7 @@ export async function completeConnection({ state, code }, { http = httpImpl, env
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
   await adoptAsEmailProvider(companyId, provider);
+  await adoptAgendaAndVisio(companyId, provider);
   return { companyId, provider, accountEmail };
 }
 
@@ -156,6 +157,38 @@ async function adoptAsEmailProvider(companyId, provider) {
     if (current === 'platform') await SecretariatTools.updateOne({ companyId: oid(companyId) }, { $set: { 'email.provider': provider } }, { upsert: true });
   } catch (error) {
     console.error('secretariat connexion : bascule du réglage e-mail impossible:', error.message);
+  }
+}
+
+/** Réglage de visio correspondant à chaque compte connecté, et inversement. */
+const VISIO_OF = { google: 'google_meet', microsoft: 'teams', zoom: 'zoom' };
+const AGENDA_OF = { google: 'google', microsoft: 'microsoft' };
+/** 'jitsi' / 'custom' / absent = aucune visio choisie. */
+const hasVisioChoice = (v) => Object.values(VISIO_OF).includes(v);
+
+/**
+ * Cohérence des réglages à la connexion : agenda (Google, Microsoft ; jamais Zoom) choisi si aucun ('none') ; visio (Meet, Teams, Zoom)
+ * choisie si aucune ('jitsi' / 'custom' / absent). Un choix déjà fait n'est jamais écrasé. Au mieux : la connexion reste valide en cas d'échec.
+ */
+async function adoptAgendaAndVisio(companyId, provider) {
+  try {
+    const doc = await SecretariatTools.findOne({ companyId: oid(companyId) }).select('agenda.provider visio.provider').lean();
+    const set = {};
+    if (AGENDA_OF[provider] && (doc?.agenda?.provider || 'none') === 'none') set['agenda.provider'] = AGENDA_OF[provider];
+    if (VISIO_OF[provider] && !hasVisioChoice(doc?.visio?.provider)) { set['visio.provider'] = VISIO_OF[provider]; set['visio.chosen'] = true; }
+    if (Object.keys(set).length) await SecretariatTools.updateOne({ companyId: oid(companyId) }, { $set: set }, { upsert: true });
+  } catch (error) {
+    console.error('secretariat connexion : bascule des réglages agenda / visio impossible:', error.message);
+  }
+}
+
+/** À la déconnexion : l'agenda qui pointait sur ce compte repasse à 'none', la visio à 'jitsi' (= aucune). Les autres choix sont laissés tels quels. */
+async function releaseAgendaAndVisio(companyId, provider) {
+  try {
+    if (AGENDA_OF[provider]) await SecretariatTools.updateOne({ companyId: oid(companyId), 'agenda.provider': AGENDA_OF[provider] }, { $set: { 'agenda.provider': 'none' } });
+    if (VISIO_OF[provider]) await SecretariatTools.updateOne({ companyId: oid(companyId), 'visio.provider': VISIO_OF[provider] }, { $set: { 'visio.provider': 'jitsi' } });
+  } catch (error) {
+    console.error('secretariat déconnexion : remise des réglages agenda / visio impossible:', error.message);
   }
 }
 
@@ -186,6 +219,24 @@ export async function resolveMailbox(companyId, preferred) {
   if (active.length === 1) return pick(active[0]);
   const stale = rows.find((r) => r.status === 'needs_reauth' && r.provider === preferred) || rows.find((r) => r.status === 'needs_reauth');
   return stale ? { error: 'needs_reauth', provider: stale.provider } : { error: 'not_connected', provider: null };
+}
+
+/**
+ * Compte de visio à utiliser pour créer un lien. `preferred` = `visio.provider` des réglages ('jitsi' / 'custom' = aucun choix).
+ * 1) le fournisseur choisi (google_meet / teams / zoom) si sa connexion est active ; 2) sinon l'UNIQUE visio possible (une seule connexion active) ;
+ * 3) sinon une erreur : `needs_reauth` si le choix explicite (ou à défaut une connexion) est à refaire, `not_connected` sinon (on ne devine pas).
+ * @returns {Promise<{provider: 'google_meet'|'teams'|'zoom', account: string} | {error: 'not_connected'|'needs_reauth', account: string|null}>}
+ */
+export async function resolveVisio(companyId, preferred) {
+  const rows = await SecretariatConnection.find({ companyId: oid(companyId), provider: { $in: Object.keys(VISIO_OF) } }).select('provider status').lean();
+  const active = rows.filter((r) => r.status === 'connected');
+  const chosen = active.find((r) => VISIO_OF[r.provider] === preferred);
+  if (chosen) return { provider: preferred, account: chosen.provider };
+  const stalePreferred = rows.find((r) => VISIO_OF[r.provider] === preferred && r.status === 'needs_reauth');
+  if (stalePreferred) return { error: 'needs_reauth', account: stalePreferred.provider };
+  if (active.length === 1) return { provider: VISIO_OF[active[0].provider], account: active[0].provider };
+  const stale = rows.find((r) => r.status === 'needs_reauth');
+  return stale && active.length === 0 ? { error: 'needs_reauth', account: stale.provider } : { error: 'not_connected', account: null };
 }
 
 const markReauth = (companyId, provider) => SecretariatConnection.updateOne({ companyId: oid(companyId), provider }, { $set: { status: 'needs_reauth' } }).catch(() => {});
@@ -290,7 +341,7 @@ export async function connectionsView(companyId, env = process.env) {
 /** Révoque chez le fournisseur au mieux (un échec est toléré) puis supprime les jetons. */
 export async function disconnect(companyId, provider, { http = httpImpl, env = process.env } = {}) {
   const conn = await SecretariatConnection.findOne({ companyId: oid(companyId), provider }).select('+credentialsEnc');
-  if (!conn) { await releaseEmailProvider(companyId, provider); return false; }
+  if (!conn) { await releaseEmailProvider(companyId, provider); await releaseAgendaAndVisio(companyId, provider); return false; }
   try {
     const cfg = providerConfig(provider, env);
     const P = PROVIDERS[provider];
@@ -301,5 +352,6 @@ export async function disconnect(companyId, provider, { http = httpImpl, env = p
   }
   await SecretariatConnection.deleteOne({ companyId: oid(companyId), provider });
   await releaseEmailProvider(companyId, provider);
+  await releaseAgendaAndVisio(companyId, provider);
   return true;
 }

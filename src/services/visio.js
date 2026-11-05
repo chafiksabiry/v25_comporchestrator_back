@@ -2,7 +2,8 @@ import { randomBytes } from 'node:crypto';
 import { VIDEO_LINK_RE } from './secretariatProviders/common.js';
 
 /**
- * Lien de visio SANS COMPTE : une salle Jitsi Meet publique (https://meet.jit.si), au nom impossible à deviner
+ * OBSOLÈTE pour la création : HARX ne fournit plus aucune visio, plus aucun code ne génère de lien Jitsi (conservé pour les tests et la
+ * lecture des anciens rendez-vous). Ancien lien de visio SANS COMPTE : une salle Jitsi Meet publique (https://meet.jit.si), au nom impossible à deviner
  * (12 caractères alphanumériques tirés avec le générateur cryptographique). Ce n'est pas une intégration Google Meet,
  * Teams ou Zoom : celles-ci passent par la connexion des comptes du centre (secretariatActions.js).
  */

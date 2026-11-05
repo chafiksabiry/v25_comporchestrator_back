@@ -607,18 +607,40 @@ try {
   toolsDocs.length = 0; toolsDocs.push({ companyId: C1, email: { provider: 'platform', signature: 'Sig' }, agenda: { provider: 'none' }, visio: { provider: 'jitsi', chosen: false } });
   r = await cb('google', { code: 'CODE_SECRET_123', state: state('google') }); assert.match(r.location, /connected=google/);
   assert.equal(emailOf(), 'google', "'platform' (= aucun choix) bascule sur la messagerie connectée");
-  assert.equal(toolsDocs[0].email.signature, 'Sig'); assert.deepEqual([toolsDocs[0].agenda.provider, toolsDocs[0].visio.provider], ['none', 'jitsi'], 'agenda et visio ne changent pas');
+  assert.equal(toolsDocs[0].email.signature, 'Sig'); assert.deepEqual([toolsDocs[0].agenda.provider, toolsDocs[0].visio.provider], ['google', 'google_meet'], 'agenda et visio basculent sur Google (aucun choix fait)');
   r = await cb('microsoft', { code: 'CODE_SECRET_123', state: state('microsoft') });
   assert.equal(emailOf(), 'google', 'un choix déjà fait n’est pas écrasé par une nouvelle connexion');
-  // connexion d'un autre fournisseur (Zoom) : aucun effet sur l'e-mail
+  // connexion d'un autre fournisseur (Zoom) : aucun effet sur l'e-mail ni l'agenda ; la visio bascule sur Zoom si aucun choix
   toolsDocs.length = 0; toolsDocs.push({ companyId: C1, email: { provider: 'platform' } });
   r = await cb('zoom', { code: 'CODE_SECRET_123', state: state('zoom') }); assert.equal(emailOf(), 'platform');
+  assert.deepEqual([toolsDocs[0].agenda?.provider, toolsDocs[0].visio?.provider], [undefined, 'zoom'], 'Zoom : visio seulement, jamais l’agenda');
+  // Microsoft : agenda + Teams ; 'custom' / 'jitsi' / absent = aucune visio choisie
+  toolsDocs.length = 0; toolsDocs.push({ companyId: C1, agenda: { provider: 'none' }, visio: { provider: 'custom', customUrl: 'https://meet.google.com/abc-defg-hij' } });
+  r = await cb('microsoft', { code: 'CODE_SECRET_123', state: state('microsoft') });
+  assert.deepEqual([toolsDocs[0].agenda.provider, toolsDocs[0].visio.provider], ['microsoft', 'teams']);
+  assert.equal(toolsDocs[0].visio.customUrl, 'https://meet.google.com/abc-defg-hij', 'customUrl n’est jamais effacé');
+  // un choix déjà fait n'est jamais écrasé (agenda Outlook et visio Zoom conservés à la connexion de Google)
+  toolsDocs.length = 0; toolsDocs.push({ companyId: C1, agenda: { provider: 'microsoft' }, visio: { provider: 'zoom' } });
+  r = await cb('google', { code: 'CODE_SECRET_123', state: state('google') });
+  assert.deepEqual([toolsDocs[0].agenda.provider, toolsDocs[0].visio.provider], ['microsoft', 'zoom']);
+  // déconnexion : remise à none / jitsi seulement pour ce qui pointait sur ce fournisseur
+  toolsDocs.length = 0; toolsDocs.push({ companyId: C1, email: { provider: 'platform' }, agenda: { provider: 'google' }, visio: { provider: 'google_meet', customUrl: 'x' } });
+  putConnection(C1, 'google'); await req('DELETE', `/connections/${C1}/google`, { user: 'owner1' });
+  assert.deepEqual([toolsDocs[0].agenda.provider, toolsDocs[0].visio.provider], ['none', 'jitsi'], 'déconnexion Google : agenda none, visio jitsi (= aucune)');
+  assert.equal(toolsDocs[0].visio.customUrl, 'x');
+  toolsDocs.length = 0; toolsDocs.push({ companyId: C1, agenda: { provider: 'microsoft' }, visio: { provider: 'zoom' } });
+  putConnection(C1, 'google'); await req('DELETE', `/connections/${C1}/google`, { user: 'owner1' });
+  assert.deepEqual([toolsDocs[0].agenda.provider, toolsDocs[0].visio.provider], ['microsoft', 'zoom'], 'autre fournisseur : choix intacts');
+  putConnection(C1, 'zoom'); await req('DELETE', `/connections/${C1}/zoom`, { user: 'owner1' });
+  assert.deepEqual([toolsDocs[0].agenda.provider, toolsDocs[0].visio.provider], ['microsoft', 'jitsi']);
+  putConnection(C1, 'microsoft'); await req('DELETE', `/connections/${C1}/microsoft`, { user: 'owner1' });
+  assert.deepEqual([toolsDocs[0].agenda.provider, toolsDocs[0].visio.provider], ['none', 'jitsi']);
   // déconnexion du fournisseur NON choisi : le choix reste ; du fournisseur choisi : retour à 'platform'
   toolsDocs.length = 0; toolsDocs.push({ companyId: C1, email: { provider: 'google' }, agenda: { provider: 'google' }, visio: { provider: 'google_meet', chosen: true } });
   await req('DELETE', `/connections/${C1}/microsoft`, { user: 'owner1' }); assert.equal(emailOf(), 'google');
   r = await req('DELETE', `/connections/${C1}/google`, { user: 'owner1' }); assert.equal(r.status, 200);
   assert.equal(emailOf(), 'platform', 'fournisseur choisi déconnecté : aucune messagerie choisie');
-  assert.deepEqual([toolsDocs[0].agenda.provider, toolsDocs[0].visio.provider], ['google', 'google_meet'], 'agenda et visio ne changent pas');
+  assert.deepEqual([toolsDocs[0].agenda.provider, toolsDocs[0].visio.provider], ['none', 'jitsi'], 'déconnexion du fournisseur choisi : agenda none, visio jitsi (= aucune)');
   e = await call(mail.send, msg); assert.equal(e.code, 409); assert.equal(e.body.code, 'mailbox_not_connected');
   // déconnexion d'un autre centre : aucun effet
   toolsDocs.length = 0; toolsDocs.push({ companyId: C2, email: { provider: 'google' } });
@@ -714,12 +736,32 @@ try {
   a = await create({ videoLink: true }); assert.equal(a.code, 502); assert.match(a.body.message, /lien de visio Zoom n’a pas pu être créé/); assert.equal(store.length, n);
   on('POST', /users\/me\/meetings/, () => ({ status: 201, json: { id: 1, join_url: 'https://evil.example/j/1' } }));
   a = await create({ videoLink: true }); assert.equal(a.code, 502); assert.equal(store.length, n, 'lien étranger renvoyé par un fournisseur : refusé');
-  conns.length = 0; a = await create({ videoLink: true }); assert.equal(a.code, 409); assert.match(a.body.message, /Zoom n’est pas connecté/); assert.equal(store.length, n);
-  putConnection(C1, 'zoom', { status: 'needs_reauth' }); a = await create({ videoLink: true }); assert.equal(a.code, 409); assert.match(a.body.message, /Reconnectez-la dans Paramétrage > Outils/);
-  p = await patch(store.at(-1), { videoLink: true }); assert.equal(p.code, 409); assert.equal(store.at(-1).videoUrl, '', 'PATCH : rien n’est enregistré si le lien échoue');
-  // jitsi et lien permanent : inchangés
-  setTools({}); reset(); a = await create({ videoLink: true }); assert.ok(V.isVisioUrl(a.body.data.videoUrl)); assert.equal(store.at(-1).videoProvider, ''); assert.equal(httpCalls.length, 0);
-  setTools({ visio: { provider: 'custom', customUrl: 'https://meet.google.com/zzz-zzzz-zzz', chosen: true } }); a = await create({ videoLink: true }); assert.equal(a.body.data.videoUrl, 'https://meet.google.com/zzz-zzzz-zzz');
+  // zoom choisi mais aucune connexion : 409 visio_not_connected (contrat exact), rien d'enregistré
+  const NOT_CONN = 'Connectez Google Meet, Microsoft Teams ou Zoom dans Paramétrage > Outils pour créer un lien de visio.';
+  conns.length = 0; a = await create({ videoLink: true }); assert.equal(a.code, 409);
+  assert.deepEqual(a.body, { success: false, code: 'visio_not_connected', error: 'visio_not_connected', message: NOT_CONN }); assert.equal(store.length, n);
+  putConnection(C1, 'zoom', { status: 'needs_reauth' }); a = await create({ videoLink: true }); assert.equal(a.code, 409);
+  assert.equal(a.body.code, 'visio_needs_reauth'); assert.equal(a.body.error, 'visio_needs_reauth'); assert.match(a.body.message, /Reconnectez-la dans Paramétrage > Outils/);
+  p = await patch(store.at(-1), { videoLink: true }); assert.equal(p.code, 409); assert.equal(p.body.code, 'visio_needs_reauth'); assert.equal(store.at(-1).videoUrl, '', 'PATCH : rien n’est enregistré si le lien échoue');
+  // plus aucune visio fournie par HARX : ni Jitsi ni lien permanent, quels que soient les réglages et sans aucun appel réseau
+  for (const tools of [{}, { visio: { provider: 'jitsi', chosen: true } }, { visio: { provider: 'custom', customUrl: 'https://meet.google.com/zzz-zzzz-zzz', chosen: true } }]) {
+    setTools(tools); conns.length = 0; reset(); a = await create({ videoLink: true });
+    assert.equal(a.code, 409); assert.equal(a.body.code, 'visio_not_connected'); assert.equal(a.body.message, NOT_CONN); assert.equal(store.length, n); assert.equal(httpCalls.length, 0);
+  }
+  // fournisseur choisi non connecté mais UNE seule visio possible : elle est utilisée
+  setTools({ visio: { provider: 'teams', chosen: true } }); reset(); std(); conns.length = 0; putConnection(C1, 'zoom');
+  on('POST', /users\/me\/meetings/, () => ({ status: 201, json: { id: 85746065432, join_url: ZOOM } }));
+  a = await create({ videoLink: true }); assert.equal(a.code, 201, JSON.stringify(a.body)); assert.equal(a.body.data.videoUrl, ZOOM); assert.equal(store.at(-1).videoProvider, 'zoom');
+  // 'jitsi' (= aucune) + une seule connexion : utilisée aussi
+  setTools({}); a = await create({ videoLink: true }); assert.equal(a.code, 201); assert.equal(store.at(-1).videoProvider, 'zoom');
+  // plusieurs connexions actives sans choix valide : on ne devine pas
+  const cnt = store.length; putConnection(C1, 'google');
+  a = await create({ videoLink: true }); assert.equal(a.code, 409); assert.equal(a.body.code, 'visio_not_connected'); assert.equal(store.length, cnt);
+  // plusieurs connexions, choix valide (Zoom) : le choix est respecté
+  setTools({ visio: { provider: 'zoom', chosen: true } }); a = await create({ videoLink: true }); assert.equal(a.code, 201); assert.equal(store.at(-1).videoProvider, 'zoom');
+  // anciens rendez-vous : un lien Jitsi existant n'est ni supprimé ni remplacé
+  const old = store.at(-1); old.videoUrl = 'https://meet.jit.si/HARX-abcDEF123456'; old.videoProvider = ''; old.videoExternalId = '';
+  p = await patch(old, { videoLink: true }); assert.equal(p.code, 200); assert.equal(old.videoUrl, 'https://meet.jit.si/HARX-abcDEF123456');
 
   // ---------- 12. aucun lien libre : un lien n'est accepté que s'il vient de CE fournisseur pour CE rendez-vous
   assert.ok(V.isVisioUrl(MEET, '', 'google_meet')); assert.ok(V.isVisioUrl(TEAMS, '', 'teams')); assert.ok(V.isVisioUrl(ZOOM, '', 'zoom'));
