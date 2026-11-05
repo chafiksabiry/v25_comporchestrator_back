@@ -12,7 +12,7 @@ const companyOid = (req) => (mongoose.Types.ObjectId.isValid(req.params.companyI
 const mayWrite = (req) => Boolean(req.companyAccess) && canManage(req.companyAccess);
 
 /** Codes courts renvoyés au portail (?error=…) : aucun détail technique. */
-const ERROR_CODES = new Set(['invalid_state', 'invalid_request', 'access_denied', 'unavailable', 'exchange_failed', 'no_refresh_token', 'missing_permissions', 'no_account', 'storage_failed']);
+const ERROR_CODES = new Set(['invalid_state', 'invalid_request', 'access_denied', 'unavailable', 'exchange_failed', 'no_refresh_token', 'missing_permissions', 'no_account', 'storage_failed', 'wrong_account', 'too_many_accounts']);
 
 export const secretariatConnectionsController = {
   /** Lecture : tout membre rattaché au centre. Jamais de jeton ni de nom de variable. */
@@ -65,8 +65,8 @@ export const secretariatConnectionsController = {
     try {
       if (req.query?.error !== undefined) return done(state.returnTo, { error: 'access_denied' }); // refus de l'utilisateur chez le fournisseur
       if (!isAvailable(provider)) return done(state.returnTo, { error: 'unavailable' });
-      await completeConnection({ state, code: typeof req.query?.code === 'string' ? req.query.code : '' });
-      return done(state.returnTo, { connected: provider });
+      const done_ = await completeConnection({ state, code: typeof req.query?.code === 'string' ? req.query.code : '' });
+      return done(state.returnTo, done_?.accountId ? { connected: provider, shared: '1' } : { connected: provider });
     } catch (error) {
       const fromProvider = ['provider_error', 'provider_refused', 'invalid_link'].includes(error.code);
       const code = error instanceof SecretariatError && ERROR_CODES.has(error.code) ? error.code : fromProvider ? 'exchange_failed' : 'storage_failed';

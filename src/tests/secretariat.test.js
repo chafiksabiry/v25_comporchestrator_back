@@ -161,7 +161,7 @@ SecretariatTools.findOne = () => ({ select() { return this; }, lean: async () =>
 const logs = [];
 EmailLog.create = async (d) => { const r = { _id: `l${logs.length + 1}`, createdAt: new Date(), ...d }; logs.push(r); return r; };
 EmailLog.countDocuments = async (f) => logs.filter((l) => String(l.companyId) === String(f.companyId) && l.createdAt >= f.createdAt.$gte).length;
-EmailLog.find = (f) => ({ sort() { return this; }, limit() { return this; }, lean: async () => logs.filter((l) => !f.followUpId || String(l.followUpId) === String(f.followUpId)).reverse() });
+EmailLog.find = (f) => ({ sort() { return this; }, limit() { return this; }, lean: async () => logs.filter((l) => (!f.sentById || l.sentById === f.sentById) && (!f.followUpId || String(l.followUpId) === String(f.followUpId))).reverse() });
 const apptDoc = { _id: APPT, model: 'appointment', title: 'Rendez-vous avec Mme Durand', contactName: 'Mme Durand', dueAt: new Date('2026-11-03T09:00:00Z'), durationMinutes: 30, status: 'todo', assigneeId: 'owner1', assigneeName: 'Chef', videoUrl: 'https://meet.jit.si/HARX-abcDEF123456', sequence: 2, createdAt: new Date('2026-11-01T10:00:00Z'), updatedAt: new Date('2026-11-02T10:00:00Z'), transfers: [] };
 apptDoc.toObject = () => ({ ...apptDoc });
 apptDoc.save = async () => apptDoc;
@@ -298,13 +298,13 @@ assert.equal(r.code, 429); assert.equal(r.body.error, 'email_rate_limited'); ass
 logs.push({ _id: 'autre', companyId: '64b0000000000000000000d9', createdAt: new Date(), status: 'sent' });
 delete process.env.EMAIL_MAX_PER_HOUR;
 
-// droits : un agent ne peut pas envoyer ni lire le journal ; un membre sans droit d'appels non plus ; un membre avec, oui
+// droits : un agent n'envoie pas depuis la boîte de la société et ne lit que son propre journal ; un membre sans droit d'appels non plus ; un membre avec, oui
 me = { isOwner: false, isAgent: true, companyId: COMPANY, permissions: {} };
 const before = sentCount();
 r = await call(mail.send, { user: 'agent1', body: msg });
 assert.equal(r.code, 403); assert.equal(sentCount(), before);
 r = await call(mail.list, { user: 'agent1' });
-assert.equal(r.code, 403);
+assert.equal(r.code, 200); assert.deepEqual(r.body.data.items, [], 'une secrétaire ne lit que ses propres envois (aucun ici)');
 me = { isOwner: false, isAgent: false, companyId: COMPANY, permissions: { 'calls.view': false } };
 r = await call(mail.send, { user: 'm1', body: msg });
 assert.equal(r.code, 403);
