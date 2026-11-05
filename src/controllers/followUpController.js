@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import FollowUpItem from '../models/FollowUpItem.js';
 import Voicemail from '../models/Voicemail.js';
+import ReceptionDirectory from '../models/ReceptionDirectory.js';
 import InboundCall from '../models/InboundCall.js';
 import { callerAccess, scopeToCompany, ScopeError } from '../middleware/companyScope.js';
 import { loadDirectory, loadUserName } from '../services/followUpDirectory.js';
@@ -87,9 +88,18 @@ async function context(req, res) {
 
 const bearer = (req) => req.headers.authorization?.split(' ')[1];
 
+/**
+ * Une secrétaire peut réserver un rendez-vous pour une personne de l'annuaire de son entreprise (celles qui ont un compte) : c'est la seule
+ * liste de collaborateurs qu'elle voit. Elle ne lit pas les listes de membres et de secrétaires de l'entreprise.
+ */
+async function directoryPeople(access) {
+  const doc = await ReceptionDirectory.findOne({ companyId: new mongoose.Types.ObjectId(access.companyId) }).lean();
+  return (doc?.entries || []).filter((e) => e.userId && e.userId !== access.userId).map((e) => ({ id: e.userId, name: e.name, kind: e.kind === 'owner' ? 'owner' : 'member' }));
+}
+
 /** Collaborateurs assignables : annuaire du centre + soi-même. Un agent ne peut se confier les éléments qu'à lui-même. */
 async function assignees(req, access) {
-  const list = canManage(access) ? await loadDirectory({ companyId: access.companyId, token: bearer(req) }) : [];
+  const list = canManage(access) ? await loadDirectory({ companyId: access.companyId, token: bearer(req) }) : await directoryPeople(access);
   if (!list.some((p) => p.id === access.userId)) list.unshift({ id: access.userId, name: (await loadUserName(access.userId)) || 'Moi', kind: access.role === 'owner' ? 'owner' : access.role });
   return list;
 }
@@ -157,7 +167,8 @@ export const followUpController = {
     try {
       const access = await context(req, res);
       if (!access) return;
-      if (!canManage(access)) return fail(res, 403, NOT_ALLOWED);
+      // Titulaire et responsables créent tout ; une secrétaire réserve seulement des rendez-vous (pour elle ou une personne de l'annuaire).
+      if (!canManage(access) && !(access.role === 'agent' && req.body?.model === 'appointment')) return fail(res, 403, NOT_ALLOWED);
       const checked = validateCreate(req.body, access);
       if (checked.error) return fail(res, 400, checked.error);
       const v = checked.value;
