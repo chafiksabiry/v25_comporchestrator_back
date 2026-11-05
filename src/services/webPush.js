@@ -59,6 +59,15 @@ export const voicemailPayload = ({ from = '', durationSeconds = 0, recordingSid 
   url: '/app/voicemails',
 });
 
+/** Message pris à l'accueil, urgent (prise du message) ou relancé : le contenu du message reste dans l'application, la notification n'en dit que l'essentiel. */
+export const messagePayload = ({ callerName = '', urgent = false, reminder = false, id = '' } = {}) => ({
+  kind: 'message',
+  title: reminder ? 'Rappel : un message vous attend' : urgent ? 'Message URGENT pour vous' : 'Un message a été pris pour vous',
+  body: `${String(callerName).slice(0, 80) || 'Un appelant'} vous demande. Touchez pour ouvrir « Demandes à traiter ».`,
+  tag: id ? `message-${id}${reminder ? '-reminder' : ''}` : 'message',
+  url: '/app/followups',
+});
+
 /**
  * Envoie `payload` à ces abonnements. Renvoie les compteurs et les points d'arrivée à supprimer (404/410 : abonnement expiré).
  * `client` : bibliothèque web-push (simulée dans les tests).

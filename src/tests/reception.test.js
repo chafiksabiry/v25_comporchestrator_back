@@ -97,7 +97,7 @@ for (const w of ['centre d’appels', 'call centre', 'siège', 'agent']) assert.
 
 // ---------------------------------------------------------------- toItem / tri / filtre : modèles existants intacts
 const msgItem = { _id: 'i1', model: 'message_taken', title: 'x', status: 'todo', urgency: 'urgent', forName: 'Mme Martin', callerCompany: 'SARL', seenAt: null, emailStatus: 'sent' };
-assert.deepEqual(F.toItem(msgItem).message, { callerCompany: 'SARL', forEntryId: '', forName: 'Mme Martin', urgency: 'urgent', seen: false, email: 'sent' });
+assert.deepEqual(F.toItem(msgItem).message, { callerCompany: 'SARL', forEntryId: '', forName: 'Mme Martin', urgency: 'urgent', seen: false, email: 'sent', motif: '', priority: false, reminded: false, escalated: false });
 assert.equal('message' in F.toItem({ _id: 'i2', model: 'transfer', title: 'x', status: 'todo' }), false, 'les autres modèles ne changent pas');
 assert.deepEqual(F.sortItems([{ id: 'n', status: 'todo', dueAt: '2026-11-01', createdAt: '2026-11-01' }, { id: 'u', status: 'todo', urgency: 'urgent', dueAt: null, createdAt: '2026-11-01' }]).map((i) => i.id), ['u', 'n'], 'urgent d’abord');
 assert.deepEqual(F.parseListFilters({ model: 'message_taken' }).value, { model: 'message_taken' });

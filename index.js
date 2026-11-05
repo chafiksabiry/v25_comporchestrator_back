@@ -28,6 +28,7 @@ import { publicApiRoutes } from './src/routes/publicApi.js';
 import { startIntegrationsWorker } from './src/integrations/runtime.js';
 import { internalRoutes } from './src/routes/internal.js';
 import { companyNotificationRoutes } from './src/routes/companyNotifications.js';
+import { startMessageReminders } from './src/services/messageReminders.js';
 import { scanLowResources } from './src/services/companyNotificationService.js';
 import { clearExpiredRetractions } from './src/services/retractionService.js';
 import { resolveExpiredPendingReviews, flagWeeklyAiAudits } from './src/controllers/escrowController.js';
@@ -220,6 +221,9 @@ const runLowResourceScan = () =>
   });
 setTimeout(runLowResourceScan, 60 * 1000);
 setInterval(runLowResourceScan, 15 * 60 * 1000);
+
+// Relance automatique des messages pris à l'accueil (désactivable : MESSAGE_REMINDERS_DISABLED=1).
+startMessageReminders();
 
 // Reprise des journalisations CRM et des webhooks en échec (inactif sans INTEGRATIONS_ENC_KEY).
 startIntegrationsWorker();

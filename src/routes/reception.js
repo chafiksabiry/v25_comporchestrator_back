@@ -1,6 +1,7 @@
 import express from 'express';
 import { receptionController as c } from '../controllers/receptionController.js';
 import { callTransferController as t } from '../controllers/callTransferController.js';
+import { receptionExtrasController as x } from '../controllers/receptionExtrasController.js';
 import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -12,5 +13,15 @@ router.post('/messages', authenticate, c.takeMessage);
 router.post('/messages/:id/seen', authenticate, c.markSeen);
 router.post('/transfer', authenticate, t.transfer);
 router.get('/transfers', authenticate, t.list);
+
+// Suivi des messages, réponses types par motif, appelants prioritaires / bloqués (lecture : accueil ; écriture et tableau de suivi : titulaire et responsables).
+router.get('/scripts', authenticate, x.getScripts);
+router.put('/scripts', authenticate, x.putScripts);
+router.get('/callers', authenticate, x.getCallers);
+router.put('/callers', authenticate, x.putCallers);
+router.get('/callers/check', authenticate, x.callerCheck);
+router.get('/follow-up-settings', authenticate, x.getSettings);
+router.put('/follow-up-settings', authenticate, x.putSettings);
+router.get('/follow-up-stats', authenticate, x.stats);
 
 export const receptionRoutes = router;

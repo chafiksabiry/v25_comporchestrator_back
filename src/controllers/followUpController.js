@@ -119,15 +119,18 @@ export const followUpController = {
       Object.assign(filter, extra.value);
       const limit = Math.min(200, Math.max(1, Math.floor(Number(req.query.limit)) || 100));
       const base = visibilityFilter(access, new mongoose.Types.ObjectId(access.companyId));
-      const [rows, open, mine, overdue, unseen] = await Promise.all([
+      const [rows, open, mine, overdue, unseen, reminded, escalated] = await Promise.all([
         FollowUpItem.find(filter).sort({ createdAt: -1 }).limit(limit).lean(),
         FollowUpItem.countDocuments({ ...base, status: 'todo' }),
         FollowUpItem.countDocuments({ companyId: base.companyId, assigneeId: access.userId, status: 'todo' }),
         FollowUpItem.countDocuments({ ...base, status: 'todo', dueAt: { $lt: new Date() } }),
         // Messages pris à l'accueil et pas encore ouverts par la personne visée (alerte de l'application).
         FollowUpItem.countDocuments({ companyId: base.companyId, model: 'message_taken', assigneeId: access.userId, status: 'todo', seenAt: null }),
+        // Relances automatiques : messages relancés pour moi, et (titulaire / responsables) messages transmis aux responsables faute de traitement.
+        FollowUpItem.countDocuments({ companyId: base.companyId, model: 'message_taken', assigneeId: access.userId, status: 'todo', remindedAt: { $ne: null } }),
+        canManage(access) ? FollowUpItem.countDocuments({ companyId: base.companyId, model: 'message_taken', status: 'todo', escalatedAt: { $ne: null } }) : 0,
       ]);
-      res.json({ success: true, data: { items: sortItems(rows).map(toItem), counts: { open, mine, overdue, newMessages: unseen } } });
+      res.json({ success: true, data: { items: sortItems(rows).map(toItem), counts: { open, mine, overdue, newMessages: unseen, reminded, escalated } } });
     } catch (error) {
       console.error('followUps list:', error.message);
       fail(res, 500, 'Lecture des éléments à traiter impossible.');

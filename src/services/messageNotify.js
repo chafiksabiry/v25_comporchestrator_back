@@ -34,9 +34,9 @@ export async function notifyByMail({ companyId, followUpId, entry, message, take
     const now = Date.now();
     const [hour, day] = await Promise.all([deps.countRecent(companyId, new Date(now - 3600_000)), deps.countRecent(companyId, new Date(now - 86400_000))]);
     if (!checkRate({ hour, day }, limits()).ok) return 'limit';
-    const subject = `${message.urgency === 'urgent' ? 'URGENT · ' : ''}Message de ${message.callerName}`.replace(/[\r\n]+/g, ' ').slice(0, 150);
+    const subject = `${message.escalationFor ? 'RELANCE · ' : ''}${message.urgency === 'urgent' ? 'URGENT · ' : ''}Message de ${message.callerName}`.replace(/[\r\n]+/g, ' ').slice(0, 150);
     const text = messageEmail({ forName: entry.name, ...message, takenByName: takenBy.name, companyName, timeZone });
-    const base = { companyId: new mongoose.Types.ObjectId(String(companyId)), sentById: takenBy.id, sentByName: takenBy.name || '', to: [to], subject, template: 'message_taken', followUpId: followUpId || null, withIcs: false };
+    const base = { companyId: new mongoose.Types.ObjectId(String(companyId)), sentById: takenBy.id, sentByName: takenBy.name || '', to: [to], subject, template: message.escalationFor ? 'message_escalation' : 'message_taken', followUpId: followUpId || null, withIcs: false };
     try {
       // From = compte connecté de l'entreprise ; aucun repli sur un autre canal d'envoi en cas de refus.
       await deps.sendViaConnection(companyId, mailbox.provider, {
