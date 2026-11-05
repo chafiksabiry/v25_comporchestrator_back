@@ -88,3 +88,32 @@ export function onlyCompanyRows(rows, companyId) {
 export function clearCompanyCache() {
   companyByUser.clear();
 }
+
+/**
+ * Route guard for `/…/:companyId` reads: the caller must belong to that company. Use after `authenticate`.
+ *  - person (owner, team member or agent employed by the company): company resolved by the registration backend
+ *    (`callerAccess`), which must equal `:companyId`;
+ *  - service-to-service call (JWT signed with the shared secret, carrying `service` and the `companyId` it acts for,
+ *    no `userId`): accepted only for that same company.
+ * Fails closed: if the company of the caller cannot be established (lookup down), the answer is 503, never the data.
+ */
+export async function requireCompanyParam(req, res, next) {
+  const wanted = String(req.params.companyId || '');
+  const u = req.user || {};
+  if (!u.userId && !u.id && u.service) {
+    if (u.companyId && String(u.companyId) === wanted) return next();
+    return res.status(403).json({ error: 'Forbidden: not your company' });
+  }
+  try {
+    const access = await callerAccess(req);
+    const mine = new Set([access.companyId, ...(access.companyIds || [])].filter(Boolean).map(String));
+    if (!mine.has(wanted)) {
+      return res.status(403).json({ error: 'Forbidden: not your company' });
+    }
+    req.companyAccess = access;
+    return next();
+  } catch (error) {
+    if (error instanceof ScopeError) return res.status(error.status).json({ error: error.message });
+    return res.status(500).json({ error: 'Company check failed' });
+  }
+}
