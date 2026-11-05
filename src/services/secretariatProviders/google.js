@@ -73,6 +73,22 @@ export const google = {
     return { id: eventId, joinUrl: addMeeting ? link : '' };
   },
 
+  /**
+   * Lecture seule des événements du calendrier principal du compte entre deux instants (instances des séries dépliées).
+   * Le périmètre `calendar.events` déjà demandé suffit. Événements annulés ignorés.
+   * @returns {Promise<Array<{id: string, title: string, startsAt: string, endsAt: string, allDay: boolean, location: string, private: boolean, busy: boolean}>>}
+   */
+  async listEvents({ http, accessToken, from, to }) {
+    const q = new URLSearchParams({ timeMin: from.toISOString(), timeMax: to.toISOString(), singleEvents: 'true', orderBy: 'startTime', maxResults: '250' });
+    const res = ensure(await call(http, { method: 'GET', url: `${CAL}?${q}`, headers: { Authorization: `Bearer ${accessToken}` } }), 'Lecture de Google Agenda', [200]);
+    const when = (t) => (t?.dateTime ? new Date(t.dateTime) : t?.date ? new Date(`${t.date}T00:00:00Z`) : null);
+    return (Array.isArray(res.json?.items) ? res.json.items : []).filter((e) => e && e.status !== 'cancelled').flatMap((e) => {
+      const startsAt = when(e.start); const endsAt = when(e.end);
+      if (!e.id || !startsAt || !endsAt || Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) return [];
+      return [{ id: String(e.id), title: String(e.summary || ''), startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), allDay: Boolean(e.start?.date), location: String(e.location || ''), private: e.visibility === 'private' || e.visibility === 'confidential', busy: e.transparency !== 'transparent' }];
+    });
+  },
+
   /** Suppression ; 404 et 410 (déjà supprimé) comptent comme réussis. */
   async deleteEvent({ http, accessToken, id }) {
     ensure(await call(http, { method: 'DELETE', url: `${CAL}/${encodeURIComponent(id)}?sendUpdates=none`, headers: { Authorization: `Bearer ${accessToken}` } }), 'Suppression Google Agenda', [200, 204, 404, 410]);

@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import SecretariatConnection from '../models/SecretariatConnection.js';
+import SecretariatSharedAccount from '../models/SecretariatSharedAccount.js';
 import SecretariatTools from '../models/SecretariatTools.js';
 import { config } from '../config/env.js';
 import { decryptJson, encryptJson, integrationsEnabled, loadKey } from '../integrations/crypto.js';
@@ -31,6 +32,12 @@ export function setConnectionsHttp(fn) { httpImpl = typeof fn === 'function' ? f
 
 const oid = (id) => new mongoose.Types.ObjectId(String(id));
 const context = (companyId, provider) => `secretariat:${companyId}:${provider}`;
+/** Contexte authentifié des jetons d'un compte PARTAGÉ : lié à la société et au compte (un blob ne peut pas être recopié sur un autre). */
+const sharedContext = (companyId, accountId) => `secretariat-shared:${companyId}:${accountId}`;
+/** Où vivent les jetons : la connexion de la société (par fournisseur) ou un compte partagé (par identifiant). */
+const slot = (companyId, provider, accountId) => (accountId
+  ? { Model: SecretariatSharedAccount, filter: { _id: oid(accountId), companyId: oid(companyId) }, ctx: sharedContext(companyId, accountId) }
+  : { Model: SecretariatConnection, filter: { companyId: oid(companyId), provider }, ctx: context(companyId, provider) });
 const trim = (v) => String(v ?? '').trim();
 const isHttpUrl = (v) => { try { return ['http:', 'https:'].includes(new URL(v).protocol); } catch { return false; } };
 
@@ -38,7 +45,12 @@ export const messages = {
   notConnected: (p) => `${PROVIDER_LABEL[p]} n’est pas connecté. Connectez-le dans Paramétrage > Outils.`,
   needsReauth: (p) => `La connexion ${PROVIDER_LABEL[p]} a expiré ou a été révoquée. Reconnectez-la dans Paramétrage > Outils.`,
   unavailable: (p) => `La connexion ${PROVIDER_LABEL[p]} n’est pas encore configurée côté HARX.`,
+  /** Compte partagé à reconnecter par le titulaire (la secrétaire ne le peut pas). Jamais de repli sur un autre compte. */
+  sharedNeedsReauth: (label) => `La connexion du compte « ${label || 'partagé'} » a expiré ou a été révoquée : le titulaire doit la reconnecter dans Paramétrage > Outils. Aucun autre compte n’est utilisé à sa place.`,
 };
+
+/** Comptes partagés : libellé, nom du propriétaire et droits des secrétaires, portés par l'état OAuth signé. */
+export const SHARED_LABEL_MAX = 80;
 
 /** Configuration d'un fournisseur, ou null s'il n'est PAS disponible (variables absentes/invalides ou clé de chiffrement invalide). */
 export function providerConfig(provider, env = process.env) {
@@ -75,10 +87,10 @@ const stateSecret = () => {
 };
 
 /** Adresse d'autorisation du fournisseur, avec un état signé (10 min) lié au centre, à l'utilisateur, au fournisseur et à la page de retour. */
-export function startAuthorization({ companyId, userId, provider, returnTo }, env = process.env) {
+export function startAuthorization({ companyId, userId, provider, returnTo, shared }, env = process.env) {
   const cfg = providerConfig(provider, env);
   if (!cfg) throw new SecretariatError('unavailable', messages.unavailable(provider));
-  const state = jwt.sign({ purpose: STATE_PURPOSE, companyId: String(companyId), userId: String(userId), provider, returnTo }, stateSecret(), { expiresIn: STATE_TTL_SECONDS, algorithm: 'HS256' });
+  const state = jwt.sign({ purpose: STATE_PURPOSE, companyId: String(companyId), userId: String(userId), provider, returnTo, ...(shared ? { shared } : {}) }, stateSecret(), { expiresIn: STATE_TTL_SECONDS, algorithm: 'HS256' });
   const P = PROVIDERS[provider];
   const q = new URLSearchParams({
     client_id: cfg.clientId, redirect_uri: cfg.redirectUri, response_type: 'code', state,
@@ -93,7 +105,15 @@ export function readState(state, provider) {
     const s = jwt.verify(String(state), stateSecret(), { algorithms: ['HS256'] });
     if (s.purpose !== STATE_PURPOSE || s.provider !== provider || !isProviderId(provider)) return null;
     if (!/^[0-9a-fA-F]{24}$/.test(String(s.companyId)) || typeof s.userId !== 'string' || !s.userId || !RETURN_PATHS[s.returnTo]) return null;
-    return { companyId: String(s.companyId), userId: s.userId, provider, returnTo: s.returnTo };
+    const base = { companyId: String(s.companyId), userId: s.userId, provider, returnTo: s.returnTo };
+    if (s.shared === undefined) return base;
+    // Compte partagé : seuls Google et Microsoft ; libellé et droits revalidés (jamais de confiance aveugle dans la charge utile).
+    const sh = s.shared;
+    if (!['google', 'microsoft'].includes(provider) || !sh || typeof sh !== 'object') return null;
+    const label = trim(sh.label); const ownerName = trim(sh.ownerName);
+    if (!label || label.length > SHARED_LABEL_MAX || ownerName.length > SHARED_LABEL_MAX) return null;
+    if (sh.accountId !== undefined && !/^[0-9a-fA-F]{24}$/.test(String(sh.accountId))) return null;
+    return { ...base, shared: { label, ownerName, send: sh.send === true, calendar: sh.calendar === true, ...(sh.accountId ? { accountId: String(sh.accountId) } : {}) } };
   } catch {
     return null;
   }
@@ -130,7 +150,9 @@ export async function completeConnection({ state, code }, { http = httpImpl, env
   }
   const accountEmail = trim(await P.accountEmail({ http, accessToken: token.accessToken }));
   if (!/^[^\s@]+@[^\s@]+$/.test(accountEmail) || accountEmail.length > 254) throw new SecretariatError('no_account', 'Le compte connecté n’a pas d’adresse e-mail lisible.');
-  const credentialsEnc = encryptJson({ accessToken: token.accessToken, refreshToken: token.refreshToken, expiresAt: token.expiresAt }, { context: context(companyId, provider), key: loadKey(env) });
+  const secrets = { accessToken: token.accessToken, refreshToken: token.refreshToken, expiresAt: token.expiresAt };
+  if (state.shared) return storeSharedAccount({ state, accountEmail, secrets, scopes: token.scopes.length ? token.scopes : P.scopes, env });
+  const credentialsEnc = encryptJson(secrets, { context: context(companyId, provider), key: loadKey(env) });
   await SecretariatConnection.findOneAndUpdate(
     { companyId: oid(companyId), provider },
     { $set: { accountEmail, credentialsEnc, scopes: token.scopes.length ? token.scopes : P.scopes, status: 'connected', connectedAt: new Date(), connectedBy: userId } },
@@ -139,6 +161,36 @@ export async function completeConnection({ state, code }, { http = httpImpl, env
   await adoptAsEmailProvider(companyId, provider);
   await adoptAgendaAndVisio(companyId, provider);
   return { companyId, provider, accountEmail };
+}
+
+/** Nombre maximum de comptes partagés par société (garde-fou). */
+export const MAX_SHARED_ACCOUNTS = 20;
+
+/**
+ * Enregistre (ou met à jour) un compte PARTAGÉ après le consentement. Reconnexion d'un compte existant (`shared.accountId`) : les jetons sont
+ * remplacés, le libellé et les droits conservés/mis à jour, et l'adresse doit être la même (sinon refus : on ne change pas de boîte en cours de route).
+ * Même adresse déjà partagée : mise à jour de ce compte (pas de doublon). Les réglages de la société ne sont PAS modifiés.
+ */
+async function storeSharedAccount({ state, accountEmail, secrets, scopes, env }) {
+  const { companyId, userId, provider, shared } = state;
+  const email = accountEmail.toLowerCase();
+  let doc = null;
+  if (shared.accountId) {
+    doc = await SecretariatSharedAccount.findOne({ _id: oid(shared.accountId), companyId: oid(companyId), provider }).select('accountEmail').lean();
+    if (!doc) throw new SecretariatError('invalid_request', 'Compte introuvable.');
+    if (String(doc.accountEmail).toLowerCase() !== email) throw new SecretariatError('wrong_account', 'Ce n’est pas le même compte que celui à reconnecter.');
+  } else {
+    doc = await SecretariatSharedAccount.findOne({ companyId: oid(companyId), provider, accountEmail: email }).select('accountEmail').lean();
+    if (!doc && (await SecretariatSharedAccount.countDocuments({ companyId: oid(companyId) })) >= MAX_SHARED_ACCOUNTS) throw new SecretariatError('too_many_accounts', 'Nombre maximum de comptes partagés atteint.');
+  }
+  const accountId = doc ? String(doc._id) : String(new mongoose.Types.ObjectId());
+  const credentialsEnc = encryptJson(secrets, { context: sharedContext(companyId, accountId), key: loadKey(env) });
+  await SecretariatSharedAccount.findOneAndUpdate(
+    { _id: oid(accountId), companyId: oid(companyId) },
+    { $set: { provider, label: shared.label, ownerName: shared.ownerName, accountEmail: email, credentialsEnc, scopes, status: 'connected', connectedAt: new Date(), connectedBy: userId, 'permissions.send': shared.send, 'permissions.calendar': shared.calendar } },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+  return { companyId, provider, accountEmail: email, accountId };
 }
 
 /** Messageries pouvant envoyer les e-mails du secrétariat (les e-mails ne partent JAMAIS de HARX : seulement de la boîte connectée du centre). */
@@ -239,26 +291,28 @@ export async function resolveVisio(companyId, preferred) {
   return stale && active.length === 0 ? { error: 'needs_reauth', account: stale.provider } : { error: 'not_connected', account: null };
 }
 
-const markReauth = (companyId, provider) => SecretariatConnection.updateOne({ companyId: oid(companyId), provider }, { $set: { status: 'needs_reauth' } }).catch(() => {});
+const markReauth = (companyId, provider, accountId) => { const t = slot(companyId, provider, accountId); return t.Model.updateOne(t.filter, { $set: { status: 'needs_reauth' } }).catch(() => {}); };
 const inFlight = new Map();
 
 /**
  * Jeton d'accès valide (marge de 60 s). Rafraîchit au plus UNE fois par appel ; si le fournisseur refuse (révoqué) la connexion passe
  * en `needs_reauth` et l'erreur le dit en français. Une panne temporaire du fournisseur ne change pas l'état. Jamais de boucle.
  */
-export function getAccessToken(companyId, provider, { force = false, http = httpImpl, env = process.env } = {}) {
-  const key = `${companyId}:${provider}`;
+export function getAccessToken(companyId, provider, { force = false, http = httpImpl, env = process.env, accountId = null } = {}) {
+  const key = `${companyId}:${provider}:${accountId || ''}`;
+  const where = slot(companyId, provider, accountId);
+  const reauth = (conn) => new SecretariatError('needs_reauth', accountId ? messages.sharedNeedsReauth(conn?.label) : messages.needsReauth(provider), { status: null });
   if (inFlight.has(key) && !force) return inFlight.get(key);
   const run = (async () => {
-    const conn = await SecretariatConnection.findOne({ companyId: oid(companyId), provider }).select('+credentialsEnc');
-    if (!conn) throw new SecretariatError('not_connected', messages.notConnected(provider));
-    if (conn.status === 'needs_reauth') throw new SecretariatError('needs_reauth', messages.needsReauth(provider));
+    const conn = await where.Model.findOne(where.filter).select('+credentialsEnc');
+    if (!conn) throw new SecretariatError('not_connected', accountId ? 'Ce compte n’est plus connecté.' : messages.notConnected(provider));
+    if (conn.status === 'needs_reauth') throw reauth(conn);
     let key32;
     try { key32 = loadKey(env); } catch { throw new SecretariatError('unavailable', messages.unavailable(provider)); }
     let creds;
-    try { creds = decryptJson(conn.credentialsEnc, { context: context(companyId, provider), key: key32 }); } catch {
-      await markReauth(companyId, provider);
-      throw new SecretariatError('needs_reauth', messages.needsReauth(provider));
+    try { creds = decryptJson(conn.credentialsEnc, { context: where.ctx, key: key32 }); } catch {
+      await markReauth(companyId, provider, accountId);
+      throw reauth(conn);
     }
     if (!force && creds.accessToken && Number(creds.expiresAt) - Date.now() > REFRESH_MARGIN_MS) return creds.accessToken;
 
@@ -268,12 +322,12 @@ export function getAccessToken(companyId, provider, { force = false, http = http
     if (res.status === 200 && res.json?.access_token) {
       const t = parseToken(res.json);
       const next = { accessToken: t.accessToken, refreshToken: t.refreshToken || creds.refreshToken, expiresAt: t.expiresAt }; // certains fournisseurs renouvellent le jeton de rafraîchissement
-      await SecretariatConnection.updateOne({ companyId: oid(companyId), provider }, { $set: { credentialsEnc: encryptJson(next, { context: context(companyId, provider), key: key32 }) } });
+      await where.Model.updateOne(where.filter, { $set: { credentialsEnc: encryptJson(next, { context: where.ctx, key: key32 }) } });
       return next.accessToken;
     }
     if ((res.status === 400 || res.status === 401) && res.json?.error !== 'invalid_client') {
-      await markReauth(companyId, provider);
-      throw new SecretariatError('needs_reauth', messages.needsReauth(provider), { status: res.status });
+      await markReauth(companyId, provider, accountId);
+      throw new SecretariatError('needs_reauth', accountId ? messages.sharedNeedsReauth(conn.label) : messages.needsReauth(provider), { status: res.status });
     }
     throw new SecretariatError('provider_error', `${PROVIDER_LABEL[provider]} est momentanément indisponible. Réessayez dans un instant.`, { status: res.status });
   })();
@@ -287,8 +341,8 @@ export function getAccessToken(companyId, provider, { force = false, http = http
  * Exécute `fn(accessToken)`. Un 401 du fournisseur (jeton annulé avant son échéance) provoque UN rafraîchissement forcé puis UN second
  * essai ; un nouveau 401 passe la connexion en `needs_reauth`. @template T @param {(token: string, http: Function) => Promise<T>} fn @returns {Promise<T>}
  */
-export async function withConnection(companyId, provider, fn, { http = httpImpl, env = process.env } = {}) {
-  const opts = { http, env };
+export async function withConnection(companyId, provider, fn, { http = httpImpl, env = process.env, accountId = null } = {}) {
+  const opts = { http, env, accountId };
   let token = await getAccessToken(companyId, provider, opts);
   try {
     return await fn(token, http);
@@ -300,8 +354,10 @@ export async function withConnection(companyId, provider, fn, { http = httpImpl,
     return await fn(token, http);
   } catch (error) {
     if (error instanceof SecretariatError && error.status === 401) {
-      await markReauth(companyId, provider);
-      throw new SecretariatError('needs_reauth', messages.needsReauth(provider));
+      await markReauth(companyId, provider, accountId);
+      let label = '';
+      if (accountId) label = (await SecretariatSharedAccount.findOne({ _id: oid(accountId), companyId: oid(companyId) }).select('label').lean().catch(() => null))?.label || '';
+      throw new SecretariatError('needs_reauth', accountId ? messages.sharedNeedsReauth(label) : messages.needsReauth(provider));
     }
     throw error;
   }
@@ -353,5 +409,22 @@ export async function disconnect(companyId, provider, { http = httpImpl, env = p
   await SecretariatConnection.deleteOne({ companyId: oid(companyId), provider });
   await releaseEmailProvider(companyId, provider);
   await releaseAgendaAndVisio(companyId, provider);
+  return true;
+}
+
+/** Supprime un compte PARTAGÉ : révocation chez le fournisseur au mieux, puis suppression des jetons. Les réglages de la société ne bougent pas. */
+export async function disconnectSharedAccount(companyId, accountId, { http = httpImpl, env = process.env } = {}) {
+  const where = slot(companyId, null, accountId);
+  const conn = await SecretariatSharedAccount.findOne(where.filter).select('+credentialsEnc');
+  if (!conn) return false;
+  try {
+    const cfg = providerConfig(conn.provider, env);
+    const P = PROVIDERS[conn.provider];
+    const credentials = decryptJson(conn.credentialsEnc, { context: where.ctx, key: loadKey(env) });
+    await P.revoke({ http, credentials, auth: cfg ? P.clientAuth(cfg) : { form: {}, headers: {} } });
+  } catch {
+    // Révocation au mieux : les jetons sont supprimés dans tous les cas.
+  }
+  await SecretariatSharedAccount.deleteOne(where.filter);
   return true;
 }

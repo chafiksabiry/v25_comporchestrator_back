@@ -71,6 +71,22 @@ export const microsoft = {
     return { id: eventId, joinUrl: addMeeting ? link : '' };
   },
 
+  /**
+   * Lecture seule des événements du calendrier par défaut entre deux instants (`calendarView` déplie les séries), en UTC.
+   * Le périmètre `Calendars.ReadWrite` déjà demandé suffit. Événements annulés ignorés.
+   * @returns {Promise<Array<{id: string, title: string, startsAt: string, endsAt: string, allDay: boolean, location: string, private: boolean, busy: boolean}>>}
+   */
+  async listEvents({ http, accessToken, from, to }) {
+    const q = new URLSearchParams({ startDateTime: from.toISOString(), endDateTime: to.toISOString(), $top: '250', $orderby: 'start/dateTime', $select: 'id,subject,start,end,isAllDay,location,sensitivity,showAs,isCancelled' });
+    const res = ensure(await call(http, { method: 'GET', url: `${GRAPH}/me/calendarView?${q}`, headers: { Authorization: `Bearer ${accessToken}`, Prefer: 'outlook.timezone="UTC"' } }), 'Lecture du calendrier Outlook', [200]);
+    const when = (t) => (t?.dateTime ? new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(t.dateTime) ? t.dateTime : `${t.dateTime}Z`) : null);
+    return (Array.isArray(res.json?.value) ? res.json.value : []).filter((e) => e && !e.isCancelled).flatMap((e) => {
+      const startsAt = when(e.start); const endsAt = when(e.end);
+      if (!e.id || !startsAt || !endsAt || Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) return [];
+      return [{ id: String(e.id), title: String(e.subject || ''), startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), allDay: e.isAllDay === true, location: String(e.location?.displayName || ''), private: e.sensitivity === 'private' || e.sensitivity === 'confidential', busy: e.showAs !== 'free' }];
+    });
+  },
+
   /** Suppression ; 404 (déjà supprimé) compte comme réussi. */
   async deleteEvent({ http, accessToken, id }) {
     ensure(await call(http, { method: 'DELETE', url: `${GRAPH}/me/events/${encodeURIComponent(id)}`, headers: { Authorization: `Bearer ${accessToken}` } }), 'Suppression Outlook', [200, 204, 404]);

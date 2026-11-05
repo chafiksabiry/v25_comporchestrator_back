@@ -14,6 +14,10 @@ const schema = new mongoose.Schema(
     template: { type: String, default: 'free' },
     followUpId: { type: mongoose.Schema.Types.ObjectId, default: null },
     withIcs: { type: Boolean, default: false },
+    /** Envoi depuis un compte partagé (boîte d'un patron / collègue) : compte, adresse d'expédition et libellé au moment de l'envoi. Absent = boîte de la société. */
+    accountId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    fromEmail: { type: String, default: '', maxlength: 254 },
+    fromLabel: { type: String, default: '', maxlength: 80 },
     status: { type: String, enum: ['sent', 'failed'], required: true },
     /** Motif court d'échec (jamais le contenu du message). */
     error: { type: String, default: '', maxlength: 200 },
