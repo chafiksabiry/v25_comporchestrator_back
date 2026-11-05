@@ -2,11 +2,14 @@ import express from 'express';
 import { secretariatToolsController as c } from '../controllers/secretariatToolsController.js';
 import { secretariatConnectionsController as cx } from '../controllers/secretariatConnectionsController.js';
 import { callQueuesController as q } from '../controllers/callQueuesController.js';
+import { receptionLineController as rl } from '../controllers/receptionLineController.js';
 import { authenticate } from '../middleware/auth.js';
 import { requireCompanyParam } from '../middleware/companyScope.js';
 
 const router = express.Router();
 
+// Ligne d'accueil (nom de l'entreprise + numéros), LECTURE SEULE pour tout membre rattaché, secrétaires comprises. Société résolue côté serveur.
+router.get('/reception-line', authenticate, rl.get);
 // Réglages : session obligatoire + appartenance au centre ; l'écriture est limitée au titulaire/responsable dans le contrôleur.
 router.get('/tools/:companyId', authenticate, requireCompanyParam, c.get);
 router.put('/tools/:companyId', authenticate, requireCompanyParam, c.update);
