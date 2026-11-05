@@ -41,6 +41,25 @@ const schema = new mongoose.Schema(
     },
     entries: { type: [entrySchema], default: [] },
     updatedById: { type: String, default: '' },
+    /** Réponses types par motif d'appel (devis, rendez-vous, réclamation…) : ce que la secrétaire dit et les questions à poser. */
+    scripts: {
+      type: [new mongoose.Schema({
+        label: { type: String, required: true, maxlength: 60 },
+        answer: { type: String, default: '', maxlength: 1000 },
+        questions: { type: [{ type: String, maxlength: 200 }], default: [] },
+        suggestedUrgency: { type: String, enum: ['normal', 'urgent'], default: 'normal' },
+      })],
+      default: [],
+    },
+    /** Appelants prioritaires (alerte à l'écran, message marqué prioritaire) et bloqués (appel refusé poliment). Numéros E.164, 200 au plus par liste. */
+    vipNumbers: { type: [new mongoose.Schema({ phone: { type: String, required: true, maxlength: 20 }, label: { type: String, default: '', maxlength: 80 } }, { _id: false })], default: [] },
+    blockedNumbers: { type: [new mongoose.Schema({ phone: { type: String, required: true, maxlength: 20 }, label: { type: String, default: '', maxlength: 80 } }, { _id: false })], default: [] },
+    /** Seuils des relances automatiques des messages pris (réglés par le titulaire). */
+    followUpSettings: {
+      remindersEnabled: { type: Boolean, default: true },
+      urgentUnseenMinutes: { type: Number, default: 120 },
+      escalateAfterMinutes: { type: Number, default: 60 },
+    },
     /** Photo des absences acceptées (planning de l'entreprise), rafraîchie quand une personne autorisée à lire le planning ouvre l'annuaire. */
     absences: {
       type: [new mongoose.Schema({ userId: String, kind: String, startDate: String, endDate: String }, { _id: false })],

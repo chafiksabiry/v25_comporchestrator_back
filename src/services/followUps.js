@@ -235,6 +235,8 @@ export function toItem(i) {
       message: {
         callerCompany: o.callerCompany || '', forEntryId: o.forEntryId || '', forName: o.forName || '', urgency: o.urgency === 'urgent' ? 'urgent' : 'normal',
         seen: Boolean(o.seenAt), email: o.emailStatus || '',
+        motif: o.motif || '', priority: o.priorityCaller === true,
+        reminded: Boolean(o.remindedAt), escalated: Boolean(o.escalatedAt),
       },
     } : {}),
   };

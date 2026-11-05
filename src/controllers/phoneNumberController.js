@@ -35,6 +35,7 @@ import { journalForwardedCall, journalUnansweredCall } from '../services/journal
 import ReachSettings from '../models/ReachSettings.js';
 import { decideInboundRoute, mobileTarget, shouldRingMobileAfter } from '../services/reach.js';
 import { callPayload, notifyOwners, voicemailPayload } from '../services/webPush.js';
+import { blockedCallBody } from '../services/blockedCallers.js';
 import { getInboundTest, receiveInboundCall, startInboundTest as startInboundTestSession } from '../services/inboundTestService.js';
 
 /** Titulaire Nomad Solo (une seule personne) : l'appelant entend des messages à la première personne. Toute erreur = texte entreprise. */
@@ -1798,6 +1799,9 @@ class PhoneNumberController {
       const line = to
         ? (await PhoneNumber.findOne({ phoneNumber: to })) || (await PhoneNumber.findOne({ phoneNumber: to.replace(/^\+/, '') }))
         : null;
+      // Appelant bloqué par l'entreprise : refus poli ; toute anomalie laisse le comportement habituel.
+      const blocked = line?.companyId ? await blockedCallBody(line.companyId, from) : null;
+      if (blocked) { console.log(`⛔ Appel refusé (appelant bloqué) sur ${to}`); return reply(blocked); }
       const online = line?.companyId ? availableIdentities(line.companyId) : [];
       const settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
       const baseUrl = `https://${req.get('host')}`;

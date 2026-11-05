@@ -59,6 +59,15 @@ const schema = new mongoose.Schema(
     seenAt: { type: Date, default: null },
     /** Prévenue par e-mail depuis la messagerie connectée de l'entreprise : `sent`, `failed`, `not_connected`, `needs_reauth`, `no_recipient`, `limit`. Jamais depuis HARX. */
     emailStatus: { type: String, default: '', maxlength: 20 },
+    /** Motif choisi parmi les réponses types de l'entreprise (libellé au moment de la prise de message). */
+    motif: { type: String, default: '', maxlength: 60 },
+    /** Appelant de la liste des appelants prioritaires. */
+    priorityCaller: { type: Boolean, default: false },
+    /** Relance automatique : une seule à la personne visée (`remindedAt`), une seule aux responsables (`escalatedAt`). Raison : `overdue` ou `urgent_unseen`. */
+    remindedAt: { type: Date, default: null },
+    remindReason: { type: String, default: '', maxlength: 20 },
+    escalatedAt: { type: Date, default: null },
+    escalatedToNames: { type: [String], default: [] },
     createdById: { type: String, default: '' },
     createdByName: { type: String, default: '' },
     closedAt: { type: Date, default: null },
@@ -92,5 +101,6 @@ const schema = new mongoose.Schema(
 schema.index({ companyId: 1, status: 1, createdAt: -1 });
 schema.index({ companyId: 1, assigneeId: 1, status: 1 });
 schema.index({ companyId: 1, model: 1, originType: 1, originId: 1 });
+schema.index({ model: 1, status: 1, escalatedAt: 1, remindedAt: 1 });
 
 export default mongoose.models.FollowUpItem || mongoose.model('FollowUpItem', schema);
