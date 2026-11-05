@@ -1,17 +1,18 @@
 import mongoose from 'mongoose';
 import EmailLog from '../models/EmailLog.js';
 import FollowUpItem from '../models/FollowUpItem.js';
-import { callerAccess, ScopeError } from '../middleware/companyScope.js';
+import { callerAccess, scopeToCompany, ScopeError } from '../middleware/companyScope.js';
 import { loadUserProfile } from '../services/followUpDirectory.js';
-import { canManage, toItem } from '../services/followUps.js';
+import { canManage, canSeeItem, canUse, toItem } from '../services/followUps.js';
 import { buildAppointmentIcs } from '../services/ics.js';
 import { sendViaConnection } from '../services/secretariatActions.js';
 import { messages as connectionMessages, resolveMailbox } from '../services/secretariatConnections.js';
 import { SecretariatError } from '../services/secretariatProviders/common.js';
 import { loadEmailIdentity } from '../services/secretariatTools.js';
+import { composeSignature, listAccounts, requireAccount, sendFromAccount } from '../services/secretariatSharedAccounts.js';
 import { buildPayload, checkRate, limits, validateSend } from '../services/emailService.js';
 
-const fail = (res, status, message, code) => res.status(status).json({ success: false, error: code || message, message });
+const fail = (res, status, message, code) => res.status(status).json({ success: false, error: code || message, message, ...(code ? { code } : {}) });
 /** 409 : aucune messagerie utilisable. `code` pour le portail, `error` identique (comme les autres refus de ce contrôleur). */
 const refuse = (res, code, message) => res.status(409).json({ success: false, code, error: code, message });
 const NOT_ALLOWED = 'Seuls le titulaire et les membres autorisés à gérer les appels peuvent envoyer des e-mails.';
@@ -20,7 +21,10 @@ const REFUSED = 'Votre messagerie connectée a refusé l\'envoi. Reconnectez-la 
 const NOT_CONNECTED = 'Connectez votre messagerie (Gmail ou Outlook) dans Paramétrage > Outils pour envoyer des e-mails.';
 const UNAVAILABLE = 'Votre messagerie connectée est momentanément indisponible. Aucun e-mail n’a été envoyé : réessayez dans un instant.';
 
-/** Droits de l'appelant : titulaire, ou membre avec le droit d'appels ; jamais un agent. Répond lui-même et renvoie null en cas de refus. */
+/**
+ * Droits de l'appelant : titulaire, ou membre avec le droit d'appels (boîte de la société et comptes partagés). Une secrétaire (rôle agent)
+ * n'envoie QUE depuis un compte partagé que le titulaire a autorisé, et ne lit que son propre journal. Répond lui-même et renvoie null en cas de refus.
+ */
 async function context(req, res) {
   let access;
   try {
@@ -31,6 +35,12 @@ async function context(req, res) {
   }
   if (!access.companyId) { fail(res, 403, 'Aucun centre rattaché à votre compte.'); return null; }
   const asked = req.query?.companyId ?? req.body?.companyId;
+  if (access.role === 'agent') {
+    // Une secrétaire employée par plusieurs sociétés travaille sur celle qu'elle a choisie (parmi ses emplois, jamais une autre).
+    try { access = scopeToCompany(access, asked); } catch (e) { fail(res, 403, 'Ce centre n’est pas le vôtre.'); return null; }
+    if (!canUse(access)) { fail(res, 403, NOT_ALLOWED); return null; }
+    return access;
+  }
   if (asked && String(asked) !== access.companyId) { fail(res, 403, 'Ce centre n’est pas le vôtre.'); return null; }
   if (!canManage(access)) { fail(res, 403, NOT_ALLOWED); return null; }
   return access;
@@ -39,6 +49,7 @@ async function context(req, res) {
 const view = (l) => ({
   id: String(l._id), at: l.createdAt, by: { id: l.sentById, name: l.sentByName || '' }, to: l.to || [], subject: l.subject, template: l.template,
   followUpId: l.followUpId ? String(l.followUpId) : null, withIcs: l.withIcs === true, status: l.status, error: l.error || '',
+  from: l.accountId ? { accountId: String(l.accountId), email: l.fromEmail || '', label: l.fromLabel || '' } : null,
 });
 
 async function usage(companyId) {
@@ -50,6 +61,61 @@ async function usage(companyId) {
   return { hour, day };
 }
 
+/**
+ * Envoi depuis un compte PARTAGÉ (boîte d'un patron / collègue) : From = ce compte, signature au nom de la secrétaire + société, journal avec
+ * l'auteur. Compte non autorisé = 404 (jamais confirmé), action refusée = 403, compte à reconnecter = 409 (`account_needs_reauth`) ;
+ * jamais de repli sur un autre compte ni sur HARX.
+ */
+async function sendFromShared(req, res, access, accountId) {
+  let account;
+  try {
+    account = await requireAccount(access.companyId, access, accountId, 'send');
+  } catch (e) {
+    if (!(e instanceof SecretariatError)) throw e;
+    return res.status(e.status || 400).json({ success: false, code: e.code, error: e.code, message: e.message });
+  }
+  const checked = validateSend(req.body);
+  if (checked.error) return fail(res, 400, checked.error);
+  const v = checked.value;
+  const companyId = new mongoose.Types.ObjectId(access.companyId);
+  const rate = checkRate(await usage(companyId), limits());
+  if (!rate.ok) return fail(res, 429, rate.message, 'email_rate_limited');
+  const me = await loadUserProfile(access.userId);
+  let icsContent = null;
+  if (v.followUpId) {
+    const item = await FollowUpItem.findOne({ _id: v.followUpId, companyId });
+    if (!item || !canSeeItem(access, item)) return fail(res, 404, 'Élément « À traiter » introuvable.');
+    if (v.attachIcs) {
+      if (item.model !== 'appointment' || !item.dueAt) return fail(res, 422, 'Seul un rendez-vous peut être joint à un agenda.');
+      icsContent = buildAppointmentIcs(toItem(item));
+    }
+  }
+  const fromName = account.ownerName || account.label;
+  const signature = composeSignature({ secretaryName: me.name, ownerName: account.ownerName || account.label, companyName: v.centerName });
+  const payload = buildPayload({
+    senderEmail: account.accountEmail, centerName: fromName, to: v.to, subject: v.subject, text: v.body, signature, icsContent, harxFooter: false,
+    replyTo: { email: account.accountEmail, name: fromName },
+  });
+  const base = {
+    companyId, sentById: access.userId, sentByName: me.name, to: v.to, subject: v.subject, template: v.template, followUpId: v.followUpId, withIcs: Boolean(icsContent),
+    accountId: account._id, fromEmail: account.accountEmail, fromLabel: account.label,
+  };
+  try {
+    await sendFromAccount(access.companyId, account, {
+      fromName, to: v.to, subject: v.subject, text: payload.textContent, html: payload.htmlContent, replyTo: payload.replyTo,
+      attachments: (payload.attachment || []).map((a) => ({ name: a.name, contentType: 'text/calendar; charset=UTF-8; method=PUBLISH', contentBase64: a.content })),
+    });
+  } catch (error) {
+    const e = error instanceof SecretariatError ? error : new SecretariatError('provider_error', '');
+    console.error(`emails send (compte partagé ${account.provider}): ${e.code}`);
+    await EmailLog.create({ ...base, status: 'failed', error: `provider_${e.code}` }).catch(() => {});
+    if (e.code === 'needs_reauth' || e.code === 'not_connected') return res.status(409).json({ success: false, code: 'account_needs_reauth', error: 'account_needs_reauth', message: e.message });
+    return e.code === 'provider_error' ? fail(res, 502, UNAVAILABLE, 'email_provider_unavailable') : fail(res, e.code === 'unavailable' ? 503 : 502, `Le compte « ${account.label} » a refusé l’envoi. Aucun e-mail n’a été envoyé : prévenez le titulaire.`, 'email_provider_refused');
+  }
+  const log = await EmailLog.create({ ...base, status: 'sent' });
+  res.status(201).json({ success: true, data: view(log) });
+}
+
 export const emailController = {
   /** Le service d'e-mail est-il configuré, et combien d'envois restent ? */
   async config(req, res) {
@@ -58,6 +124,11 @@ export const emailController = {
       if (!access) return;
       const max = limits();
       const used = await usage(new mongoose.Types.ObjectId(access.companyId));
+      if (access.role === 'agent') {
+        // Une secrétaire n'a pas la messagerie de la société : « configuré » = au moins un compte partagé qu'elle peut utiliser pour écrire.
+        const usable = (await listAccounts(access.companyId, access)).filter((a) => a.can.send && !a.needsReauth);
+        return res.json({ success: true, data: { configured: usable.length > 0, provider: null, account: null, limits: max, remainingThisHour: Math.max(0, max.perHour - used.hour), remainingToday: Math.max(0, max.perDay - used.day) } });
+      }
       // Les e-mails ne partent que de la messagerie connectée du centre : `configured` = une messagerie active (aucune dépendance au service HARX).
       const identity = await loadEmailIdentity(access.companyId);
       const mailbox = await resolveMailbox(access.companyId, identity.provider);
@@ -74,6 +145,7 @@ export const emailController = {
       const access = await context(req, res);
       if (!access) return;
       const filter = { companyId: new mongoose.Types.ObjectId(access.companyId) };
+      if (access.role === 'agent') filter.sentById = access.userId; // une secrétaire ne voit que ses propres envois
       if (req.query.followUpId !== undefined) {
         if (!/^[0-9a-fA-F]{24}$/.test(String(req.query.followUpId))) return fail(res, 400, 'Élément « À traiter » invalide.');
         filter.followUpId = new mongoose.Types.ObjectId(String(req.query.followUpId));
@@ -91,7 +163,11 @@ export const emailController = {
     try {
       const access = await context(req, res);
       if (!access) return;
-      // Les e-mails ne partent JAMAIS de HARX : uniquement de la messagerie (Gmail / Outlook) que le centre a connectée.
+      // Les e-mails ne partent JAMAIS de HARX : uniquement de la messagerie (Gmail / Outlook) que le centre a connectée, ou d'un compte partagé autorisé.
+      const wanted = req.body?.accountId;
+      if (wanted !== undefined && wanted !== null && wanted !== '' && typeof wanted !== 'string') return fail(res, 400, 'Compte d’envoi invalide.');
+      if (access.role === 'agent' && !wanted) return fail(res, 403, NOT_ALLOWED); // inchangé : sans compte partagé autorisé, une secrétaire n'envoie pas
+      if (wanted) return sendFromShared(req, res, access, wanted);
       const identity = await loadEmailIdentity(access.companyId);
       const mailbox = await resolveMailbox(access.companyId, identity.provider);
       if (mailbox.error === 'needs_reauth') return refuse(res, 'mailbox_needs_reauth', connectionMessages.needsReauth(mailbox.provider));
