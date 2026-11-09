@@ -14,7 +14,7 @@ import {
 } from '../services/subscriptionFulfillment.js';
 import { fulfillStripeCheckoutSessionPayment } from '../services/paymentFulfillment.js';
 import { config } from '../config/env.js';
-import { normalizeCurrency, pickCurrency, priceAmounts } from '../services/currency.js';
+import { currencyForCountry, normalizeCurrency, pickCurrency, priceAmounts } from '../services/currency.js';
 
 function numberOrNull(value) {
   const n = Number(value);
@@ -185,7 +185,12 @@ export const subscriptionController = {
     try {
       const callcenterOnly = req.query.product === 'callcenter';
       // `?currency=usd|gbp|eur` : prix dans cette devise quand le prix Stripe la propose (mêmes montants), sinon devise de base.
-      const requestedCurrency = req.query.currency ? normalizeCurrency(req.query.currency, '') : '';
+      // `?country=GB|US|…` (sans `currency`) : devise déduite du pays du souscripteur (GB -> gbp, US -> usd, sinon eur).
+      const requestedCurrency = req.query.currency
+        ? normalizeCurrency(req.query.currency, '')
+        : req.query.country
+          ? currencyForCountry(req.query.country)
+          : '';
 
       // 1. Métadonnées Stripe (prix actuel, nom produit) pour les plans connus.
       let stripePrices = [];
@@ -337,7 +342,9 @@ export const subscriptionController = {
   /** Popup checkout init — Stripe subscription or PayPal (first month). */
   initPopupCheckout: async (req, res) => {
     try {
-      const { userId, companyId, priceId, planName, provider, returnUrl, apiBaseUrl, uiMode, promotionCode, currency: requestedCurrency } = req.body;
+      const { userId, companyId, priceId, planName, provider, returnUrl, apiBaseUrl, uiMode, promotionCode, currency: bodyCurrency, country } = req.body;
+      // `currency` explicite prioritaire ; sinon déduite du pays du souscripteur ; sinon devise du prix.
+      const requestedCurrency = bodyCurrency || (country ? currencyForCountry(country) : undefined);
       if (!userId || !companyId || !priceId || !provider) {
         return res.status(400).json({ error: 'userId, companyId, priceId and provider are required' });
       }
