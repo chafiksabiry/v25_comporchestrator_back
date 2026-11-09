@@ -39,6 +39,7 @@ import ReachSettings from '../models/ReachSettings.js';
 import { decideInboundRoute, mobileTarget, shouldRingMobileAfter } from '../services/reach.js';
 import { callPayload, notifyOwners, voicemailPayload } from '../services/webPush.js';
 import { blockedCallBody } from '../services/blockedCallers.js';
+import { languageForPhone } from '../services/companyLanguage.js';
 import { getInboundTest, receiveInboundCall, startInboundTest as startInboundTestSession } from '../services/inboundTestService.js';
 
 /** Titulaire Nomad Solo (une seule personne) : l'appelant entend des messages à la première personne. Toute erreur = texte entreprise. */
@@ -57,10 +58,11 @@ const isSoloCompany = async (companyId) => {
  * Consigne d'enregistrement d'un appel entrant pour l'entreprise de la ligne (null = non enregistré, aucune annonce).
  * Offre non listée (voir callRecording.shouldRecordPlan), erreur de lecture ou CallSid absent : jamais d'enregistrement.
  */
-const recordingPlanFor = async ({ companyId, callSid, baseUrl, from }) => {
+const recordingPlanFor = async ({ companyId, callSid, baseUrl, from, language = 'fr' }) => {
   if (!companyId || !callSid) return null;
   if (!(await shouldRecordCompany(companyId, loadCompanyPlanLimits))) return null;
-  return buildRecordingPlan({ record: true, companyId: String(companyId), callSid, baseUrl, language: consentLanguageFor(from) });
+  // Annonce dans la langue de l'interlocuteur quand son indicatif est reconnu, sinon dans celle de la société (`language`).
+  return buildRecordingPlan({ record: true, companyId: String(companyId), callSid, baseUrl, language: consentLanguageFor(from, language) });
 };
 
 /** In-memory status for live test-call monitoring (popup). */
@@ -1795,7 +1797,7 @@ class PhoneNumberController {
         PhoneNumber.findOne({ companyId, provider: 'twilio', twilioId: { $exists: true, $ne: null }, status: 'active', billingStatus: { $ne: 'suspended' } }).sort({ createdAt: 1 }).lean(),
       ]);
       // Enregistrement selon l'offre (liste blanche) ; l'annonce est jouée à la personne appelée quand elle décroche.
-      const recording = buildRecordingPlan({ record: shouldRecordPlan(limits), companyId, callSid: String(req.body?.CallSid || ''), baseUrl: `https://${req.get('host')}`, language: consentLanguageFor(to) });
+      const recording = buildRecordingPlan({ record: shouldRecordPlan(limits), companyId, callSid: String(req.body?.CallSid || ''), baseUrl: `https://${req.get('host')}`, language: consentLanguageFor(to, languageForPhone(line?.phoneNumber)) });
       const decision = decideOutboundCall({ to, line, subscribed: Boolean(limits), minutes, recording });
       if (!decision.ok) {
         console.warn(`[browser-outbound] refusé pour l'entreprise ${companyId} : ${decision.message}`);
@@ -1847,6 +1849,8 @@ class PhoneNumberController {
       const to = toE164(req.body?.To);
       const from = String(req.body?.From || '').trim();
       const callSid = String(req.body?.CallSid || '').trim();
+      // Langue des textes de l'entreprise dits à l'appelant : pays de la ligne appelée (français sans numéro lisible).
+      const language = languageForPhone(to);
       const received = to ? receiveInboundCall(to, { from, callSid }) : null;
       if (received) {
         await PhoneNumber.updateMany(
@@ -1861,15 +1865,15 @@ class PhoneNumberController {
         ? (await PhoneNumber.findOne({ phoneNumber: to })) || (await PhoneNumber.findOne({ phoneNumber: to.replace(/^\+/, '') }))
         : null;
       // Appelant bloqué par l'entreprise : refus poli ; toute anomalie laisse le comportement habituel.
-      const blocked = line?.companyId ? await blockedCallBody(line.companyId, from) : null;
+      const blocked = line?.companyId ? await blockedCallBody(line.companyId, from, { language }) : null;
       if (blocked) { console.log(`⛔ Appel refusé (appelant bloqué) sur ${to}`); return reply(blocked); }
       const online = line?.companyId ? availableIdentities(line.companyId) : [];
       const settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
       const baseUrl = `https://${req.get('host')}`;
       const solo = await isSoloCompany(line?.companyId);
-      const recording = solo ? null : await recordingPlanFor({ companyId: line?.companyId, callSid, baseUrl, from });
+      const recording = solo ? null : await recordingPlanFor({ companyId: line?.companyId, callSid, baseUrl, from, language });
       // Files d'attente (routage par langues / compétences, menu vocal). null = aucune file, Nomad Solo ou erreur : comportement inchangé.
-      const queueRoute = !solo && line?.companyId ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'call', recording }) : null;
+      const queueRoute = !solo && line?.companyId ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'call', recording, language }) : null;
       const identities = queueRoute ? (queueRoute.kind === 'ring' ? queueRoute.firstIds : []) : online;
       const reach = line?.companyId ? await ReachSettings.findOne({ companyId: line.companyId }).lean().catch((e) => { console.error('ReachSettings read:', e.message); return null; }) : null;
       const route = queueRoute?.kind === 'menu' ? { first: 'browser', mobileNext: false, mobile: null } : decideInboundRoute({ identities, reach, linePhone: to });
@@ -1889,7 +1893,7 @@ class PhoneNumberController {
       // File choisie (menu ou sonnerie dirigée) : accueil puis menu / sonnerie. Toute anomalie : sonnerie existante.
       if (queueRoute && queueRoute.kind !== 'none') {
         try {
-          return reply(greetingTwiml(settings, baseUrl, line?.companyId ? String(line.companyId) : '') + queueRoute.body);
+          return reply(greetingTwiml(settings, baseUrl, line?.companyId ? String(line.companyId) : '', language) + queueRoute.body);
         } catch (e) {
           console.error('Files d\'attente (accueil) :', e.message);
         }
@@ -1905,6 +1909,7 @@ class PhoneNumberController {
         mobile: route.first === 'mobile' ? route.mobile : null,
         linePhone: to,
         recording,
+        language,
       }));
     } catch (error) {
       console.error('Error in handleTwilioInboundCall:', error);
@@ -1927,17 +1932,19 @@ class PhoneNumberController {
     let solo = false;
     let to = '';
     let from = '';
+    let language = 'fr';
     try {
       to = toE164(req.body?.To || req.body?.Called);
+      language = languageForPhone(to);
       from = String(req.body?.From || '').trim();
       const callSid = String(req.body?.CallSid || '').trim();
       const attempt = Math.min(2, Math.max(1, Number.parseInt(req.query?.a, 10) || 1));
       line = to ? (await PhoneNumber.findOne({ phoneNumber: to })) || (await PhoneNumber.findOne({ phoneNumber: to.replace(/^\+/, '') })) : null;
       settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
       solo = await isSoloCompany(line?.companyId);
-      const recording = solo ? null : await recordingPlanFor({ companyId: line?.companyId, callSid, baseUrl, from });
+      const recording = solo ? null : await recordingPlanFor({ companyId: line?.companyId, callSid, baseUrl, from, language });
       const queueRoute = !solo && line?.companyId
-        ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'menu', digits: String(req.body?.Digits || '').trim(), attempt, recording })
+        ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'menu', digits: String(req.body?.Digits || '').trim(), attempt, recording, language })
         : null;
       if (queueRoute && (queueRoute.kind === 'menu' || queueRoute.kind === 'ring')) return reply(queueRoute.body);
       // Aucune file ne couvre ce cas (ou personne d'éligible) : repli existant, sans rejouer l'accueil.
@@ -1952,13 +1959,13 @@ class PhoneNumberController {
       return reply(buildInboundTwiml({
         solo, settings, baseUrl, companyId: line?.companyId ? String(line.companyId) : '', identities, from,
         resultUrl: `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result`,
-        mobile: route.first === 'mobile' ? route.mobile : null, linePhone: to, withGreeting: false, recording,
+        mobile: route.first === 'mobile' ? route.mobile : null, linePhone: to, withGreeting: false, recording, language,
       }));
     } catch (error) {
       console.error('Error in handleTwilioInboundMenu:', error);
       try {
         const identities = line?.companyId ? availableIdentities(line.companyId) : [];
-        return reply(buildInboundTwiml({ solo, settings, baseUrl, companyId: line?.companyId ? String(line.companyId) : '', identities, from, resultUrl: `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result`, linePhone: to, withGreeting: false }));
+        return reply(buildInboundTwiml({ solo, settings, baseUrl, companyId: line?.companyId ? String(line.companyId) : '', identities, from, resultUrl: `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result`, linePhone: to, withGreeting: false, language }));
       } catch (e) {
         console.error('Error in handleTwilioInboundMenu (repli):', e);
         return reply('<Hangup/>');
@@ -1978,7 +1985,7 @@ class PhoneNumberController {
       // Tentatives suivantes : même enregistrement que la première (l'annonce n'est pas répétée). Entreprise lue dans le plan signé.
       const callSid0 = String(req.body?.CallSid || '').trim();
       const planOwner = (() => { try { return readPlan(req.query?.s).companyId; } catch { return ''; } })();
-      const recording = await recordingPlanFor({ companyId: planOwner, callSid: callSid0, baseUrl, from });
+      const recording = await recordingPlanFor({ companyId: planOwner, callSid: callSid0, baseUrl, from, language: languageForPhone(toE164(req.body?.To || req.body?.Called)) });
       const step = continueQueuePlan({ token: req.query?.s, dialStatus: req.body?.DialCallStatus, baseUrl, from, recording });
       if (step.action === 'dial') return res.type('text/xml').status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response>${step.body}</Response>`);
       const callSid = String(req.body?.CallSid || '').trim();
@@ -2025,7 +2032,7 @@ class PhoneNumberController {
       }
       const settings = call?.companyId ? await InboundSettings.findOne({ companyId: call.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
       const solo = await isSoloCompany(call?.companyId);
-      return reply(buildNoAnswerTwiml({ solo, settings, baseUrl, companyId: call?.companyId ? String(call.companyId) : '', dialStatus, mobile: ringMobile ? mobile : null, linePhone: call?.phoneNumber || '', resultUrl: `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result` }));
+      return reply(buildNoAnswerTwiml({ solo, settings, baseUrl, companyId: call?.companyId ? String(call.companyId) : '', dialStatus, mobile: ringMobile ? mobile : null, linePhone: call?.phoneNumber || '', resultUrl: `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result`, language: languageForPhone(call?.phoneNumber) }));
     } catch (error) {
       console.error('Error in handleTwilioInboundDialResult:', error);
       return reply('<Hangup/>');
@@ -2076,7 +2083,7 @@ class PhoneNumberController {
 
   /** Action du <Record> : remercie l'appelant puis raccroche. */
   async handleTwilioVoicemailDone(req, res) {
-    res.type('text/xml').status(200).send(wrapResponse(buildVoicemailDoneTwiml()));
+    res.type('text/xml').status(200).send(wrapResponse(buildVoicemailDoneTwiml(languageForPhone(toE164(req.body?.To || req.body?.Called)))));
   }
 
   /** recordingStatusCallback : crée le message du répondeur (idempotent), notifie l'entreprise, lance l'analyse IA sans bloquer. */

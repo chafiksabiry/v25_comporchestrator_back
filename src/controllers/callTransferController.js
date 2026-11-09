@@ -9,6 +9,7 @@ import { loadUserName } from '../services/followUpDirectory.js';
 import { loadTools, mergedTools } from '../services/secretariatTools.js';
 import { voiceIdentity } from '../services/voicePresenceService.js';
 import { normalizeOutboundDestination, maxSecondsForBalance } from '../services/browserOutbound.js';
+import { languageForPhone, phrasesFor } from '../services/companyLanguage.js';
 import {
   buildTransferMessageTwiml, buildTransferResultTwiml, buildTransferTwiml, CALL_SID, entryAvailability, isReachableNow, resultOfDial,
   signTransferState, toTransferLog, TRANSFER_WEBHOOK_PATH, verifyTransferState,
@@ -112,10 +113,12 @@ export const callTransferController = {
 
       const settings = await InboundSettings.findOne({ companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch(() => null);
       const baseUrl = baseUrlOf(req);
+      // Annonce dite à l'appelant : langue de la société (pays de la ligne appelée).
+      const language = languageForPhone(call.phoneNumber);
       const twiml = mode === 'message'
-        ? buildTransferMessageTwiml({ name: entry.name, settings, baseUrl, companyId: access.companyId })
+        ? buildTransferMessageTwiml({ name: entry.name, settings, baseUrl, companyId: access.companyId, language })
         : buildTransferTwiml({
-          name: entry.name, number, extension: entry.extension, callerId: call.phoneNumber, voice: settings?.voice, maxSeconds,
+          name: entry.name, number, extension: entry.extension, callerId: call.phoneNumber, voice: settings?.voice, maxSeconds, language,
           resultUrl: `${baseUrl}${TRANSFER_WEBHOOK_PATH}?s=${encodeURIComponent(signTransferState({ secret: config.twilioAuthToken, companyId: access.companyId, callSid: parentSid, entryId, userId: access.userId, now }))}`,
         });
       try {
@@ -166,7 +169,8 @@ export async function transferResult(req, res) {
       { new: true }
     ).lean();
     const settings = await InboundSettings.findOne({ companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch(() => null);
-    return xml(buildTransferResultTwiml({ dialStatus, name: updated?.transfer?.entryName || 'La personne demandée', settings, baseUrl: baseUrlOf(req), companyId: state.companyId }));
+    const language = languageForPhone(updated?.phoneNumber);
+    return xml(buildTransferResultTwiml({ dialStatus, name: updated?.transfer?.entryName || phrasesFor(language).transferFallbackName, settings, baseUrl: baseUrlOf(req), companyId: state.companyId, language }));
   } catch (error) {
     console.error('reception transferResult:', error.message);
     return xml('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>');

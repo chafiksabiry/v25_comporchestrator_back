@@ -1,7 +1,8 @@
 import crypto from 'crypto';
 import { absenceOf, todayIn } from './receptionDirectory.js';
 import { DEFAULT_TIME_ZONE, normalizeTimeZone } from './timeZone.js';
-import { buildNoAnswerTwiml, pollyVoice, wrapResponse, xmlEscape } from './inboundFlow.js';
+import { buildNoAnswerTwiml, say, wrapResponse, xmlEscape } from './inboundFlow.js';
+import { phrasesFor } from './companyLanguage.js';
 
 /**
  * Transfert d'un appel en cours (secrétaire -> personne de l'annuaire). Logique pure : aucun accès base ni réseau.
@@ -74,31 +75,31 @@ export function verifyTransferState({ secret, token, now = Date.now() }) {
 }
 
 // ---------- TwiML
-const say = (text, voice) => `<Say language="fr-FR" voice="${pollyVoice(voice)}">${xmlEscape(text)}</Say>`;
-/** Phrase d'annonce faite à l'appelant avant de lui passer la personne. */
-export const announceText = (name) => `Je vous passe ${String(name).replace(/\s+/g, ' ').trim()}, ne quittez pas.`;
-export const unavailableText = (name) => `${String(name).replace(/\s+/g, ' ').trim()} ne peut pas vous répondre pour le moment.`;
+const oneLine = (name) => String(name).replace(/\s+/g, ' ').trim();
+/** Phrase d'annonce faite à l'appelant avant de lui passer la personne, dans la langue de la société (`language`, français par défaut). */
+export const announceText = (name, language = 'fr') => phrasesFor(language).transferAnnounce(oneLine(name));
+export const unavailableText = (name, language = 'fr') => phrasesFor(language).transferUnavailable(oneLine(name));
 
 /** Annonce puis sonnerie du numéro de la fiche (poste composé après la mise en relation). */
-export function buildTransferTwiml({ name, number, extension = '', callerId = '', voice = '', resultUrl, ringSeconds = TRANSFER_RING_SECONDS, maxSeconds }) {
+export function buildTransferTwiml({ name, number, extension = '', callerId = '', voice = '', resultUrl, ringSeconds = TRANSFER_RING_SECONDS, maxSeconds, language = 'fr' }) {
   const caller = String(callerId).replace(/[^+\d]/g, '');
   const callerAttr = caller ? ` callerId="${caller}"` : '';
   const limit = Number.isFinite(maxSeconds) && maxSeconds > 0 ? ` timeLimit="${Math.floor(maxSeconds)}"` : '';
   const digits = /^\d{1,8}$/.test(String(extension)) ? ` sendDigits="${xmlEscape(`wwww${extension}`)}"` : '';
-  return wrapResponse(`${say(announceText(name), voice)}<Dial timeout="${ringSeconds}" answerOnBridge="true" action="${xmlEscape(resultUrl)}" method="POST"${callerAttr}${limit}><Number${digits}>${xmlEscape(number)}</Number></Dial>`);
+  return wrapResponse(`${say(announceText(name, language), voice, language)}<Dial timeout="${ringSeconds}" answerOnBridge="true" action="${xmlEscape(resultUrl)}" method="POST"${callerAttr}${limit}><Number${digits}>${xmlEscape(number)}</Number></Dial>`);
 }
 
 /** Suite d'un transfert qui n'a pas abouti (ou personne absente) : l'appelant est invité à laisser un message sur le répondeur existant. */
-export function buildTransferMessageTwiml({ name, settings, baseUrl, companyId }) {
+export function buildTransferMessageTwiml({ name, settings, baseUrl, companyId, language = 'fr' }) {
   const voice = settings?.voice;
-  return wrapResponse(say(unavailableText(name), voice) + buildNoAnswerTwiml({ settings, baseUrl, companyId: String(companyId), dialStatus: 'no-answer' }));
+  return wrapResponse(say(unavailableText(name, language), voice, language) + buildNoAnswerTwiml({ settings, baseUrl, companyId: String(companyId), dialStatus: 'no-answer', language }));
 }
 
 /** Réponse au webhook de fin de sonnerie : décroché ou appelant parti -> rien de plus ; sinon message. */
-export function buildTransferResultTwiml({ dialStatus, name, settings, baseUrl, companyId }) {
+export function buildTransferResultTwiml({ dialStatus, name, settings, baseUrl, companyId, language = 'fr' }) {
   const status = String(dialStatus || '').toLowerCase();
   if (status === 'completed' || status === 'answered' || status === 'canceled') return wrapResponse('<Hangup/>');
-  return buildTransferMessageTwiml({ name, settings, baseUrl, companyId });
+  return buildTransferMessageTwiml({ name, settings, baseUrl, companyId, language });
 }
 
 /** Résultat consigné pour l'état renvoyé par Twilio à la fin de la sonnerie. */

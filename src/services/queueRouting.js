@@ -5,6 +5,7 @@ import InboundCall from '../models/InboundCall.js';
 import { availableIdentities, voiceIdentity } from './voicePresenceService.js';
 import { buildInboundTwiml, ringTimeoutOf, xmlEscape } from './inboundFlow.js';
 import { defaultMenuPhrase, menuVoice } from './routingLanguages.js';
+import { normalizeCompanyLanguage, phrasesFor } from './companyLanguage.js';
 import {
   MAX_ATTEMPTS, buildPlan, chooseMenuQueue, defaultQueueOf, eligibleIdentities, inboundQueues, menuQueues, needsMenu,
 } from './callQueues.js';
@@ -22,22 +23,26 @@ export const MENU_MAX_PLAYS = 2; // le menu est joué, puis rejoué UNE fois, pu
 
 // ---------------------------------------------------------------- menu vocal
 
-/** Langue (et texte) lus pour une file dans le menu : langue du texte, sinon première langue de la file, sinon français. */
-export function menuLine(queue) {
-  const lang = queue.promptLanguage || queue.languages?.[0] || 'fr';
+/**
+ * Langue (et texte) lus pour une file dans le menu : langue du texte, sinon première langue de la file, sinon la langue de la société
+ * (`language`, français par défaut : comportement d'avant).
+ */
+export function menuLine(queue, language = 'fr') {
+  const company = normalizeCompanyLanguage(language);
+  const lang = queue.promptLanguage || queue.languages?.[0] || company;
   const key = queue.menuKey;
   let text = queue.prompt;
   if (!text) {
-    text = queue.languages?.length || queue.promptLanguage ? defaultMenuPhrase(lang, key) : `Pour ${queue.name}, tapez ${key}.`;
+    text = queue.languages?.length || queue.promptLanguage ? defaultMenuPhrase(lang, key) : phrasesFor(company).menuFor(queue.name, key);
   }
   return { ...menuVoice(lang), text };
 }
 
 /** Corps TwiML du menu : une phrase par file (dans sa langue) dans un <Gather> ; sans touche, l'URL est rappelée (rejeu / défaut). */
-export function buildMenuBody({ queues, baseUrl, attempt = 1 }) {
+export function buildMenuBody({ queues, baseUrl, attempt = 1, language = 'fr' }) {
   const url = `${baseUrl}${WEBHOOK_PATH}/inbound-menu?a=${attempt}`;
   const says = menuQueues(queues).map((q) => {
-    const l = menuLine(q);
+    const l = menuLine(q, language);
     return `<Say language="${l.language}" voice="${l.voice}">${xmlEscape(l.text)}</Say>`;
   }).join('');
   return `<Gather numDigits="1" timeout="6" action="${xmlEscape(url)}" method="POST">${says}</Gather><Redirect method="POST">${xmlEscape(url)}</Redirect>`;
@@ -76,9 +81,9 @@ export function buildAttemptDial({ attempt, from = '', action, recording = null 
  * Sinon chaque tentative revient sur inbound-queue-next, qui passe à la suivante (jusqu'à MAX_ATTEMPTS) puis rend la main
  * au traitement standard (mobile puis répondeur).
  */
-export function buildPlanBody({ plan, companyId, settings, baseUrl, from, resultUrl, recording = null }) {
+export function buildPlanBody({ plan, companyId, settings, baseUrl, from, resultUrl, recording = null, language = 'fr' }) {
   if (plan.length === 1 && !plan[0].seq) {
-    return buildInboundTwiml({ settings, baseUrl, companyId: String(companyId), identities: plan[0].ids, from, resultUrl, withGreeting: false, recording });
+    return buildInboundTwiml({ settings, baseUrl, companyId: String(companyId), identities: plan[0].ids, from, resultUrl, withGreeting: false, recording, language });
   }
   // Appel enregistré : l'annonce est dite une seule fois, avant la première sonnerie.
   return `${recording ? recording.say : ''}${buildAttemptDial({ attempt: plan[0], from, action: nextUrl(baseUrl, plan, 1, companyId), recording })}`;
@@ -118,7 +123,7 @@ async function planFor({ companyId, inbound, queue, settings }) {
  * @returns {Promise<null|{kind:'menu',body:string}|{kind:'ring',body:string,firstIds:string[],queue:object}|{kind:'none',queue:object}>}
  *   null = aucune file (ou erreur) : comportement existant inchangé.
  */
-export async function resolveQueueRoute({ companyId, settings, baseUrl, from = '', stage = 'call', digits = '', attempt = 1, recording = null } = {}) {
+export async function resolveQueueRoute({ companyId, settings, baseUrl, from = '', stage = 'call', digits = '', attempt = 1, recording = null, language = 'fr' } = {}) {
   try {
     if (!companyId) return null;
     const rows = await CallQueue.find({ companyId }).lean();
@@ -126,10 +131,10 @@ export async function resolveQueueRoute({ companyId, settings, baseUrl, from = '
     if (!inbound.length) return null;
     let queue;
     if (needsMenu(inbound)) {
-      if (stage === 'call') return { kind: 'menu', body: buildMenuBody({ queues: inbound, baseUrl, attempt: 1 }) };
+      if (stage === 'call') return { kind: 'menu', body: buildMenuBody({ queues: inbound, baseUrl, attempt: 1, language }) };
       queue = chooseMenuQueue(inbound, digits);
       if (!queue) {
-        if (attempt < MENU_MAX_PLAYS) return { kind: 'menu', body: buildMenuBody({ queues: inbound, baseUrl, attempt: attempt + 1 }) };
+        if (attempt < MENU_MAX_PLAYS) return { kind: 'menu', body: buildMenuBody({ queues: inbound, baseUrl, attempt: attempt + 1, language }) };
         queue = defaultQueueOf(inbound);
       }
     } else {
@@ -138,7 +143,7 @@ export async function resolveQueueRoute({ companyId, settings, baseUrl, from = '
     const plan = await planFor({ companyId, inbound, queue, settings });
     if (!plan.length) return { kind: 'none', queue };
     const resultUrl = `${baseUrl}${WEBHOOK_PATH}/inbound-dial-result`;
-    const body = buildPlanBody({ plan, companyId, settings, baseUrl, from, resultUrl, recording });
+    const body = buildPlanBody({ plan, companyId, settings, baseUrl, from, resultUrl, recording, language });
     return { kind: 'ring', body, firstIds: plan[0].ids, queue };
   } catch (error) {
     console.error('Files d\'attente : repli sur le comportement actuel (' + String(error?.message || error) + ')');
