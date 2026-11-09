@@ -43,6 +43,9 @@ export const config = {
   phoneLineMonthlyPriceCents: parseInt(process.env.PHONE_LINE_MONTHLY_PRICE_CENTS || '999', 10),
   // Royaume-Uni : dossier réglementaire Twilio « United Kingdom: Local - Business » (approuvé) et son adresse. Tant que ces deux
   // variables sont vides, la recherche de numéros +44 répond « dossier requis » (rien n'est vendu sans dossier approuvé).
+  // Numéros de l'inventaire Twilio à ne JAMAIS proposer à la vente (numéros propres de HARX, séparés par des virgules, format E.164).
+  twilioInventoryExclude: String(process.env.TWILIO_INVENTORY_EXCLUDE || '')
+    .split(',').map((x) => x.trim()).filter(Boolean),
   twilioGbBundleSid: process.env.TWILIO_GB_BUNDLE_SID || '',
   twilioGbAddressSid: process.env.TWILIO_GB_ADDRESS_SID || '',
   twilioFrenchBundleSid: process.env.TWILIO_FRENCH_BUNDLE_SID || 'BUf007aeefc1a71ad9ac096a4d205563b0',

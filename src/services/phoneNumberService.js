@@ -8,6 +8,9 @@ import axios from 'axios';
 import FormData from 'form-data';
 import mongoose from 'mongoose';
 
+/** Nom convivial donné par la plateforme aux numéros qu'elle achète : sert à reconnaître l'inventaire proposable. */
+export const INVENTORY_FRIENDLY_PREFIX = 'Gig Number:';
+
 class PhoneNumberService {
   constructor() {
     if (!config.telnyxApiKey) {
@@ -593,6 +596,60 @@ class PhoneNumberService {
     }
   }
 
+  /**
+   * Numéros déjà dans l'inventaire Twilio et pas encore rattachés à un compte HARX : proposés en premier à l'achat.
+   * Seuls sont éligibles les numéros nés de la plateforme (nom convivial « Gig Number:+… »), compatibles voix, absents de la base
+   * (aucune entreprise ne les détient) et non listés dans TWILIO_INVENTORY_EXCLUDE : un numéro acheté à la main dans la console
+   * (par exemple un numéro propre de HARX) n'est jamais offert, sauf si on le renomme ainsi.
+   */
+  isInventoryCandidate(n) {
+    const e164 = String(n?.phoneNumber || '');
+    if (!e164.startsWith('+')) return false;
+    if (!String(n?.friendlyName || '').startsWith(INVENTORY_FRIENDLY_PREFIX)) return false;
+    if (n?.capabilities && n.capabilities.voice === false) return false;
+    return !(config.twilioInventoryExclude || []).includes(e164);
+  }
+
+  /** Parmi des numéros possédés, ceux qu'aucune entreprise ne détient dans la base HARX (surchargé dans les tests). */
+  async unassignedAmong(owned) {
+    if (!owned.length) return [];
+    const docs = await PhoneNumber.find({ phoneNumber: { $in: owned.map((n) => n.phoneNumber) } }).select('phoneNumber').lean();
+    const taken = new Set(docs.map((d) => d.phoneNumber));
+    return owned.filter((n) => !taken.has(n.phoneNumber));
+  }
+
+  async listClaimableInventory({ countryCode, limit = 50 } = {}) {
+    const cc = String(countryCode || '').toUpperCase();
+    const owned = await this.twilioClient.incomingPhoneNumbers.list({ limit: 1000 });
+    const candidates = owned.filter((n) => this.isInventoryCandidate(n) && this.guessCountryFromE164(n.phoneNumber) === cc);
+    const free = await this.unassignedAmong(candidates);
+    return free.slice(0, limit).map((n) => ({
+      phoneNumber: n.phoneNumber,
+      friendlyName: n.phoneNumber,
+      locality: null,
+      region: null,
+      isoCountry: cc,
+      type: 'local',
+      inventory: true,
+      capabilities: { voice: n.capabilities?.voice !== false, SMS: Boolean(n.capabilities?.sms ?? n.capabilities?.SMS), MMS: Boolean(n.capabilities?.mms ?? n.capabilities?.MMS) },
+    }));
+  }
+
+  /** Le numéro (déjà possédé chez Twilio) si une entreprise peut le prendre ; `null` s'il n'est pas dans l'inventaire ou n'est pas éligible. */
+  async findClaimableInventoryNumber(phoneNumber) {
+    let owned;
+    try {
+      owned = await this.twilioClient.incomingPhoneNumbers.list({ phoneNumber, limit: 1 });
+    } catch (err) {
+      console.warn('[telephony] inventaire Twilio illisible:', err.message);
+      return null;
+    }
+    const n = Array.isArray(owned) ? owned.find((x) => x.phoneNumber === phoneNumber) : null;
+    if (!n) return { owned: false, claimable: false, number: null };
+    const free = this.isInventoryCandidate(n) ? await this.unassignedAmong([n]) : [];
+    return { owned: true, claimable: free.length > 0, number: n };
+  }
+
   async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId, { bundleSid, addressSid, type, price, currency, paymentRef, isTrial, trialExpiresAt } = {}) {
     if (!companyId) {
       throw new Error('companyId is required to purchase a phone number');
@@ -602,6 +659,15 @@ class PhoneNumberService {
 
     let purchasedNumber;
     try {
+      // Numéro déjà dans l'inventaire Twilio : on le prend sans le racheter ; s'il est possédé mais pas proposable (numéro propre de
+      // HARX, déjà détenu par une entreprise), on refuse plutôt que de tenter un achat qui échouerait.
+      const inventory = await this.findClaimableInventoryNumber(phoneNumber);
+      if (inventory?.owned && !inventory.claimable) {
+        const err = new Error('Ce numéro n’est pas disponible.');
+        err.code = 'NUMBER_NOT_AVAILABLE';
+        err.status = 409;
+        throw err;
+      }
       const purchaseOptions = {
         phoneNumber: phoneNumber,
         friendlyName: 'Gig Number:' + phoneNumber,
@@ -617,7 +683,7 @@ class PhoneNumberService {
       // Fail early (before Twilio IncomingPhoneNumbers.create) when the
       // configured FR bundle is not a "local" regulation — same 21649 Twilio
       // would return, so the controller can refund the payment.
-      if (currentBundleSid && phoneNumber.startsWith('+33')) {
+      if (!inventory?.claimable && currentBundleSid && phoneNumber.startsWith('+33')) {
         if (!this.isCompatibleWithLocalBundle(phoneNumber, 'FR')) {
           const err = new Error(
             `Bundle [${currentBundleSid}] does not have the correct regulation type to provision this number`
@@ -634,7 +700,12 @@ class PhoneNumberService {
       if (currentAddressSid) purchaseOptions.addressSid = currentAddressSid;
 
       try {
-        purchasedNumber = await this.twilioClient.incomingPhoneNumbers.create(purchaseOptions);
+        if (inventory?.claimable) {
+          purchasedNumber = inventory.number;
+          console.log(`📦 Numéro pris dans l'inventaire Twilio : ${phoneNumber}`);
+        } else {
+          purchasedNumber = await this.twilioClient.incomingPhoneNumbers.create(purchaseOptions);
+        }
       } catch (firstError) {
         // Twilio classe certains numéros +33 1… « national » : ils exigent le dossier National, pas le dossier Local.
         const nationalBundle = config.twilioFrenchNationalBundleSid;

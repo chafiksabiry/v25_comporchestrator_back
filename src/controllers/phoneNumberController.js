@@ -240,13 +240,30 @@ class PhoneNumberController {
       console.log("countryCode", countryCode);
       console.log("areaCode", areaCode);
       console.log("limit", limit);
-      const numbers = await phoneNumberService.searchTwilioNumbers({
-        countryCode: countryCode || 'US',
-        areaCode,
-        locality,
-        limit: parseInt(limit) || 50
-      });
-      res.json(numbers);
+      // Numéros déjà dans l'inventaire Twilio et pas encore affectés à un compte : proposés en premier (sans filtre de ville ni
+      // d'indicatif, qu'ils ne portent pas). Le dossier réglementaire d'un pays ne bloque pas un numéro déjà possédé.
+      let inventory = [];
+      if (!areaCode && !locality) {
+        try {
+          inventory = await phoneNumberService.listClaimableInventory({ countryCode: countryCode || 'US', limit: parseInt(limit) || 50 });
+        } catch (invErr) {
+          console.warn('[telephony] inventaire Twilio indisponible:', invErr.message);
+        }
+      }
+      let numbers = [];
+      try {
+        numbers = await phoneNumberService.searchTwilioNumbers({
+          countryCode: countryCode || 'US',
+          areaCode,
+          locality,
+          limit: parseInt(limit) || 50
+        });
+      } catch (searchErr) {
+        if (!inventory.length) throw searchErr;
+        console.warn('[telephony] recherche de nouveaux numéros indisponible, inventaire seul:', searchErr.message);
+      }
+      const inInventory = new Set(inventory.map((n) => n.phoneNumber));
+      res.json([...inventory, ...numbers.filter((n) => !inInventory.has(n.phoneNumber))]);
     } catch (error) {
       if (error.code === 'REGULATORY_BUNDLE_REQUIRED') {
         return res.status(200).json({
@@ -752,7 +769,12 @@ class PhoneNumberController {
       // used to abort checkout before Stripe/PayPal returned a URL.
       const lineProvider = resolvePhoneProvider(req.body.lineProvider, { phoneNumber });
       const isoCountry = phoneNumberService.guessCountryFromE164(phoneNumber);
-      if (lineProvider === 'twilio' && isoCountry) {
+      // Un numéro déjà dans l'inventaire Twilio a déjà son dossier : aucun contrôle de dossier avant paiement.
+      const inventoryCheck = lineProvider === 'twilio' ? await phoneNumberService.findClaimableInventoryNumber(phoneNumber) : null;
+      if (inventoryCheck?.owned && !inventoryCheck.claimable) {
+        return res.status(409).json({ error: 'Number not available', code: 'NUMBER_NOT_AVAILABLE', message: 'Ce numéro n’est pas disponible.' });
+      }
+      if (lineProvider === 'twilio' && isoCountry && !inventoryCheck?.claimable) {
         const bundleRequired = await phoneNumberService.isRegulatoryBundleRequired(
           isoCountry,
           'local'
