@@ -1,5 +1,5 @@
 import jwt from 'jsonwebtoken';
-import { menuVoice } from './routingLanguages.js';
+import { sayVoice } from './companyLanguage.js';
 import { xmlEscape } from './inboundFlow.js';
 import { isTwilioRecordingUrl } from './voicemailMapping.js';
 import { resolveDashCallsApi, SERVICE_ISSUER } from './voicemailAnalysis.js';
@@ -45,6 +45,10 @@ export const CONSENT_TEXTS = {
   en: 'This call may be recorded for quality and training purposes. By continuing this call, you agree to being recorded.',
   es: 'Esta llamada puede ser grabada con fines de calidad y formación. Al continuar con esta llamada, acepta que se grabe.',
   ar: 'قد يتم تسجيل هذه المكالمة لأغراض الجودة والتدريب. بمتابعة هذه المكالمة، فإنك توافق على تسجيلها.',
+  de: 'Dieses Gespräch kann zu Qualitäts- und Schulungszwecken aufgezeichnet werden. Wenn Sie das Gespräch fortsetzen, stimmen Sie der Aufzeichnung zu.',
+  it: 'Questa chiamata può essere registrata per scopi di qualità e formazione. Proseguendo la chiamata, accetta la registrazione.',
+  nl: 'Dit gesprek kan worden opgenomen voor kwaliteits- en opleidingsdoeleinden. Door dit gesprek voort te zetten, gaat u akkoord met de opname.',
+  pt: 'Esta chamada pode ser gravada para fins de qualidade e formação. Ao continuar esta chamada, aceita a gravação.',
 };
 export const CONSENT_LANGUAGES = Object.keys(CONSENT_TEXTS);
 export const DEFAULT_CONSENT_LANGUAGE = 'fr';
@@ -53,16 +57,20 @@ const ARABIC = ['+20', '+212', '+213', '+216', '+218', '+249', '+961', '+962', '
 const SPANISH = ['+34', '+51', '+52', '+53', '+54', '+56', '+57', '+58', '+591', '+593', '+595', '+598'];
 const ENGLISH = ['+1', '+44', '+61', '+64', '+353'];
 const FRENCH = ['+33', '+32', '+41', '+352', '+221', '+225', '+262', '+590', '+594', '+596', '+687', '+689'];
+const GERMAN = ['+49', '+43', '+423'];
+const ITALIAN = ['+39', '+378', '+379'];
+const DUTCH = ['+31'];
+const PORTUGUESE = ['+351'];
 
-/** Code de langue d'une annonce valide (fr/en/es/ar), sinon null. */
+/** Code de langue d'une annonce valide (fr/en/es/ar/de/it/nl/pt), sinon null. */
 export const normalizeConsentLanguage = (value) => {
   const code = String(value ?? '').trim().toLowerCase();
   return CONSENT_LANGUAGES.includes(code) ? code : null;
 };
 
 /**
- * Langue de l'annonce selon l'indicatif du numéro de l'interlocuteur (E.164), quand il est reconnu (arabe, espagnol, anglais, français).
- * Indicatif non reconnu ou numéro illisible : `fallback`, la langue de la société (`languageForCountry`), sinon le français comme avant.
+ * Langue de l'annonce selon l'indicatif du numéro de l'interlocuteur (E.164), quand il est reconnu (arabe, espagnol, anglais, français, allemand, italien, néerlandais, portugais).
+ * Indicatif non reconnu ou numéro illisible : `fallback`, la langue de la ligne (`languageForPhone`), sinon le français comme avant.
  * Le comportement pour un indicatif reconnu est inchangé : la langue de l'interlocuteur prime sur celle de la société.
  */
 export function consentLanguageFor(number, fallback = DEFAULT_CONSENT_LANGUAGE) {
@@ -74,13 +82,17 @@ export function consentLanguageFor(number, fallback = DEFAULT_CONSENT_LANGUAGE) 
   if (hit(SPANISH)) return 'es';
   if (hit(ENGLISH)) return 'en';
   if (hit(FRENCH)) return 'fr';
+  if (hit(GERMAN)) return 'de';
+  if (hit(ITALIAN)) return 'it';
+  if (hit(DUTCH)) return 'nl';
+  if (hit(PORTUGUESE)) return 'pt';
   return fb;
 }
 
-/** <Say> de l'annonce, dans la langue et avec la voix du routage (menuVoice). */
+/** <Say> de l'annonce, dans la langue et avec la voix féminine de la langue (sayVoice). */
 export function consentSay(lang) {
   const code = normalizeConsentLanguage(lang) || DEFAULT_CONSENT_LANGUAGE;
-  const { voice, language } = menuVoice(code);
+  const { voice, language } = sayVoice(code);
   return `<Say language="${language}" voice="${voice}">${xmlEscape(CONSENT_TEXTS[code])}</Say>`;
 }
 
