@@ -2,6 +2,7 @@ import { phoneNumberService } from '../services/phoneNumberService.js';
 import { callerAccess } from '../middleware/companyScope.js';
 import { listLinesFor } from '../services/phoneNumberList.js';
 import { checkNumberCountry } from '../services/numberCountry.js';
+import { purchaseCurrency } from '../services/purchaseCurrency.js';
 import { checkCompanyDestination } from '../services/outboundPolicy.js';
 import { isPremiumRate, MESSAGES as DESTINATION_MESSAGES, DESTINATION_NOT_ALLOWED } from '../services/outboundDestinations.js';
 import { paypalService } from '../services/paypalService.js';
@@ -393,7 +394,7 @@ class PhoneNumberController {
           bundleSid, 
           addressSid,
           price: paidPrice,
-          currency: !isTrial && payment?.currency ? payment.currency : linePricing.currency,
+          currency: !isTrial && payment?.currency ? payment.currency : await purchaseCurrency(req, companyId),
           paymentRef: !isTrial ? payment?._id : undefined,
           isTrial,
           trialExpiresAt,
@@ -583,7 +584,7 @@ class PhoneNumberController {
           bundleSid,
           addressSid,
           price: paidPrice,
-          currency: !isTrial && payment?.currency ? payment.currency : linePricing.currency,
+          currency: !isTrial && payment?.currency ? payment.currency : await purchaseCurrency(req, companyId),
           paymentRef: !isTrial ? payment?._id : undefined,
           isTrial,
           trialExpiresAt,
@@ -772,6 +773,8 @@ class PhoneNumberController {
    * No wallet (`WalletCompany`) interaction here; this is fully separate.
    */
   async initLineCheckout(req, res) {
+    // Déclaré hors du try : le catch nettoie le paiement créé, et doit toujours pouvoir répondre.
+    let payment = null;
     try {
       const { phoneNumber, gigId, companyId, provider, returnUrl, apiBaseUrl } = req.body;
       if (!phoneNumber || !companyId || !provider) {
@@ -842,14 +845,16 @@ class PhoneNumberController {
       }
 
       const linePricing = await getPhoneLinePricing();
+      // Devise du pays de l'entreprise (mêmes montants dans les trois devises), EUR si le pays n'est pas lisible.
+      const lineCurrency = await purchaseCurrency(req, companyId);
 
-      const payment = await PhoneNumberPayment.create({
+      payment = await PhoneNumberPayment.create({
         companyId: new mongoose.Types.ObjectId(companyId),
         gigId: gigId && mongoose.Types.ObjectId.isValid(gigId) ? new mongoose.Types.ObjectId(gigId) : undefined,
         phoneNumber,
         provider,
         amount: linePricing.setupFeeCents,
-        currency: linePricing.currency,
+        currency: lineCurrency,
         status: 'pending'
       });
 
@@ -1077,6 +1082,8 @@ class PhoneNumberController {
   async getCheckoutConfig(req, res) {
     try {
       const linePricing = await getPhoneLinePricing();
+      // `?companyId=` : devise du pays de l'entreprise (mêmes montants) ; sans lui, la devise de base (EUR).
+      const currency = req.query?.companyId ? await purchaseCurrency(req, req.query.companyId) : String(linePricing.currency || 'EUR').toUpperCase();
       res.json({
         success: true,
         paypal: {
@@ -1089,7 +1096,7 @@ class PhoneNumberController {
         },
         pricing: {
           amountCents: linePricing.setupFeeCents,
-          currency: linePricing.currency,
+          currency,
           trialDays: linePricing.trialDays,
         }
       });
