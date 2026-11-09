@@ -14,6 +14,7 @@ import {
 } from '../services/subscriptionFulfillment.js';
 import { fulfillStripeCheckoutSessionPayment } from '../services/paymentFulfillment.js';
 import { config } from '../config/env.js';
+import { normalizeCurrency, pickCurrency, priceAmounts } from '../services/currency.js';
 
 function numberOrNull(value) {
   const n = Number(value);
@@ -183,6 +184,8 @@ export const subscriptionController = {
   getPlans: async (req, res) => {
     try {
       const callcenterOnly = req.query.product === 'callcenter';
+      // `?currency=usd|gbp|eur` : prix dans cette devise quand le prix Stripe la propose (mêmes montants), sinon devise de base.
+      const requestedCurrency = req.query.currency ? normalizeCurrency(req.query.currency, '') : '';
 
       // 1. Métadonnées Stripe (prix actuel, nom produit) pour les plans connus.
       let stripePrices = [];
@@ -250,14 +253,21 @@ export const subscriptionController = {
             const marketingFeatures = stripeService.extractStripeProductFeatures(product);
             const stripeLimits = stripeService.extractStripeProductLimits(product);
             const displayFeatures = stripeService.buildStripePlanDisplayFeatures(product);
+            const amounts = priceAmounts(stripePrice);
+            const baseCurrency = stripePrice.currency || 'eur';
+            const shownCurrency = pickCurrency(requestedCurrency, amounts, baseCurrency);
+            const shownCents = amounts[shownCurrency] ?? stripePrice.unit_amount;
 
             return {
               _id: dbPlan._id,
               name: product.name || dbPlan.name,
               // Keep integer Stripe cents — never round euros for display.
-              priceCents: stripePrice.unit_amount,
-              price: Number((stripePrice.unit_amount / 100).toFixed(2)),
-              currency: stripePrice.currency || 'eur',
+              priceCents: shownCents,
+              price: Number((shownCents / 100).toFixed(2)),
+              currency: shownCurrency,
+              /** Montants (centimes) par devise proposée par le prix Stripe, ex. { eur: 4900, usd: 4900, gbp: 4900 }. */
+              prices: amounts,
+              currencies: Object.keys(amounts),
               stripePriceId: effectivePriceId,
               description: product.description || '',
               features: displayFeatures,
@@ -327,7 +337,7 @@ export const subscriptionController = {
   /** Popup checkout init — Stripe subscription or PayPal (first month). */
   initPopupCheckout: async (req, res) => {
     try {
-      const { userId, companyId, priceId, planName, provider, returnUrl, apiBaseUrl, uiMode, promotionCode } = req.body;
+      const { userId, companyId, priceId, planName, provider, returnUrl, apiBaseUrl, uiMode, promotionCode, currency: requestedCurrency } = req.body;
       if (!userId || !companyId || !priceId || !provider) {
         return res.status(400).json({ error: 'userId, companyId, priceId and provider are required' });
       }
@@ -374,7 +384,11 @@ export const subscriptionController = {
       if (!resolved) {
         return res.status(404).json({ error: 'Plan not found for this priceId' });
       }
-      const { plan, amountCents, currency, stripePriceId: effectivePriceId } = resolved;
+      const { plan, stripePriceId: effectivePriceId } = resolved;
+      // Devise choisie par le visiteur (mêmes montants en EUR, USD, GBP) si le prix Stripe la propose ; sinon celle du prix.
+      const chosenCurrency = pickCurrency(requestedCurrency, resolved.amounts, resolved.currency);
+      const amountCents = resolved.amounts?.[chosenCurrency] ?? resolved.amountCents;
+      const currency = chosenCurrency.toUpperCase();
 
       const payment = await CompanyPayment.create({
         companyId: new mongoose.Types.ObjectId(companyId),
@@ -435,7 +449,8 @@ export const subscriptionController = {
             userId,
             effectivePriceId,
             metadata,
-            promotionCodeId
+            promotionCodeId,
+            chosenCurrency
           );
           payment.providerRef = session.id;
           payment.checkoutUrl = '';
@@ -471,7 +486,8 @@ export const subscriptionController = {
           successUrl,
           cancelUrl,
           metadata,
-          promotionCodeId
+          promotionCodeId,
+          chosenCurrency
         );
         checkoutUrl = session.url;
         payment.providerRef = session.id;

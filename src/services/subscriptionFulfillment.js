@@ -7,6 +7,7 @@ import { ensurePlanTokensGranted } from './planTokensGrant.js';
 import { pickPlanItem } from './seats.js';
 import { subscriptionPeriod, supersededStripeSubscriptionId } from './subscriptionPeriod.js';
 import { isCallcenterMetadata } from './callcenterTier.js';
+import { priceAmounts } from './currency.js';
 
 export async function resolvePlanByPriceId(priceId) {
   let plan = await SubscriptionPlan.findOne({ stripePriceId: priceId });
@@ -34,6 +35,8 @@ export async function resolvePlanByPriceId(priceId) {
 
   let amountCents = plan ? Math.round(Number(plan.price) * 100) : null;
   let currency = (plan?.currency || 'eur').toUpperCase();
+  /** Montants par devise (mêmes montants en EUR, USD, GBP) ; vide si Stripe n'a pas répondu. */
+  let amounts = {};
 
   if (stripeService.isConfigured()) {
     try {
@@ -42,6 +45,7 @@ export async function resolvePlanByPriceId(priceId) {
       if (sp) {
         amountCents = sp.unit_amount;
         currency = (sp.currency || 'eur').toUpperCase();
+        amounts = priceAmounts(sp);
       }
     } catch (err) {
       console.warn('[subscription] Could not fetch Stripe prices:', err.message);
@@ -51,7 +55,7 @@ export async function resolvePlanByPriceId(priceId) {
   if (!plan || amountCents == null) {
     return null;
   }
-  return { plan, amountCents, currency, stripePriceId: effectivePriceId };
+  return { plan, amountCents, currency, amounts, stripePriceId: effectivePriceId };
 }
 
 /**
