@@ -1,16 +1,25 @@
 /**
- * Langue des textes que l'ENTREPRISE dit à ses appelants (accueil, répondeur, transfert, refus, annonces) : elle suit le PAYS DE LA
- * SOCIÉTÉ, jamais la langue de l'écran de celui qui règle. Logique pure (aucun accès base ni réseau), à garder alignée avec
+ * Langue des phrases SYSTÈME que la ligne dit à ses appelants (répondeur, repli sans conseiller, remerciement, transfert, refus d'appelant
+ * bloqué, menu vocal, annonce d'enregistrement) : elle suit le PAYS DU NUMÉRO DE TÉLÉPHONE DE LA LIGNE (décision du propriétaire), pas le
+ * pays de la société ni la langue de l'écran de celui qui règle. Une société française qui achète un numéro allemand (permis par la règle
+ * « toute l'Europe ») entend donc de l'allemand sur cette ligne. Logique pure (aucun accès base ni réseau), à garder alignée avec
  * `src/domain/companyLanguage.ts` du front (`languageForCountry`).
  *
- * Le mapping est ici, en un seul endroit, facile à ajuster :
- *   fr : FR BE CH LU MA SN CI (le Maroc reste en français d'affaires malgré l'arabe) ;
- *   en : GB US IE CA AU NZ, et tout autre pays (pas de langue produit dédiée) ;
+ * Limite : le texte d'accueil / de répondeur écrit (ou validé, audio généré) par l'entreprise n'est JAMAIS traduit ; il est dit tel quel,
+ * dans la langue où le client l'a écrit. Seules les phrases fixes ci-dessous suivent la ligne.
+ *
+ * Le mapping pays -> langue est le tableau COUNTRIES_BY_LANGUAGE ci-dessous (un seul endroit, à ajuster ici) :
+ *   fr : FR BE CH LU MA SN CI (BE et CH restent en français ; le Maroc reste en français d'affaires malgré l'arabe) ;
+ *   de : DE AT LI (la Suisse reste en français) ;
+ *   it : IT SM VA ;
+ *   nl : NL (la Belgique reste en français) ;
+ *   pt : PT ;
+ *   en : GB US IE CA AU NZ, et tout autre pays (pas de langue produit dédiée, ex. Grèce, Pologne, Suède) ;
  *   es : Espagne et pays hispanophones ;
  *   ar : pays arabophones (sauf le Maroc) ;
  *   pays absent ou inconnu : fr (comme avant ce réglage).
  */
-export const COMPANY_LANGUAGES = ['fr', 'en', 'es', 'ar'];
+export const COMPANY_LANGUAGES = ['fr', 'en', 'es', 'ar', 'de', 'it', 'nl', 'pt'];
 export const DEFAULT_COMPANY_LANGUAGE = 'fr';
 
 export const COUNTRIES_BY_LANGUAGE = Object.freeze({
@@ -18,6 +27,10 @@ export const COUNTRIES_BY_LANGUAGE = Object.freeze({
   en: ['GB', 'US', 'IE', 'CA', 'AU', 'NZ'],
   es: ['ES', 'MX', 'AR', 'CO', 'CL', 'PE', 'VE', 'EC', 'GT', 'CU', 'BO', 'DO', 'HN', 'PY', 'SV', 'NI', 'CR', 'PA', 'UY', 'PR', 'GQ'],
   ar: ['AE', 'SA', 'EG', 'JO', 'KW', 'QA', 'BH', 'OM', 'LB', 'IQ', 'DZ', 'TN', 'LY', 'SY', 'YE', 'SD', 'PS', 'MR'],
+  de: ['DE', 'AT', 'LI'],
+  it: ['IT', 'SM', 'VA'],
+  nl: ['NL'],
+  pt: ['PT'],
 });
 
 /** Langue des textes d'entreprise pour un code pays ISO 3166-1 alpha-2 (« UK » = GB). Absent ou illisible : français. */
@@ -36,7 +49,8 @@ export function languageForCountry(iso2) {
  */
 const CALLING_CODE_COUNTRY = Object.freeze({
   '+1': 'US', '+20': 'EG', '+212': 'MA', '+213': 'DZ', '+216': 'TN', '+218': 'LY', '+221': 'SN', '+222': 'MR', '+225': 'CI', '+240': 'GQ',
-  '+249': 'SD', '+262': 'FR', '+32': 'BE', '+33': 'FR', '+34': 'ES', '+352': 'LU', '+353': 'IE', '+41': 'CH', '+44': 'GB',
+  '+249': 'SD', '+262': 'FR', '+31': 'NL', '+32': 'BE', '+33': 'FR', '+34': 'ES', '+351': 'PT', '+352': 'LU', '+353': 'IE', '+378': 'SM',
+  '+379': 'VA', '+39': 'IT', '+41': 'CH', '+423': 'LI', '+43': 'AT', '+44': 'GB', '+49': 'DE',
   '+502': 'GT', '+503': 'SV', '+504': 'HN', '+505': 'NI', '+506': 'CR', '+507': 'PA', '+508': 'FR', '+51': 'PE', '+52': 'MX', '+53': 'CU',
   '+54': 'AR', '+56': 'CL', '+57': 'CO', '+58': 'VE', '+590': 'FR', '+591': 'BO', '+593': 'EC', '+594': 'FR', '+595': 'PY', '+596': 'FR',
   '+598': 'UY', '+61': 'AU', '+64': 'NZ', '+681': 'FR', '+687': 'FR', '+689': 'FR', '+961': 'LB', '+962': 'JO', '+963': 'SY', '+964': 'IQ',
@@ -67,13 +81,18 @@ export const normalizeCompanyLanguage = (value) => {
 
 /**
  * Voix Amazon Polly (via <Say>) par langue du produit, voix féminine / masculine. Le polly arabe n'a qu'une voix (Zeina) : elle sert aux deux.
- * Voix à vérifier avec de vrais appels (même réserve que routingLanguages.js).
+ * Noms et codes de langue contrôlés contre les types du SDK Twilio (VoiceResponse.d.ts) : « Polly.Ines » s'écrit sans accent, et Daniel,
+ * Adriano et Laura n'existent que sous leur forme neuronale (« -Neural »). Jamais écoutées en vrai appel (même réserve que routingLanguages.js).
  */
 const SAY_VOICES = Object.freeze({
   fr: { language: 'fr-FR', female: 'Polly.Lea', male: 'Polly.Mathieu' },
   en: { language: 'en-US', female: 'Polly.Joanna', male: 'Polly.Matthew' },
   es: { language: 'es-ES', female: 'Polly.Lucia', male: 'Polly.Enrique' },
   ar: { language: 'arb', female: 'Polly.Zeina', male: 'Polly.Zeina' },
+  de: { language: 'de-DE', female: 'Polly.Vicki', male: 'Polly.Daniel-Neural' },
+  it: { language: 'it-IT', female: 'Polly.Bianca', male: 'Polly.Adriano-Neural' },
+  nl: { language: 'nl-NL', female: 'Polly.Laura-Neural', male: 'Polly.Ruben' },
+  pt: { language: 'pt-PT', female: 'Polly.Ines', male: 'Polly.Cristiano' },
 });
 
 /** Attributs `language` et `voice` d'un <Say> dans la langue de la société (français si langue inconnue). */
@@ -139,6 +158,62 @@ export const PHRASES = Object.freeze({
     transferUnavailable: (name) => `${name} غير متاح للرد حالياً.`,
     transferFallbackName: 'الشخص المطلوب',
     menuFor: (name, key) => `لـ ${name}، اضغط ${key}.`,
+  },
+  de: {
+    voicemailPrompt: 'Im Moment ist kein Berater verfügbar. Ihre Nachricht wird aufgezeichnet. Sprechen Sie sie nach dem Signalton auf, wir rufen Sie in Kürze zurück.',
+    noAnswer: 'Leider konnte kein Berater Ihren Anruf entgegennehmen. Bitte rufen Sie später noch einmal an. Auf Wiederhören.',
+    noAgent: 'Diese Leitung ist auf der Harx-Plattform aktiv. Im Moment ist kein Berater verfügbar. Auf Wiederhören.',
+    soloVoicemailPrompt: 'Ich bin im Moment nicht erreichbar. Ihre Nachricht wird aufgezeichnet. Sprechen Sie sie nach dem Signalton auf, ich rufe Sie in Kürze zurück.',
+    soloNoAnswer: 'Ich konnte Ihren Anruf nicht entgegennehmen. Bitte rufen Sie später noch einmal an. Auf Wiederhören.',
+    soloNoAgent: 'Diese Leitung ist im Moment nicht erreichbar. Bitte rufen Sie später noch einmal an. Auf Wiederhören.',
+    voicemailThanks: 'Vielen Dank, Ihre Nachricht wurde aufgezeichnet. Auf Wiederhören.',
+    blocked: 'Wir können Ihren Anruf leider nicht annehmen. Auf Wiederhören.',
+    transferAnnounce: (name) => `Ich verbinde Sie mit ${name}, bitte bleiben Sie in der Leitung.`,
+    transferUnavailable: (name) => `${name} ist im Moment nicht erreichbar.`,
+    transferFallbackName: 'Die gewünschte Person',
+    menuFor: (name, key) => `Für ${name} drücken Sie die ${key}.`,
+  },
+  it: {
+    voicemailPrompt: 'Al momento nessun consulente è disponibile. Il suo messaggio verrà registrato. Lo lasci dopo il segnale acustico e la richiameremo al più presto.',
+    noAnswer: 'Nessun consulente ha potuto rispondere. La preghiamo di richiamare più tardi. Arrivederci.',
+    noAgent: 'Questa linea è attiva sulla piattaforma Harx. Al momento nessun consulente è disponibile. Arrivederci.',
+    soloVoicemailPrompt: 'Al momento non sono disponibile. Il suo messaggio verrà registrato. Lo lasci dopo il segnale acustico e la richiamerò al più presto.',
+    soloNoAnswer: 'Non ho potuto rispondere. La prego di richiamare più tardi. Arrivederci.',
+    soloNoAgent: 'Questa linea al momento non è raggiungibile. La preghiamo di richiamare più tardi. Arrivederci.',
+    voicemailThanks: 'Grazie, il suo messaggio è stato registrato. Arrivederci.',
+    blocked: 'Non possiamo dare seguito alla sua chiamata. Arrivederci.',
+    transferAnnounce: (name) => `La metto in contatto con ${name}, resti in linea.`,
+    transferUnavailable: (name) => `${name} al momento non è disponibile.`,
+    transferFallbackName: 'La persona richiesta',
+    menuFor: (name, key) => `Per ${name}, prema ${key}.`,
+  },
+  nl: {
+    voicemailPrompt: 'Er is op dit moment geen adviseur beschikbaar. Uw bericht wordt opgenomen. Spreek het in na de piep, dan bellen we u zo snel mogelijk terug.',
+    noAnswer: 'Geen enkele adviseur kon uw oproep beantwoorden. Bel later nog eens. Tot ziens.',
+    noAgent: 'Deze lijn is actief op het Harx-platform. Er is op dit moment geen adviseur beschikbaar. Tot ziens.',
+    soloVoicemailPrompt: 'Ik ben op dit moment niet beschikbaar. Uw bericht wordt opgenomen. Spreek het in na de piep, dan bel ik u zo snel mogelijk terug.',
+    soloNoAnswer: 'Ik kon uw oproep niet beantwoorden. Bel later nog eens. Tot ziens.',
+    soloNoAgent: 'Deze lijn is op dit moment niet bereikbaar. Bel later nog eens. Tot ziens.',
+    voicemailThanks: 'Bedankt, uw bericht is opgenomen. Tot ziens.',
+    blocked: 'Wij kunnen uw oproep helaas niet aannemen. Tot ziens.',
+    transferAnnounce: (name) => `Ik verbind u door met ${name}, blijft u aan de lijn.`,
+    transferUnavailable: (name) => `${name} is op dit moment niet beschikbaar.`,
+    transferFallbackName: 'De gevraagde persoon',
+    menuFor: (name, key) => `Voor ${name}, druk op ${key}.`,
+  },
+  pt: {
+    voicemailPrompt: 'Neste momento não há nenhum consultor disponível. A sua mensagem será gravada. Deixe-a após o sinal e voltaremos a ligar-lhe em breve.',
+    noAnswer: 'Nenhum consultor conseguiu atender. Volte a ligar mais tarde. Até breve.',
+    noAgent: 'Esta linha está ativa na plataforma Harx. Neste momento não há nenhum consultor disponível. Até breve.',
+    soloVoicemailPrompt: 'Neste momento não estou disponível. A sua mensagem será gravada. Deixe-a após o sinal e voltarei a ligar-lhe em breve.',
+    soloNoAnswer: 'Não consegui atender. Volte a ligar mais tarde. Até breve.',
+    soloNoAgent: 'Esta linha não está disponível neste momento. Volte a ligar mais tarde. Até breve.',
+    voicemailThanks: 'Obrigado, a sua mensagem foi gravada. Até breve.',
+    blocked: 'Não podemos dar seguimento à sua chamada. Até breve.',
+    transferAnnounce: (name) => `Vou transferir a chamada para ${name}, aguarde um momento.`,
+    transferUnavailable: (name) => `${name} não está disponível neste momento.`,
+    transferFallbackName: 'A pessoa pretendida',
+    menuFor: (name, key) => `Para ${name}, marque ${key}.`,
   },
 });
 

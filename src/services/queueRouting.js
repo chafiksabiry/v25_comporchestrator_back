@@ -5,7 +5,7 @@ import InboundCall from '../models/InboundCall.js';
 import { availableIdentities, voiceIdentity } from './voicePresenceService.js';
 import { buildInboundTwiml, ringTimeoutOf, xmlEscape } from './inboundFlow.js';
 import { defaultMenuPhrase, menuVoice } from './routingLanguages.js';
-import { normalizeCompanyLanguage, phrasesFor } from './companyLanguage.js';
+import { normalizeCompanyLanguage, phrasesFor, sayVoice } from './companyLanguage.js';
 import {
   MAX_ATTEMPTS, buildPlan, chooseMenuQueue, defaultQueueOf, eligibleIdentities, inboundQueues, menuQueues, needsMenu,
 } from './callQueues.js';
@@ -35,7 +35,9 @@ export function menuLine(queue, language = 'fr') {
   if (!text) {
     text = queue.languages?.length || queue.promptLanguage ? defaultMenuPhrase(lang, key) : phrasesFor(company).menuFor(queue.name, key);
   }
-  return { ...menuVoice(lang), text };
+  // Sans langue propre à la file : voix de la ligne (la même que ses autres phrases) ; sinon voix de la langue de la file.
+  const ownLanguage = Boolean(queue.promptLanguage || queue.languages?.length);
+  return { ...(ownLanguage ? menuVoice(lang) : sayVoice(company)), text };
 }
 
 /** Corps TwiML du menu : une phrase par file (dans sa langue) dans un <Gather> ; sans touche, l'URL est rappelée (rejeu / défaut). */
