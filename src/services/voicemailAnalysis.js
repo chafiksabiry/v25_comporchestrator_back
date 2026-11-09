@@ -3,6 +3,7 @@ import TokensCompany from '../models/TokensCompany.js';
 import Voicemail from '../models/Voicemail.js';
 import { notifyCompany } from './companyNotificationService.js';
 import { loadAudio } from './voicemailStorage.js';
+import { companyLanguage } from './companyLanguageLookup.js';
 
 /** Analyse IA d'un message du répondeur par le service dash_calls (qui débite lui-même les jetons via charge-usage). */
 export const MIN_TOKENS = 3000;
@@ -26,8 +27,13 @@ export function resolveDashCallsApi(env = process.env) {
   return /\/api$/i.test(base) ? base : `${base}/api`;
 }
 
-export function buildAnalyzeUrl({ apiBase, companyId, from, recordingSid }) {
+/**
+ * `language` (fr, en, es, ar) : langue de la société, envoyée à dash_calls comme indice de transcription et langue du résumé ; absente, le
+ * paramètre n'est pas envoyé et dash_calls reste en français (comportement d'avant).
+ */
+export function buildAnalyzeUrl({ apiBase, companyId, from, recordingSid, language }) {
   const qs = new URLSearchParams({ companyId: String(companyId), from: String(from || ''), usageId: `voicemail-${recordingSid}` });
+  if (language) qs.set('language', String(language));
   return `${apiBase}/voice-menu/analyze-voicemail?${qs.toString()}`;
 }
 
@@ -70,7 +76,8 @@ export async function analyzeVoicemail(voicemailId) {
     const apiBase = resolveDashCallsApi();
     if (!apiBase) throw new Error('dash_calls URL not configured');
     const audio = await loadAudio(vm);
-    const res = await fetch(buildAnalyzeUrl({ apiBase, companyId: vm.companyId, from: vm.from, recordingSid: vm.recordingSid }), {
+    const language = await companyLanguage(vm.companyId);
+    const res = await fetch(buildAnalyzeUrl({ apiBase, companyId: vm.companyId, from: vm.from, recordingSid: vm.recordingSid, language }), {
       method: 'POST',
       headers: { Authorization: `Bearer ${signServiceToken()}`, 'Content-Type': 'audio/mpeg' },
       body: audio,

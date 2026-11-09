@@ -52,6 +52,7 @@ export const DEFAULT_CONSENT_LANGUAGE = 'fr';
 const ARABIC = ['+20', '+212', '+213', '+216', '+218', '+249', '+961', '+962', '+963', '+964', '+965', '+966', '+967', '+968', '+971', '+973', '+974'];
 const SPANISH = ['+34', '+51', '+52', '+53', '+54', '+56', '+57', '+58', '+591', '+593', '+595', '+598'];
 const ENGLISH = ['+1', '+44', '+61', '+64', '+353'];
+const FRENCH = ['+33', '+32', '+41', '+352', '+221', '+225', '+262', '+590', '+594', '+596', '+687', '+689'];
 
 /** Code de langue d'une annonce valide (fr/en/es/ar), sinon null. */
 export const normalizeConsentLanguage = (value) => {
@@ -59,15 +60,21 @@ export const normalizeConsentLanguage = (value) => {
   return CONSENT_LANGUAGES.includes(code) ? code : null;
 };
 
-/** Langue de l'annonce selon l'indicatif du numéro de l'interlocuteur (E.164) ; français par défaut. */
-export function consentLanguageFor(number) {
+/**
+ * Langue de l'annonce selon l'indicatif du numéro de l'interlocuteur (E.164), quand il est reconnu (arabe, espagnol, anglais, français).
+ * Indicatif non reconnu ou numéro illisible : `fallback`, la langue de la société (`languageForCountry`), sinon le français comme avant.
+ * Le comportement pour un indicatif reconnu est inchangé : la langue de l'interlocuteur prime sur celle de la société.
+ */
+export function consentLanguageFor(number, fallback = DEFAULT_CONSENT_LANGUAGE) {
+  const fb = normalizeConsentLanguage(fallback) || DEFAULT_CONSENT_LANGUAGE;
   const n = String(number ?? '').replace(/[\s().-]/g, '');
-  if (!n.startsWith('+')) return DEFAULT_CONSENT_LANGUAGE;
+  if (!n.startsWith('+')) return fb;
   const hit = (list) => list.some((p) => n.startsWith(p));
   if (hit(ARABIC)) return 'ar';
   if (hit(SPANISH)) return 'es';
   if (hit(ENGLISH)) return 'en';
-  return DEFAULT_CONSENT_LANGUAGE;
+  if (hit(FRENCH)) return 'fr';
+  return fb;
 }
 
 /** <Say> de l'annonce, dans la langue et avec la voix du routage (menuVoice). */
