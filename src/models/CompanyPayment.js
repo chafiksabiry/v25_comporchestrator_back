@@ -21,7 +21,7 @@ const companyPaymentSchema = new mongoose.Schema({
     required: true,
     enum: ['stripe', 'paypal']
   },
-  /** Charge amount in cents (EUR). */
+  /** Charge amount in cents, in `currency` (devise du pays de l'entreprise : EUR, USD ou GBP, mêmes montants). */
   amount: {
     type: Number,
     required: true,

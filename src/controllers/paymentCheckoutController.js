@@ -5,13 +5,15 @@ import { stripeService } from '../services/stripeService.js';
 import { bundleBalances, fulfillBundlePurchase, fulfillMinutesPurchase, fulfillTokensPurchase, fulfillWalletDeposit } from '../services/paymentFulfillment.js';
 import { bundleAmountCents, bundleLabel, parseBundleQuantities } from '../services/bundlePurchase.js';
 import { config } from '../config/env.js';
+import { FALLBACK_PURCHASE_CURRENCY, formatAmountLabel, purchaseCurrency } from '../services/purchaseCurrency.js';
 import {
   computeMinutesPurchaseCents,
   computeTokensPurchaseCents,
   getPlatformPricing,
 } from '../config/minutesPricing.js';
 
-const CURRENCY = (process.env.PAYMENT_CURRENCY || 'EUR').toUpperCase();
+// Le portefeuille (dépôt) reste en EUR : c'est le registre des commissions, pas un achat de produit.
+const WALLET_CURRENCY = 'EUR';
 
 function paypalReturnBase() {
   return (
@@ -138,6 +140,8 @@ export const paymentCheckoutController = {
   async getConfig(req, res) {
     try {
       const pricing = await getPlatformPricing();
+      // `?companyId=` : devise du pays de l'entreprise (mêmes montants dans les trois devises) ; sinon EUR.
+      const currency = req.query?.companyId ? await purchaseCurrency(req, req.query.companyId) : FALLBACK_PURCHASE_CURRENCY;
       res.json({
         success: true,
         paypal: {
@@ -149,7 +153,7 @@ export const paymentCheckoutController = {
           enabled: stripeService.isConfigured()
         },
         pricing: {
-          currency: CURRENCY,
+          currency,
           minutePacks: pricing.minutePacks,
           minutesCustomRateCents: pricing.minutesCustomRateCents,
           minutesCustomRateEuros: pricing.minutesCustomRateCents / 100,
@@ -180,6 +184,7 @@ export const paymentCheckoutController = {
         return res.status(400).json({ error: "provider must be 'stripe' or 'paypal'" });
       }
 
+      const currency = purpose === 'wallet_deposit' ? WALLET_CURRENCY : await purchaseCurrency(req, companyId);
       const amountCents = await computeAmountCents(purpose, { amountEuros, minutes, tokens });
       if (amountCents == null || amountCents <= 0) {
         return res.status(400).json({ error: 'Invalid amount, minutes or tokens quantity' });
@@ -198,7 +203,7 @@ export const paymentCheckoutController = {
         purpose,
         provider,
         amount: amountCents,
-        currency: CURRENCY,
+        currency,
         quantity:
           purpose === 'minutes_purchase' || purpose === 'tokens_purchase'
             ? quantity
@@ -226,7 +231,7 @@ export const paymentCheckoutController = {
 
         const label =
           purpose === 'wallet_deposit'
-            ? `HARX — Crédit portefeuille ${(amountCents / 100).toFixed(2)} €`
+            ? `HARX — Crédit portefeuille ${formatAmountLabel(amountCents, currency)}`
             : purpose === 'bundle_purchase'
               ? bundleLabel(bundle)
               : purpose === 'tokens_purchase'
@@ -235,7 +240,7 @@ export const paymentCheckoutController = {
 
         const paypalOrder = await paypalService.createOrder({
           amountCents,
-          currency: CURRENCY,
+          currency,
           description: label,
           customId: payment._id,
           returnUrl,
@@ -278,7 +283,7 @@ export const paymentCheckoutController = {
 
         const productName =
           purpose === 'wallet_deposit'
-            ? `HARX — Crédit portefeuille ${(amountCents / 100).toFixed(2)} €`
+            ? `HARX — Crédit portefeuille ${formatAmountLabel(amountCents, currency)}`
             : purpose === 'bundle_purchase'
               ? bundleLabel(bundle)
               : purpose === 'tokens_purchase'
@@ -288,7 +293,7 @@ export const paymentCheckoutController = {
         try {
           const session = await stripeService.createOneShotCheckoutSession({
             amountCents,
-            currency: CURRENCY,
+            currency,
             productName,
             successUrl,
             cancelUrl,
