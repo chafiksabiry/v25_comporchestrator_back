@@ -31,3 +31,17 @@ export function pickCurrency(requested, amounts, baseCurrency = 'eur') {
   if (wanted && amounts && Object.prototype.hasOwnProperty.call(amounts, wanted)) return wanted;
   return String(baseCurrency || 'eur').toLowerCase();
 }
+
+/**
+ * Devise affichée et facturée selon le PAYS du souscripteur (décision produit, pas de sélecteur manuel) :
+ * Royaume-Uni -> GBP, États-Unis -> USD, tous les autres pays (et pays inconnu ou absent) -> EUR.
+ * Les montants sont identiques dans les trois devises : seule la devise change.
+ * @param {string|null|undefined} iso2 code pays ISO 3166-1 alpha-2 (« UK » est accepté comme alias de GB).
+ * @returns {'eur'|'usd'|'gbp'}
+ */
+export function currencyForCountry(iso2) {
+  const code = String(iso2 ?? '').trim().toUpperCase();
+  if (code === 'GB' || code === 'UK') return 'gbp';
+  if (code === 'US') return 'usd';
+  return 'eur';
+}
