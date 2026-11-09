@@ -469,7 +469,7 @@ export const stripeService = {
   captureCheckoutSession,
   cancelCheckoutAuthorization,
   refundCheckoutSession,
-  createCheckoutSession: async (userId, priceId, successUrl, cancelUrl, metadata = {}, promotionCodeId = null) => {
+  createCheckoutSession: async (userId, priceId, successUrl, cancelUrl, metadata = {}, promotionCodeId = null, currency = null) => {
     try {
       const session = await getStripe().checkout.sessions.create(withPromotion({
         payment_method_types: ['card'],
@@ -480,6 +480,8 @@ export const stripeService = {
           },
         ],
         mode: 'subscription',
+        // Prix multi-devises : la devise choisie (mêmes montants en EUR, USD, GBP).
+        ...(currency ? { currency: String(currency).toLowerCase() } : {}),
         // Plus d'essai sans carte : la carte est demandée dès la souscription.
         payment_method_collection: 'always',
         success_url: successUrl,
@@ -508,12 +510,13 @@ export const stripeService = {
    * Create an EMBEDDED Stripe Checkout Session (UI rendered inside HARX as a modal).
    * No redirect: the front uses onComplete + confirm endpoint.
    */
-  createEmbeddedSubscriptionSession: async (userId, priceId, metadata = {}, promotionCodeId = null) => {
+  createEmbeddedSubscriptionSession: async (userId, priceId, metadata = {}, promotionCodeId = null, currency = null) => {
     return getStripe().checkout.sessions.create(withPromotion({
       ui_mode: 'embedded_page',
       mode: 'subscription',
       payment_method_types: ['card'],
       line_items: [{ price: priceId, quantity: 1 }],
+      ...(currency ? { currency: String(currency).toLowerCase() } : {}),
       // Plus d'essai sans carte : la carte est demandée dès la souscription.
       payment_method_collection: 'always',
       redirect_on_completion: 'never',
@@ -565,7 +568,7 @@ export const stripeService = {
       const stripe = getStripe();
       const prices = await stripe.prices.list({
         active: true,
-        expand: ['data.product'],
+        expand: ['data.product', 'data.currency_options'],
         limit: 100,
       });
 
@@ -597,7 +600,7 @@ export const stripeService = {
   retrievePriceWithProduct: async (priceId) => {
     if (!priceId || !String(priceId).startsWith('price_')) return null;
     const stripe = getStripe();
-    const price = await stripe.prices.retrieve(priceId, { expand: ['product'] });
+    const price = await stripe.prices.retrieve(priceId, { expand: ['product', 'currency_options'] });
     if (!price?.active) return null;
     let product = price.product;
     if (!product || typeof product === 'string') {
