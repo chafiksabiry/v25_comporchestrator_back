@@ -65,10 +65,10 @@ export function readPlan(token) {
 const nextUrl = (baseUrl, plan, index, companyId) => `${baseUrl}${WEBHOOK_PATH}/inbound-queue-next?s=${signPlan(plan, index, companyId)}`;
 
 /** <Dial> d'une tentative : même forme que la sonnerie actuelle, `action` et délai propres à la tentative. */
-export function buildAttemptDial({ attempt, from = '', action }) {
+export function buildAttemptDial({ attempt, from = '', action, recording = null }) {
   const clients = attempt.ids.map((id) => `<Client>${xmlEscape(id)}</Client>`).join('');
   const callerId = String(from).replace(/[^+\d]/g, '');
-  return `<Dial timeout="${attempt.t}" answerOnBridge="true" action="${xmlEscape(action)}" method="POST" callerId="${callerId}">${clients}</Dial>`;
+  return `<Dial timeout="${attempt.t}" answerOnBridge="true" action="${xmlEscape(action)}" method="POST" callerId="${callerId}"${recording ? recording.attrs : ''}>${clients}</Dial>`;
 }
 
 /**
@@ -76,11 +76,12 @@ export function buildAttemptDial({ attempt, from = '', action }) {
  * Sinon chaque tentative revient sur inbound-queue-next, qui passe à la suivante (jusqu'à MAX_ATTEMPTS) puis rend la main
  * au traitement standard (mobile puis répondeur).
  */
-export function buildPlanBody({ plan, companyId, settings, baseUrl, from, resultUrl }) {
+export function buildPlanBody({ plan, companyId, settings, baseUrl, from, resultUrl, recording = null }) {
   if (plan.length === 1 && !plan[0].seq) {
-    return buildInboundTwiml({ settings, baseUrl, companyId: String(companyId), identities: plan[0].ids, from, resultUrl, withGreeting: false });
+    return buildInboundTwiml({ settings, baseUrl, companyId: String(companyId), identities: plan[0].ids, from, resultUrl, withGreeting: false, recording });
   }
-  return buildAttemptDial({ attempt: plan[0], from, action: nextUrl(baseUrl, plan, 1, companyId) });
+  // Appel enregistré : l'annonce est dite une seule fois, avant la première sonnerie.
+  return `${recording ? recording.say : ''}${buildAttemptDial({ attempt: plan[0], from, action: nextUrl(baseUrl, plan, 1, companyId), recording })}`;
 }
 
 // ---------------------------------------------------------------- données
@@ -117,7 +118,7 @@ async function planFor({ companyId, inbound, queue, settings }) {
  * @returns {Promise<null|{kind:'menu',body:string}|{kind:'ring',body:string,firstIds:string[],queue:object}|{kind:'none',queue:object}>}
  *   null = aucune file (ou erreur) : comportement existant inchangé.
  */
-export async function resolveQueueRoute({ companyId, settings, baseUrl, from = '', stage = 'call', digits = '', attempt = 1 } = {}) {
+export async function resolveQueueRoute({ companyId, settings, baseUrl, from = '', stage = 'call', digits = '', attempt = 1, recording = null } = {}) {
   try {
     if (!companyId) return null;
     const rows = await CallQueue.find({ companyId }).lean();
@@ -137,7 +138,7 @@ export async function resolveQueueRoute({ companyId, settings, baseUrl, from = '
     const plan = await planFor({ companyId, inbound, queue, settings });
     if (!plan.length) return { kind: 'none', queue };
     const resultUrl = `${baseUrl}${WEBHOOK_PATH}/inbound-dial-result`;
-    const body = buildPlanBody({ plan, companyId, settings, baseUrl, from, resultUrl });
+    const body = buildPlanBody({ plan, companyId, settings, baseUrl, from, resultUrl, recording });
     return { kind: 'ring', body, firstIds: plan[0].ids, queue };
   } catch (error) {
     console.error('Files d\'attente : repli sur le comportement actuel (' + String(error?.message || error) + ')');
@@ -150,7 +151,7 @@ export async function resolveQueueRoute({ companyId, settings, baseUrl, from = '
  * @returns {{action:'dial',body:string}|{action:'delegate',answeredBy:string}} 'delegate' = laisser le traitement standard
  *   (décroché / abandon / mobile puis répondeur) ; `answeredBy` = identité qui a décroché (tentative à une seule personne).
  */
-export function continueQueuePlan({ token, dialStatus = '', baseUrl, from = '' }) {
+export function continueQueuePlan({ token, dialStatus = '', baseUrl, from = '', recording = null }) {
   const { plan, next, companyId } = readPlan(token);
   const status = String(dialStatus).toLowerCase();
   if (status === 'completed' || status === 'answered') {
@@ -159,5 +160,5 @@ export function continueQueuePlan({ token, dialStatus = '', baseUrl, from = '' }
   }
   if (status === 'canceled' || next >= plan.length) return { action: 'delegate', answeredBy: '' };
   const attempt = plan[next];
-  return { action: 'dial', body: buildAttemptDial({ attempt, from, action: nextUrl(baseUrl, plan, next + 1, companyId) }) };
+  return { action: 'dial', body: buildAttemptDial({ attempt, from, action: nextUrl(baseUrl, plan, next + 1, companyId), recording }) };
 }

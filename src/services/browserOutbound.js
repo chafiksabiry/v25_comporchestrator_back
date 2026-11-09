@@ -83,7 +83,7 @@ export function maxSecondsForBalance(minutes) {
  * Décision de numérotation, sans accès réseau : renvoie la consigne TwiML à donner à Twilio.
  * `line` est la ligne Twilio de l'entreprise utilisée comme numéro appelant ; `minutes` le solde de minutes.
  */
-export function decideOutboundCall({ to, line, subscribed, minutes }) {
+export function decideOutboundCall({ to, line, subscribed, minutes, recording = null }) {
   if (!to) return { ok: false, message: 'Numéro non autorisé.' };
   if (!subscribed) return { ok: false, message: 'Aucun abonnement actif.' };
   if (!line) return { ok: false, message: 'Aucune ligne disponible pour appeler.' };
@@ -91,7 +91,7 @@ export function decideOutboundCall({ to, line, subscribed, minutes }) {
   // les minutes entières du solde sont écoulées, pour que le solde ne passe jamais sous zéro.
   const maxSeconds = maxSecondsForBalance(minutes);
   if (!maxSeconds) return { ok: false, message: 'Solde de minutes insuffisant.' };
-  return { ok: true, maxSeconds, twiml: buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds }) };
+  return { ok: true, maxSeconds, twiml: buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds, recording }) };
 }
 
 /**

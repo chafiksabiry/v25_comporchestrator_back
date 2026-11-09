@@ -48,10 +48,16 @@ export function verifyTicket({ secret, voicemailId, identity, ticket, now = Date
 
 const wrap = (inner) => `<?xml version="1.0" encoding="UTF-8"?><Response>${inner}</Response>`;
 
-/** `maxSeconds` (optionnel) : durée maximale de l'appel, au-delà Twilio raccroche (attribut timeLimit de <Dial>). */
-export const buildCallbackTwiml = ({ callerId, to, maxSeconds }) => {
+/**
+ * `maxSeconds` (optionnel) : durée maximale de l'appel, au-delà Twilio raccroche (attribut timeLimit de <Dial>).
+ * `recording` (optionnel, voir callRecording.buildRecordingPlan) : enregistre l'appel, et l'annonce est jouée à la personne
+ * appelée quand elle décroche (`<Number url>`), avant la mise en relation. Sans `recording`, TwiML inchangé.
+ */
+export const buildCallbackTwiml = ({ callerId, to, maxSeconds, recording = null }) => {
   const limit = Number.isFinite(maxSeconds) && maxSeconds > 0 ? ` timeLimit="${Math.floor(maxSeconds)}"` : '';
-  return wrap(`<Dial callerId="${xmlEscape(callerId)}" answerOnBridge="true" timeout="30"${limit}><Number>${xmlEscape(to)}</Number></Dial>`);
+  const record = recording ? recording.attrs : '';
+  const whisper = recording ? ` url="${xmlEscape(recording.announceUrl)}" method="POST"` : '';
+  return wrap(`<Dial callerId="${xmlEscape(callerId)}" answerOnBridge="true" timeout="30"${limit}${record}><Number${whisper}>${xmlEscape(to)}</Number></Dial>`);
 };
 
 export const buildRefusalTwiml = (message) =>
