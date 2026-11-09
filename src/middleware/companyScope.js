@@ -8,6 +8,7 @@
 const LOOKUP_TIMEOUT_MS = 4000;
 const CACHE_TTL_MS = 60 * 1000;
 const companyByUser = new Map();
+const countryByCompany = new Map();
 
 export class ScopeError extends Error {
   constructor(status, message) {
@@ -101,6 +102,61 @@ export function onlyCompanyRows(rows, companyId) {
 
 export function clearCompanyCache() {
   companyByUser.clear();
+  countryByCompany.clear();
+}
+
+/** Code pays ISO 3166-1 alpha-2 en majuscules ; « UK » est un alias de GB. Vide si rien d'exploitable. */
+export function normalizeCountryCode(code) {
+  const c = String(code ?? '').trim().toUpperCase();
+  return c === 'UK' ? 'GB' : c;
+}
+
+export const DEFAULT_COMPANY_COUNTRY = 'FR';
+
+/**
+ * Pays de l'entreprise (celui de l'abonné), lu dans l'état de l'espace de travail du service d'inscription
+ * (`GET /api/call-center/workspace-state?companyId=…` avec le jeton de l'appelant : le service vérifie lui-même que l'appelant
+ * appartient à l'entreprise ; réponse `{ success, data: { company: { profile: { country } } } }`).
+ * Pays non renseigné : FR, comme l'application. Lecture impossible (service absent, erreur, réponse illisible) : refus fermé (503),
+ * jamais « tout autoriser ». À appeler après le contrôle d'appartenance (`requireCompany`).
+ * @returns {Promise<string>} code ISO en majuscules (GB pour UK)
+ */
+export async function companyCountry(req, companyId) {
+  const id = String(companyId || '');
+  const userId = req.user && (req.user.userId || req.user.id);
+  const token = req.headers?.authorization?.split(' ')[1];
+  if (!userId || !token) throw new ScopeError(401, 'Authentication required');
+  if (!id) throw new ScopeError(400, 'companyId is required');
+
+  // Clé par personne ET entreprise : un autre appelant repasse toujours par le contrôle d'accès du service d'inscription.
+  const key = `${userId}:${id}`;
+  const cached = countryByCompany.get(key);
+  if (cached && cached.expires > Date.now()) return cached.country;
+
+  const origin = registrationOrigin();
+  if (!origin) throw new ScopeError(503, 'Company country lookup is not configured');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LOOKUP_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${origin}/api/call-center/workspace-state?companyId=${encodeURIComponent(id)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new ScopeError(503, 'Company country lookup failed');
+    const payload = await res.json();
+    const company = payload?.data?.company;
+    if (!payload || payload.success === false || !company || typeof company !== 'object') {
+      throw new ScopeError(503, 'Company country lookup failed');
+    }
+    const country = normalizeCountryCode(company.profile?.country) || DEFAULT_COMPANY_COUNTRY;
+    countryByCompany.set(key, { country, expires: Date.now() + CACHE_TTL_MS });
+    return country;
+  } catch (error) {
+    if (error instanceof ScopeError) throw error;
+    throw new ScopeError(503, 'Company country lookup failed');
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
