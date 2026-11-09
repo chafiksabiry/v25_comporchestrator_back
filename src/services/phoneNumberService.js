@@ -381,6 +381,7 @@ class PhoneNumberService {
   getBundleSidForCountry(isoCountry) {
     const cc = String(isoCountry || '').toUpperCase();
     if (cc === 'FR') return config.twilioFrenchBundleSid || null;
+    if (cc === 'GB') return config.twilioGbBundleSid || null;
     return null;
   }
 
@@ -606,8 +607,12 @@ class PhoneNumberService {
         friendlyName: 'Gig Number:' + phoneNumber,
       };
 
-      const currentBundleSid = bundleSid || (phoneNumber.startsWith('+33') ? config.twilioFrenchBundleSid : null);
-      const currentAddressSid = addressSid || (phoneNumber.startsWith('+33') ? config.twilioFrenchAddressSid : null);
+      const currentBundleSid = bundleSid
+        || (phoneNumber.startsWith('+33') ? config.twilioFrenchBundleSid : null)
+        || (phoneNumber.startsWith('+44') ? config.twilioGbBundleSid || null : null);
+      const currentAddressSid = addressSid
+        || (phoneNumber.startsWith('+33') ? config.twilioFrenchAddressSid : null)
+        || (phoneNumber.startsWith('+44') ? config.twilioGbAddressSid || null : null);
 
       // Fail early (before Twilio IncomingPhoneNumbers.create) when the
       // configured FR bundle is not a "local" regulation — same 21649 Twilio

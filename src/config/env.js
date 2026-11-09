@@ -41,6 +41,10 @@ export const config = {
   // acquisition for non-trial lines).
   stripePricePhoneLine: process.env.STRIPE_PRICE_PHONE_LINE || 'price_phone_line_placeholder',
   phoneLineMonthlyPriceCents: parseInt(process.env.PHONE_LINE_MONTHLY_PRICE_CENTS || '999', 10),
+  // Royaume-Uni : dossier réglementaire Twilio « United Kingdom: Local - Business » (approuvé) et son adresse. Tant que ces deux
+  // variables sont vides, la recherche de numéros +44 répond « dossier requis » (rien n'est vendu sans dossier approuvé).
+  twilioGbBundleSid: process.env.TWILIO_GB_BUNDLE_SID || '',
+  twilioGbAddressSid: process.env.TWILIO_GB_ADDRESS_SID || '',
   twilioFrenchBundleSid: process.env.TWILIO_FRENCH_BUNDLE_SID || 'BUf007aeefc1a71ad9ac096a4d205563b0',
   twilioFrenchAddressSid: process.env.TWILIO_FRENCH_ADDRESS_SID || 'ADfa022505e9b0433a23c8b4f6e56cf15a',
   // Dossier « France: National - Business » (approuvé) et son adresse : requis pour les numéros que Twilio classe « national » (ex. +33 1 62 04).
