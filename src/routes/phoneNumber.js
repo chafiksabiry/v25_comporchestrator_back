@@ -127,6 +127,17 @@ router.post(
   express.urlencoded({ extended: false }),
   phoneNumberController.handleTwilioTransferResult.bind(phoneNumberController)
 );
+// Appels enregistrés (offres Full Scope / Multi-clients / TaaS) : annonce à l'appelé et rappel d'enregistrement (jeton signé dans l'URL)
+router.post(
+  '/webhooks/twilio/call-announce',
+  express.urlencoded({ extended: false }),
+  phoneNumberController.handleTwilioCallAnnounce.bind(phoneNumberController)
+);
+router.post(
+  '/webhooks/twilio/call-recording',
+  express.urlencoded({ extended: false }),
+  phoneNumberController.handleTwilioCallRecording.bind(phoneNumberController)
+);
 router.post(
   '/webhooks/twilio/voicemail-done',
   express.urlencoded({ extended: false }),

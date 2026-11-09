@@ -65,13 +65,16 @@ export function buildMobileDialTwiml({ number, ringSeconds = 25, callerId = '', 
  * TwiML (corps de <Response>) d'un appel entrant réel.
  * `mobile` ({ number, ringSeconds }, voir reach.mobileTarget) + `linePhone` : sans navigateur présent, le mobile sonne avant le répondeur.
  */
-export function buildInboundTwiml({ settings, baseUrl, companyId, identities = [], from = '', resultUrl, voicemailUrls, mobile = null, linePhone = '', solo = false, withGreeting = true } = {}) {
+export function buildInboundTwiml({ settings, baseUrl, companyId, identities = [], from = '', resultUrl, voicemailUrls, mobile = null, linePhone = '', solo = false, withGreeting = true, recording = null } = {}) {
   const s = normalize(settings);
   const hello = withGreeting ? greeting(s, baseUrl, companyId) : '';
   if (identities.length) {
     const clients = identities.map((id) => `<Client>${xmlEscape(id)}</Client>`).join('');
     const callerId = String(from).replace(/[^+\d]/g, '');
-    return `${hello}<Dial timeout="${s.ringTimeoutSeconds}" answerOnBridge="true" action="${xmlEscape(resultUrl)}" method="POST" callerId="${callerId}">${clients}</Dial>`;
+    // Appel enregistré (`recording`, voir callRecording.js) : annonce à l'appelant avant la sonnerie, puis <Dial record>.
+    const announce = recording ? recording.say : '';
+    const record = recording ? recording.attrs : '';
+    return `${hello}${announce}<Dial timeout="${s.ringTimeoutSeconds}" answerOnBridge="true" action="${xmlEscape(resultUrl)}" method="POST" callerId="${callerId}"${record}>${clients}</Dial>`;
   }
   if (mobile) return `${hello}${buildMobileDialTwiml({ ...mobile, callerId: linePhone, resultUrl })}`;
   if (s.voicemailEnabled) return `${hello}${voicemailRecord(s, baseUrl, companyId, voicemailUrls, solo)}`;

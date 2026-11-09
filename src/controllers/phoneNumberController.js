@@ -19,7 +19,7 @@ import { computeInboundStats } from '../services/inboundStats.js';
 import InboundSettings from '../models/InboundSettings.js';
 import Voicemail from '../models/Voicemail.js';
 import { buildInboundTwiml, buildNoAnswerTwiml, buildVoicemailDoneTwiml, greetingTwiml, wrapResponse } from '../services/inboundFlow.js';
-import { continueQueuePlan, resolveQueueRoute } from '../services/queueRouting.js';
+import { continueQueuePlan, readPlan, resolveQueueRoute } from '../services/queueRouting.js';
 import { mapRecordingCallback } from '../services/voicemailMapping.js';
 import { mapTwilioCallStatus } from '../services/twilioTestCallStatus.js';
 import { analyzeVoicemail } from '../services/voicemailAnalysis.js';
@@ -31,6 +31,7 @@ import { syncMinutesFromCalls } from './escrowController.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket } from '../services/browserOutbound.js';
 import { transferResult } from './callTransferController.js';
+import { attachCallRecording, buildRecordingPlan, consentLanguageFor, consentTwiml, mapCallRecordingCallback, normalizeConsentLanguage, shouldRecordCompany, shouldRecordPlan, verifyRecordingToken } from '../services/callRecording.js';
 import { journalForwardedCall, journalUnansweredCall } from '../services/journalCall.js';
 import ReachSettings from '../models/ReachSettings.js';
 import { decideInboundRoute, mobileTarget, shouldRingMobileAfter } from '../services/reach.js';
@@ -48,6 +49,16 @@ const isSoloCompany = async (companyId) => {
     console.error('isSoloCompany:', e.message);
     return false;
   }
+};
+
+/**
+ * Consigne d'enregistrement d'un appel entrant pour l'entreprise de la ligne (null = non enregistré, aucune annonce).
+ * Offre non listée (voir callRecording.shouldRecordPlan), erreur de lecture ou CallSid absent : jamais d'enregistrement.
+ */
+const recordingPlanFor = async ({ companyId, callSid, baseUrl, from }) => {
+  if (!companyId || !callSid) return null;
+  if (!(await shouldRecordCompany(companyId, loadCompanyPlanLimits))) return null;
+  return buildRecordingPlan({ record: true, companyId: String(companyId), callSid, baseUrl, language: consentLanguageFor(from) });
 };
 
 /** In-memory status for live test-call monitoring (popup). */
@@ -1756,12 +1767,14 @@ class PhoneNumberController {
         freshMinutesBalance(companyId, { sync: syncMinutesFromCalls, grant: ensurePlanMinutesGranted, readWallet: (id) => MinutesCompany.findOne({ companyId: id }).select('minutes').lean() }),
         PhoneNumber.findOne({ companyId, provider: 'twilio', twilioId: { $exists: true, $ne: null }, status: 'active', billingStatus: { $ne: 'suspended' } }).sort({ createdAt: 1 }).lean(),
       ]);
-      const decision = decideOutboundCall({ to, line, subscribed: Boolean(limits), minutes });
+      // Enregistrement selon l'offre (liste blanche) ; l'annonce est jouée à la personne appelée quand elle décroche.
+      const recording = buildRecordingPlan({ record: shouldRecordPlan(limits), companyId, callSid: String(req.body?.CallSid || ''), baseUrl: `https://${req.get('host')}`, language: consentLanguageFor(to) });
+      const decision = decideOutboundCall({ to, line, subscribed: Boolean(limits), minutes, recording });
       if (!decision.ok) {
         console.warn(`[browser-outbound] refusé pour l'entreprise ${companyId} : ${decision.message}`);
         return send(refusal(decision.message));
       }
-      console.log(`📞 Appel sortant du navigateur (entreprise ${companyId}) vers ${to.slice(0, 6)}… depuis ${line.phoneNumber}`);
+      console.log(`📞 Appel sortant du navigateur (entreprise ${companyId}) vers ${to.slice(0, 6)}… depuis ${line.phoneNumber}${recording ? ' (enregistré)' : ''}`);
       return send(decision.twiml);
     } catch (error) {
       console.error('Error in handleBrowserOutbound:', error);
@@ -1827,8 +1840,9 @@ class PhoneNumberController {
       const settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
       const baseUrl = `https://${req.get('host')}`;
       const solo = await isSoloCompany(line?.companyId);
+      const recording = solo ? null : await recordingPlanFor({ companyId: line?.companyId, callSid, baseUrl, from });
       // Files d'attente (routage par langues / compétences, menu vocal). null = aucune file, Nomad Solo ou erreur : comportement inchangé.
-      const queueRoute = !solo && line?.companyId ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'call' }) : null;
+      const queueRoute = !solo && line?.companyId ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'call', recording }) : null;
       const identities = queueRoute ? (queueRoute.kind === 'ring' ? queueRoute.firstIds : []) : online;
       const reach = line?.companyId ? await ReachSettings.findOne({ companyId: line.companyId }).lean().catch((e) => { console.error('ReachSettings read:', e.message); return null; }) : null;
       const route = queueRoute?.kind === 'menu' ? { first: 'browser', mobileNext: false, mobile: null } : decideInboundRoute({ identities, reach, linePhone: to });
@@ -1863,6 +1877,7 @@ class PhoneNumberController {
         resultUrl,
         mobile: route.first === 'mobile' ? route.mobile : null,
         linePhone: to,
+        recording,
       }));
     } catch (error) {
       console.error('Error in handleTwilioInboundCall:', error);
@@ -1893,8 +1908,9 @@ class PhoneNumberController {
       line = to ? (await PhoneNumber.findOne({ phoneNumber: to })) || (await PhoneNumber.findOne({ phoneNumber: to.replace(/^\+/, '') })) : null;
       settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
       solo = await isSoloCompany(line?.companyId);
+      const recording = solo ? null : await recordingPlanFor({ companyId: line?.companyId, callSid, baseUrl, from });
       const queueRoute = !solo && line?.companyId
-        ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'menu', digits: String(req.body?.Digits || '').trim(), attempt })
+        ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'menu', digits: String(req.body?.Digits || '').trim(), attempt, recording })
         : null;
       if (queueRoute && (queueRoute.kind === 'menu' || queueRoute.kind === 'ring')) return reply(queueRoute.body);
       // Aucune file ne couvre ce cas (ou personne d'éligible) : repli existant, sans rejouer l'accueil.
@@ -1909,7 +1925,7 @@ class PhoneNumberController {
       return reply(buildInboundTwiml({
         solo, settings, baseUrl, companyId: line?.companyId ? String(line.companyId) : '', identities, from,
         resultUrl: `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result`,
-        mobile: route.first === 'mobile' ? route.mobile : null, linePhone: to, withGreeting: false,
+        mobile: route.first === 'mobile' ? route.mobile : null, linePhone: to, withGreeting: false, recording,
       }));
     } catch (error) {
       console.error('Error in handleTwilioInboundMenu:', error);
@@ -1931,7 +1947,12 @@ class PhoneNumberController {
   async handleTwilioInboundQueueNext(req, res) {
     try {
       const baseUrl = `https://${req.get('host')}`;
-      const step = continueQueuePlan({ token: req.query?.s, dialStatus: req.body?.DialCallStatus, baseUrl, from: String(req.body?.From || '').trim() });
+      const from = String(req.body?.From || '').trim();
+      // Tentatives suivantes : même enregistrement que la première (l'annonce n'est pas répétée). Entreprise lue dans le plan signé.
+      const callSid0 = String(req.body?.CallSid || '').trim();
+      const planOwner = (() => { try { return readPlan(req.query?.s).companyId; } catch { return ''; } })();
+      const recording = await recordingPlanFor({ companyId: planOwner, callSid: callSid0, baseUrl, from });
+      const step = continueQueuePlan({ token: req.query?.s, dialStatus: req.body?.DialCallStatus, baseUrl, from, recording });
       if (step.action === 'dial') return res.type('text/xml').status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response>${step.body}</Response>`);
       const callSid = String(req.body?.CallSid || '').trim();
       if (step.answeredBy && callSid) await InboundCall.updateOne({ callSid }, { $set: { answeredBy: step.answeredBy } }).catch((e) => console.error('InboundCall answeredBy:', e.message));
@@ -1987,6 +2008,43 @@ class PhoneNumberController {
   /** Fin de la sonnerie d'un transfert d'appel : consigne le résultat puis, sans réponse, invite l'appelant à laisser un message. */
   async handleTwilioTransferResult(req, res) {
     return transferResult(req, res);
+  }
+
+  /**
+   * Annonce d'enregistrement jouée à la personne appelée (<Number url> d'un appel sortant enregistré), avant la mise en
+   * relation. Texte public sans effet : seule la langue (fr/en/es/ar, français par défaut) est lue dans l'URL.
+   */
+  async handleTwilioCallAnnounce(req, res) {
+    res.type('text/xml').status(200).send(consentTwiml(normalizeConsentLanguage(req.query?.l)));
+  }
+
+  /**
+   * recordingStatusCallback d'un appel enregistré (<Dial record>). Le jeton signé de l'URL (entreprise + CallSid) est la
+   * seule preuve acceptée : sans lui, ou si le CallSid du rappel n'est pas celui du jeton, le rappel est ignoré.
+   * Rattache l'URL de l'enregistrement au document d'appel existant de dash_calls, sans bloquer la réponse à Twilio.
+   */
+  async handleTwilioCallRecording(req, res) {
+    try {
+      const claims = verifyRecordingToken(req.query?.t);
+      if (!claims) {
+        console.warn('Enregistrement d\'appel : rappel refusé (jeton absent ou invalide)');
+        return res.status(403).json({ success: false, ignored: 'invalid_token' });
+      }
+      const mapped = mapCallRecordingCallback(req.body || {});
+      if (mapped.ignore) {
+        console.log(`Enregistrement d'appel : rappel ignoré (${mapped.ignore})`);
+        return res.status(200).json({ success: true, ignored: mapped.ignore });
+      }
+      if (mapped.value.callSid !== claims.callSid) {
+        console.warn('Enregistrement d\'appel : CallSid différent du jeton, rappel ignoré');
+        return res.status(200).json({ success: true, ignored: 'call_mismatch' });
+      }
+      void attachCallRecording({ companyId: claims.companyId, value: mapped.value });
+      return res.status(200).json({ success: true });
+    } catch (error) {
+      console.error('Error in handleTwilioCallRecording:', error.message);
+      return res.status(200).json({ success: false });
+    }
   }
 
   /** Action du <Record> : remercie l'appelant puis raccroche. */
