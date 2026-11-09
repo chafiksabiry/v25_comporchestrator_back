@@ -14,7 +14,7 @@ const OWNED = [
   num('+33218940260', 'Gig Number:+33218940260'),        // issu de la plateforme, libre → proposé
   num('+33218940920', 'Gig Number:+33218940920'),        // issu de la plateforme, déjà détenu par une entreprise → pas proposé
   num('+33218940999', 'Gig Number:+33218940999'),        // exclu par la configuration → pas proposé
-  num('+33162044030', '+33 1 62 04 40 30'),              // acheté à la main (pas « Gig Number: ») → pas proposé
+  num('+33162044030', '+33 1 62 04 40 30'),              // acheté à la main, nom quelconque, libre → proposé aussi
   num('+13023132631', 'Gig Number:+13023132631'),        // exclu par la configuration → pas proposé
   num('+442081942726', 'Gig Number:+442081942726'),      // britannique, libre → proposé pour GB
   num('+33162044499', 'Gig Number:+33162044499', false), // sans voix → pas proposé
@@ -34,7 +34,7 @@ assert.equal(INVENTORY_FRIENDLY_PREFIX, 'Gig Number:');
 
 // Liste : seulement l'inventaire libre du pays demandé, marqué `inventory`
 const fr = await phoneNumberService.listClaimableInventory({ countryCode: 'FR' });
-assert.deepEqual(fr.map((n) => n.phoneNumber), ['+33218940260']);
+assert.deepEqual(fr.map((n) => n.phoneNumber).sort(), ['+33162044030', '+33218940260']);
 assert.equal(fr[0].inventory, true);
 assert.equal(fr[0].isoCountry, 'FR');
 const gb = await phoneNumberService.listClaimableInventory({ countryCode: 'gb' });
@@ -45,7 +45,7 @@ assert.equal((await phoneNumberService.listClaimableInventory({ countryCode: 'FR
 // Éligibilité d'un numéro précis
 assert.deepEqual((await phoneNumberService.findClaimableInventoryNumber('+33218940260')).claimable, true);
 assert.deepEqual(await phoneNumberService.findClaimableInventoryNumber('+33218940920'), { owned: true, claimable: false, number: OWNED[1] });
-assert.equal((await phoneNumberService.findClaimableInventoryNumber('+33162044030')).claimable, false);
+assert.equal((await phoneNumberService.findClaimableInventoryNumber('+33162044030')).claimable, true);
 assert.equal((await phoneNumberService.findClaimableInventoryNumber('+13023132631')).claimable, false);
 assert.deepEqual(await phoneNumberService.findClaimableInventoryNumber('+33199999999'), { owned: false, claimable: false, number: null });
 
@@ -55,7 +55,7 @@ assert.equal(claimed.phoneNumber, '+33218940260');
 assert.equal(created.length, 0, 'aucun achat Twilio pour un numéro déjà possédé');
 
 // Un numéro possédé mais non proposable (propre à HARX, déjà détenu) est refusé et rien n'est acheté
-for (const bad of ['+13023132631', '+33218940920', '+33162044030']) {
+for (const bad of ['+13023132631', '+33218940920']) {
   await assert.rejects(() => phoneNumberService.purchaseTwilioNumber(bad, null, undefined, '64b000000000000000000001', {}), (e) => e.code === 'NUMBER_NOT_AVAILABLE' || /Twilio Purchase Failed/.test(e.message));
 }
 assert.equal(created.length, 0);
