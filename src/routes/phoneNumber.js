@@ -9,7 +9,7 @@ import { guard, companyFrom, ofNumber, ofPayment } from '../middleware/phoneScop
 
 const router = express.Router();
 
-// Search available phone numbers (Telnyx) — `companyId` required: only the company's own country can be searched
+// Search available phone numbers (Telnyx) — `companyId` required: only the company's country (or Europe, for a European company) can be searched
 router.get('/search', ...guard(companyFrom('companyId')), phoneNumberController.searchNumbers.bind(phoneNumberController));
 
 // Search available Twilio phone numbers

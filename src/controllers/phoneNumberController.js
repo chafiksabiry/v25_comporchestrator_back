@@ -214,7 +214,7 @@ class PhoneNumberController {
   async searchNumbers(req, res) {
     try {
       const { type, features, limit } = req.query;
-      // Seul le pays de l'entreprise peut être cherché (décision produit) ; sans countryCode, c'est lui qui s'applique.
+      // Pays de l'entreprise, ou toute l'Europe pour une entreprise européenne (décision produit) ; sans countryCode, celui de l'entreprise.
       const gate = await checkNumberCountry(req, req.query.companyId, { countryCode: req.query.countryCode });
       if (!gate.ok) return res.status(gate.status).json(gate.body);
       const countryCode = gate.country;
@@ -252,7 +252,7 @@ class PhoneNumberController {
   async searchTwilioNumbers(req, res) {
     try {
       const { areaCode, limit, locality } = req.query;
-      // Seul le pays de l'entreprise peut être cherché (décision produit) ; le même pays borne l'inventaire non affecté.
+      // Pays de l'entreprise, ou toute l'Europe pour une entreprise européenne (décision produit) ; le pays cherché borne aussi l'inventaire non affecté.
       const gate = await checkNumberCountry(req, req.query.companyId, { countryCode: req.query.countryCode });
       if (!gate.ok) return res.status(gate.status).json(gate.body);
       const countryCode = gate.country;
@@ -320,7 +320,7 @@ class PhoneNumberController {
         });
       }
 
-      // Le numéro doit être du pays de l'entreprise.
+      // Le numéro doit être du pays de l'entreprise (ou d'Europe pour une entreprise européenne).
       const countryGate = await checkNumberCountry(req, companyId, { phoneNumber });
       if (!countryGate.ok) return res.status(countryGate.status).json(countryGate.body);
 
@@ -511,7 +511,7 @@ class PhoneNumberController {
       const { phoneNumber, gigId, companyId, bundleSid, addressSid, paymentId } = req.body;
       console.log("phoneNumber", phoneNumber);
 
-      // Le numéro doit être du pays de l'entreprise.
+      // Le numéro doit être du pays de l'entreprise (ou d'Europe pour une entreprise européenne).
       const countryGate = await checkNumberCountry(req, companyId, { phoneNumber });
       if (!countryGate.ok) return res.status(countryGate.status).json(countryGate.body);
 
@@ -784,7 +784,7 @@ class PhoneNumberController {
         return res.status(400).json({ error: 'Invalid companyId' });
       }
 
-      // Le numéro doit être du pays de l'entreprise, avant tout paiement.
+      // Le numéro doit être du pays de l'entreprise (ou d'Europe pour une entreprise européenne), avant tout paiement.
       const countryGate = await checkNumberCountry(req, companyId, { phoneNumber });
       if (!countryGate.ok) return res.status(countryGate.status).json(countryGate.body);
 

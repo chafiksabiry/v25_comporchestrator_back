@@ -20,6 +20,7 @@ try { import.meta.resolve('web-push'); } catch {
 const { companyCountry, normalizeCountryCode, clearCompanyCache } = await import('../middleware/companyScope.js');
 const { checkNumberCountry } = await import('../services/numberCountry.js');
 const { countryOfE164 } = await import('../utils/e164Country.js');
+const { numberCountryAllowed, EUROPE_ZONE, isEuropeCountry } = await import('../utils/europeZone.js');
 const { phoneNumberService } = await import('../services/phoneNumberService.js');
 const { phoneNumberRoutes } = await import('../routes/phoneNumber.js');
 const { PhoneNumber } = await import('../models/PhoneNumber.js');
@@ -120,13 +121,13 @@ describe('contrôle du pays (checkNumberCountry)', () => {
   beforeEach(() => { clearCompanyCache(); workspaceCalls = []; });
 
   it('pays identique accepté (code ou numéro E.164)', async () => {
-    assert.deepEqual(await checkNumberCountry(fakeReq('owner'), FR_CO, { countryCode: 'fr' }), { ok: true, country: 'FR' });
+    assert.deepEqual(await checkNumberCountry(fakeReq('owner'), FR_CO, { countryCode: 'fr' }), { ok: true, country: 'FR', companyCountry: 'FR' });
     assert.equal((await checkNumberCountry(fakeReq('owner'), FR_CO, { phoneNumber: '+33 1 42 00 00 00' })).ok, true);
     assert.equal((await checkNumberCountry(fakeReq('owner'), FR_CO, { countryCode: 'FR', phoneNumber: '+33142000000' })).ok, true);
   });
 
   it('autre pays refusé : 403 COUNTRY_NOT_ALLOWED', async () => {
-    for (const ask of [{ countryCode: 'US' }, { countryCode: 'GB' }, { phoneNumber: '+14155550100' }, { phoneNumber: '+442071234567' }, { countryCode: 'FR', phoneNumber: '+14155550100' }, { countryCode: 'DE', phoneNumber: '+33142000000' }]) {
+    for (const ask of [{ countryCode: 'US' }, { countryCode: 'MA' }, { phoneNumber: '+14155550100' }, { phoneNumber: '+212600000000' }, { countryCode: 'FR', phoneNumber: '+14155550100' }, { countryCode: 'DE', phoneNumber: '+212600000000' }]) {
       const r = await checkNumberCountry(fakeReq('owner'), FR_CO, ask);
       assert.equal(r.ok, false, JSON.stringify(ask));
       assert.equal(r.status, 403);
@@ -143,7 +144,7 @@ describe('contrôle du pays (checkNumberCountry)', () => {
 
   it('FR par défaut quand l’entreprise n’a pas de pays', async () => {
     assert.equal((await checkNumberCountry(fakeReq('ownerNone'), NOCOUNTRY_CO, { countryCode: 'FR' })).ok, true);
-    assert.equal((await checkNumberCountry(fakeReq('ownerNone'), NOCOUNTRY_CO, { countryCode: 'GB' })).status, 403);
+    assert.equal((await checkNumberCountry(fakeReq('ownerNone'), NOCOUNTRY_CO, { countryCode: 'US' })).status, 403);
   });
 
   it('GB / UK : alias équivalents, côté entreprise comme côté demande', async () => {
@@ -152,8 +153,10 @@ describe('contrôle du pays (checkNumberCountry)', () => {
       assert.equal((await checkNumberCountry(fakeReq('ownerUk'), UK_CO, { countryCode: asked })).ok, true, asked);
     }
     assert.equal((await checkNumberCountry(fakeReq('ownerUk'), UK_CO, { phoneNumber: '+442071234567' })).ok, true);
-    assert.equal((await checkNumberCountry(fakeReq('ownerUk'), UK_CO, { countryCode: 'FR' })).status, 403);
-    assert.equal((await checkNumberCountry(fakeReq('owner'), FR_CO, { countryCode: 'UK' })).status, 403);
+    assert.equal((await checkNumberCountry(fakeReq('ownerUk'), UK_CO, { countryCode: 'US' })).status, 403);
+    assert.equal((await checkNumberCountry(fakeReq('ownerUs'), US_CO, { countryCode: 'UK' })).status, 403);
+    // GB est dans la zone Europe : une entreprise française peut viser le Royaume-Uni (UK = GB), et inversement
+    assert.deepEqual(await checkNumberCountry(fakeReq('owner'), FR_CO, { countryCode: 'UK' }), { ok: true, country: 'GB', companyCountry: 'FR' });
   });
 
   it('lecture du pays en échec : 503, jamais autorisé', async () => {
@@ -170,8 +173,71 @@ describe('contrôle du pays (checkNumberCountry)', () => {
     assert.equal(countryOfE164('+212600000000'), 'MA');
     assert.equal(countryOfE164('+352621000000'), 'LU');
     assert.equal(countryOfE164('+819012345678'), null);
+    assert.equal(countryOfE164('+49 30 1234567'), 'DE');
+    assert.equal(countryOfE164('+3584012345'), 'FI');
+    assert.equal(countryOfE164('+35312345678'), 'IE');
+    assert.equal(countryOfE164('+420123456789'), 'CZ');
     assert.equal(countryOfE164('33142000000'), null);
     assert.equal(phoneNumberService.guessCountryFromE164('+442071234567'), 'GB');
+  });
+});
+
+describe('zone Europe (numberCountryAllowed)', () => {
+  const cases = [
+    ['FR', 'FR', true], ['FR', 'DE', true], ['FR', 'GB', true], ['FR', 'UK', true], ['FR', 'CH', true], ['FR', 'NO', true],
+    ['DE', 'FR', true], ['GB', 'FR', true], ['UK', 'FR', true], ['UK', 'GB', true], ['gb', 'de', true],
+    ['FR', 'US', false], ['FR', 'MA', false], ['US', 'FR', false], ['GB', 'US', false], ['MA', 'FR', false],
+    ['US', 'US', true], ['MA', 'MA', true],
+    ['FR', 'XX', false], ['XX', 'FR', false], ['XX', 'XX', true], ['', '', false], [undefined, 'FR', false], ['FR', null, false], ['FR', '', false],
+  ];
+  for (const [company, number, expected] of cases) {
+    it(`${company || '(vide)'} -> ${number || '(vide)'} : ${expected ? 'autorisé' : 'refusé'}`, () => {
+      assert.equal(numberCountryAllowed(company, number), expected);
+    });
+  }
+
+  it('la zone : UE27 + EEE + CH + GB + micro-États', () => {
+    for (const c of ['AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE', 'IS', 'LI', 'NO', 'CH', 'GB', 'AD', 'MC', 'SM', 'VA']) {
+      assert.ok(isEuropeCountry(c), c);
+    }
+    assert.equal(EUROPE_ZONE.size, 36);
+    for (const c of ['US', 'MA', 'TR', 'RU', 'UA', 'CA']) assert.equal(isEuropeCountry(c), false, c);
+  });
+
+  it('chaque pays de la zone a un indicatif dans la table E.164 (aucun numéro européen valide refusé « hors table »)', () => {
+    const sample = { AT: '+4366412345678', BE: '+32470123456', BG: '+359881234567', HR: '+385911234567', CY: '+35799123456', CZ: '+420601234567', DK: '+4520123456', EE: '+37251234567', FI: '+358401234567', FR: '+33612345678', DE: '+4915112345678', GR: '+306912345678', HU: '+36201234567', IE: '+353851234567', IT: '+393123456789', LV: '+37121234567', LT: '+37061234567', LU: '+352621123456', MT: '+35679123456', NL: '+31612345678', PL: '+48512345678', PT: '+351912345678', RO: '+40712345678', SK: '+421901234567', SI: '+38631234567', ES: '+34612345678', SE: '+46701234567', IS: '+3546112345', LI: '+4237661234', NO: '+4741234567', CH: '+41791234567', GB: '+447911123456', AD: '+376312345', MC: '+37798123456', SM: '+378661234567', VA: '+379123456789' };
+    for (const c of EUROPE_ZONE) assert.equal(countryOfE164(sample[c]), c, c);
+    assert.equal(Object.keys(sample).length, EUROPE_ZONE.size);
+  });
+
+  it('indicatif inconnu : toujours refusé', () => {
+    assert.equal(countryOfE164('+819012345678'), null);
+    assert.equal(countryOfE164('+9999'), null);
+  });
+});
+
+describe('Europe : recherche et achats par une entreprise européenne', () => {
+  beforeEach(() => { clearCompanyCache(); workspaceCalls = []; });
+
+  it('FR -> DE / GB / CH accepté (code ou numéro), pays recherché = pays demandé', async () => {
+    for (const [countryCode, phoneNumber] of [['DE', '+4915112345678'], ['gb', '+442071234567'], ['UK', '+442071234567'], ['CH', '+41791234567']]) {
+      const r = await checkNumberCountry(fakeReq('owner'), FR_CO, { countryCode, phoneNumber });
+      assert.equal(r.ok, true, countryCode);
+      assert.equal(r.country, countryCode.toUpperCase() === 'UK' ? 'GB' : countryCode.toUpperCase());
+    }
+  });
+
+  it('FR -> US / MA refusé ; US -> FR refusé ; GB -> US refusé', async () => {
+    assert.equal((await checkNumberCountry(fakeReq('owner'), FR_CO, { countryCode: 'US' })).status, 403);
+    assert.equal((await checkNumberCountry(fakeReq('owner'), FR_CO, { countryCode: 'MA', phoneNumber: '+212600000000' })).status, 403);
+    assert.equal((await checkNumberCountry(fakeReq('ownerUs'), US_CO, { countryCode: 'FR' })).status, 403);
+    assert.equal((await checkNumberCountry(fakeReq('ownerUs'), US_CO, { phoneNumber: '+33142000000' })).status, 403);
+    assert.equal((await checkNumberCountry(fakeReq('ownerGb'), GB_CO, { countryCode: 'US' })).status, 403);
+  });
+
+  it('un code pays et un numéro de deux pays européens différents sont chacun contrôlés', async () => {
+    assert.equal((await checkNumberCountry(fakeReq('owner'), FR_CO, { countryCode: 'DE', phoneNumber: '+442071234567' })).ok, true);
+    assert.equal((await checkNumberCountry(fakeReq('owner'), FR_CO, { countryCode: 'DE', phoneNumber: '+14155550100' })).status, 403);
   });
 });
 
@@ -221,6 +287,19 @@ describe('routes /api/phone-numbers : recherche, achat, paiement', () => {
     assert.equal(inventories[1].countryCode, 'GB');
   });
 
+  it('GET /search/twilio : entreprise européenne, pays européen demandé : recherche et inventaire de CE pays', async () => {
+    const r = await call('GET', `/search/twilio?companyId=${FR_CO}&countryCode=DE`, { user: 'owner' });
+    assert.equal(r.status, 200);
+    assert.equal(searches[0].countryCode, 'DE');
+    assert.equal(inventories[0].countryCode, 'DE');
+    const uk = await call('GET', `/search/twilio?companyId=${FR_CO}&countryCode=UK`, { user: 'owner' });
+    assert.equal(uk.status, 200);
+    assert.equal(searches[1].countryCode, 'GB');
+    assert.equal(inventories[1].countryCode, 'GB');
+    assert.equal((await call('GET', `/search/twilio?companyId=${US_CO}&countryCode=FR`, { user: 'ownerUs' })).status, 403);
+    assert.equal(searches.length, 2);
+  });
+
   it('GET /search/twilio : sans countryCode, c’est le pays de l’entreprise (plus US par défaut)', async () => {
     const r = await call('GET', `/search/twilio?companyId=${GB_CO}`, { user: 'ownerGb' });
     assert.equal(r.status, 200);
@@ -229,7 +308,7 @@ describe('routes /api/phone-numbers : recherche, achat, paiement', () => {
   });
 
   it('GET /search/twilio : autre pays refusé 403 COUNTRY_NOT_ALLOWED, rien n’est interrogé chez l’opérateur', async () => {
-    for (const [user, co, asked] of [['owner', FR_CO, 'US'], ['owner', FR_CO, 'GB'], ['owner', FR_CO, 'UK'], ['ownerGb', GB_CO, 'FR'], ['ownerNone', NOCOUNTRY_CO, 'US']]) {
+    for (const [user, co, asked] of [['owner', FR_CO, 'US'], ['owner', FR_CO, 'MA'], ['ownerGb', GB_CO, 'US'], ['ownerUs', US_CO, 'FR'], ['ownerNone', NOCOUNTRY_CO, 'US']]) {
       const r = await call('GET', `/search/twilio?companyId=${co}&countryCode=${asked}`, { user });
       assert.equal(r.status, 403, `${co} ${asked}`);
       assert.equal(r.body.code, 'COUNTRY_NOT_ALLOWED');
@@ -254,17 +333,18 @@ describe('routes /api/phone-numbers : recherche, achat, paiement', () => {
   it('achats et checkout : le numéro d’un autre pays est refusé avant tout paiement ou achat', async () => {
     const foreign = '+14155550100';
     for (const [path, body] of [
+      ['/purchase/twilio', { phoneNumber: '+212600000000', companyId: FR_CO }],
       ['/purchase/twilio', { phoneNumber: foreign, companyId: FR_CO }],
       ['/purchase', { phoneNumber: foreign, companyId: FR_CO, provider: 'twilio' }],
       ['/checkout/init', { phoneNumber: foreign, companyId: FR_CO, provider: 'stripe' }],
-      ['/purchase/twilio', { phoneNumber: '+442071234567', companyId: FR_CO }],
+      ['/checkout/init', { phoneNumber: '+212600000000', companyId: FR_CO, provider: 'stripe' }],
     ]) {
       const r = await call('POST', path, { user: 'owner', body });
       assert.equal(r.status, 403, `${path} ${body.phoneNumber}`);
       assert.equal(r.body.code, 'COUNTRY_NOT_ALLOWED');
     }
-    // Entreprise britannique : un numéro français est refusé, un +44 passe le contrôle
-    assert.equal((await call('POST', '/purchase/twilio', { user: 'ownerGb', body: { phoneNumber: '+33142000000', companyId: GB_CO } })).body.code, 'COUNTRY_NOT_ALLOWED');
+    // Entreprise américaine : un numéro français est refusé
+    assert.equal((await call('POST', '/purchase/twilio', { user: 'ownerUs', body: { phoneNumber: '+33142000000', companyId: US_CO } })).body.code, 'COUNTRY_NOT_ALLOWED');
   });
 
   // /checkout/init n'est pas dans cette boucle : sa gestion d'erreur référence `payment` hors de portée (défaut existant) et ne répond pas
@@ -274,6 +354,8 @@ describe('routes /api/phone-numbers : recherche, achat, paiement', () => {
       ['/purchase/twilio', { phoneNumber: '+33142000000', companyId: FR_CO }, 'owner'],
       ['/purchase', { phoneNumber: '+33142000000', companyId: FR_CO, provider: 'twilio' }, 'owner'],
       ['/purchase/twilio', { phoneNumber: '+442071234567', companyId: UK_CO }, 'ownerUk'],
+      ['/purchase/twilio', { phoneNumber: '+4915112345678', companyId: FR_CO }, 'owner'],
+      ['/purchase', { phoneNumber: '+442071234567', companyId: FR_CO, provider: 'twilio' }, 'owner'],
     ]) {
       const r = await call('POST', path, { user, body });
       assert.ok(notCountryRefusal(r), `${path} ${body.phoneNumber} -> ${r.status} ${JSON.stringify(r.body)}`);
