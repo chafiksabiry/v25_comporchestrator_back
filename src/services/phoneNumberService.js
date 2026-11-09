@@ -1,5 +1,6 @@
 import { buildLocalSearchOptions } from './numberSearchOptions.js';
 import { addressSidFromAssignments, isRejectedRange, rememberRejectedRange } from './rejectedNumberRanges.js';
+import { countryOfE164 } from '../utils/e164Country.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { config } from '../config/env.js';
 import telnyx from 'telnyx';
@@ -397,26 +398,7 @@ class PhoneNumberService {
    * to block payments for countries we haven't mapped yet).
    */
   guessCountryFromE164(phoneNumber) {
-    const raw = String(phoneNumber || '').replace(/[^\d+]/g, '');
-    if (!raw.startsWith('+')) return null;
-    // Order matters: longer prefixes must be tested first.
-    const prefixes = [
-      ['+1', 'US'],
-      ['+33', 'FR'],
-      ['+44', 'GB'],
-      ['+49', 'DE'],
-      ['+34', 'ES'],
-      ['+39', 'IT'],
-      ['+31', 'NL'],
-      ['+32', 'BE'],
-      ['+41', 'CH'],
-      ['+352', 'LU'],
-      ['+212', 'MA']
-    ].sort((a, b) => b[0].length - a[0].length);
-    for (const [prefix, iso] of prefixes) {
-      if (raw.startsWith(prefix)) return iso;
-    }
-    return null;
+    return countryOfE164(phoneNumber);
   }
 
   /**

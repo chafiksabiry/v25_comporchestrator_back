@@ -1,6 +1,7 @@
 import { phoneNumberService } from '../services/phoneNumberService.js';
 import { callerAccess } from '../middleware/companyScope.js';
 import { listLinesFor } from '../services/phoneNumberList.js';
+import { checkNumberCountry } from '../services/numberCountry.js';
 import { checkCompanyDestination } from '../services/outboundPolicy.js';
 import { isPremiumRate, MESSAGES as DESTINATION_MESSAGES, DESTINATION_NOT_ALLOWED } from '../services/outboundDestinations.js';
 import { paypalService } from '../services/paypalService.js';
@@ -212,8 +213,11 @@ const upsertTestCallSession = (callId, patch) => {
 class PhoneNumberController {
   async searchNumbers(req, res) {
     try {
-      const { countryCode, type, features, limit } = req.query;
-      console.log(countryCode, type, features, limit);
+      const { type, features, limit } = req.query;
+      // Seul le pays de l'entreprise peut être cherché (décision produit) ; sans countryCode, c'est lui qui s'applique.
+      const gate = await checkNumberCountry(req, req.query.companyId, { countryCode: req.query.countryCode });
+      if (!gate.ok) return res.status(gate.status).json(gate.body);
+      const countryCode = gate.country;
 
       // FR is Twilio-only — never search Telnyx inventory for France.
       if (isFrenchCountry(countryCode)) {
@@ -247,7 +251,11 @@ class PhoneNumberController {
 
   async searchTwilioNumbers(req, res) {
     try {
-      const { countryCode, areaCode, limit, locality } = req.query;
+      const { areaCode, limit, locality } = req.query;
+      // Seul le pays de l'entreprise peut être cherché (décision produit) ; le même pays borne l'inventaire non affecté.
+      const gate = await checkNumberCountry(req, req.query.companyId, { countryCode: req.query.countryCode });
+      if (!gate.ok) return res.status(gate.status).json(gate.body);
+      const countryCode = gate.country;
       console.log("countryCode", countryCode);
       console.log("areaCode", areaCode);
       console.log("limit", limit);
@@ -256,14 +264,14 @@ class PhoneNumberController {
       // masquerait). Le dossier réglementaire d'un pays ne bloque pas un numéro déjà possédé.
       let inventory = [];
       try {
-        inventory = await phoneNumberService.listClaimableInventory({ countryCode: countryCode || 'US', limit: parseInt(limit) || 50 });
+        inventory = await phoneNumberService.listClaimableInventory({ countryCode, limit: parseInt(limit) || 50 });
       } catch (invErr) {
         console.warn('[telephony] inventaire Twilio indisponible:', invErr.message);
       }
       let numbers = [];
       try {
         numbers = await phoneNumberService.searchTwilioNumbers({
-          countryCode: countryCode || 'US',
+          countryCode,
           areaCode,
           locality,
           limit: parseInt(limit) || 50
@@ -311,6 +319,10 @@ class PhoneNumberController {
           details: missingFieldsList
         });
       }
+
+      // Le numéro doit être du pays de l'entreprise.
+      const countryGate = await checkNumberCountry(req, companyId, { phoneNumber });
+      if (!countryGate.ok) return res.status(countryGate.status).json(countryGate.body);
 
       // FR / +33 → always Twilio (ignore client Telnyx).
       const resolvedProvider = resolvePhoneProvider(provider, { phoneNumber });
@@ -498,6 +510,10 @@ class PhoneNumberController {
 
       const { phoneNumber, gigId, companyId, bundleSid, addressSid, paymentId } = req.body;
       console.log("phoneNumber", phoneNumber);
+
+      // Le numéro doit être du pays de l'entreprise.
+      const countryGate = await checkNumberCountry(req, companyId, { phoneNumber });
+      if (!countryGate.ok) return res.status(countryGate.status).json(countryGate.body);
 
       // ──────────────────────────────────────────────────────────────────
       // Free trial gate: the FIRST phone number per company is provisioned
@@ -767,6 +783,10 @@ class PhoneNumberController {
       if (!mongoose.Types.ObjectId.isValid(companyId)) {
         return res.status(400).json({ error: 'Invalid companyId' });
       }
+
+      // Le numéro doit être du pays de l'entreprise, avant tout paiement.
+      const countryGate = await checkNumberCountry(req, companyId, { phoneNumber });
+      if (!countryGate.ok) return res.status(countryGate.status).json(countryGate.body);
 
       const existingLines = await PhoneNumber.countDocuments({ companyId });
       const planLimits = await loadCompanyPlanLimits(companyId);
