@@ -580,14 +580,13 @@ class PhoneNumberService {
 
   /**
    * Numéros déjà dans l'inventaire Twilio et pas encore rattachés à un compte HARX : proposés en premier à l'achat.
-   * Seuls sont éligibles les numéros nés de la plateforme (nom convivial « Gig Number:+… »), compatibles voix, absents de la base
-   * (aucune entreprise ne les détient) et non listés dans TWILIO_INVENTORY_EXCLUDE : un numéro acheté à la main dans la console
-   * (par exemple un numéro propre de HARX) n'est jamais offert, sauf si on le renomme ainsi.
+   * Tout numéro de l'inventaire (déjà payé), compatible voix, qu'aucune entreprise ne détient dans la base HARX, est éligible, quel que soit
+   * son nom dans la console Twilio (numéro acheté à la main compris). Seule exception, un choix explicite : les numéros listés dans
+   * TWILIO_INVENTORY_EXCLUDE (ex. un numéro que HARX garde pour son propre usage) ne sont jamais offerts.
    */
   isInventoryCandidate(n) {
     const e164 = String(n?.phoneNumber || '');
     if (!e164.startsWith('+')) return false;
-    if (!String(n?.friendlyName || '').startsWith(INVENTORY_FRIENDLY_PREFIX)) return false;
     if (n?.capabilities && n.capabilities.voice === false) return false;
     return !(config.twilioInventoryExclude || []).includes(e164);
   }
@@ -641,8 +640,8 @@ class PhoneNumberService {
 
     let purchasedNumber;
     try {
-      // Numéro déjà dans l'inventaire Twilio : on le prend sans le racheter ; s'il est possédé mais pas proposable (numéro propre de
-      // HARX, déjà détenu par une entreprise), on refuse plutôt que de tenter un achat qui échouerait.
+      // Numéro déjà dans l'inventaire Twilio : on le prend sans le racheter ; s'il est possédé mais pas proposable (déjà détenu par une entreprise,
+      // sans voix ou exclu par la configuration), on refuse plutôt que de tenter un achat qui échouerait.
       const inventory = await this.findClaimableInventoryNumber(phoneNumber);
       if (inventory?.owned && !inventory.claimable) {
         const err = new Error('Ce numéro n’est pas disponible.');
