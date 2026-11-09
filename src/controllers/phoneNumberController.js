@@ -240,15 +240,14 @@ class PhoneNumberController {
       console.log("countryCode", countryCode);
       console.log("areaCode", areaCode);
       console.log("limit", limit);
-      // Numéros déjà dans l'inventaire Twilio et pas encore affectés à un compte : proposés en premier (sans filtre de ville ni
-      // d'indicatif, qu'ils ne portent pas). Le dossier réglementaire d'un pays ne bloque pas un numéro déjà possédé.
+      // Numéros déjà dans l'inventaire Twilio et pas encore affectés à un compte : toujours proposés en premier, quel que soit le
+      // filtre de ville ou d'indicatif (ils n'en portent pas : l'application propose par défaut la ville du client, ce qui les
+      // masquerait). Le dossier réglementaire d'un pays ne bloque pas un numéro déjà possédé.
       let inventory = [];
-      if (!areaCode && !locality) {
-        try {
-          inventory = await phoneNumberService.listClaimableInventory({ countryCode: countryCode || 'US', limit: parseInt(limit) || 50 });
-        } catch (invErr) {
-          console.warn('[telephony] inventaire Twilio indisponible:', invErr.message);
-        }
+      try {
+        inventory = await phoneNumberService.listClaimableInventory({ countryCode: countryCode || 'US', limit: parseInt(limit) || 50 });
+      } catch (invErr) {
+        console.warn('[telephony] inventaire Twilio indisponible:', invErr.message);
       }
       let numbers = [];
       try {
