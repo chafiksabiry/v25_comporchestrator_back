@@ -1874,7 +1874,8 @@ class PhoneNumberController {
       const recording = solo ? null : await recordingPlanFor({ companyId: line?.companyId, callSid, baseUrl, from, language });
       // Files d'attente (routage par langues / compétences, menu vocal). null = aucune file, Nomad Solo ou erreur : comportement inchangé.
       const queueRoute = !solo && line?.companyId ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'call', recording, language }) : null;
-      const identities = queueRoute ? (queueRoute.kind === 'ring' ? queueRoute.firstIds : []) : online;
+      // File choisie sans conseiller éligible (langues / compétences) : les conseillers présents sonnent quand même, plutôt que le répondeur.
+      const identities = queueRoute ? (queueRoute.kind === 'ring' ? queueRoute.firstIds : queueRoute.kind === 'none' ? online : []) : online;
       const reach = line?.companyId ? await ReachSettings.findOne({ companyId: line.companyId }).lean().catch((e) => { console.error('ReachSettings read:', e.message); return null; }) : null;
       const route = queueRoute?.kind === 'menu' ? { first: 'browser', mobileNext: false, mobile: null } : decideInboundRoute({ identities, reach, linePhone: to });
       // Chaque appel est consigné : niveau de service, abandon et attente en sont calculés (inbound-stats).
@@ -1884,6 +1885,8 @@ class PhoneNumberController {
           { $setOnInsert: { companyId: line.companyId, gigId: line.gigId || null, phoneNumber: to, from, callSid, startedAt: new Date(), status: route.first === 'voicemail' ? 'no_agent' : 'ringing', waitSeconds: route.first === 'voicemail' ? 0 : null, route: route.first, mobileTried: route.first === 'mobile' } },
           { upsert: true }
         ).catch((e) => console.error('InboundCall log:', e.message));
+        // Aucun conseiller à faire sonner : l'appel va au répondeur et doit être au journal même sans message laissé.
+        if (route.first === 'voicemail') void journalUnansweredCall({ callSid, companyId: line.companyId, gigId: line.gigId, from, to, startedAt: new Date(), voicemail: settings?.voicemailEnabled !== false });
       }
       const where = queueRoute?.kind === 'menu' ? "file d'attente : menu vocal" : route.first === 'browser' ? `sonnerie chez ${identities.length} conseiller(s)${route.mobileNext ? ', puis le mobile du titulaire' : ''}` : route.first === 'mobile' ? "aucun navigateur présent : sonnerie du mobile du titulaire" : `aucun conseiller disponible pour l'entreprise de la ligne ${line?.companyId ?? '(ligne inconnue)'} ; présents : ${JSON.stringify(presenceSummary())}`;
       console.log(`📞 Appel entrant sur ${to} depuis ${from} : ${where}`);
@@ -1903,7 +1906,7 @@ class PhoneNumberController {
         settings,
         baseUrl,
         companyId: line?.companyId ? String(line.companyId) : '',
-        identities: queueRoute ? (queueRoute.kind === 'none' ? [] : online) : identities,
+        identities: queueRoute ? online : identities,
         from,
         resultUrl,
         mobile: route.first === 'mobile' ? route.mobile : null,
@@ -1948,12 +1951,16 @@ class PhoneNumberController {
         : null;
       if (queueRoute && (queueRoute.kind === 'menu' || queueRoute.kind === 'ring')) return reply(queueRoute.body);
       // Aucune file ne couvre ce cas (ou personne d'éligible) : repli existant, sans rejouer l'accueil.
-      const identities = queueRoute ? [] : (line?.companyId ? availableIdentities(line.companyId) : []);
+      // Personne d'éligible dans la file : les conseillers présents sonnent quand même (sinon l'appel tombait au répondeur alors qu'ils étaient en ligne).
+      const identities = line?.companyId ? availableIdentities(line.companyId) : [];
+      if (queueRoute?.kind === 'none' && identities.length) console.log(`📞 Aucun conseiller éligible dans la file sur ${to} : sonnerie chez les ${identities.length} conseiller(s) présent(s)`);
       const reach = line?.companyId ? await ReachSettings.findOne({ companyId: line.companyId }).lean().catch(() => null) : null;
       const route = decideInboundRoute({ identities, reach, linePhone: to });
       if (line?.companyId && callSid) {
         const set = route.first === 'mobile' ? { route: 'mobile', mobileTried: true } : route.first === 'voicemail' ? { route: 'voicemail', status: 'no_agent', waitSeconds: 0 } : null;
         if (set) await InboundCall.updateOne({ callSid }, { $set: set }).catch((e) => console.error('InboundCall menu:', e.message));
+        // Appel envoyé au répondeur sans sonnerie : il est au journal même si l'appelant ne laisse pas de message.
+        if (route.first === 'voicemail') void journalUnansweredCall({ callSid, companyId: line.companyId, gigId: line.gigId, from, to, startedAt: new Date(), voicemail: settings?.voicemailEnabled !== false });
       }
       if (line?.companyId && !identities.length) void notifyOwners({ companyId: line.companyId }, callPayload({ from, to, callSid }));
       return reply(buildInboundTwiml({
