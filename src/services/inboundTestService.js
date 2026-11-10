@@ -34,3 +34,12 @@ export function getInboundTest(e164, now = Date.now()) {
 export function clearInboundTests() {
   sessions.clear();
 }
+
+/**
+ * Un appel réel qui atteint le serveur sur une ligne jamais testée prouve que la ligne est bien reliée : il compte comme test d'appel
+ * entrant (la personne qui appelle sa ligne sans avoir lancé le test n'a pas à recommencer). Une ligne déjà testée garde son résultat.
+ */
+export const needsInboundTestProof = (line) => Boolean(line) && !line.metadata?.inboundTest;
+
+/** Résultat enregistré sur la ligne pour un appel réel : même forme que le test, avec l'origine. */
+export const realCallProof = ({ from, callSid } = {}, now = Date.now()) => ({ testedAt: new Date(now).toISOString(), from: String(from || ''), callSid: String(callSid || ''), viaRealCall: true });
