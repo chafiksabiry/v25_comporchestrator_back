@@ -57,7 +57,7 @@ async function syncExternal(item, { wasStatus, keys, videoChanged }) {
     }
     const removed = await removeVideoResource(before.companyId, before);
     if (item.videoProvider && ok && removed) { item.videoUrl = ''; item.videoProvider = ''; item.videoExternalId = ''; } // le lien n'existe plus chez le fournisseur
-  } else if (!canceled && (wasStatus === 'canceled' || videoChanged || keys.some((k) => ['dueAt', 'timeZone', 'title', 'durationMinutes'].includes(k)))) {
+  } else if (!canceled && (wasStatus === 'canceled' || videoChanged || keys.some((k) => ['dueAt', 'timeZone', 'title', 'durationMinutes', 'location'].includes(k)))) {
     if (item.videoProvider && item.videoExternalId && item.videoExternalId !== item.calendarExternalId) await updateVideoResource(String(item.companyId), extView(item));
     const op = item.calendarExternalId ? 'update' : 'push';
     applySync(item, await syncAppointment(extView(item), { op }), op);
@@ -199,7 +199,7 @@ export const followUpController = {
       try {
         item = await FollowUpItem.create({
           companyId, model: v.model, originType: v.originType, originId: v.originId, title: v.title, note: v.note,
-          contactName: v.contactName, contactPhone: v.contactPhone || origin?.from || '', contactEmail: v.contactEmail,
+          contactName: v.contactName, contactPhone: v.contactPhone || origin?.from || '', contactEmail: v.contactEmail, location: v.location,
           videoUrl: video.url, videoProvider: video.provider, videoExternalId: video.externalId,
           dueAt: v.dueAt, timeZone: v.timeZone, durationMinutes: v.durationMinutes, assigneeId: assignee.id, assigneeName: assignee.name,
           createdById: access.userId, createdByName: me?.name || '', fromAiPlan: v.fromAiPlan,

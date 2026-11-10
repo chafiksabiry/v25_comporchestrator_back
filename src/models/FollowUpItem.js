@@ -42,6 +42,8 @@ const schema = new mongoose.Schema(
     contactPhone: { type: String, default: '', maxlength: 40 },
     /** Adresse e-mail de la personne (facultatif) : pré-remplit l'e-mail de confirmation du secrétariat. */
     contactEmail: { type: String, default: '', maxlength: 254 },
+    /** Rendez-vous : lieu (adresse, salle…), en plus ou à la place du lien de visio. */
+    location: { type: String, default: '', maxlength: 300 },
     /** Échéance : date du rappel planifié, début du rendez-vous. */
     dueAt: { type: Date, default: null },
     durationMinutes: { type: Number, default: null },

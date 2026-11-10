@@ -39,6 +39,10 @@ assert.match(ok({ model: 'transfer' }).error, /autre collaborateur/, 'transfert 
 assert.equal(ok({ model: 'transfer', assigneeId: 'u2', note: 'Merci de rappeler' }).value.assigneeId, 'u2');
 assert.match(ok({ model: 'transfer', assigneeId: 'u2', note: 'x'.repeat(1001) }).error, /1000/);
 assert.equal(ok({ model: 'transfer', assigneeId: 'u2' }).value.title, 'À traiter', 'titre par défaut');
+assert.equal(ok({ model: 'appointment', contactName: 'Mme Durand', dueAt: FUTURE, location: '  12 rue de la Paix, Paris ' }).value.location, '12 rue de la Paix, Paris', 'lieu du rendez-vous');
+assert.equal(ok({ model: 'appointment', contactName: 'Mme Durand', dueAt: FUTURE }).value.location, '', 'lieu facultatif');
+assert.match(ok({ model: 'appointment', contactName: 'Mme Durand', dueAt: FUTURE, location: 'x'.repeat(301) }).error, /300/);
+assert.equal(ok({ model: 'transfer', assigneeId: 'u2', location: 'ailleurs' }).value.location, '', 'le lieu ne concerne que les rendez-vous');
 
 // --- modification
 const item = { model: 'missed_callback', status: 'todo', assigneeId: 'u2' };
@@ -47,6 +51,8 @@ assert.match(F.validatePatch({ status: 'archived' }, item, NOW).error, /Statut/)
 assert.deepEqual(F.validatePatch({ status: 'done', note: ' ok ' }, item, NOW).value, { status: 'done', note: 'ok' });
 assert.match(F.validatePatch({ dueAt: null }, item, NOW).error, /obligatoires/);
 assert.equal(F.validatePatch({ dueAt: null }, { model: 'transfer' }, NOW).value.dueAt, null);
+assert.equal(F.validatePatch({ location: ' Salle B ' }, { model: 'appointment', status: 'todo' }, NOW).value.location, 'Salle B');
+assert.match(F.validatePatch({ location: 'Salle B' }, { model: 'transfer', status: 'todo' }, NOW).error, /rendez-vous/);
 assert.match(F.validatePatch({ title: '  ' }, item, NOW).error, /vide/);
 
 // --- transfert

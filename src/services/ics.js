@@ -77,6 +77,7 @@ function eventLines(item) {
     item.contactName ? `Rendez-vous avec ${item.contactName}.` : '',
     item.contactPhone ? `Téléphone : ${item.contactPhone}` : '',
     item.assignee?.name ? `En charge : ${item.assignee.name}` : '',
+    item.location ? `Lieu : ${item.location}` : '',
     item.videoUrl ? `Visio : ${item.videoUrl}` : '',
     item.note ? `Note : ${item.note}` : '',
   ].filter(Boolean).join('\n');
@@ -90,7 +91,8 @@ function eventLines(item) {
     `SEQUENCE:${Math.max(0, Math.floor(Number(item.sequence) || 0))}`,
     `SUMMARY:${escapeText(item.title || 'Rendez-vous')}`,
     ...(description ? [`DESCRIPTION:${escapeText(description)}`] : []),
-    ...(item.videoUrl ? [`LOCATION:${escapeText(item.videoUrl)}`, `URL:${item.videoUrl}`] : []),
+    ...(item.location || item.videoUrl ? [`LOCATION:${escapeText(item.location || item.videoUrl)}`] : []),
+    ...(item.videoUrl ? [`URL:${item.videoUrl}`] : []),
     `STATUS:${canceled ? 'CANCELLED' : 'CONFIRMED'}`,
     'TRANSP:OPAQUE',
     ...(canceled ? [] : ['BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:Rappel de rendez-vous', 'TRIGGER:-PT15M', 'END:VALARM']),
