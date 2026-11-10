@@ -281,9 +281,21 @@ assert.ok(!t.includes('<Gather'), 'une seule file : pas de menu');
 seed([{ name: 'Tous' }]); assert.equal(await inbound(), wrap(dialOf(['cc-alice', 'cc-bob', 'cc-chloe'])), 'une file sans langue ni compétence : tout le monde, TwiML identique à l\'existant');
 seed([{ name: 'Arabe', languages: ['ar'] }]); present('alice');
 t = await inbound();
-assert.ok(!t.includes('<Dial') || t.includes('<Record'), 'personne d\'éligible : jamais de sonnerie vers des inéligibles'); assert.ok(t.includes('<Record'), 'puis répondeur');
+assert.ok(clientsOf(t).includes('cc-alice'), 'personne d\'éligible mais un conseiller présent : il sonne quand même (le bouton « prendre les appels » est activé)');
+// Journal : un appel qui va au répondeur sans sonnerie est inscrit même si l'appelant ne laisse pas de message.
+process.env.DASH_CALLS_API_URL = 'https://dash-calls.test';
+const fetchBeforeJournal = globalThis.fetch; const journaled = [];
+globalThis.fetch = async (url, init) => { journaled.push({ url: String(url), body: JSON.parse(init.body) }); return { ok: true }; };
+present(); t = await inbound();
+assert.ok(!t.includes('<Client>') && t.includes('<Record'), 'personne de présent : répondeur');
+await new Promise((r) => setTimeout(r, 20));
+assert.equal(journaled.length, 1, 'appel au répondeur sans sonnerie : une ligne au journal');
+assert.ok(journaled[0].url.endsWith('/api/calls/center-call') && journaled[0].body.unanswered === true && journaled[0].body.outcome === 'voicemail' && journaled[0].body.direction === 'inbound', 'ligne « non décroché / répondeur » du journal');
+present('alice'); journaled.length = 0; await inbound(); await new Promise((r) => setTimeout(r, 20));
+assert.equal(journaled.length, 0, 'une sonnerie en cours n\'est pas inscrite comme manquée (le résultat de la sonnerie le fera)');
+globalThis.fetch = fetchBeforeJournal; present();
 reachDoc = { forwardEnabled: true, mobileNumber: '+33611223344', mobileRingSeconds: 25 };
-t = await inbound(); assert.ok(t.includes('<Number>+33611223344</Number>') && !t.includes('<Client>'), 'personne d\'éligible : mobile du titulaire'); reachDoc = null;
+t = await inbound(); assert.ok(t.includes('<Number>+33611223344</Number>') && !t.includes('<Client>'), 'personne de présent : mobile du titulaire'); reachDoc = null;
 
 // plusieurs files avec touche : accueil + menu vocal
 seed([
@@ -322,9 +334,11 @@ present('dina');
 t = await menuPost('3'); assert.equal(clientsOf(t).join(), 'cc-dina', 'éligible arabe : sonne');
 assert.ok(nextActionOf(t) !== null || t.includes(RESULT));
 present('bob');
-t = await menuPost('3'); assert.ok(t.includes('<Record'), 'ni arabe ni défaut : répondeur');
+t = await menuPost('3'); assert.equal(clientsOf(t).join(), 'cc-bob', 'ni arabe ni défaut mais un conseiller présent : il sonne quand même (au lieu du répondeur)');
+present();
+t = await menuPost('3'); assert.ok(t.includes('<Record'), 'personne de présent : répondeur');
 reachDoc = { forwardEnabled: true, mobileNumber: '+33611223344', mobileRingSeconds: 25 };
-t = await menuPost('3'); assert.ok(t.includes('<Number>+33611223344</Number>'), 'ni arabe ni défaut : mobile du titulaire'); reachDoc = null;
+t = await menuPost('3'); assert.ok(t.includes('<Number>+33611223344</Number>'), 'personne de présent : mobile du titulaire'); reachDoc = null;
 // après la file arabe qui ne répond pas, la file par défaut sonne ensuite (plan signé), puis retour au traitement standard
 present('dina', 'alice');
 t = await menuPost('3'); let url = nextActionOf(t);
