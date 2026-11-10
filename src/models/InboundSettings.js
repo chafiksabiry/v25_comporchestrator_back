@@ -21,6 +21,8 @@ const schema = new mongoose.Schema(
     voice: { type: String, enum: VOICES, default: 'nova' },
     ringTimeoutSeconds: { type: Number, min: 5, max: 120, default: 30 },
     voicemailEnabled: { type: Boolean, default: true },
+    /** Message d'accueil dit avant la sonnerie ; false : l'appel entre directement (le texte et l'audio restent enregistrés). */
+    greetingEnabled: { type: Boolean, default: true },
     /** Les secrétaires (rôle agent) peuvent passer des appels sortants depuis leur navigateur. Autorisé par défaut. */
     secretaryOutbound: { type: Boolean, default: true },
     /** Indicatifs pays autorisés pour les appels sortants. Absent : pays de l'entreprise + liste globale de l'environnement. */

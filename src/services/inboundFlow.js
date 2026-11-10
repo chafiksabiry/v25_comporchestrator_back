@@ -37,6 +37,7 @@ export const defaultVoicemailUrls = (baseUrl) => ({
 
 /** Accueil : audio validé, sinon voix de synthèse, sinon rien. */
 function greeting(s, baseUrl, companyId, language = 'fr') {
+  if (s.greetingEnabled === false) return '';
   if (s.greetingValidated && s.greetingAudioVersion) return play(baseUrl, companyId, 'greeting', s.greetingAudioVersion);
   if (s.greetingText) return say(s.greetingText, s.voice, language);
   return '';

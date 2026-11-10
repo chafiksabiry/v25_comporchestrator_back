@@ -1,6 +1,6 @@
 // Run: node src/tests/inboundFlow.test.js
 import assert from 'node:assert/strict';
-import { buildInboundTwiml, buildNoAnswerTwiml, buildVoicemailDoneTwiml, xmlEscape, pollyVoice, DEFAULT_VOICEMAIL_PROMPT, SOLO_VOICEMAIL_PROMPT, SOLO_NO_ANSWER_MESSAGE, SOLO_NO_AGENT_MESSAGE } from '../services/inboundFlow.js';
+import { greetingTwiml, buildInboundTwiml, buildNoAnswerTwiml, buildVoicemailDoneTwiml, xmlEscape, pollyVoice, DEFAULT_VOICEMAIL_PROMPT, SOLO_VOICEMAIL_PROMPT, SOLO_NO_ANSWER_MESSAGE, SOLO_NO_AGENT_MESSAGE } from '../services/inboundFlow.js';
 import { toPublicSettings } from '../services/inboundSettings.js';
 
 const base = 'https://orch.test';
@@ -24,6 +24,13 @@ assert.ok(t1.startsWith('<Say language="fr-FR" voice="Polly.Mathieu">Bonjour</Sa
 assert.ok(buildInboundTwiml({ ...common, settings: { greetingText: 'Bonjour', voice: 'shimmer' }, identities: ['cc-u1'] }).includes('Polly.Lea'));
 assert.equal(pollyVoice('coral'), 'Polly.Lea');
 assert.equal(pollyVoice('ash'), 'Polly.Mathieu');
+
+// Accueil désactivé : l'appel entre directement (ni texte ni audio), la sonnerie est inchangée
+const off = buildInboundTwiml({ ...common, settings: { greetingText: 'Bonjour', voice: 'onyx', greetingEnabled: false }, identities: ['cc-u1'] });
+assert.ok(off.startsWith('<Dial') && !off.includes('Bonjour'), 'accueil désactivé : pas de Say');
+assert.ok(buildInboundTwiml({ ...common, settings: { greetingText: 'Bonjour', greetingEnabled: false, greetingAudio: audio('Bonjour', 'nova') }, identities: ['cc-u1'] }).startsWith('<Dial'), 'accueil désactivé : pas de Play non plus');
+assert.equal(greetingTwiml({ greetingText: 'Bonjour', greetingEnabled: false }, base, companyId), '', 'files d\'attente : pas d\'accueil avant le menu');
+assert.ok(greetingTwiml({ greetingText: 'Bonjour' }, base, companyId).includes('Bonjour'), 'activé par défaut');
 
 // Accueil : audio validé => Play ; texte modifié depuis => Say
 const validated = { greetingText: 'Bonjour', voice: 'nova', greetingAudio: audio('Bonjour', 'nova') };
