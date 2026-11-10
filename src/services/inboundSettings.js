@@ -12,6 +12,8 @@ export const DEFAULTS = Object.freeze({
   voice: 'nova',
   ringTimeoutSeconds: 30,
   voicemailEnabled: true,
+  /** Message d'accueil dit à l'appelant avant la sonnerie ; désactivé : l'appel entre directement. */
+  greetingEnabled: true,
   secretaryOutbound: true,
 });
 export const KINDS = ['greeting', 'voicemail'];
@@ -41,6 +43,10 @@ export function validateSettingsInput(body = {}) {
     if (typeof body.voicemailEnabled !== 'boolean') errors.push("L'activation du répondeur doit être vrai ou faux.");
     else value.voicemailEnabled = body.voicemailEnabled;
   }
+  if (body.greetingEnabled !== undefined) {
+    if (typeof body.greetingEnabled !== 'boolean') errors.push("L'activation du message d'accueil doit être vrai ou faux.");
+    else value.greetingEnabled = body.greetingEnabled;
+  }
   if (body.secretaryOutbound !== undefined) {
     if (typeof body.secretaryOutbound !== 'boolean') errors.push("L'autorisation d'appeler des secrétaires doit être vrai ou faux.");
     else value.secretaryOutbound = body.secretaryOutbound;
@@ -62,6 +68,7 @@ export function toPublicSettings(doc) {
     voice: d.voice ?? DEFAULTS.voice,
     ringTimeoutSeconds: d.ringTimeoutSeconds ?? DEFAULTS.ringTimeoutSeconds,
     voicemailEnabled: d.voicemailEnabled ?? DEFAULTS.voicemailEnabled,
+    greetingEnabled: d.greetingEnabled ?? DEFAULTS.greetingEnabled,
     secretaryOutbound: d.secretaryOutbound ?? DEFAULTS.secretaryOutbound,
   };
   return {

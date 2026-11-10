@@ -4,7 +4,7 @@ import { audioVersion, isMp3, toPublicSettings, validateSettingsInput } from '..
 
 // Valeurs par défaut sans document
 assert.deepEqual(toPublicSettings(null), {
-  greetingText: '', voicemailText: '', voice: 'nova', ringTimeoutSeconds: 30, voicemailEnabled: true, secretaryOutbound: true,
+  greetingText: '', voicemailText: '', voice: 'nova', ringTimeoutSeconds: 30, voicemailEnabled: true, greetingEnabled: true, secretaryOutbound: true,
   greetingValidated: false, voicemailValidated: false, greetingAudioVersion: null, voicemailAudioVersion: null, validatedAt: null,
 });
 
@@ -12,6 +12,12 @@ assert.deepEqual(toPublicSettings(null), {
 assert.equal(toPublicSettings({ secretaryOutbound: false }).secretaryOutbound, false);
 assert.equal(validateSettingsInput({ secretaryOutbound: false }).value.secretaryOutbound, false);
 assert.equal(validateSettingsInput({ secretaryOutbound: 'non' }).ok, false);
+
+// Message d'accueil activable : activé par défaut, booléen seulement
+assert.equal(toPublicSettings({ greetingEnabled: false }).greetingEnabled, false);
+assert.equal(toPublicSettings({}).greetingEnabled, true, 'sans réglage : accueil activé (comportement d\'avant)');
+assert.equal(validateSettingsInput({ greetingEnabled: false }).value.greetingEnabled, false);
+assert.equal(validateSettingsInput({ greetingEnabled: 'non' }).ok, false);
 
 // Validation
 const bad = (body) => assert.equal(validateSettingsInput(body).ok, false, JSON.stringify(body));
