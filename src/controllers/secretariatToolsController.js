@@ -81,11 +81,11 @@ export const secretariatToolsController = {
       // Seuls les champs utiles au calendrier sont lus : ni e-mail, ni téléphone, ni note du contact.
       const rows = await FollowUpItem.find({
         companyId: tools.companyId, model: 'appointment', dueAt: { $gte: new Date(Date.now() - FEED_PAST_DAYS * 86400000) },
-      }).sort({ dueAt: 1 }).limit(FEED_MAX_ITEMS).select('title dueAt durationMinutes status videoUrl videoProvider sequence createdAt updatedAt').lean();
+      }).sort({ dueAt: 1 }).limit(FEED_MAX_ITEMS).select('title dueAt durationMinutes status location videoUrl videoProvider sequence createdAt updatedAt').lean();
       const customUrl = tools.visio?.provider === 'custom' ? tools.visio.customUrl : '';
       const items = rows.map((r) => ({
         id: String(r._id), title: r.title, dueAt: r.dueAt, durationMinutes: r.durationMinutes, status: r.status, sequence: r.sequence,
-        createdAt: r.createdAt, updatedAt: r.updatedAt, videoUrl: isVisioUrl(r.videoUrl, customUrl, r.videoProvider) ? r.videoUrl : '',
+        createdAt: r.createdAt, updatedAt: r.updatedAt, location: r.location || '', videoUrl: isVisioUrl(r.videoUrl, customUrl, r.videoProvider) ? r.videoUrl : '',
       }));
       res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
       res.setHeader('Cache-Control', 'private, no-store');

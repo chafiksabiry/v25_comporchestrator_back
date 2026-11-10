@@ -67,6 +67,10 @@ assert.match(rich, /STATUS:CANCELLED/);
 assert.ok(!rich.includes('VALARM'), 'pas de rappel pour un rendez-vous annulé');
 assert.ok(rich.replace(/\r\n /g, '').includes('Visio : https://meet.jit.si/HARX-abcDEF123456\\n'), 'visio dans la description');
 assert.throws(() => I.buildAppointmentIcs({ ...base, dueAt: null }), /sans date/);
+const withPlace = I.buildAppointmentIcs({ ...base, location: '12 rue de la Paix, Paris', videoUrl: 'https://meet.jit.si/HARX-abcDEF123456' });
+assert.match(withPlace, /LOCATION:12 rue de la Paix\\, Paris\r\n/, 'le lieu prime sur le lien de visio');
+assert.ok(withPlace.replace(/\r\n /g, '').includes('Lieu : 12 rue de la Paix'), 'lieu dans la description');
+assert.match(withPlace, /URL:https:\/\/meet\.jit\.si/, 'le lien de visio reste dans URL');
 // aucune injection de ligne depuis un titre malveillant
 const evil = I.buildAppointmentIcs({ ...base, title: 'x\r\nATTENDEE:mailto:pirate@x.fr' });
 assert.ok(!/\r\nATTENDEE:/.test(evil), 'un retour à la ligne dans le titre ne crée pas de propriété');

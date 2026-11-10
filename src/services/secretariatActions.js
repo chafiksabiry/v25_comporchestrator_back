@@ -32,11 +32,11 @@ export async function sendViaConnection(companyId, provider, message) {
 }
 
 // ---------- événements d'agenda
-const describe = (i) => [i.contactName ? `Rendez-vous avec ${i.contactName}` : '', i.videoUrl ? `Visio : ${i.videoUrl}` : ''].filter(Boolean).join('\n');
+const describe = (i) => [i.contactName ? `Rendez-vous avec ${i.contactName}` : '', i.location ? `Lieu : ${i.location}` : '', i.videoUrl ? `Visio : ${i.videoUrl}` : ''].filter(Boolean).join('\n');
 /** `tools` = réglages du centre (fuseau par défaut) ; le fuseau envoyé au fournisseur est celui du rendez-vous (resolveItemTimeZone). */
 function eventOf(item, tools) {
   const start = new Date(item.dueAt);
-  return { timeZone: resolveItemTimeZone(item, tools), title: item.title, description: describe(item), location: item.videoUrl || '', startsAt: start, endsAt: new Date(start.getTime() + (Number(item.durationMinutes) || DEFAULT_MINUTES) * 60000) };
+  return { timeZone: resolveItemTimeZone(item, tools), title: item.title, description: describe(item), location: item.location || item.videoUrl || '', startsAt: start, endsAt: new Date(start.getTime() + (Number(item.durationMinutes) || DEFAULT_MINUTES) * 60000) };
 }
 
 /** Adaptateur d'agenda d'UN centre pour calendarSync (rendez-vous = vue `toItem` + companyId + calendarExternalId). */

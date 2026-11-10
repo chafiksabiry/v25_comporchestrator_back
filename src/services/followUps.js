@@ -21,6 +21,7 @@ export const ORIGIN_TYPES = ['voicemail', 'missed_call', 'none'];
 export const MISSED_STATUSES = ['missed', 'abandoned', 'no_agent'];
 export const MAX_TITLE = 120;
 export const MAX_NOTE = 1000;
+const MAX_LOCATION = 300;
 export const MAX_TRANSFER_NOTE = 500;
 const MAX_AHEAD_MS = 2 * 365 * 86400000;
 const PAST_TOLERANCE_MS = 5 * 60 * 1000;
@@ -73,6 +74,8 @@ export function validateCreate(body, access, now = Date.now()) {
   const contactEmail = typeof b.contactEmail === 'string' ? b.contactEmail.trim().toLowerCase() : '';
   if (contactEmail && !isValidEmail(contactEmail)) return bad('Adresse e-mail invalide.');
   if (b.videoLink !== undefined && typeof b.videoLink !== 'boolean') return bad('Option de visio invalide.');
+  if (b.location !== undefined && typeof b.location !== 'string') return bad('Le lieu doit être un texte.');
+  if (typeof b.location === 'string' && b.location.trim().length > MAX_LOCATION) return bad(`Le lieu doit faire ${MAX_LOCATION} caractères au maximum.`);
   if (model === 'appointment' && !contactName) return bad('Indiquez la personne concernée par le rendez-vous.');
 
   const zone = parseTimeZone(b.timeZone);
@@ -102,6 +105,7 @@ export function validateCreate(body, access, now = Date.now()) {
       model, originType, originId, title,
       note: typeof b.note === 'string' ? b.note.trim() : '',
       contactName, contactPhone, contactEmail,
+      location: model === 'appointment' && typeof b.location === 'string' ? b.location.trim() : '',
       videoLink: model === 'appointment' && b.videoLink === true,
       dueAt: due.date || null,
       timeZone: zone.value,
@@ -153,6 +157,11 @@ export function validatePatch(body, item, now = Date.now()) {
     if (typeof b.videoLink !== 'boolean') return bad('Option de visio invalide.');
     set.videoLink = b.videoLink;
   }
+  if (b.location !== undefined) {
+    if (item.model !== 'appointment') return bad('Le lieu ne concerne que les rendez-vous.');
+    if (typeof b.location !== 'string' || b.location.trim().length > MAX_LOCATION) return bad(`Le lieu doit être un texte de ${MAX_LOCATION} caractères au maximum.`);
+    set.location = b.location.trim();
+  }
   if (b.contactEmail !== undefined) {
     const e = typeof b.contactEmail === 'string' ? b.contactEmail.trim().toLowerCase() : null;
     if (e === null || (e && !isValidEmail(e))) return bad('Adresse e-mail invalide.');
@@ -181,7 +190,7 @@ export const canManage = (access) => access.role !== 'agent' && canUse(access);
 export const canSeeItem = (access, item) => canUse(access) && (access.role !== 'agent' || String(item.assigneeId) === String(access.userId));
 /** Un agent peut clore ou annoter ses éléments ; il ne les retitre pas et ne change pas l'échéance. */
 export function allowedPatchFields(access) {
-  return access.role === 'agent' ? ['status', 'note'] : ['status', 'note', 'title', 'dueAt', 'timeZone', 'durationMinutes', 'videoLink', 'contactEmail'];
+  return access.role === 'agent' ? ['status', 'note'] : ['status', 'note', 'title', 'dueAt', 'timeZone', 'durationMinutes', 'videoLink', 'contactEmail', 'location'];
 }
 
 /** Filtre Mongo des éléments visibles par cette personne. */
@@ -216,6 +225,7 @@ export function toItem(i) {
     contactName: o.contactName || '',
     contactPhone: o.contactPhone || '',
     contactEmail: o.contactEmail || '',
+    location: o.location || '',
     dueAt: o.dueAt || null,
     durationMinutes: o.durationMinutes ?? null,
     timeZone: o.timeZone || null,
