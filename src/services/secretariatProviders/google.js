@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { call, ensure, eventWindow, READ_SCOPE, WRITE_SCOPE, SecretariatError, VIDEO_LINK_RE } from './common.js';
+import { dialIn, plainDescription, safeVideoUrl, videoUrlIn } from './eventConnection.js';
 import { cleanSnippet, cleanSubject, htmlToText, limitBody, parseAddress, stripQuoted } from './mailText.js';
 import { DEFAULT_TIME_ZONE } from '../timeZone.js';
 import { buildMime, toBase64Url } from './mime.js';
@@ -91,7 +92,7 @@ export const google = {
     return (Array.isArray(res.json?.items) ? res.json.items : []).filter((e) => e && e.status !== 'cancelled').flatMap((e) => {
       const startsAt = when(e.start); const endsAt = when(e.end);
       if (!e.id || !startsAt || !endsAt || Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) return [];
-      return [{ id: String(e.id), title: String(e.summary || ''), startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), allDay: Boolean(e.start?.date), location: String(e.location || ''), private: e.visibility === 'private' || e.visibility === 'confidential', busy: e.transparency !== 'transparent' }];
+      return [{ id: String(e.id), title: String(e.summary || ''), startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), allDay: Boolean(e.start?.date), location: String(e.location || ''), private: e.visibility === 'private' || e.visibility === 'confidential', busy: e.transparency !== 'transparent' , ...connection(e) }];
     });
   },
 
@@ -162,6 +163,18 @@ export const google = {
     ensure(await call(http, { method: 'DELETE', url: `${CAL}/${encodeURIComponent(id)}?sendUpdates=none`, headers: { Authorization: `Bearer ${accessToken}` } }), 'Suppression Google Agenda', [200, 204, 404, 410]);
   },
 };
+
+/** Pour rejoindre : lien (Meet, sinon un lien de visio du lieu / de la description), numéros d'appel, code de réunion, description. */
+function connection(e) {
+  const points = Array.isArray(e.conferenceData?.entryPoints) ? e.conferenceData.entryPoints : [];
+  const phones = points.filter((p) => p.entryPointType === 'phone').map((p) => dialIn(p.label || p.uri, p.pin)).filter(Boolean).slice(0, 3);
+  return {
+    joinUrl: safeVideoUrl(meetLink(e)) || videoUrlIn(e.location, e.description),
+    dialIn: phones,
+    conferenceCode: String(e.conferenceData?.conferenceId || '').replace(/[^\w-]/g, '').slice(0, 40),
+    description: plainDescription(e.description),
+  };
+}
 
 function meetLink(json) {
   const entry = json?.conferenceData?.entryPoints?.find((e) => e.entryPointType === 'video');
