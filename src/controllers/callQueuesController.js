@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import CallQueue from '../models/CallQueue.js';
 import StaffRouting from '../models/StaffRouting.js';
 import { canManage } from '../services/followUps.js';
+import { scopeToCompany } from '../middleware/companyScope.js';
 import { availableIdentities, voiceIdentity } from '../services/voicePresenceService.js';
 import {
   previewQueues, toQueueView, toStaffView, validateQueueSet, validateStaffProfile,
@@ -9,6 +10,7 @@ import {
 
 const fail = (res, status, message) => res.status(status).json({ success: false, error: message, message });
 const NOT_ALLOWED = 'Seuls le titulaire et les membres autorisés à gérer les appels peuvent modifier les files d\'attente.';
+const NOT_ALLOWED_SELF = 'Seule la secrétaire peut modifier ses propres langues et compétences par cette voie.';
 const USER_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 const companyOid = (req) => (mongoose.Types.ObjectId.isValid(req.params.companyId) ? new mongoose.Types.ObjectId(req.params.companyId) : null);
@@ -143,6 +145,28 @@ export const callQueuesController = {
     } catch (error) {
       console.error('staff routing update:', error.message);
       fail(res, 500, 'Enregistrement des compétences impossible.');
+    }
+  },
+
+  /**
+   * La secrétaire règle SES langues et compétences (PUT /staff/:companyId/me). L'identité vient de la SESSION (req.companyAccess), jamais du
+   * corps ni de l'URL ; la société est l'un de ses emplois (déjà contrôlé par requireCompanyParam). Tout autre rôle : 403 (le responsable
+   * garde la route /staff/:companyId/:userId). Même validation et même écriture que updateStaff.
+   */
+  async updateMyStaff(req, res) {
+    try {
+      const companyId = guard(req, res); if (!companyId) return;
+      const access = req.companyAccess ? scopeToCompany(req.companyAccess, req.params.companyId) : null;
+      if (!access || access.role !== 'agent' || !access.userId || String(access.companyId) !== String(req.params.companyId)) return fail(res, 403, NOT_ALLOWED_SELF);
+      const userId = String(access.userId);
+      if (!USER_ID.test(userId)) return fail(res, 400, 'Identifiant de personne invalide.');
+      const checked = validateStaffProfile(req.body);
+      if (checked.error) return fail(res, 400, checked.error);
+      const doc = await StaffRouting.findOneAndUpdate({ companyId, userId }, { $set: checked.value }, { upsert: true, new: true, setDefaultsOnInsert: true }).lean();
+      res.json({ success: true, data: { member: toStaffView(doc) } });
+    } catch (error) {
+      console.error('staff routing update (self):', error.message);
+      fail(res, error.status === 403 ? 403 : 500, error.status === 403 ? NOT_ALLOWED_SELF : 'Enregistrement des compétences impossible.');
     }
   },
 
