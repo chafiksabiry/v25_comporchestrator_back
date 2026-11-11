@@ -90,8 +90,10 @@ async function sendFromShared(req, res, access, accountId) {
       icsContent = buildAppointmentIcs(toItem(item));
     }
   }
-  const fromName = account.ownerName || account.label;
-  const signature = composeSignature({ secretaryName: me.name, ownerName: account.ownerName || account.label, companyName: v.centerName });
+  // Messagerie PERSONNELLE de la secrétaire : elle écrit en son nom (expéditeur affiché = son nom, signature sans « pour le compte de »).
+  const personal = Boolean(account.personalUserId);
+  const fromName = personal ? (me.name || account.ownerName || account.label) : account.ownerName || account.label;
+  const signature = composeSignature({ secretaryName: me.name, ownerName: account.ownerName || account.label, companyName: v.centerName, personal });
   const payload = buildPayload({
     senderEmail: account.accountEmail, centerName: fromName, to: v.to, subject: v.subject, text: v.body, signature, icsContent, harxFooter: false,
     replyTo: { email: account.accountEmail, name: fromName },
@@ -110,7 +112,9 @@ async function sendFromShared(req, res, access, accountId) {
     console.error(`emails send (compte partagé ${account.provider}): ${e.code}`);
     await EmailLog.create({ ...base, status: 'failed', error: `provider_${e.code}` }).catch(() => {});
     if (e.code === 'needs_reauth' || e.code === 'not_connected') return res.status(409).json({ success: false, code: 'account_needs_reauth', error: 'account_needs_reauth', message: e.message });
-    return e.code === 'provider_error' ? fail(res, 502, UNAVAILABLE, 'email_provider_unavailable') : fail(res, e.code === 'unavailable' ? 503 : 502, `Le compte « ${account.label} » a refusé l’envoi. Aucun e-mail n’a été envoyé : prévenez le titulaire.`, 'email_provider_refused');
+    if (e.code === 'provider_error') return fail(res, 502, UNAVAILABLE, 'email_provider_unavailable');
+    const refused = personal ? 'Votre messagerie a refusé l’envoi. Aucun e-mail n’a été envoyé : reconnectez-la depuis votre profil.' : `Le compte « ${account.label} » a refusé l’envoi. Aucun e-mail n’a été envoyé : prévenez le titulaire.`;
+    return fail(res, e.code === 'unavailable' ? 503 : 502, refused, 'email_provider_refused');
   }
   const log = await EmailLog.create({ ...base, status: 'sent' });
   res.status(201).json({ success: true, data: view(log) });
@@ -125,7 +129,7 @@ export const emailController = {
       const max = limits();
       const used = await usage(new mongoose.Types.ObjectId(access.companyId));
       if (access.role === 'agent') {
-        // Une secrétaire n'a pas la messagerie de la société : « configuré » = au moins un compte partagé qu'elle peut utiliser pour écrire.
+        // Une secrétaire n'a pas la messagerie de la société : « configuré » = au moins un compte utilisable pour écrire (délégué autorisé OU sa messagerie personnelle).
         const usable = (await listAccounts(access.companyId, access)).filter((a) => a.can.send && !a.needsReauth);
         return res.json({ success: true, data: { configured: usable.length > 0, provider: null, account: null, limits: max, remainingThisHour: Math.max(0, max.perHour - used.hour), remainingToday: Math.max(0, max.perDay - used.day) } });
       }
@@ -166,7 +170,7 @@ export const emailController = {
       // Les e-mails ne partent JAMAIS de HARX : uniquement de la messagerie (Gmail / Outlook) que le centre a connectée, ou d'un compte partagé autorisé.
       const wanted = req.body?.accountId;
       if (wanted !== undefined && wanted !== null && wanted !== '' && typeof wanted !== 'string') return fail(res, 400, 'Compte d’envoi invalide.');
-      if (access.role === 'agent' && !wanted) return fail(res, 403, NOT_ALLOWED); // inchangé : sans compte partagé autorisé, une secrétaire n'envoie pas
+      if (access.role === 'agent' && !wanted) return fail(res, 403, NOT_ALLOWED); // inchangé : sans compte (délégué autorisé ou sa messagerie personnelle), une secrétaire n'envoie pas
       if (wanted) return sendFromShared(req, res, access, wanted);
       const identity = await loadEmailIdentity(access.companyId);
       const mailbox = await resolveMailbox(access.companyId, identity.provider);

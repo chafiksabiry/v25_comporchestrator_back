@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import SecretariatSharedAccount from '../models/SecretariatSharedAccount.js';
-import { disconnectSharedAccount, messages, SHARED_LABEL_MAX, withConnection } from './secretariatConnections.js';
+import { disconnectSharedAccount, messages, SHARED_LABEL_MAX, sharedReauthMessage, withConnection } from './secretariatConnections.js';
 import { SecretariatError } from './secretariatProviders/common.js';
 import { PROVIDERS } from './secretariatProviders/index.js';
 import { DEFAULT_TIME_ZONE, normalizeTimeZone, UNKNOWN_TIME_ZONE_MESSAGE } from './timeZone.js';
@@ -10,6 +10,8 @@ import { DEFAULT_TIME_ZONE, normalizeTimeZone, UNKNOWN_TIME_ZONE_MESSAGE } from 
  *  - titulaire et responsables (rôle ≠ agent) : voient et gèrent tous les comptes de leur société ;
  *  - secrétaire (rôle agent) : ne voit QUE les comptes où le titulaire a autorisé au moins une action, et n'agit que dans ce cadre ;
  *  - un compte d'une autre société, inconnu ou non autorisé répond « introuvable » (on ne confirme pas son existence) ;
+ *  - messagerie PERSONNELLE d'une secrétaire (`personalUserId`) : visible, utilisable (envoi, agenda) et déconnectable par sa seule propriétaire ;
+ *    jamais listée au titulaire / aux responsables ni aux autres secrétaires, jamais modifiable par eux ; non autorisé = « introuvable » ;
  *  - un compte à reconnecter répond 409 `account_needs_reauth` : jamais de repli sur un autre compte ;
  *  - les jetons ne sortent jamais d'ici (les vues ne contiennent que des champs d'affichage).
  * AUCUNE lecture de boîte de réception (elle exigerait gmail.readonly, périmètre restreint soumis à vérification Google).
@@ -69,15 +71,23 @@ const base = (d) => ({
 /** Vue du titulaire / d'un responsable : droits réglés + date de connexion. */
 export const managerView = (d) => ({ ...base(d), permissions: { send: d.permissions?.send === true, calendar: d.permissions?.calendar === true }, connectedAt: d.connectedAt ? new Date(d.connectedAt).toISOString() : null });
 /** Vue d'une secrétaire : ce qu'elle peut faire, rien d'autre (pas de date de connexion, pas de réglage). */
-export const secretaryView = (d) => ({ ...base(d), can: { send: d.permissions?.send === true, calendar: d.permissions?.calendar === true } });
+export const secretaryView = (d) => (d.personalUserId
+  ? { ...base(d), mine: true, can: { send: true, calendar: true } } // c'est SA messagerie : droits fixes
+  : { ...base(d), can: { send: d.permissions?.send === true, calendar: d.permissions?.calendar === true } });
 
-const DISPLAY_FIELDS = 'provider label ownerName accountEmail status permissions connectedAt';
+const DISPLAY_FIELDS = 'provider label ownerName accountEmail status permissions connectedAt personalUserId';
+/** Messagerie personnelle de cet utilisateur ? (jamais vrai pour un compte partagé ni pour la messagerie d'une autre personne) */
+const isMine = (d, access) => Boolean(d.personalUserId) && String(d.personalUserId) === String(access.userId);
 
 /** Comptes visibles de l'appelant (jamais de jeton : `credentialsEnc` est `select: false` et n'est pas demandé). */
 export async function listAccounts(companyId, access) {
   const rows = await SecretariatSharedAccount.find({ companyId: oid(companyId) }).select(DISPLAY_FIELDS).sort({ label: 1 }).lean();
-  if (isManager(access)) return rows.map(managerView);
-  return rows.filter((d) => d.permissions?.send === true || d.permissions?.calendar === true).map(secretaryView);
+  // Titulaire / responsables : jamais une messagerie personnelle de secrétaire.
+  if (isManager(access)) return rows.filter((d) => !d.personalUserId).map(managerView);
+  // Secrétaire : sa messagerie personnelle (en premier) puis les comptes délégués autorisés ; jamais celle d'une autre.
+  const mine = rows.filter((d) => isMine(d, access));
+  const delegated = rows.filter((d) => !d.personalUserId && (d.permissions?.send === true || d.permissions?.calendar === true));
+  return [...mine, ...delegated].map(secretaryView);
 }
 
 /**
@@ -88,12 +98,14 @@ export async function requireAccount(companyId, access, accountId, need) {
   if (!isOid(accountId)) throw fail('account_not_found', NOT_FOUND, 404);
   const d = await SecretariatSharedAccount.findOne({ _id: oid(accountId), companyId: oid(companyId) }).select(DISPLAY_FIELDS).lean();
   if (!d) throw fail('account_not_found', NOT_FOUND, 404);
-  if (!isManager(access)) {
+  // Messagerie personnelle : sa seule propriétaire (rôle secrétaire) y accède, droits fixes ; pour tout autre elle n'existe pas.
+  if (d.personalUserId && (isManager(access) || !isMine(d, access))) throw fail('account_not_found', NOT_FOUND, 404);
+  if (!isManager(access) && !d.personalUserId) {
     const p = d.permissions || {};
     if (p.send !== true && p.calendar !== true) throw fail('account_not_found', NOT_FOUND, 404); // jamais révélé à la secrétaire
     if (p[need] !== true) throw fail('account_not_allowed', need === 'send' ? 'Le titulaire n’a pas autorisé l’envoi d’e-mails depuis ce compte.' : 'Le titulaire n’a pas autorisé l’accès à l’agenda de ce compte.', 403);
   }
-  if (d.status === 'needs_reauth') throw fail('account_needs_reauth', messages.sharedNeedsReauth(d.label), 409);
+  if (d.status === 'needs_reauth') throw fail('account_needs_reauth', sharedReauthMessage(d), 409);
   return d;
 }
 
@@ -104,10 +116,12 @@ const shaped = (error) => { const e = safe(error); if (e.code === 'needs_reauth'
 
 // ---------- e-mail
 /** Signature : nom de la secrétaire, son rôle au service du propriétaire du compte, et la société. */
-export function composeSignature({ secretaryName, ownerName, companyName }) {
+export function composeSignature({ secretaryName, ownerName, companyName, personal = false }) {
   const who = (secretaryName || '').trim();
   const on = (ownerName || '').trim();
   const co = (companyName || '').trim();
+  // Messagerie personnelle : elle écrit en son nom, pas « pour le compte de » quelqu'un.
+  if (personal) return [who, co].filter(Boolean).join('\n');
   return [who, `Secrétariat${on ? ` de ${on}` : ''}${co ? ` — ${co}` : ''}`].filter(Boolean).join('\n');
 }
 
@@ -210,10 +224,16 @@ export async function updateAccount(companyId, accountId, patch) {
   if (patch.ownerName !== undefined) set.ownerName = patch.ownerName;
   if (patch.send !== undefined) set['permissions.send'] = patch.send;
   if (patch.calendar !== undefined) set['permissions.calendar'] = patch.calendar;
-  return SecretariatSharedAccount.findOneAndUpdate({ _id: oid(accountId), companyId: oid(companyId) }, { $set: set }, { new: true }).select(DISPLAY_FIELDS).lean();
+  return SecretariatSharedAccount.findOneAndUpdate({ _id: oid(accountId), companyId: oid(companyId), personalUserId: null }, { $set: set }, { new: true }).select(DISPLAY_FIELDS).lean();
 }
 
 export async function removeAccount(companyId, accountId) {
   if (!isOid(accountId)) return false;
-  return disconnectSharedAccount(companyId, accountId);
+  return disconnectSharedAccount(companyId, accountId, { owner: null }); // jamais une messagerie personnelle
+}
+
+/** La secrétaire déconnecte SA messagerie personnelle (propriété vérifiée dans le filtre ; autre compte = introuvable). */
+export async function removePersonalAccount(companyId, userId, accountId) {
+  if (!isOid(accountId) || !userId) return false;
+  return disconnectSharedAccount(companyId, accountId, { owner: String(userId) });
 }

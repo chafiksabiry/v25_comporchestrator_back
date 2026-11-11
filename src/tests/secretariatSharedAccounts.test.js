@@ -1,3 +1,4 @@
+// Inclut la messagerie PERSONNELLE d'une secrétaire (confidentialité stricte, envoi, signature, routes).
 // Run: JWT_SECRET=test TELNYX_API_KEY=x node src/tests/secretariatSharedAccounts.test.js
 // Comptes partagés avec les secrétaires (boîte / agenda d'un patron ou collègue) : OAuth réutilisé, jetons chiffrés par compte, contrôle
 // d'accès strict, envoi « Envoyer depuis », agenda lecture + création avec conflits, needs_reauth sans repli. Base et réseau SIMULÉS :
@@ -20,7 +21,7 @@ for (const k of ['GOOGLE_REDIRECT_URI', 'MICROSOFT_REDIRECT_URI', 'ZOOM_REDIRECT
 process.env.BREVO_API_KEY = 'cle-de-test';
 process.env.BREVO_SENDER_EMAIL = 'noreply@harx.ai';
 
-const SECRETS = ['ACCESS_MARIE', 'REFRESH_MARIE', 'ACCESS_EQUIPE', 'REFRESH_EQUIPE', 'CODE_SECRET_123', 'NEWACCESS'];
+const SECRETS = ['ACCESS_MARIE', 'REFRESH_MARIE', 'ACCESS_EQUIPE', 'REFRESH_EQUIPE', 'CODE_SECRET_123', 'NEWACCESS', 'ACCESS_SOPHIE', 'REFRESH_SOPHIE', 'ACCESS_PAUL', 'REFRESH_PAUL'];
 const logged = [];
 for (const k of ['log', 'error', 'warn']) { const orig = console[k]; console[k] = (...a) => { logged.push(a.join(' ')); if (k === 'log') orig(...a); }; }
 
@@ -88,7 +89,7 @@ const conns = [];
 const toolsDocs = [];
 const getPath = (o, p) => p.split('.').reduce((a, k) => (a == null ? undefined : a[k]), o);
 const setPath = (d, path, val) => { const keys = path.split('.'); const last = keys.pop(); keys.reduce((a, k) => (a[k] = a[k] || {}), d)[last] = val; };
-const match = (d, f) => Object.entries(f).every(([k, x]) => String(getPath(d, k)) === String(x));
+const match = (d, f) => Object.entries(f).every(([k, x]) => (x === null ? getPath(d, k) == null : String(getPath(d, k)) === String(x))); // `champ: null` = absent ou null (comme MongoDB)
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const chain = (rows, one) => {
   const strip = (r) => { const c = clone(r); delete c.credentialsEnc; return c; };
@@ -448,6 +449,130 @@ try {
   r = await req('DELETE', `/accounts/${C1}/${marie._id}`, { user: 'owner1' });
   assert.equal(r.status, 200); assert.equal(accounts.length, 4); assert.equal(callsTo(/oauth2\.googleapis\.com\/revoke/).length, 1, 'révocation chez le fournisseur au mieux');
   assert.equal((await req('GET', `/accounts/${C1}/${marie._id}/events?from=2026-11-09T00:00:00Z&to=2026-11-16T00:00:00Z`, { user: 'sophie' })).status, 404);
+
+
+  // ---------- 9 bis. messagerie PERSONNELLE de la secrétaire
+  const before = accounts.length;
+  const personalCb = (user, provider, email, access, refresh, extra = {}) => {
+    reset(); oauthOk(email, access, refresh);
+    return cb(provider, { code: 'c', state: stateFrom(S.startAuthorization({ companyId: extra.companyId || C1, userId: user, provider, returnTo: 'profile', shared: { personal: true, ownerName: '' } })) });
+  };
+  // démarrage : secrétaire seulement, pour elle-même (identité = session), retour = profil uniquement
+  reset();
+  for (const [user, status] of [['owner1', 403], ['member1', 403], ['memberNoCalls', 403], ['otherAgent', 403]]) assert.equal((await req('POST', `/accounts/${C1}/mine/google/start`, { user })).status, status, `démarrage refusé à ${user}`);
+  assert.equal((await req('POST', `/accounts/${C1}/mine/google/start`)).status, 401);
+  assert.equal((await req('POST', `/accounts/${C2}/mine/google/start`, { user: 'sophie' })).status, 403, 'pas pour une autre société');
+  assert.equal((await req('POST', `/accounts/${C1}/mine/zoom/start`, { user: 'sophie' })).status, 400);
+  assert.equal((await req('POST', `/accounts/${C1}/mine/google/start`, { user: 'sophie', body: { returnTo: 'tools' } })).status, 400, 'liste blanche des pages de retour');
+  r = await req('POST', `/accounts/${C1}/mine/google/start`, { user: 'sophie', body: { userId: 'paul', personalUserId: 'paul', companyId: C2 } });
+  assert.equal(r.status, 200, 'la route « mine » n’est pas capturée par /:provider/start'); assert.match(r.body.data.url, /^https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth\?/);
+  assert.equal(new URL(r.body.data.url).searchParams.get('scope'), 'openid email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.events'); assert.ok(!/readonly/.test(r.body.data.url), 'aucune lecture de boîte');
+  const stP = S.readState(stateFrom(r.body.data.url), 'google');
+  assert.deepEqual(stP, { companyId: C1, userId: 'sophie', provider: 'google', returnTo: 'profile', shared: { label: 'Ma messagerie', ownerName: 'Sophie Martin', send: true, calendar: true, personal: true } }, 'identité tirée de la session, jamais du corps');
+  r = await req('POST', `/accounts/${C1}/mine/microsoft/start`, { user: 'sophie', body: { returnTo: 'profile' } }); assert.equal(r.status, 200);
+  const forgeP = (shared) => jwt.sign({ purpose: 'secretariat-oauth', companyId: C1, userId: 'sophie', provider: 'google', returnTo: 'profile', shared }, process.env.JWT_SECRET, { expiresIn: 600 });
+  assert.equal(S.readState(forgeP({ personal: 'oui' }), 'google'), null); assert.equal(S.readState(forgeP({ personal: true, accountId: marie._id }), 'google'), null);
+  assert.equal(S.readState(forgeP({ personal: true, label: 'pirate', send: false, calendar: false }), 'google').shared.label, 'Ma messagerie', 'libellé et droits imposés');
+
+  // retour OAuth : compte créé au nom de sa propriétaire, chiffré, droits fixes
+  r = await personalCb('sophie', 'google', 'Sophie@Cabinet.test', 'ACCESS_SOPHIE', 'REFRESH_SOPHIE');
+  assert.equal(r.location, 'https://portal.test/telephony/app/profile?connected=google&personal=1');
+  const sophieAcc = accounts.find((a) => a.personalUserId === 'sophie');
+  assert.deepEqual([sophieAcc.companyId, sophieAcc.provider, sophieAcc.label, sophieAcc.accountEmail, sophieAcc.status, sophieAcc.connectedBy], [C1, 'google', 'Ma messagerie', 'sophie@cabinet.test', 'connected', 'sophie']);
+  assert.deepEqual(sophieAcc.permissions, { send: true, calendar: true });
+  assert.ok(!sophieAcc.credentialsEnc.includes('ACCESS_SOPHIE')); assert.equal(credsOf(sophieAcc).refreshToken, 'REFRESH_SOPHIE');
+  // reconnexion (même adresse) : mise à jour, pas de doublon ; autre adresse : erreur claire, jetons inchangés
+  r = await personalCb('sophie', 'google', 'sophie@cabinet.test', 'ACCESS_SOPHIE', 'REFRESH_SOPHIE');
+  assert.equal(r.location, 'https://portal.test/telephony/app/profile?connected=google&personal=1'); assert.equal(accounts.filter((a) => a.personalUserId === 'sophie').length, 1);
+  r = await personalCb('sophie', 'google', 'autre@cabinet.test', 'ACCESS_PAUL', 'REFRESH_PAUL');
+  assert.equal(r.location, 'https://portal.test/telephony/app/profile?error=wrong_account'); assert.equal(credsOf(sophieAcc).refreshToken, 'REFRESH_SOPHIE'); assert.equal(sophieAcc.accountEmail, 'sophie@cabinet.test');
+  // adresse déjà connectée : jamais d'écrasement silencieux (compte de sa collègue, compte partagé, et l'inverse)
+  r = await personalCb('paul', 'google', 'sophie@cabinet.test', 'ACCESS_PAUL', 'REFRESH_PAUL');
+  assert.equal(r.location, 'https://portal.test/telephony/app/profile?error=email_in_use'); assert.equal(sophieAcc.personalUserId, 'sophie'); assert.equal(credsOf(sophieAcc).refreshToken, 'REFRESH_SOPHIE');
+  reset();
+  on('POST', /login\.microsoftonline\.com\/common\/oauth2\/v2\.0\/token/, () => ({ status: 200, json: { access_token: 'ACCESS_PAUL', refresh_token: 'REFRESH_PAUL', expires_in: 3599, scope: 'Mail.Send User.Read' } }));
+  on('GET', /graph\.microsoft\.com\/v1\.0\/me\?/, () => ({ status: 200, json: { mail: 'commercial@acme.test' } }));
+  r = await cb('microsoft', { code: 'c', state: stateFrom(S.startAuthorization({ companyId: C1, userId: 'paul', provider: 'microsoft', returnTo: 'profile', shared: { personal: true, ownerName: '' } })) });
+  assert.equal(r.location, 'https://portal.test/telephony/app/profile?error=email_in_use', 'adresse déjà partagée par le titulaire'); assert.equal(equipe.personalUserId, undefined); assert.equal(credsOf(equipe).refreshToken, 'REFRESH_EQUIPE');
+  reset(); oauthOk('sophie@cabinet.test');
+  r = await cb('google', { code: 'c', state: stateFrom(S.startAuthorization({ companyId: C1, userId: 'owner1', provider: 'google', returnTo: 'tools', shared: { label: 'Écrase', ownerName: '', send: true, calendar: true } })) });
+  assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=email_in_use', 'le titulaire ne peut pas écraser une messagerie personnelle'); assert.equal(sophieAcc.label, 'Ma messagerie'); assert.equal(credsOf(sophieAcc).refreshToken, 'REFRESH_SOPHIE');
+  r = await cb('google', { code: 'c', state: stateFrom(S.startAuthorization({ companyId: C1, userId: 'owner1', provider: 'google', returnTo: 'tools', shared: { label: 'Écrase', ownerName: '', send: true, calendar: true, accountId: sophieAcc._id } })) });
+  assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=invalid_request', 'reconnexion « partagée » d’un compte personnel = introuvable'); assert.equal(credsOf(sophieAcc).refreshToken, 'REFRESH_SOPHIE');
+  r = await personalCb('paul', 'google', 'paul@cabinet.test', 'ACCESS_PAUL', 'REFRESH_PAUL');
+  const paulAcc = accounts.find((a) => a.personalUserId === 'paul'); assert.ok(paulAcc); assert.equal(paulAcc.accountEmail, 'paul@cabinet.test');
+
+  // listes : le titulaire et les responsables ne voient JAMAIS une messagerie personnelle
+  for (const user of ['owner1', 'member1']) {
+    r = await req('GET', `/accounts/${C1}`, { user });
+    assert.equal(r.status, 200); assert.ok(!r.body.data.accounts.some((a) => a.label === 'Ma messagerie' || a.email.includes('@cabinet.test')), `${user} ne voit pas les messageries personnelles`);
+    assert.ok(!r.text.includes(sophieAcc._id) && !r.text.includes(paulAcc._id) && !r.text.includes('cabinet.test'));
+  }
+  r = await req('GET', `/accounts/${C1}`, { user: 'sophie' });
+  assert.equal(r.body.data.accounts[0].mine, true, 'la sienne d’abord'); assert.deepEqual(r.body.data.accounts.slice(1).map((a) => a.mine), r.body.data.accounts.slice(1).map(() => undefined), 'puis les comptes délégués autorisés'); assert.ok(r.body.data.accounts.length >= 2 && r.body.data.accounts.some((x) => x.label === 'Équipe commerciale'));
+  assert.deepEqual(r.body.data.accounts[0], { id: sophieAcc._id, provider: 'google', label: 'Ma messagerie', ownerName: '', email: 'sophie@cabinet.test', status: 'connected', needsReauth: false, mine: true, can: { send: true, calendar: true } });
+  assert.equal(r.body.data.accounts[1].mine, undefined); assert.ok(!r.text.includes('paul@cabinet.test') && !r.text.includes(paulAcc._id), 'jamais celle d’une autre secrétaire');
+  r = await req('GET', `/accounts/${C1}`, { user: 'paul' });
+  assert.equal(r.body.data.accounts[0].email, 'paul@cabinet.test'); assert.ok(!r.text.includes('sophie@cabinet.test') && !r.text.includes(sophieAcc._id));
+  r = await req('GET', `/accounts/${C2}`, { user: 'otherAgent' }); assert.ok(!r.text.includes('cabinet.test'), 'autre société');
+
+  // gestion : ni modifiable, ni reconnectable, ni supprimable par le titulaire ; introuvable pour tout autre
+  r = await req('PATCH', `/accounts/${C1}/${sophieAcc._id}`, { user: 'owner1', body: { label: 'pirate', permissions: { send: false, calendar: false } } }); assert.equal(r.status, 404); assert.equal(sophieAcc.label, 'Ma messagerie'); assert.deepEqual(sophieAcc.permissions, { send: true, calendar: true });
+  assert.equal((await req('POST', `/accounts/${C1}/${sophieAcc._id}/reconnect`, { user: 'owner1' })).status, 404);
+  assert.equal((await req('DELETE', `/accounts/${C1}/${sophieAcc._id}`, { user: 'owner1' })).status, 404); assert.ok(accounts.includes(sophieAcc));
+  assert.equal((await req('PATCH', `/accounts/${C1}/${sophieAcc._id}`, { user: 'sophie', body: { label: 'x' } })).status, 403, 'une secrétaire ne modifie pas via la route de gestion');
+  assert.equal((await req('DELETE', `/accounts/${C1}/mine/${sophieAcc._id}`, { user: 'owner1' })).status, 403, 'route « mine » : secrétaire seulement');
+  assert.equal((await req('DELETE', `/accounts/${C1}/mine/${sophieAcc._id}`, { user: 'paul' })).status, 404, 'une autre secrétaire ne déconnecte pas la sienne'); assert.ok(accounts.includes(sophieAcc));
+  assert.equal((await req('DELETE', `/accounts/${C1}/mine/${equipe._id}`, { user: 'sophie' })).status, 404, 'compte partagé : pas via « mine »'); assert.ok(accounts.includes(equipe));
+  assert.equal((await req('DELETE', `/accounts/${C1}/mine/xx`, { user: 'sophie' })).status, 404);
+
+  // envoi : sa propriétaire seulement ; From = son nom ; signature sans « pour le compte de »
+  reset(); on('POST', /gmail\.googleapis\.com\/gmail\/v1\/users\/me\/messages\/send/, () => ({ status: 200, json: { id: 'mp1' } }));
+  r = await mail('sophie', { ...MSG, accountId: sophieAcc._id });
+  assert.equal(r.status, 201, r.text);
+  const gp = callsTo(/messages\/send/)[0]; assert.equal(gp.headers.Authorization, 'Bearer ACCESS_SOPHIE');
+  const rawP = Buffer.from(gp.body.raw, 'base64url').toString('utf8');
+  assert.match(rawP, /From: "Sophie Martin" <sophie@cabinet\.test>/); assert.match(rawP, /Reply-To: "Sophie Martin" <sophie@cabinet\.test>/);
+  const textP = decodeParts(rawP); assert.match(textP, /Sophie Martin\nAcme/); assert.ok(!/Secrétariat de|pour le compte/i.test(textP), 'signature personnelle');
+  assert.equal(logs.at(-1).fromLabel, 'Ma messagerie'); assert.equal(logs.at(-1).fromEmail, 'sophie@cabinet.test'); assert.equal(logs.at(-1).sentById, 'sophie'); assert.equal(harxMails, 0);
+  assert.equal(A.composeSignature({ secretaryName: 'Sophie Martin', companyName: 'Acme', personal: true }), 'Sophie Martin\nAcme');
+  assert.equal(A.composeSignature({ secretaryName: 'Sophie Martin', companyName: '', personal: true }), 'Sophie Martin');
+  reset(); const sentBefore = logs.length;
+  for (const user of ['paul', 'owner1', 'member1', 'otherAgent']) {
+    r = await mail(user, { ...MSG, accountId: sophieAcc._id });
+    assert.ok([403, 404].includes(r.status) && r.status !== 201, `${user} ne peut pas envoyer depuis la messagerie de Sophie (${r.status})`);
+    if (user !== 'otherAgent') assert.equal(r.status, 404, 'on ne confirme pas son existence');
+  }
+  assert.equal(callsTo(/messages\/send/).length, 0); assert.equal(logs.length, sentBefore, 'aucun envoi, aucun journal');
+  // agenda : sa propriétaire seulement
+  reset(); on('GET', gcal, () => ({ status: 200, json: { items: [] } }));
+  assert.equal((await req('GET', `/accounts/${C1}/${sophieAcc._id}/events?from=2026-11-09T00:00:00Z&to=2026-11-16T00:00:00Z`, { user: 'sophie' })).status, 200);
+  for (const user of ['paul', 'owner1', 'member1']) assert.equal((await req('GET', `/accounts/${C1}/${sophieAcc._id}/events?from=2026-11-09T00:00:00Z&to=2026-11-16T00:00:00Z`, { user })).status, 404);
+  assert.equal(callsTo(gcal).length, 1);
+  // « configuré » pour une secrétaire sans compte délégué : sa messagerie personnelle suffit
+  etranger.permissions = { send: false, calendar: false };
+  r = await req('GET', '/config', { user: 'otherAgent', root: `${origin}/emails` }); assert.equal(r.body.data.configured, false);
+  r = await personalCb('otherAgent', 'google', 'oa@autre.test', 'ACCESS_PAUL', 'REFRESH_PAUL', { companyId: C2 });
+  assert.equal(r.location, 'https://portal.test/telephony/app/profile?connected=google&personal=1');
+  r = await req('GET', '/config', { user: 'otherAgent', root: `${origin}/emails` }); assert.equal(r.body.data.configured, true, 'compte personnel seul = configuré');
+  etranger.permissions = { send: true, calendar: true };
+  // à reconnecter : message adressé à la secrétaire elle-même, jamais de repli
+  sophieAcc.status = 'needs_reauth';
+  r = await req('GET', `/accounts/${C1}`, { user: 'sophie' }); assert.equal(r.body.data.accounts[0].needsReauth, true);
+  r = await req('GET', '/config', { user: 'paul', root: `${origin}/emails` }); assert.equal(r.body.data.configured, true);
+  reset(); r = await mail('sophie', { ...MSG, accountId: sophieAcc._id });
+  assert.equal(r.status, 409); assert.equal(r.body.code, 'account_needs_reauth'); assert.match(r.body.message, /Reconnectez-la|reconnectez-la depuis votre profil/); assert.ok(!/titulaire/.test(r.body.message)); assert.equal(callsTo(/messages\/send/).length, 0);
+  r = await personalCb('sophie', 'google', 'sophie@cabinet.test', 'ACCESS_SOPHIE', 'REFRESH_SOPHIE');
+  assert.equal(sophieAcc.status, 'connected');
+  // déconnexion par la propriétaire : révocation au mieux, jetons supprimés
+  reset(); on('POST', /oauth2\.googleapis\.com\/revoke/, () => ({ status: 200, json: {} }));
+  r = await req('DELETE', `/accounts/${C1}/mine/${sophieAcc._id}`, { user: 'sophie' });
+  assert.equal(r.status, 200); assert.ok(!accounts.includes(sophieAcc)); assert.equal(callsTo(/oauth2\.googleapis\.com\/revoke/).length, 1); assert.ok(!r.body.data.accounts.some((a) => a.mine));
+  assert.equal((await mail('sophie', { ...MSG, accountId: sophieAcc._id })).status, 404);
+  for (const u of ['paul']) assert.equal((await req('DELETE', `/accounts/${C1}/mine/${paulAcc._id}`, { user: u })).status, 200);
+  const oa = accounts.find((a) => a.personalUserId === 'otherAgent');
+  assert.equal((await req('DELETE', `/accounts/${C2}/mine/${oa._id}`, { user: 'otherAgent' })).status, 200);
+  assert.equal(accounts.length, before, 'toutes les messageries personnelles de test ont disparu');
 
   // ---------- 10. plafond
   while (accounts.filter((a) => a.companyId === C1).length < S.MAX_SHARED_ACCOUNTS) seed({ accountEmail: `x${accounts.length}@acme.test` });

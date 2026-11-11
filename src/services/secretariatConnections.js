@@ -22,7 +22,9 @@ import { isValidTenant, tenantOf } from './secretariatProviders/microsoft.js';
  * Page de retour du portail : SECRETARIAT_RETURN_URL, à défaut FRONTEND_BASE_URL (+ /telephony/app/tools ou /telephony/onboarding).
  * Les jetons ne sont jamais écrits en clair, ni journalisés, ni renvoyés ; l'état OAuth est un JWT de 10 minutes (JWT_SECRET).
  */
-export const RETURN_PATHS = { tools: '/telephony/app/tools', onboarding: '/telephony/onboarding' };
+export const RETURN_PATHS = { tools: '/telephony/app/tools', onboarding: '/telephony/onboarding', profile: '/telephony/app/profile' };
+/** Pages de retour autorisées pour la connexion de la messagerie PERSONNELLE d'une secrétaire (liste blanche côté serveur). */
+export const PERSONAL_RETURN_TO = ['profile'];
 export const STATE_PURPOSE = 'secretariat-oauth';
 const STATE_TTL_SECONDS = 600;
 const REFRESH_MARGIN_MS = 60_000;
@@ -39,6 +41,8 @@ const sharedContext = (companyId, accountId) => `secretariat-shared:${companyId}
 const slot = (companyId, provider, accountId) => (accountId
   ? { Model: SecretariatSharedAccount, filter: { _id: oid(accountId), companyId: oid(companyId) }, ctx: sharedContext(companyId, accountId) }
   : { Model: SecretariatConnection, filter: { companyId: oid(companyId), provider }, ctx: context(companyId, provider) });
+/** Message de reconnexion d'un compte partagé OU personnel (`conn` = document du compte). */
+export const sharedReauthMessage = (conn) => (conn?.personalUserId ? messages.personalNeedsReauth() : messages.sharedNeedsReauth(conn?.label));
 const trim = (v) => String(v ?? '').trim();
 const isHttpUrl = (v) => { try { return ['http:', 'https:'].includes(new URL(v).protocol); } catch { return false; } };
 
@@ -47,11 +51,15 @@ export const messages = {
   needsReauth: (p) => `La connexion ${PROVIDER_LABEL[p]} a expiré ou a été révoquée. Reconnectez-la dans Paramétrage > Outils.`,
   unavailable: (p) => `La connexion ${PROVIDER_LABEL[p]} n’est pas encore configurée côté HARX.`,
   /** Compte partagé à reconnecter par le titulaire (la secrétaire ne le peut pas). Jamais de repli sur un autre compte. */
+  /** Messagerie personnelle d'une secrétaire à reconnecter par elle-même. */
+  personalNeedsReauth: () => 'La connexion de votre messagerie professionnelle a expiré ou a été révoquée : reconnectez-la depuis votre profil. Aucun autre compte n’est utilisé à sa place.',
   sharedNeedsReauth: (label) => `La connexion du compte « ${label || 'partagé'} » a expiré ou a été révoquée : le titulaire doit la reconnecter dans Paramétrage > Outils. Aucun autre compte n’est utilisé à sa place.`,
 };
 
 /** Comptes partagés : libellé, nom du propriétaire et droits des secrétaires, portés par l'état OAuth signé. */
 export const SHARED_LABEL_MAX = 80;
+/** Libellé fixe de la messagerie personnelle d'une secrétaire. */
+export const PERSONAL_LABEL = 'Ma messagerie';
 
 /** Configuration d'un fournisseur, ou null s'il n'est PAS disponible (variables absentes/invalides ou clé de chiffrement invalide). */
 export function providerConfig(provider, env = process.env) {
@@ -114,6 +122,12 @@ export function readState(state, provider) {
     // Compte partagé : seuls Google et Microsoft ; libellé et droits revalidés (jamais de confiance aveugle dans la charge utile).
     const sh = s.shared;
     if (!['google', 'microsoft'].includes(provider) || !sh || typeof sh !== 'object') return null;
+    // Messagerie PERSONNELLE de la secrétaire : droits fixes (envoi + agenda), propriétaire = l'utilisateur de l'état (jamais un autre).
+    if (sh.personal !== undefined && sh.personal !== true) return null;
+    if (sh.personal === true) {
+      if (sh.accountId !== undefined) return null;
+      return { ...base, shared: { label: PERSONAL_LABEL, ownerName: trim(sh.ownerName).slice(0, SHARED_LABEL_MAX), send: true, calendar: true, personal: true } };
+    }
     const label = trim(sh.label); const ownerName = trim(sh.ownerName);
     if (!label || label.length > SHARED_LABEL_MAX || ownerName.length > SHARED_LABEL_MAX) return null;
     if (sh.accountId !== undefined && !/^[0-9a-fA-F]{24}$/.test(String(sh.accountId))) return null;
@@ -179,22 +193,29 @@ async function storeSharedAccount({ state, accountEmail, secrets, scopes, env })
   const { companyId, userId, provider, shared } = state;
   const email = accountEmail.toLowerCase();
   let doc = null;
-  if (shared.accountId) {
-    doc = await SecretariatSharedAccount.findOne({ _id: oid(shared.accountId), companyId: oid(companyId), provider }).select('accountEmail').lean();
+  const taken = () => new SecretariatError('email_in_use', 'Cette adresse est déjà connectée dans cette société (compte partagé ou messagerie d’une autre personne). Utilisez une autre adresse.');
+  if (shared.personal) {
+    // Messagerie personnelle : une seule par fournisseur et par secrétaire (reconnexion = mise à jour, même adresse obligatoire).
+    doc = await SecretariatSharedAccount.findOne({ companyId: oid(companyId), provider, personalUserId: String(userId) }).select('accountEmail').lean();
+    if (doc && String(doc.accountEmail).toLowerCase() !== email) throw new SecretariatError('wrong_account', 'Ce n’est pas la même adresse que celle déjà connectée : déconnectez d’abord votre messagerie, puis reconnectez-la.');
+    if (!doc && (await SecretariatSharedAccount.findOne({ companyId: oid(companyId), provider, accountEmail: email }).select('_id').lean())) throw taken();
+  } else if (shared.accountId) {
+    doc = await SecretariatSharedAccount.findOne({ _id: oid(shared.accountId), companyId: oid(companyId), provider, personalUserId: null }).select('accountEmail').lean();
     if (!doc) throw new SecretariatError('invalid_request', 'Compte introuvable.');
     if (String(doc.accountEmail).toLowerCase() !== email) throw new SecretariatError('wrong_account', 'Ce n’est pas le même compte que celui à reconnecter.');
   } else {
-    doc = await SecretariatSharedAccount.findOne({ companyId: oid(companyId), provider, accountEmail: email }).select('accountEmail').lean();
-    if (!doc && (await SecretariatSharedAccount.countDocuments({ companyId: oid(companyId) })) >= MAX_SHARED_ACCOUNTS) throw new SecretariatError('too_many_accounts', 'Nombre maximum de comptes partagés atteint.');
+    doc = await SecretariatSharedAccount.findOne({ companyId: oid(companyId), provider, accountEmail: email }).select('accountEmail personalUserId').lean();
+    if (doc?.personalUserId) throw taken(); // jamais d'écrasement de la messagerie d'une secrétaire
+    if (!doc && (await SecretariatSharedAccount.countDocuments({ companyId: oid(companyId), personalUserId: null })) >= MAX_SHARED_ACCOUNTS) throw new SecretariatError('too_many_accounts', 'Nombre maximum de comptes partagés atteint.');
   }
   const accountId = doc ? String(doc._id) : String(new mongoose.Types.ObjectId());
   const credentialsEnc = encryptJson(secrets, { context: sharedContext(companyId, accountId), key: loadKey(env) });
   await SecretariatSharedAccount.findOneAndUpdate(
     { _id: oid(accountId), companyId: oid(companyId) },
-    { $set: { provider, label: shared.label, ownerName: shared.ownerName, accountEmail: email, credentialsEnc, scopes, status: 'connected', connectedAt: new Date(), connectedBy: userId, 'permissions.send': shared.send, 'permissions.calendar': shared.calendar } },
+    { $set: { provider, label: shared.label, ownerName: shared.ownerName, accountEmail: email, credentialsEnc, scopes, status: 'connected', connectedAt: new Date(), connectedBy: userId, ...(shared.personal ? { personalUserId: String(userId) } : {}), 'permissions.send': shared.send, 'permissions.calendar': shared.calendar } },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
-  return { companyId, provider, accountEmail: email, accountId };
+  return { companyId, provider, accountEmail: email, accountId, ...(shared.personal ? { personal: true } : {}) };
 }
 
 /** Messageries pouvant envoyer les e-mails du secrétariat (les e-mails ne partent JAMAIS de HARX : seulement de la boîte connectée du centre). */
@@ -305,7 +326,7 @@ const inFlight = new Map();
 export function getAccessToken(companyId, provider, { force = false, http = httpImpl, env = process.env, accountId = null } = {}) {
   const key = `${companyId}:${provider}:${accountId || ''}`;
   const where = slot(companyId, provider, accountId);
-  const reauth = (conn) => new SecretariatError('needs_reauth', accountId ? messages.sharedNeedsReauth(conn?.label) : messages.needsReauth(provider), { status: null });
+  const reauth = (conn) => new SecretariatError('needs_reauth', accountId ? sharedReauthMessage(conn) : messages.needsReauth(provider), { status: null });
   if (inFlight.has(key) && !force) return inFlight.get(key);
   const run = (async () => {
     const conn = await where.Model.findOne(where.filter).select('+credentialsEnc');
@@ -331,7 +352,7 @@ export function getAccessToken(companyId, provider, { force = false, http = http
     }
     if ((res.status === 400 || res.status === 401) && res.json?.error !== 'invalid_client') {
       await markReauth(companyId, provider, accountId);
-      throw new SecretariatError('needs_reauth', accountId ? messages.sharedNeedsReauth(conn.label) : messages.needsReauth(provider), { status: res.status });
+      throw new SecretariatError('needs_reauth', accountId ? sharedReauthMessage(conn) : messages.needsReauth(provider), { status: res.status });
     }
     throw new SecretariatError('provider_error', `${PROVIDER_LABEL[provider]} est momentanément indisponible. Réessayez dans un instant.`, { status: res.status });
   })();
@@ -359,9 +380,9 @@ export async function withConnection(companyId, provider, fn, { http = httpImpl,
   } catch (error) {
     if (error instanceof SecretariatError && error.status === 401) {
       await markReauth(companyId, provider, accountId);
-      let label = '';
-      if (accountId) label = (await SecretariatSharedAccount.findOne({ _id: oid(accountId), companyId: oid(companyId) }).select('label').lean().catch(() => null))?.label || '';
-      throw new SecretariatError('needs_reauth', accountId ? messages.sharedNeedsReauth(label) : messages.needsReauth(provider));
+      let row = null;
+      if (accountId) row = await SecretariatSharedAccount.findOne({ _id: oid(accountId), companyId: oid(companyId) }).select('label personalUserId').lean().catch(() => null);
+      throw new SecretariatError('needs_reauth', accountId ? sharedReauthMessage(row) : messages.needsReauth(provider));
     }
     throw error;
   }
@@ -423,8 +444,10 @@ export async function disconnect(companyId, provider, { http = httpImpl, env = p
 }
 
 /** Supprime un compte PARTAGÉ : révocation chez le fournisseur au mieux, puis suppression des jetons. Les réglages de la société ne bougent pas. */
-export async function disconnectSharedAccount(companyId, accountId, { http = httpImpl, env = process.env } = {}) {
+export async function disconnectSharedAccount(companyId, accountId, { http = httpImpl, env = process.env, owner } = {}) {
   const where = slot(companyId, null, accountId);
+  // `owner` : null = compte PARTAGÉ uniquement (jamais une messagerie personnelle) ; chaîne = messagerie personnelle de CET utilisateur seulement.
+  if (owner !== undefined) where.filter = { ...where.filter, personalUserId: owner === null ? null : String(owner) };
   const conn = await SecretariatSharedAccount.findOne(where.filter).select('+credentialsEnc');
   if (!conn) return false;
   try {

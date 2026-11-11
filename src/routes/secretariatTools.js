@@ -31,6 +31,9 @@ router.post('/inbound-emails/:companyId/delete-many', authenticate, requireCompa
 router.post('/inbound-emails/:companyId/archive-many', authenticate, requireCompanyParam, ib.archiveMany);
 // Comptes partagés avec les secrétaires (boîte / agenda d'un patron ou collègue) : titulaire/responsable gèrent, une secrétaire ne voit que les comptes autorisés (contrôleur + service).
 router.get('/accounts/:companyId', authenticate, requireCompanyParam, ac.list);
+// Messagerie PERSONNELLE de la secrétaire (SA boîte, visible d'elle seule) : déclarée AVANT les routes à paramètres pour ne jamais être capturée par elles.
+router.post('/accounts/:companyId/mine/:provider/start', authenticate, requireCompanyParam, ac.startMine);
+router.delete('/accounts/:companyId/mine/:accountId', authenticate, requireCompanyParam, ac.removeMine);
 router.post('/accounts/:companyId/:provider/start', authenticate, requireCompanyParam, ac.start);
 router.post('/accounts/:companyId/:accountId/reconnect', authenticate, requireCompanyParam, ac.reconnect);
 router.patch('/accounts/:companyId/:accountId', authenticate, requireCompanyParam, ac.update);
