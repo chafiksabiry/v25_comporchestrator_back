@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import { canManage } from '../services/followUps.js';
-import { inboundView, markHandled, readInboundBody, refreshInbound } from '../services/inboundEmails.js';
+import { archiveManyInbound, deleteInbound, deleteManyInbound, inboundView, markHandled, readInboundBody, refreshInbound } from '../services/inboundEmails.js';
 import { loadTools, mergedTools } from '../services/secretariatTools.js';
 import { SecretariatError } from '../services/secretariatProviders/common.js';
 
@@ -58,7 +58,11 @@ export const inboundEmailsController = {
       return sendError(res, error, 'access');
     }
   },
-  list: guard(async (companyId, req, res) => res.json({ success: true, data: await inboundView(companyId) }), 'list'),
+  list: guard(async (companyId, req, res) => {
+    const { view } = req.query;
+    if (view !== undefined && typeof view !== 'string') throw new SecretariatError('invalid_request', 'Vue invalide : « active » ou « archived ».');
+    res.json({ success: true, data: await inboundView(companyId, view) });
+  }, 'list'),
   refresh: guard(async (companyId, req, res) => res.json({ success: true, data: await refreshInbound(companyId) }), 'refresh'),
   body: guard(async (companyId, req, res) => {
     const data = await readInboundBody(companyId, req.params.id);
@@ -66,4 +70,8 @@ export const inboundEmailsController = {
     res.json({ success: true, data });
   }, 'body'),
   update: guard(async (companyId, req, res) => res.json({ success: true, data: await markHandled(companyId, req.params.id, req.body) }), 'update'),
+  /** Suppression DANS L'APPLICATION seulement (aucune écriture chez le fournisseur). Re-suppression : 404. */
+  remove: guard(async (companyId, req, res) => res.json({ success: true, data: await deleteInbound(companyId, req.params.id) }), 'remove'),
+  deleteMany: guard(async (companyId, req, res) => res.json({ success: true, data: await deleteManyInbound(companyId, req.body) }), 'deleteMany'),
+  archiveMany: guard(async (companyId, req, res) => res.json({ success: true, data: await archiveManyInbound(companyId, req.body) }), 'archiveMany'),
 };

@@ -22,6 +22,10 @@ const schema = new mongoose.Schema(
     /** Éléments « À traiter » (FollowUpItem) rattachés après validation humaine. */
     followUpIds: { type: [mongoose.Schema.Types.ObjectId], default: [] },
     fetchedAt: { type: Date, default: Date.now },
+    /** Archivé DANS L'APPLICATION seulement (rien n'est écrit dans la messagerie du fournisseur). null = actif. */
+    archivedAt: { type: Date, default: null },
+    /** Suppression logique DANS L'APPLICATION : le document reste jusqu'à l'expiration TTL pour que l'upsert de `refresh` ne recrée pas l'e-mail. Les métadonnées sont effacées à la suppression. */
+    deletedAt: { type: Date, default: null },
   },
   { timestamps: true, collection: 'secretariat_inbound_emails' }
 );

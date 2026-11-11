@@ -62,19 +62,39 @@ export const toItem = (d) => ({
   receivedAt: new Date(d.receivedAt).toISOString(),
   snippet: String(d.snippet || '').slice(0, 200),
   status: d.status === 'handled' ? 'handled' : 'new',
+  archived: Boolean(d.archivedAt),
   followUpIds: (d.followUpIds || []).map(String),
 });
 
-/** Vue renvoyée par GET et par le rafraîchissement. Ne lit RIEN chez le fournisseur. */
-export async function inboundView(companyId) {
+export const MAX_BULK_IDS = 100;
+const ACTIVE = { deletedAt: null, archivedAt: null };
+const ARCHIVED = { deletedAt: null, archivedAt: { $ne: null } };
+
+/**
+ * Vue renvoyée par GET et par le rafraîchissement. Ne lit RIEN chez le fournisseur.
+ * `view` : 'active' (défaut : ni archivés ni supprimés) | 'archived' (archivés non supprimés). `counts` : new/handled sur les actifs, archived = nombre d'archivés.
+ */
+export async function inboundView(companyId, view = 'active') {
+  if (view !== 'active' && view !== 'archived') throw new SecretariatError('invalid_request', 'Vue invalide : « active » ou « archived ».');
   const tools = mergedTools(await loadTools(companyId));
   const enabled = tools.inbound.enabled === true;
-  const [located, rows] = await Promise.all([
+  const cid = oid(companyId);
+  const [located, rows, counts] = await Promise.all([
     locateMailbox(companyId, tools.email.provider),
-    enabled ? InboundEmail.find({ companyId: oid(companyId) }).sort({ receivedAt: -1 }).limit(PAGE_SIZE).lean() : [],
+    enabled ? InboundEmail.find({ companyId: cid, ...(view === 'archived' ? ARCHIVED : ACTIVE) }).sort({ receivedAt: -1 }).limit(PAGE_SIZE).lean() : [],
+    enabled
+      ? Promise.all([
+        InboundEmail.countDocuments({ companyId: cid, ...ACTIVE, status: 'new' }),
+        InboundEmail.countDocuments({ companyId: cid, ...ACTIVE, status: 'handled' }),
+        InboundEmail.countDocuments({ companyId: cid, ...ARCHIVED }),
+      ])
+      : [0, 0, 0],
   ]);
   const last = tools.inbound.lastSyncAt ? new Date(tools.inbound.lastSyncAt) : null;
-  return { enabled, canRead: located.canRead, lastSyncAt: last && !Number.isNaN(last.getTime()) ? last.toISOString() : null, items: rows.map(toItem) };
+  return {
+    enabled, canRead: located.canRead, lastSyncAt: last && !Number.isNaN(last.getTime()) ? last.toISOString() : null,
+    counts: { new: counts[0], handled: counts[1], archived: counts[2] }, items: rows.map(toItem),
+  };
 }
 
 /** Rafraîchissement : lit les messages récents chez le fournisseur et n'enregistre que des métadonnées. Au plus un appel fournisseur par centre toutes les 30 s. */
@@ -104,25 +124,79 @@ export async function refreshInbound(companyId, now = Date.now()) {
 export async function readInboundBody(companyId, id) {
   if (!isId(id)) throw new SecretariatError('invalid_request', 'Identifiant d’e-mail invalide.');
   const access = await requireReadAccess(companyId);
-  const doc = await InboundEmail.findOne({ _id: oid(id), companyId: oid(companyId) }).select('provider providerMessageId').lean();
+  const doc = await InboundEmail.findOne({ _id: oid(id), companyId: oid(companyId), deletedAt: null }).select('provider providerMessageId').lean();
   if (!doc) throw new SecretariatError('not_found', 'E-mail introuvable.');
   if (doc.provider !== access.provider) throw new SecretariatError('no_mailbox', ERRORS.no_mailbox); // la messagerie a changé depuis la lecture
   const text = await withConnection(companyId, access.provider, (accessToken, http) => PROVIDERS[access.provider].readBody({ http, accessToken, id: doc.providerMessageId }));
   return { text };
 }
 
-/** Marque « traité » et rattache (facultatif) un élément « À traiter » du MÊME centre. Fonctionne sans lecture chez le fournisseur. */
+const plainBody = (body) => (body && typeof body === 'object' && !Array.isArray(body) ? body : {});
+
+/**
+ * Marque « traité » (et rattache, facultatif, un élément « À traiter » du MÊME centre) et/ou archive / désarchive. Fonctionne sans lecture chez le fournisseur.
+ * Idempotent. Un e-mail supprimé est introuvable (404).
+ */
 export async function markHandled(companyId, id, body) {
   if (!isId(id)) throw new SecretariatError('invalid_request', 'Identifiant d’e-mail invalide.');
-  const b = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
-  if (b.status !== 'handled') throw new SecretariatError('invalid_request', 'Seul le statut « handled » est accepté.');
+  const b = plainBody(body);
+  if (b.status === undefined && b.archived === undefined) throw new SecretariatError('invalid_request', 'Indiquez « status » ou « archived ».');
+  if (b.status !== undefined && b.status !== 'handled') throw new SecretariatError('invalid_request', 'Seul le statut « handled » est accepté.');
+  if (b.archived !== undefined && typeof b.archived !== 'boolean') throw new SecretariatError('invalid_request', 'Le champ « archived » doit être un booléen.');
+  if (b.followUpId !== undefined && b.status === undefined) throw new SecretariatError('invalid_request', 'Un élément à traiter se rattache avec le statut « handled ».');
   if (b.followUpId !== undefined && !isId(b.followUpId)) throw new SecretariatError('invalid_request', 'Identifiant d’élément à traiter invalide.');
   if (b.followUpId !== undefined && !(await FollowUpItem.exists({ _id: oid(b.followUpId), companyId: oid(companyId) }))) throw new SecretariatError('invalid_request', 'Élément à traiter introuvable.');
+  const $set = {};
+  if (b.status === 'handled') $set.status = 'handled';
+  if (b.archived !== undefined) $set.archivedAt = b.archived ? new Date() : null;
   const doc = await InboundEmail.findOneAndUpdate(
-    { _id: oid(id), companyId: oid(companyId) },
-    { $set: { status: 'handled' }, ...(b.followUpId !== undefined ? { $addToSet: { followUpIds: oid(b.followUpId) } } : {}) },
+    { _id: oid(id), companyId: oid(companyId), deletedAt: null },
+    { $set, ...(b.followUpId !== undefined ? { $addToSet: { followUpIds: oid(b.followUpId) } } : {}) },
     { new: true }
   ).lean();
   if (!doc) throw new SecretariatError('not_found', 'E-mail introuvable.');
   return toItem(doc);
+}
+
+/** Suppression logique (application seulement) : marqueur `deletedAt` + effacement des métadonnées ; le document reste jusqu'au TTL. Déjà supprimé / inconnu / autre centre : not_found (404). */
+const DELETE_SET = () => ({ deletedAt: new Date(), fromName: '', fromEmail: '', subject: '', snippet: '', followUpIds: [] });
+
+export async function deleteInbound(companyId, id) {
+  if (!isId(id)) throw new SecretariatError('invalid_request', 'Identifiant d’e-mail invalide.');
+  const res = await InboundEmail.updateOne({ _id: oid(id), companyId: oid(companyId), deletedAt: null }, { $set: DELETE_SET() });
+  if (!res || !res.matchedCount) throw new SecretariatError('not_found', 'E-mail introuvable.');
+  return { id: String(id) };
+}
+
+/** Sélection d'un lot : exactement un de `ids` (1 à 100 identifiants valides) ou `status: 'handled'`. Renvoie { ids?: ObjectId[] } ou { status }. */
+function parseBulk(body) {
+  const b = plainBody(body);
+  const hasIds = b.ids !== undefined; const hasStatus = b.status !== undefined;
+  if (hasIds === hasStatus) throw new SecretariatError('invalid_request', 'Indiquez exactement un des paramètres « ids » ou « status ».');
+  if (hasStatus) {
+    if (b.status !== 'handled') throw new SecretariatError('invalid_request', 'Seul le statut « handled » est accepté.');
+    return { status: 'handled' };
+  }
+  if (!Array.isArray(b.ids) || b.ids.length < 1 || b.ids.length > MAX_BULK_IDS) throw new SecretariatError('invalid_request', `« ids » doit contenir de 1 à ${MAX_BULK_IDS} identifiants.`);
+  if (!b.ids.every(isId)) throw new SecretariatError('invalid_request', 'Identifiant d’e-mail invalide.');
+  return { ids: [...new Set(b.ids.map((v) => v.toLowerCase()))].map(oid) };
+}
+
+/** Suppression en lot. Par `status: 'handled'` : seulement les e-mails traités NON archivés (les archivés ne se suppriment que par `ids`). @returns {{deleted: number}} */
+export async function deleteManyInbound(companyId, body) {
+  const sel = parseBulk(body);
+  const filter = { companyId: oid(companyId), deletedAt: null, ...(sel.ids ? { _id: { $in: sel.ids } } : { status: 'handled', archivedAt: null }) };
+  const res = await InboundEmail.updateMany(filter, { $set: DELETE_SET() });
+  return { deleted: res?.matchedCount ?? res?.modifiedCount ?? 0 };
+}
+
+/** Archivage / désarchivage en lot (`archived` défaut true). Compte les e-mails dont l'état a réellement changé. @returns {{updated: number}} */
+export async function archiveManyInbound(companyId, body) {
+  const sel = parseBulk(body);
+  const b = plainBody(body);
+  if (b.archived !== undefined && typeof b.archived !== 'boolean') throw new SecretariatError('invalid_request', 'Le champ « archived » doit être un booléen.');
+  const archived = b.archived !== false;
+  const filter = { companyId: oid(companyId), deletedAt: null, archivedAt: archived ? null : { $ne: null }, ...(sel.ids ? { _id: { $in: sel.ids } } : { status: 'handled' }) };
+  const res = await InboundEmail.updateMany(filter, { $set: { archivedAt: archived ? new Date() : null } });
+  return { updated: res?.matchedCount ?? res?.modifiedCount ?? 0 };
 }
