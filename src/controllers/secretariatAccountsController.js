@@ -2,10 +2,10 @@ import mongoose from 'mongoose';
 import { scopeToCompany } from '../middleware/companyScope.js';
 import { loadUserName } from '../services/followUpDirectory.js';
 import { canManage, canUse } from '../services/followUps.js';
-import { isAvailable, messages, startAuthorization } from '../services/secretariatConnections.js';
+import { isAvailable, messages, PERSONAL_RETURN_TO, startAuthorization } from '../services/secretariatConnections.js';
 import { SecretariatError } from '../services/secretariatProviders/common.js';
 import {
-  createAccountEvent, isManager, listAccountEvents, listAccounts, managerView, parseRange, removeAccount, requireAccount, updateAccount,
+  createAccountEvent, isManager, listAccountEvents, listAccounts, managerView, parseRange, removeAccount, removePersonalAccount, requireAccount, updateAccount,
   validateAccountInput, validateEventInput,
 } from '../services/secretariatSharedAccounts.js';
 import SecretariatSharedAccount from '../models/SecretariatSharedAccount.js';
@@ -17,6 +17,7 @@ import SecretariatSharedAccount from '../models/SecretariatSharedAccount.js';
 const fail = (res, status, message, code) => res.status(status).json({ success: false, error: code || message, message, ...(code ? { code } : {}) });
 const NOT_ALLOWED = 'Seuls le titulaire et les membres autorisés à gérer les appels peuvent gérer les comptes partagés.';
 const MAILBOX_PROVIDERS = ['google', 'microsoft'];
+const NOT_SECRETARY = 'Seule une secrétaire peut connecter sa messagerie professionnelle ici.';
 const HTTP = new Set([400, 403, 404, 409, 429, 502, 503]);
 
 /** Droits de l'appelant pour cette société (une secrétaire employée par plusieurs sociétés agit sur celle de l'URL). Répond et renvoie null en cas de refus. */
@@ -71,12 +72,43 @@ export const secretariatAccountsController = {
       if (!a) return;
       const id = req.params.accountId;
       const d = mongoose.Types.ObjectId.isValid(id) && /^[0-9a-fA-F]{24}$/.test(id)
-        ? await SecretariatSharedAccount.findOne({ _id: id, companyId: a.companyId }).select('provider label ownerName permissions').lean() : null;
+        ? await SecretariatSharedAccount.findOne({ _id: id, companyId: a.companyId, personalUserId: null }).select('provider label ownerName permissions').lean() : null;
       if (!d) return fail(res, 404, 'Compte introuvable.', 'account_not_found');
       if (!isAvailable(d.provider)) return fail(res, 409, messages.unavailable(d.provider));
       const url = startAuthorization({ companyId: a.companyId, userId: a.userId, provider: d.provider, returnTo: 'tools', shared: { label: d.label, ownerName: d.ownerName || '', send: d.permissions?.send === true, calendar: d.permissions?.calendar === true, accountId: String(d._id) } });
       res.json({ success: true, data: { url } });
     } catch (error) { answer(res, error, 'reconnect'); }
+  },
+
+  /**
+   * La secrétaire démarre le consentement pour SA messagerie professionnelle (mêmes périmètres OAuth « envoi / agenda » que les comptes
+   * partagés, aucune lecture de boîte). L'identité vient de la session (jamais du corps) ; retour sur son profil.
+   */
+  async startMine(req, res) {
+    try {
+      const a = access(req, res);
+      if (!a) return;
+      if (a.role !== 'agent') return fail(res, 403, NOT_SECRETARY);
+      const { provider } = req.params;
+      if (!MAILBOX_PROVIDERS.includes(provider)) return fail(res, 400, 'Fournisseur inconnu : choisissez Google ou Microsoft 365.');
+      const returnTo = req.body?.returnTo === undefined ? 'profile' : req.body.returnTo;
+      if (!PERSONAL_RETURN_TO.includes(returnTo)) return fail(res, 400, 'Page de retour invalide.');
+      if (!isAvailable(provider)) return fail(res, 409, messages.unavailable(provider));
+      const ownerName = String((await loadUserName(a.userId)) || '').replace(/[\u0000-\u001F\u007F<>"\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+      const url = startAuthorization({ companyId: a.companyId, userId: a.userId, provider, returnTo, shared: { personal: true, ownerName } });
+      res.json({ success: true, data: { url } });
+    } catch (error) { answer(res, error, 'startMine'); }
+  },
+
+  /** La secrétaire déconnecte SA messagerie (propriété vérifiée ; tout autre compte = introuvable). */
+  async removeMine(req, res) {
+    try {
+      const a = access(req, res);
+      if (!a) return;
+      if (a.role !== 'agent') return fail(res, 403, NOT_SECRETARY);
+      if (!(await removePersonalAccount(a.companyId, a.userId, req.params.accountId))) return fail(res, 404, 'Compte introuvable.', 'account_not_found');
+      res.json({ success: true, data: { accounts: await listAccounts(a.companyId, a) } });
+    } catch (error) { answer(res, error, 'removeMine'); }
   },
 
   async update(req, res) {
