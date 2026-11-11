@@ -10,6 +10,9 @@ import { buildAppointmentIcs, icsFilename } from '../services/ics.js';
 import { createVideo, removeVideoResource, updateVideoResource } from '../services/secretariatActions.js';
 import { SecretariatError } from '../services/secretariatProviders/common.js';
 import {
+  createDelegatedEvent, DELEGATED_VIDEO_CODE, delegatedVideoError, discardDelegatedEvent, openDelegatedAccount, syncDelegated,
+} from '../services/delegatedAppointments.js';
+import {
   allowedPatchFields, canManage, MAX_CALLS_PER_ITEM, validateCallLog, canSeeItem, canUse, MISSED_STATUSES, parseListFilters, sortItems, toItem, validateCreate, validatePatch,
   validateTransfer, visibilityFilter,
 } from '../services/followUps.js';
@@ -20,15 +23,34 @@ const NOT_ALLOWED = 'Vous n’avez pas accès à cet écran.';
 
 /** Erreur d'un fournisseur connecté (lien de visio) : message clair, 409 si la connexion est à refaire, 502 sinon. */
 const providerFail = (res, error) => {
-  if (error.code === 'visio_not_connected' || error.code === 'visio_needs_reauth') return res.status(409).json({ success: false, code: error.code, error: error.code, message: error.message });
+  if (error.code === 'visio_not_connected' || error.code === 'visio_needs_reauth' || error.code === DELEGATED_VIDEO_CODE) return res.status(409).json({ success: false, code: error.code, error: error.code, message: error.message });
   return fail(res, error.code === 'not_connected' || error.code === 'needs_reauth' ? 409 : 502, error.message);
 };
+
+const DELEGATED_HTTP = new Set([403, 404, 409, 502, 503]);
+/** Erreur de l'agenda délégué choisi : même forme que les routes des comptes partagés (code court, message sûr, conflits éventuels). */
+function delegatedFail(res, error) {
+  if (!(error instanceof SecretariatError)) throw error;
+  const status = DELEGATED_HTTP.has(error.status) ? error.status : 502;
+  return res.status(status).json({ success: false, error: error.code, code: error.code, message: error.message, ...(error.conflicts ? { conflicts: error.conflicts } : {}) });
+}
 
 /** Rendez-vous tel que le voient les adaptateurs d'agenda (vue publique + centre, événement et visio chez le fournisseur). */
 const extView = (item) => ({
   ...toItem(item), companyId: String(item.companyId), calendarProvider: item.calendarProvider || null, calendarExternalId: item.calendarExternalId || null,
-  videoProvider: item.videoProvider || '', videoExternalId: item.videoExternalId || '',
+  videoProvider: item.videoProvider || '', videoExternalId: item.videoExternalId || '', calendarAccountId: item.calendarAccountId || null,
 });
+
+/** Reporte la synchronisation avec l'agenda DÉLÉGUÉ du rendez-vous. Un échec est conservé avec son message (jamais masqué, jamais de repli). */
+function applyDelegated(item, sync) {
+  item.calendarStatus = sync.status;
+  item.calendarMessage = sync.status === 'failed' ? sync.message : null;
+  if (sync.status === 'synced') {
+    item.calendarExternalId = sync.externalId;
+    item.calendarProvider = sync.provider || item.calendarProvider;
+    item.calendarAccountLabel = sync.label || item.calendarAccountLabel;
+  }
+}
 
 /** Reporte le résultat d'une synchronisation d'agenda sur le rendez-vous. Un échec est CONSERVÉ (`failed`) et ne casse jamais le rendez-vous. */
 function applySync(item, sync, op) {
@@ -44,9 +66,19 @@ function applySync(item, sync, op) {
 }
 
 /** Répercute une modification d'un rendez-vous sur l'agenda / la visio connectés. Ne lève jamais. */
-async function syncExternal(item, { wasStatus, keys, videoChanged }) {
+async function syncExternal(item, { wasStatus, keys, videoChanged, access }) {
   if (item.model !== 'appointment') return;
   const canceled = item.status === 'canceled';
+  if (item.calendarAccountId) { // agenda délégué : toujours CE compte (jamais l'agenda de la société), pas de visio
+    const moved = keys.some((k) => ['dueAt', 'timeZone', 'title', 'durationMinutes', 'location'].includes(k));
+    if (canceled && wasStatus !== 'canceled') {
+      if (!item.calendarExternalId) return;
+      applyDelegated(item, await syncDelegated(extView(item), access, 'remove'));
+    } else if (!canceled && (wasStatus === 'canceled' || moved)) applyDelegated(item, await syncDelegated(extView(item), access, 'update'));
+    else return;
+    await item.save();
+    return;
+  }
   if (canceled && wasStatus !== 'canceled') {
     const before = extView(item);
     let ok = true;
@@ -190,6 +222,18 @@ export const followUpController = {
         if (dup) return fail(res, 409, 'Un suivi de ce type est déjà en cours pour cet élément.');
       }
 
+      // Agenda délégué choisi : droits (compte autorisé de CETTE société, sinon « introuvable »), visio non prise en charge, puis événement
+      // créé dans CET agenda (conflit = 409 et rien n'est créé). Aucun repli sur l'agenda de la société.
+      let delegated = null;
+      if (v.calendarAccountId) {
+        try {
+          const account = await openDelegatedAccount(access.companyId, access, v.calendarAccountId);
+          if (v.videoLink) throw delegatedVideoError();
+          const created = await createDelegatedEvent(access.companyId, account, { title: v.title, contactName: v.contactName, location: v.location, dueAt: v.dueAt, durationMinutes: v.durationMinutes, timeZone: v.timeZone }, { ignoreConflicts: v.ignoreConflicts, authorName: me?.name || '' });
+          delegated = { account, eventId: created.id };
+        } catch (error) { return delegatedFail(res, error); }
+      }
+
       // Lien de visio, une fois les vérifications passées (rien d'orphelin chez le fournisseur). Échec du fournisseur : le rendez-vous
       // n'est pas enregistré et l'erreur est claire (jamais de faux lien).
       const video = v.videoLink
@@ -203,14 +247,21 @@ export const followUpController = {
           videoUrl: video.url, videoProvider: video.provider, videoExternalId: video.externalId,
           dueAt: v.dueAt, timeZone: v.timeZone, durationMinutes: v.durationMinutes, assigneeId: assignee.id, assigneeName: assignee.name,
           createdById: access.userId, createdByName: me?.name || '', fromAiPlan: v.fromAiPlan,
+          ...(delegated ? {
+            calendarAccountId: String(delegated.account._id), calendarAccountLabel: delegated.account.label, calendarProvider: delegated.account.provider,
+            calendarExternalId: delegated.eventId, calendarStatus: 'synced',
+          } : {}),
           transfers: v.model === 'transfer' ? [{ fromId: access.userId, fromName: me?.name || '', toId: assignee.id, toName: assignee.name, note: v.note }] : [],
         });
       } catch (error) {
         // Enregistrement impossible : on ne laisse pas de réunion / d'événement orphelin chez le fournisseur.
         if (video.externalId) await removeVideoResource(access.companyId, { videoProvider: video.provider, videoExternalId: video.externalId });
+        if (delegated) await discardDelegatedEvent(access.companyId, delegated.account, delegated.eventId);
         throw error;
       }
-      if (v.model === 'appointment') {
+      if (v.model === 'appointment' && delegated) {
+        // l'événement est déjà dans l'agenda délégué (calendarStatus 'synced') : rien à synchroniser avec l'agenda de la société
+      } else if (v.model === 'appointment') {
         if (video.sharesCalendar) { // l'événement qui porte le lien Meet / Teams est l'événement d'agenda du rendez-vous
           item.calendarProvider = video.eventProvider; item.calendarExternalId = video.externalId; item.calendarStatus = 'synced';
         } else applySync(item, await syncAppointment(extView(item)), 'push');
@@ -238,6 +289,7 @@ export const followUpController = {
       const allowed = allowedPatchFields(access);
       if (Object.keys(checked.value).some((k) => !allowed.includes(k))) return fail(res, 403, 'Vous pouvez seulement clore cet élément ou ajouter une note.');
       const { videoLink, ...fields } = checked.value;
+      if (videoLink === true && item.calendarAccountId && !item.videoUrl) throw delegatedVideoError(); // pas de visio avec un agenda délégué
       const wasStatus = item.status;
       Object.assign(item, fields);
       if (videoLink === true && !item.videoUrl) {
@@ -258,7 +310,7 @@ export const followUpController = {
         item.closedById = closing ? access.userId : '';
       }
       await item.save();
-      await syncExternal(item, { wasStatus, keys: Object.keys(checked.value), videoChanged: videoLink !== undefined });
+      await syncExternal(item, { wasStatus, keys: Object.keys(checked.value), videoChanged: videoLink !== undefined, access });
       if (checked.value.status === 'done' && item.model === 'voicemail_callback' && item.originType === 'voicemail') {
         await Voicemail.updateOne({ _id: item.originId, companyId: item.companyId, followUpStatus: { $in: ['new', 'to_call'] } }, { $set: { followUpStatus: 'called' } }).catch(() => {});
       }

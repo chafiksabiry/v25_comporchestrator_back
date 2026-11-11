@@ -96,6 +96,15 @@ const schema = new mongoose.Schema(
     calendarProvider: { type: String, default: null },
     calendarExternalId: { type: String, default: null },
     calendarStatus: { type: String, enum: ['not_connected', 'synced', 'failed'], default: 'not_connected' },
+    /**
+     * Agenda DÉLÉGUÉ choisi à la création (compte partagé `SecretariatSharedAccount` avec accès à l'agenda) : l'événement est créé dans l'agenda de CE
+     * compte (pas dans celui de la société) et toute modification / annulation agit sur le MÊME compte, sans repli. Vide = agenda de la société.
+     * Jamais modifiable après la création. `calendarAccountLabel` = libellé du compte au dernier succès (affichage) ;
+     * `calendarMessage` = raison claire d'un échec (`failed`), vide sinon.
+     */
+    calendarAccountId: { type: String, default: null },
+    calendarAccountLabel: { type: String, default: null, maxlength: 120 },
+    calendarMessage: { type: String, default: null, maxlength: 300 },
   },
   { timestamps: true, collection: 'follow_up_items' }
 );

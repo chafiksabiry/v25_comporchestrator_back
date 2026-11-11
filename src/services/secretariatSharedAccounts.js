@@ -194,9 +194,33 @@ export async function createAccountEvent(companyId, account, input, { authorName
   const description = [input.description, by ? `Ajouté par le secrétariat : ${by}.` : 'Ajouté par le secrétariat.'].filter(Boolean).join('\n\n');
   try {
     const r = await withConnection(companyId, account.provider, (accessToken, http) => PROVIDERS[account.provider].upsertEvent({
-      http, accessToken, id: null, event: { timeZone: input.timeZone, title: input.title, description, location: '', startsAt: input.startsAt, endsAt: input.endsAt },
+      http, accessToken, id: null, event: { timeZone: input.timeZone, title: input.title, description, location: input.location || '', startsAt: input.startsAt, endsAt: input.endsAt },
     }), { accountId });
     return { id: r.id, title: input.title, startsAt: input.startsAt.toISOString(), endsAt: input.endsAt.toISOString() };
+  } catch (error) {
+    throw shaped(error);
+  }
+}
+
+/**
+ * Met à jour un événement DÉJÀ créé dans l'agenda de CE compte (sans invité). Aucun contrôle de conflit (le créneau a déjà été validé à la création).
+ * Jamais de repli : si le compte n'est plus utilisable, l'erreur remonte.
+ */
+export async function updateAccountEvent(companyId, account, eventId, input) {
+  try {
+    const r = await withConnection(companyId, account.provider, (accessToken, http) => PROVIDERS[account.provider].upsertEvent({
+      http, accessToken, id: eventId, event: { timeZone: input.timeZone, title: input.title, description: input.description || '', location: input.location || '', startsAt: input.startsAt, endsAt: input.endsAt },
+    }), { accountId: String(account._id || account.id) });
+    return { id: r.id };
+  } catch (error) {
+    throw shaped(error);
+  }
+}
+
+/** Supprime un événement de l'agenda de CE compte (sans notification). */
+export async function deleteAccountEvent(companyId, account, eventId) {
+  try {
+    await withConnection(companyId, account.provider, (accessToken, http) => PROVIDERS[account.provider].deleteEvent({ http, accessToken, id: eventId }), { accountId: String(account._id || account.id) });
   } catch (error) {
     throw shaped(error);
   }
