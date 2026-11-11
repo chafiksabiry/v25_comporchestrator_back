@@ -63,6 +63,7 @@ const { encryptJson, decryptJson, loadKey } = await import('../integrations/cryp
 const { default: SecretariatTools } = await import('../models/SecretariatTools.js');
 const { default: SecretariatConnection } = await import('../models/SecretariatConnection.js');
 const { default: FollowUpItem } = await import('../models/FollowUpItem.js');
+const { default: InboundEmail } = await import('../models/InboundEmail.js');
 const { default: EmailLog } = await import('../models/EmailLog.js');
 const { secretariatToolsRoutes } = await import('../routes/secretariatTools.js');
 const { clearCompanyCache } = await import('../middleware/companyScope.js');
@@ -143,6 +144,7 @@ SecretariatConnection.findOneAndUpdate = async (f, upd, opts) => {
   Object.assign(d, upd.$set);
   return d;
 };
+InboundEmail.deleteMany = async () => ({}); // purge des e-mails entrants à la déconnexion (couverte par inboundEmails.test.js)
 const getPath = (o, p) => p.split('.').reduce((a, k) => (a == null ? undefined : a[k]), o);
 const tchain = (v) => ({ select() { return this; }, lean: async () => (v ? JSON.parse(JSON.stringify(v)) : null), then(r, j) { return this.lean().then(r, j); } });
 SecretariatTools.findOne = (f) => tchain(toolsDocs.find((d) => Object.entries(f).every(([k, x]) => String(getPath(d, k)) === String(x))));
@@ -449,13 +451,13 @@ try {
   assert.equal((await req('DELETE', `/connections/${C1}/google`)).status, 401);
   assert.equal((await req('POST', `/connections/${C1}/google/start`, { user: 'other1', body: { returnTo: 'tools' } })).status, 403, 'autre entreprise');
   assert.equal((await req('DELETE', `/connections/${C1}/google`, { user: 'other1' })).status, 403);
-  const empty = { google: { available: true, connected: false, needsReauth: false, account: null, connectedAt: null }, microsoft: { available: true, connected: false, needsReauth: false, account: null, connectedAt: null }, zoom: { available: true, connected: false, needsReauth: false, account: null, connectedAt: null } };
+  const empty = { google: { available: true, connected: false, needsReauth: false, canRead: false, account: null, connectedAt: null }, microsoft: { available: true, connected: false, needsReauth: false, canRead: false, account: null, connectedAt: null }, zoom: { available: true, connected: false, needsReauth: false, canRead: false, account: null, connectedAt: null } };
   for (const user of ['owner1', 'member1', 'memberNoCalls', 'agent1']) assert.deepEqual((await req('GET', `/connections/${C1}`, { user })).body, { success: true, data: empty }, user);
   putConnection(C1, 'google'); putConnection(C1, 'microsoft', { status: 'needs_reauth' });
   r = await req('GET', `/connections/${C1}`, { user: 'agent1' });
-  assert.deepEqual(r.body.data.google, { available: true, connected: true, needsReauth: false, account: 'centre@gmail.test', connectedAt: '2026-11-01T10:00:00.000Z' });
-  assert.deepEqual(r.body.data.microsoft, { available: true, connected: false, needsReauth: true, account: 'centre@contoso.test', connectedAt: '2026-11-01T10:00:00.000Z' });
-  assert.deepEqual(Object.keys(r.body.data.google).sort(), ['account', 'available', 'connected', 'connectedAt', 'needsReauth']);
+  assert.deepEqual(r.body.data.google, { available: true, connected: true, needsReauth: false, canRead: false, account: 'centre@gmail.test', connectedAt: '2026-11-01T10:00:00.000Z' });
+  assert.deepEqual(r.body.data.microsoft, { available: true, connected: false, needsReauth: true, canRead: false, account: 'centre@contoso.test', connectedAt: '2026-11-01T10:00:00.000Z' });
+  assert.deepEqual(Object.keys(r.body.data.google).sort(), ['account', 'available', 'canRead', 'connected', 'connectedAt', 'needsReauth']);
   assert.deepEqual((await req('GET', `/connections/${C2}`, { user: 'other1' })).body.data, empty, 'autre centre : aucune connexion visible');
   // indisponible : jamais de nom de variable dans la réponse
   const keepEnv = { ...process.env }; for (const k of Object.keys(process.env)) if (/^(GOOGLE|MICROSOFT|ZOOM)_/.test(k)) delete process.env[k];

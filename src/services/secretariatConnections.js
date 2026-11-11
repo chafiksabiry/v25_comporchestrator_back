@@ -7,7 +7,8 @@ import { config } from '../config/env.js';
 import { decryptJson, encryptJson, integrationsEnabled, loadKey } from '../integrations/crypto.js';
 import { defaultHttp } from '../integrations/http.js';
 import { oauthStatus } from '../integrations/oauth.js';
-import { call, isProviderId, PROVIDER_IDS, PROVIDER_LABEL, SecretariatError } from './secretariatProviders/common.js';
+import { call, hasReadScope, isProviderId, PROVIDER_IDS, PROVIDER_LABEL, SecretariatError } from './secretariatProviders/common.js';
+import { purgeInboundEmails } from './inboundEmailStore.js';
 import { PROVIDERS } from './secretariatProviders/index.js';
 import { isValidTenant, tenantOf } from './secretariatProviders/microsoft.js';
 
@@ -87,14 +88,16 @@ const stateSecret = () => {
 };
 
 /** Adresse d'autorisation du fournisseur, avec un état signé (10 min) lié au centre, à l'utilisateur, au fournisseur et à la page de retour. */
-export function startAuthorization({ companyId, userId, provider, returnTo, shared }, env = process.env) {
+export function startAuthorization({ companyId, userId, provider, returnTo, shared, read = false }, env = process.env) {
   const cfg = providerConfig(provider, env);
   if (!cfg) throw new SecretariatError('unavailable', messages.unavailable(provider));
+  // `read` : demande EN PLUS le scope (optionnel) de lecture de la boîte de réception (e-mails entrants). Les scopes obtenus sont lus au callback.
+  if (read && !PROVIDERS[provider].readScope) throw new SecretariatError('invalid_request', 'La lecture des e-mails n’est pas disponible pour ce fournisseur.');
   const state = jwt.sign({ purpose: STATE_PURPOSE, companyId: String(companyId), userId: String(userId), provider, returnTo, ...(shared ? { shared } : {}) }, stateSecret(), { expiresIn: STATE_TTL_SECONDS, algorithm: 'HS256' });
   const P = PROVIDERS[provider];
   const q = new URLSearchParams({
     client_id: cfg.clientId, redirect_uri: cfg.redirectUri, response_type: 'code', state,
-    ...(P.noScopeParam ? {} : { scope: P.scopes.join(' ') }), ...P.authorizeExtra(env),
+    ...(P.noScopeParam ? {} : { scope: (read ? [...P.scopes, P.readScope] : P.scopes).join(' ') }), ...P.authorizeExtra(env),
   });
   return `${P.authorizeUrl(env)}?${q}`;
 }
@@ -318,7 +321,7 @@ export function getAccessToken(companyId, provider, { force = false, http = http
 
     const cfg = providerConfig(provider, env);
     if (!cfg) throw new SecretariatError('unavailable', messages.unavailable(provider));
-    const res = await postToken(PROVIDERS[provider], cfg, { grant_type: 'refresh_token', refresh_token: creds.refreshToken, ...PROVIDERS[provider].refreshExtra(env) }, http);
+    const res = await postToken(PROVIDERS[provider], cfg, { grant_type: 'refresh_token', refresh_token: creds.refreshToken, ...PROVIDERS[provider].refreshExtra(env, conn.scopes || []) }, http);
     if (res.status === 200 && res.json?.access_token) {
       const t = parseToken(res.json);
       const next = { accessToken: t.accessToken, refreshToken: t.refreshToken || creds.refreshToken, expiresAt: t.expiresAt }; // certains fournisseurs renouvellent le jeton de rafraîchissement
@@ -379,7 +382,7 @@ export async function connectedProviders(companyId) {
 
 /** Réponse de GET /connections : jamais de jeton ni de nom de variable. */
 export async function connectionsView(companyId, env = process.env) {
-  const rows = await SecretariatConnection.find({ companyId: oid(companyId) }).select('provider accountEmail status connectedAt').lean();
+  const rows = await SecretariatConnection.find({ companyId: oid(companyId) }).select('provider accountEmail status connectedAt scopes').lean();
   const out = {};
   for (const p of PROVIDER_IDS) {
     const row = rows.find((r) => r.provider === p);
@@ -387,6 +390,8 @@ export async function connectionsView(companyId, env = process.env) {
       available: isAvailable(p, env),
       connected: row?.status === 'connected',
       needsReauth: row?.status === 'needs_reauth',
+      /** Le scope (optionnel) de lecture de la boîte de réception est-il accordé ? (e-mails entrants) */
+      canRead: row?.status === 'connected' && hasReadScope(p, row.scopes),
       account: row?.accountEmail || null,
       connectedAt: row?.connectedAt ? new Date(row.connectedAt).toISOString() : null,
     };
@@ -396,6 +401,8 @@ export async function connectionsView(companyId, env = process.env) {
 
 /** Révoque chez le fournisseur au mieux (un échec est toléré) puis supprime les jetons. */
 export async function disconnect(companyId, provider, { http = httpImpl, env = process.env } = {}) {
+  // Les e-mails entrants stockés sont purgés AVANT la suppression des jetons : en cas d'échec rien n'est perdu et la déconnexion peut être rejouée.
+  if (MAILBOX_PROVIDERS.includes(provider)) await purgeInboundEmails(companyId);
   const conn = await SecretariatConnection.findOne({ companyId: oid(companyId), provider }).select('+credentialsEnc');
   if (!conn) { await releaseEmailProvider(companyId, provider); await releaseAgendaAndVisio(companyId, provider); return false; }
   try {

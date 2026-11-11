@@ -2,6 +2,7 @@ import express from 'express';
 import { secretariatToolsController as c } from '../controllers/secretariatToolsController.js';
 import { secretariatConnectionsController as cx } from '../controllers/secretariatConnectionsController.js';
 import { secretariatAccountsController as ac } from '../controllers/secretariatAccountsController.js';
+import { inboundEmailsController as ib } from '../controllers/inboundEmailsController.js';
 import { callQueuesController as q } from '../controllers/callQueuesController.js';
 import { receptionLineController as rl } from '../controllers/receptionLineController.js';
 import { authenticate } from '../middleware/auth.js';
@@ -19,6 +20,11 @@ router.post('/tools/:companyId/agenda-feed', authenticate, requireCompanyParam, 
 router.get('/connections/:companyId', authenticate, requireCompanyParam, cx.list);
 router.post('/connections/:companyId/:provider/start', authenticate, requireCompanyParam, cx.start);
 router.delete('/connections/:companyId/:provider', authenticate, requireCompanyParam, cx.remove);
+// E-mails ENTRANTS (messagerie connectée, métadonnées seulement ; corps relu en direct) : titulaire/responsable autorisé (contrôleur).
+router.get('/inbound-emails/:companyId', authenticate, requireCompanyParam, ib.list);
+router.post('/inbound-emails/:companyId/refresh', authenticate, requireCompanyParam, ib.refresh);
+router.get('/inbound-emails/:companyId/:id/body', authenticate, requireCompanyParam, ib.body);
+router.patch('/inbound-emails/:companyId/:id', authenticate, requireCompanyParam, ib.update);
 // Comptes partagés avec les secrétaires (boîte / agenda d'un patron ou collègue) : titulaire/responsable gèrent, une secrétaire ne voit que les comptes autorisés (contrôleur + service).
 router.get('/accounts/:companyId', authenticate, requireCompanyParam, ac.list);
 router.post('/accounts/:companyId/:provider/start', authenticate, requireCompanyParam, ac.start);

@@ -4,6 +4,15 @@ export const isProviderId = (v) => typeof v === 'string' && PROVIDER_IDS.include
 export const PROVIDER_LABEL = { google: 'Google', microsoft: 'Microsoft 365', zoom: 'Zoom' };
 
 /**
+ * Scope de LECTURE de la boîte de réception (e-mails entrants), OPTIONNEL : demandé seulement avec `{ read: true }` au démarrage de la connexion,
+ * jamais exigé (`requiredScopes` inchangés : une connexion d'envoi seul continue de fonctionner). Zoom : aucun.
+ */
+export const READ_SCOPE = { google: 'https://www.googleapis.com/auth/gmail.readonly', microsoft: 'Mail.Read' };
+const normScope = (s) => String(s).trim().toLowerCase().replace(/^https:\/\/graph\.microsoft\.com\//, '');
+/** Le scope de lecture est-il présent parmi les scopes obtenus ? (Microsoft peut renvoyer « Mail.Read » ou l'URI Graph complète.) */
+export const hasReadScope = (provider, scopes) => Boolean(READ_SCOPE[provider]) && Array.isArray(scopes) && scopes.some((s) => normScope(s) === normScope(READ_SCOPE[provider]));
+
+/**
  * Erreur « métier » des connecteurs. `message` est TOUJOURS un texte français sûr (jamais de jeton, d'en-tête ni de corps de réponse).
  * `code` : not_connected | needs_reauth | unavailable | provider_refused | provider_error | invalid_link | invalid_request.
  * `status` : statut HTTP du fournisseur (utile pour décider d'un rafraîchissement), jamais montré à l'utilisateur.

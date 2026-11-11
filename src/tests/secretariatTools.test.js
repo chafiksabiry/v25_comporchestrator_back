@@ -152,7 +152,7 @@ try {
   assert.equal((await req('GET', '/tools/pas-un-id', { user: 'owner1' })).status, 403);
 
   // lecture : défauts, pour tout membre rattaché
-  const defaults = { success: true, data: { email: { provider: 'platform', fromName: '', replyTo: '', signature: '' }, visio: { provider: 'jitsi', customUrl: '' }, agenda: { provider: 'none', feedUrl: null }, timeZone: '', configured: { email: false, visio: false, agenda: false } } };
+  const defaults = { success: true, data: { email: { provider: 'platform', fromName: '', replyTo: '', signature: '' }, visio: { provider: 'jitsi', customUrl: '' }, agenda: { provider: 'none', feedUrl: null }, timeZone: '', inbound: { enabled: false }, configured: { email: false, visio: false, agenda: false } } };
   for (const user of ['owner1', 'member1', 'memberNoCalls', 'agent1']) assert.deepEqual((await req('GET', `/tools/${C1}`, { user })).body, defaults, user);
 
   // écriture : titulaire / responsable seulement

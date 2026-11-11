@@ -1,4 +1,5 @@
-import { call, ensure, eventWindow, SecretariatError, VIDEO_LINK_RE } from './common.js';
+import { call, ensure, eventWindow, hasReadScope, READ_SCOPE, SecretariatError, VIDEO_LINK_RE } from './common.js';
+import { cleanSnippet, cleanSubject, htmlToText, limitBody, stripQuoted } from './mailText.js';
 
 /**
  * Microsoft 365 : Outlook (envoi), Calendrier (événements), Teams (via un événement). Points d'accès Graph v1.0 publics ;
@@ -20,11 +21,14 @@ export const microsoft = {
   id: 'microsoft',
   scopes: SCOPES,
   requiredScopes: [],
+  /** Lecture de la boîte de réception (e-mails entrants) : OPTIONNEL, demandé seulement avec `read: true`. */
+  readScope: READ_SCOPE.microsoft,
   authorizeUrl: (env) => `${base(env)}/authorize`,
   tokenUrl: (env) => `${base(env)}/token`,
   authorizeExtra: () => ({ response_mode: 'query' }),
   clientAuth: ({ clientId, clientSecret }) => ({ form: { client_id: clientId, client_secret: clientSecret }, headers: {} }),
-  refreshExtra: () => ({ scope: SCOPES.join(' ') }),
+  /** Le rafraîchissement doit redemander Mail.Read quand il a été accordé, sinon le nouveau jeton d'accès perd la lecture. */
+  refreshExtra: (_env, granted = []) => ({ scope: (hasReadScope('microsoft', granted) ? [...SCOPES, READ_SCOPE.microsoft] : SCOPES).join(' ') }),
 
   async accountEmail({ http, accessToken }) {
     const res = ensure(await call(http, { method: 'GET', url: `${GRAPH}/me?$select=mail,userPrincipalName`, headers: { Authorization: `Bearer ${accessToken}` } }), 'Lecture du compte Microsoft');
@@ -85,6 +89,31 @@ export const microsoft = {
       if (!e.id || !startsAt || !endsAt || Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) return [];
       return [{ id: String(e.id), title: String(e.subject || ''), startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), allDay: e.isAllDay === true, location: String(e.location?.displayName || ''), private: e.sensitivity === 'private' || e.sensitivity === 'confidential', busy: e.showAs !== 'free' }];
     });
+  },
+
+  /**
+   * E-mails ENTRANTS (Mail.Read) : 25 derniers messages de la boîte de réception (Graph `/me/mailFolders/inbox/messages`), champs limités
+   * à l'expéditeur, l'objet, la date et l'aperçu (`bodyPreview`) : AUCUN corps n'est lu ici.
+   * [À VÉRIFIER en recette avec un vrai compte.]
+   * @returns {Promise<Array<{id: string, fromName: string, fromEmail: string, subject: string, receivedAt: Date, snippet: string}>>}
+   */
+  async listInbox({ http, accessToken, limit = 25 }) {
+    const q = new URLSearchParams({ $top: String(limit), $orderby: 'receivedDateTime desc', $select: 'id,subject,from,receivedDateTime,bodyPreview' });
+    const res = ensure(await call(http, { method: 'GET', url: `${GRAPH}/me/mailFolders/inbox/messages?${q}`, headers: { Authorization: `Bearer ${accessToken}` } }), 'Lecture de la boîte Outlook', [200]);
+    return (Array.isArray(res.json?.value) ? res.json.value : []).slice(0, limit).flatMap((m) => {
+      const date = new Date(m?.receivedDateTime);
+      if (!m?.id || Number.isNaN(date.getTime())) return [];
+      const addr = m.from?.emailAddress || {};
+      return [{ id: String(m.id), fromName: cleanSubject(addr.name).slice(0, 120), fromEmail: String(addr.address || '').trim().toLowerCase().slice(0, 254), subject: cleanSubject(m.subject), receivedAt: date, snippet: cleanSnippet(m.bodyPreview) }];
+    });
+  },
+
+  /** Corps d'un message lu EN DIRECT (texte demandé à Graph ; HTML nettoyé si Graph renvoie quand même du HTML) ; citations retirées, 20 000 caractères max. Jamais stocké. */
+  async readBody({ http, accessToken, id }) {
+    const res = ensure(await call(http, { method: 'GET', url: `${GRAPH}/me/messages/${encodeURIComponent(id)}?$select=body`, headers: { Authorization: `Bearer ${accessToken}`, Prefer: 'outlook.body-content-type="text"' } }), 'Lecture d’un message Outlook', [200]);
+    const body = res.json?.body || {};
+    const content = String(body.content || '');
+    return limitBody(stripQuoted(String(body.contentType).toLowerCase() === 'html' ? htmlToText(content) : content));
   },
 
   /** Suppression ; 404 (déjà supprimé) compte comme réussi. */

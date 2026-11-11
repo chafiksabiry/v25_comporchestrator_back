@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { call, ensure, eventWindow, SecretariatError, VIDEO_LINK_RE } from './common.js';
+import { call, ensure, eventWindow, READ_SCOPE, SecretariatError, VIDEO_LINK_RE } from './common.js';
+import { cleanSnippet, cleanSubject, htmlToText, limitBody, parseAddress, stripQuoted } from './mailText.js';
 import { DEFAULT_TIME_ZONE } from '../timeZone.js';
 import { buildMime, toBase64Url } from './mime.js';
 
@@ -9,6 +10,7 @@ import { buildMime, toBase64Url } from './mime.js';
  */
 const SCOPE_GMAIL_SEND = 'https://www.googleapis.com/auth/gmail.send';
 const SCOPE_CALENDAR = 'https://www.googleapis.com/auth/calendar.events';
+const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const CAL = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
 
 export const google = {
@@ -16,6 +18,8 @@ export const google = {
   scopes: ['openid', 'email', SCOPE_GMAIL_SEND, SCOPE_CALENDAR],
   /** Scopes sans lesquels la connexion est inutilisable (l'utilisateur peut en décocher à l'écran de consentement). */
   requiredScopes: [SCOPE_GMAIL_SEND, SCOPE_CALENDAR],
+  /** Lecture de la boîte de réception (e-mails entrants) : OPTIONNEL, demandé seulement avec `read: true`. */
+  readScope: READ_SCOPE.google,
   authorizeUrl: () => 'https://accounts.google.com/o/oauth2/v2/auth',
   tokenUrl: () => 'https://oauth2.googleapis.com/token',
   /** Paramètres propres à Google : refresh_token seulement avec access_type=offline + prompt=consent. */
@@ -87,6 +91,52 @@ export const google = {
       if (!e.id || !startsAt || !endsAt || Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) return [];
       return [{ id: String(e.id), title: String(e.summary || ''), startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), allDay: Boolean(e.start?.date), location: String(e.location || ''), private: e.visibility === 'private' || e.visibility === 'confidential', busy: e.transparency !== 'transparent' }];
     });
+  },
+
+  /**
+   * E-mails ENTRANTS (scope gmail.readonly) : messages récents de la boîte de réception. `users.messages.list` (q « in:inbox newer_than:7d »)
+   * puis `get` format=metadata (en-têtes From / Subject / Date + extrait) : AUCUN corps n'est lu ici. Un message disparu entre-temps (404) est ignoré.
+   * [À VÉRIFIER en recette avec un vrai compte : format des en-têtes, limites de débit, comportement du scope restreint gmail.readonly.]
+   * @returns {Promise<Array<{id: string, fromName: string, fromEmail: string, subject: string, receivedAt: Date, snippet: string}>>}
+   */
+  async listInbox({ http, accessToken, limit = 25 }) {
+    const headers = { Authorization: `Bearer ${accessToken}` };
+    const q = new URLSearchParams({ q: 'in:inbox newer_than:7d', maxResults: String(limit) });
+    const list = ensure(await call(http, { method: 'GET', url: `${GMAIL}/messages?${q}`, headers }), 'Lecture de la boîte Gmail', [200]);
+    const ids = (Array.isArray(list.json?.messages) ? list.json.messages : []).map((m) => String(m?.id || '')).filter(Boolean).slice(0, limit);
+    const out = [];
+    for (let i = 0; i < ids.length; i += 5) {
+      const rows = await Promise.all(ids.slice(i, i + 5).map(async (id) => {
+        const res = ensure(await call(http, { method: 'GET', url: `${GMAIL}/messages/${encodeURIComponent(id)}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`, headers }), 'Lecture d’un message Gmail', [200, 404]);
+        return res.status === 404 ? null : { id, json: res.json };
+      }));
+      for (const row of rows) {
+        if (!row) continue;
+        const h = (name) => String((row.json?.payload?.headers || []).find((x) => String(x?.name).toLowerCase() === name)?.value || '');
+        const from = parseAddress(h('from'));
+        const ms = Number(row.json?.internalDate);
+        const date = Number.isFinite(ms) && ms > 0 ? new Date(ms) : new Date(h('date'));
+        out.push({ id: row.id, fromName: from.name, fromEmail: from.email, subject: cleanSubject(h('subject')), receivedAt: Number.isNaN(date.getTime()) ? new Date() : date, snippet: cleanSnippet(row.json?.snippet) });
+      }
+    }
+    return out;
+  },
+
+  /** Corps d'un message lu EN DIRECT (format=full) : texte brut de préférence, sinon HTML nettoyé en texte ; citations retirées, 20 000 caractères max. Jamais stocké. */
+  async readBody({ http, accessToken, id }) {
+    const res = ensure(await call(http, { method: 'GET', url: `${GMAIL}/messages/${encodeURIComponent(id)}?format=full`, headers: { Authorization: `Bearer ${accessToken}` } }), 'Lecture d’un message Gmail', [200]);
+    const plain = []; const html = [];
+    const walk = (part, depth = 0) => {
+      if (!part || typeof part !== 'object' || depth > 12) return;
+      const type = String(part.mimeType || '').toLowerCase();
+      if (!part.filename && typeof part.body?.data === 'string' && part.body.data) {
+        const text = Buffer.from(part.body.data, 'base64url').toString('utf8');
+        if (type === 'text/plain') plain.push(text); else if (type === 'text/html') html.push(text);
+      }
+      for (const p of Array.isArray(part.parts) ? part.parts : []) walk(p, depth + 1);
+    };
+    walk(res.json?.payload);
+    return limitBody(stripQuoted(plain.length ? plain.join('\n') : htmlToText(html.join('\n'))));
   },
 
   /** Suppression ; 404 et 410 (déjà supprimé) comptent comme réussis. */

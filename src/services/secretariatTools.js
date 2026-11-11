@@ -32,6 +32,7 @@ export const DEFAULT_TOOLS = Object.freeze({
   agenda: { provider: 'none' },
   visio: { provider: 'jitsi', customUrl: '', chosen: false },
   timeZone: '',
+  inbound: { enabled: false, lastSyncAt: null },
   agendaFeed: { tokenHash: null },
 });
 
@@ -41,6 +42,7 @@ export const mergedTools = (doc) => ({
   agenda: { ...DEFAULT_TOOLS.agenda, ...(doc?.agenda || {}) },
   visio: { ...DEFAULT_TOOLS.visio, ...(doc?.visio || {}) },
   timeZone: typeof doc?.timeZone === 'string' ? doc.timeZone : DEFAULT_TOOLS.timeZone,
+  inbound: { ...DEFAULT_TOOLS.inbound, ...(doc?.inbound || {}) },
   agendaFeed: { ...DEFAULT_TOOLS.agendaFeed, ...(doc?.agendaFeed || {}) },
 });
 const merged = mergedTools;
@@ -54,7 +56,7 @@ export function validateToolsPatch(body, current, connected = new Set()) {
   const b = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
   const cur = merged(current);
   const set = {};
-  if (b.email === undefined && b.visio === undefined && b.agenda === undefined && b.timeZone === undefined) return bad('Rien à modifier.');
+  if (b.email === undefined && b.visio === undefined && b.agenda === undefined && b.timeZone === undefined && b.inbound === undefined) return bad('Rien à modifier.');
 
   if (b.timeZone !== undefined) {
     if (b.timeZone === null || b.timeZone === '') set.timeZone = '';
@@ -95,6 +97,17 @@ export function validateToolsPatch(body, current, connected = new Set()) {
     }
   }
 
+  if (b.inbound !== undefined) {
+    const i = b.inbound;
+    if (!i || typeof i !== 'object' || Array.isArray(i)) return bad('Réglages des e-mails entrants invalides.');
+    if (i.enabled !== undefined) {
+      if (typeof i.enabled !== 'boolean') return bad('« inbound.enabled » doit être vrai ou faux.');
+      set['inbound.enabled'] = i.enabled;
+      // Désactivation : la dernière lecture est oubliée (les e-mails stockés sont purgés par le contrôleur).
+      if (!i.enabled) set['inbound.lastSyncAt'] = null;
+    }
+  }
+
   if (b.agenda !== undefined) {
     const a = b.agenda;
     if (!a || typeof a !== 'object' || Array.isArray(a)) return bad('Réglages d’agenda invalides.');
@@ -128,6 +141,7 @@ export function validateToolsPatch(body, current, connected = new Set()) {
     set['visio.customUrl'] = customUrl;
     set['visio.chosen'] = true;
   }
+  if (Object.keys(set).length === 0) return bad('Rien à modifier.');
   return { set };
 }
 
@@ -140,6 +154,7 @@ export function toView(doc, feedUrl = null) {
     visio: { provider: t.visio.provider, customUrl: t.visio.customUrl },
     agenda: { provider: t.agenda.provider, feedUrl: feedUrl || null },
     timeZone: t.timeZone,
+    inbound: { enabled: t.inbound.enabled === true },
     configured: {
       email: Boolean(email.fromName || email.replyTo || email.signature) || email.provider !== 'platform',
       // Vrai seulement si un fournisseur connecté (Google Meet, Teams, Zoom) est choisi ; 'jitsi' / 'custom' = aucune visio.
