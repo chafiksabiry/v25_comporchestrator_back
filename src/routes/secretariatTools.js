@@ -26,6 +26,9 @@ router.get('/inbound-emails/:companyId', authenticate, requireCompanyParam, ib.l
 router.post('/inbound-emails/:companyId/refresh', authenticate, requireCompanyParam, ib.refresh);
 router.get('/inbound-emails/:companyId/:id/body', authenticate, requireCompanyParam, ib.body);
 router.patch('/inbound-emails/:companyId/:id', authenticate, requireCompanyParam, ib.update);
+router.delete('/inbound-emails/:companyId/:id', authenticate, requireCompanyParam, ib.remove);
+router.post('/inbound-emails/:companyId/delete-many', authenticate, requireCompanyParam, ib.deleteMany);
+router.post('/inbound-emails/:companyId/archive-many', authenticate, requireCompanyParam, ib.archiveMany);
 // Comptes partagés avec les secrétaires (boîte / agenda d'un patron ou collègue) : titulaire/responsable gèrent, une secrétaire ne voit que les comptes autorisés (contrôleur + service).
 router.get('/accounts/:companyId', authenticate, requireCompanyParam, ac.list);
 router.post('/accounts/:companyId/:provider/start', authenticate, requireCompanyParam, ac.start);
