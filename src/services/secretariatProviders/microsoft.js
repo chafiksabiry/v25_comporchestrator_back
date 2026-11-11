@@ -1,4 +1,4 @@
-import { call, ensure, eventWindow, hasReadScope, READ_SCOPE, SecretariatError, VIDEO_LINK_RE } from './common.js';
+import { call, ensure, eventWindow, hasReadScope, hasWriteScope, READ_SCOPE, WRITE_SCOPE, SecretariatError, VIDEO_LINK_RE } from './common.js';
 import { cleanSnippet, cleanSubject, htmlToText, limitBody, stripQuoted } from './mailText.js';
 
 /**
@@ -23,12 +23,14 @@ export const microsoft = {
   requiredScopes: [],
   /** Lecture de la boîte de réception (e-mails entrants) : OPTIONNEL, demandé seulement avec `read: true`. */
   readScope: READ_SCOPE.microsoft,
+  /** Écriture (corbeille / archivage) : OPTIONNEL, demandé seulement avec `write: true`. Inclut la lecture. */
+  writeScope: WRITE_SCOPE.microsoft,
   authorizeUrl: (env) => `${base(env)}/authorize`,
   tokenUrl: (env) => `${base(env)}/token`,
   authorizeExtra: () => ({ response_mode: 'query' }),
   clientAuth: ({ clientId, clientSecret }) => ({ form: { client_id: clientId, client_secret: clientSecret }, headers: {} }),
-  /** Le rafraîchissement doit redemander Mail.Read quand il a été accordé, sinon le nouveau jeton d'accès perd la lecture. */
-  refreshExtra: (_env, granted = []) => ({ scope: (hasReadScope('microsoft', granted) ? [...SCOPES, READ_SCOPE.microsoft] : SCOPES).join(' ') }),
+  /** Le rafraîchissement doit redemander Mail.ReadWrite (seulement s'il a été accordé) ou Mail.Read, sinon le nouveau jeton d'accès perd ces droits. */
+  refreshExtra: (_env, granted = []) => ({ scope: (hasWriteScope('microsoft', granted) ? [...SCOPES, WRITE_SCOPE.microsoft] : hasReadScope('microsoft', granted) ? [...SCOPES, READ_SCOPE.microsoft] : SCOPES).join(' ') }),
 
   async accountEmail({ http, accessToken }) {
     const res = ensure(await call(http, { method: 'GET', url: `${GRAPH}/me?$select=mail,userPrincipalName`, headers: { Authorization: `Bearer ${accessToken}` } }), 'Lecture du compte Microsoft');
@@ -115,6 +117,21 @@ export const microsoft = {
     const content = String(body.content || '');
     return limitBody(stripQuoted(String(body.contentType).toLowerCase() === 'html' ? htmlToText(content) : content));
   },
+
+  /**
+   * Déplace un message vers un dossier bien connu (`/me/messages/{id}/move`). Graph donne au message déplacé un NOUVEL identifiant : il est renvoyé
+   * (`id`) pour que l'appelant mette à jour sa référence. 404 (message déjà absent) = réussi, `id: null`. [À VÉRIFIER en recette avec un vrai compte.]
+   */
+  async moveMessage({ http, accessToken, id, destination, what }) {
+    const res = ensure(await call(http, { method: 'POST', url: `${GRAPH}/me/messages/${encodeURIComponent(id)}/move`, headers: { Authorization: `Bearer ${accessToken}` }, body: { destinationId: destination } }), what, [200, 201, 404]);
+    return { id: res.status !== 404 && res.json?.id ? String(res.json.id) : null };
+  },
+
+  /** Mise à la CORBEILLE (réversible) : déplacement vers `deleteditems`. Scope Mail.ReadWrite. */
+  trashMessage(args) { return this.moveMessage({ ...args, destination: 'deleteditems', what: 'Mise à la corbeille Outlook' }); },
+
+  /** Archivage = déplacement vers le dossier bien connu `archive` ; désarchivage = retour vers `inbox`. */
+  setArchived({ archived, ...args }) { return this.moveMessage({ ...args, destination: archived ? 'archive' : 'inbox', what: 'Archivage Outlook' }); },
 
   /** Suppression ; 404 (déjà supprimé) compte comme réussi. */
   async deleteEvent({ http, accessToken, id }) {

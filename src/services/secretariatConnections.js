@@ -7,7 +7,7 @@ import { config } from '../config/env.js';
 import { decryptJson, encryptJson, integrationsEnabled, loadKey } from '../integrations/crypto.js';
 import { defaultHttp } from '../integrations/http.js';
 import { oauthStatus } from '../integrations/oauth.js';
-import { call, hasReadScope, isProviderId, PROVIDER_IDS, PROVIDER_LABEL, SecretariatError } from './secretariatProviders/common.js';
+import { call, hasReadScope, hasWriteScope, isProviderId, PROVIDER_IDS, PROVIDER_LABEL, SecretariatError } from './secretariatProviders/common.js';
 import { purgeInboundEmails } from './inboundEmailStore.js';
 import { PROVIDERS } from './secretariatProviders/index.js';
 import { isValidTenant, tenantOf } from './secretariatProviders/microsoft.js';
@@ -88,16 +88,17 @@ const stateSecret = () => {
 };
 
 /** Adresse d'autorisation du fournisseur, avec un état signé (10 min) lié au centre, à l'utilisateur, au fournisseur et à la page de retour. */
-export function startAuthorization({ companyId, userId, provider, returnTo, shared, read = false }, env = process.env) {
+export function startAuthorization({ companyId, userId, provider, returnTo, shared, read = false, write = false }, env = process.env) {
   const cfg = providerConfig(provider, env);
   if (!cfg) throw new SecretariatError('unavailable', messages.unavailable(provider));
   // `read` : demande EN PLUS le scope (optionnel) de lecture de la boîte de réception (e-mails entrants). Les scopes obtenus sont lus au callback.
   if (read && !PROVIDERS[provider].readScope) throw new SecretariatError('invalid_request', 'La lecture des e-mails n’est pas disponible pour ce fournisseur.');
+  if (write && !PROVIDERS[provider].writeScope) throw new SecretariatError('invalid_request', 'La gestion de la messagerie n’est pas disponible pour ce fournisseur.');
   const state = jwt.sign({ purpose: STATE_PURPOSE, companyId: String(companyId), userId: String(userId), provider, returnTo, ...(shared ? { shared } : {}) }, stateSecret(), { expiresIn: STATE_TTL_SECONDS, algorithm: 'HS256' });
   const P = PROVIDERS[provider];
   const q = new URLSearchParams({
     client_id: cfg.clientId, redirect_uri: cfg.redirectUri, response_type: 'code', state,
-    ...(P.noScopeParam ? {} : { scope: (read ? [...P.scopes, P.readScope] : P.scopes).join(' ') }), ...P.authorizeExtra(env),
+    ...(P.noScopeParam ? {} : { scope: [...P.scopes, ...(read ? [P.readScope] : []), ...(write ? [P.writeScope] : [])].join(' ') }), ...P.authorizeExtra(env),
   });
   return `${P.authorizeUrl(env)}?${q}`;
 }
@@ -392,6 +393,8 @@ export async function connectionsView(companyId, env = process.env) {
       needsReauth: row?.status === 'needs_reauth',
       /** Le scope (optionnel) de lecture de la boîte de réception est-il accordé ? (e-mails entrants) */
       canRead: row?.status === 'connected' && hasReadScope(p, row.scopes),
+      /** Le scope (optionnel, séparé) d'écriture est-il accordé ? (corbeille / archivage répercutés dans la messagerie) */
+      canModify: row?.status === 'connected' && hasWriteScope(p, row.scopes),
       account: row?.accountEmail || null,
       connectedAt: row?.connectedAt ? new Date(row.connectedAt).toISOString() : null,
     };

@@ -30,7 +30,7 @@ const FU_OTHER = '64b0000000000000000000f2';
 const S = await import('../services/secretariatConnections.js');
 const I = await import('../services/inboundEmails.js');
 const M = await import('../services/secretariatProviders/mailText.js');
-const { READ_SCOPE, hasReadScope } = await import('../services/secretariatProviders/common.js');
+const { READ_SCOPE, WRITE_SCOPE, hasReadScope, hasWriteScope } = await import('../services/secretariatProviders/common.js');
 const { encryptJson, loadKey } = await import('../integrations/crypto.js');
 const { default: SecretariatTools } = await import('../models/SecretariatTools.js');
 const { default: SecretariatConnection } = await import('../models/SecretariatConnection.js');
@@ -200,13 +200,13 @@ try {
 
   // ---------- 4. réglage inbound.enabled
   reset();
-  assert.deepEqual((await req('GET', `/tools/${C1}`, { user: 'owner1' })).body.data.inbound, { enabled: false, secretaries: false }, 'désactivé par défaut');
+  assert.deepEqual((await req('GET', `/tools/${C1}`, { user: 'owner1' })).body.data.inbound, { enabled: false, secretaries: false, mailboxActions: false }, 'désactivé par défaut');
   for (const bad of [{ enabled: 'true' }, { enabled: 1 }, { enabled: null }, [], 'x', null]) assert.equal((await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: bad } })).status, 400, JSON.stringify(bad));
   assert.equal((await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: {} } })).status, 400, 'rien à modifier');
   for (const user of ['agent1', 'memberNoCalls']) assert.equal((await req('PUT', `/tools/${C1}`, { user, body: { inbound: { enabled: true } } })).status, 403);
   r = await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: { enabled: true } } });
-  assert.equal(r.status, 200); assert.deepEqual(r.body.data.inbound, { enabled: true, secretaries: false });
-  assert.deepEqual((await req('GET', `/tools/${C1}`, { user: 'agent1' })).body.data.inbound, { enabled: true, secretaries: false });
+  assert.equal(r.status, 200); assert.deepEqual(r.body.data.inbound, { enabled: true, secretaries: false, mailboxActions: false });
+  assert.deepEqual((await req('GET', `/tools/${C1}`, { user: 'agent1' })).body.data.inbound, { enabled: true, secretaries: false, mailboxActions: false });
   assert.equal((await req('GET', `/tools/${C2}`, { user: 'other1' })).body.data.inbound.enabled, false, 'isolation entre centres');
 
   // ---------- 5. accès : désactivé / pas de messagerie / pas de lecture — AUCUN appel fournisseur
@@ -375,7 +375,7 @@ try {
   assert.equal((await del(A, 'other1', C2)).status, 404, 'autre centre via sa propre URL');
   assert.equal((await del(A, 'other1', C1)).status, 403, 'jamais le centre d’un autre');
   assert.equal((await req('DELETE', `/inbound-emails/${C1}/${A}`)).status, 401);
-  r = await del(A); assert.equal(r.status, 200); assert.deepEqual(r.body, { success: true, data: { id: A } });
+  r = await del(A); assert.equal(r.status, 200); assert.deepEqual(r.body, { success: true, data: { id: A, mailbox: 'app_only' } });
   const docA = inbox.find((x) => x._id === A); assert.ok(docA.deletedAt instanceof Date, 'soft delete : le document reste (marqueur)');
   assert.deepEqual([docA.subject, docA.snippet, docA.fromEmail], ['', '', ''], 'métadonnées effacées');
   assert.equal((await del(A)).status, 404, 're-suppression : 404');
@@ -397,10 +397,10 @@ try {
   for (const bad of [undefined, {}, { ids: [] }, { ids: 'x' }, { ids: [A2, 'zzz'] }, { ids: [42] }, { ids: [A2], status: 'handled' }, { status: 'new' }, { status: 'handled', ids: [] }, { ids: Array(101).fill(A2) }, { ids: [A2, null] }]) assert.equal((await dm(bad)).status, 400, JSON.stringify(bad)?.slice(0, 60));
   assert.equal((await dm({ ids: [A2] }, 'agent1')).status, 403); assert.equal((await dm({ ids: [A2] }, 'other1', C1)).status, 403);
   assert.equal(inbox.filter((x) => x.deletedAt).length, 0, 'rien supprimé par un refus');
-  r = await dm({ ids: [A2, A2, 'e'.repeat(24), OTHER] }); assert.equal(r.status, 200); assert.deepEqual(r.body, { success: true, data: { deleted: 1 } }, 'doublons, inconnus et autre centre ignorés');
+  r = await dm({ ids: [A2, A2, 'e'.repeat(24), OTHER] }); assert.equal(r.status, 200); assert.deepEqual(r.body, { success: true, data: { deleted: 1, mailbox: 'app_only' } }, 'doublons, inconnus et autre centre ignorés');
   assert.equal(inbox.find((x) => x._id === OTHER).deletedAt, undefined, 'autre centre intact');
-  assert.deepEqual((await dm({ ids: [A2] })).body.data, { deleted: 0 }, 're-suppression en lot : 0');
-  assert.deepEqual((await dm({ ids: Array(100).fill(B2) })).body.data, { deleted: 1 }, '100 ids acceptés');
+  assert.deepEqual((await dm({ ids: [A2] })).body.data, { deleted: 0, mailbox: 'app_only' }, 're-suppression en lot : 0');
+  assert.deepEqual((await dm({ ids: Array(100).fill(B2) })).body.data, { deleted: 1, mailbox: 'app_only' }, '100 ids acceptés');
   assert.deepEqual((await get()).body.data.items, []);
   // delete-many par statut
   r = await refreshNow(); assert.equal(inbox.filter((x) => x.companyId === C1).length, 2, 'toujours pas recréés'); assert.deepEqual(r.body.data.items, []);
@@ -408,10 +408,10 @@ try {
   inbox.push({ _id: OTHER, companyId: C2, provider: 'google', providerMessageId: 'o2', receivedAt: new Date(), subject: 'autre centre', status: 'handled', followUpIds: [] });
   r = await refreshNow(); const [A3, B3] = [idOf(r.body.data.items, 'Demande de rendez-vous'), idOf(r.body.data.items, 'Facture')];
   await p(A3, { status: 'handled' });
-  assert.deepEqual((await dm({ status: 'handled' })).body, { success: true, data: { deleted: 1 } });
+  assert.deepEqual((await dm({ status: 'handled' })).body, { success: true, data: { deleted: 1, mailbox: 'app_only' } });
   assert.ok(inbox.find((x) => x._id === A3).deletedAt); assert.equal(inbox.find((x) => x._id === B3).deletedAt, undefined, 'les « new » restent');
   assert.equal(inbox.find((x) => x._id === OTHER).deletedAt, undefined, 'les traités d’un autre centre restent');
-  assert.deepEqual((await dm({ status: 'handled' })).body.data, { deleted: 0 });
+  assert.deepEqual((await dm({ status: 'handled' })).body.data, { deleted: 0, mailbox: 'app_only' });
   assert.deepEqual((await get()).body.data.counts, { new: 1, handled: 0, archived: 0 });
 
   // archive-many
@@ -420,17 +420,17 @@ try {
   r = await refreshNow(); const [A4, B4] = [idOf(r.body.data.items, 'Demande de rendez-vous'), idOf(r.body.data.items, 'Facture')];
   for (const bad of [undefined, {}, { ids: [] }, { ids: [A4, 'x'] }, { ids: [A4], status: 'handled' }, { status: 'new' }, { ids: Array(101).fill(A4) }, { ids: [A4], archived: 'true' }]) assert.equal((await am(bad)).status, 400, JSON.stringify(bad)?.slice(0, 60));
   assert.equal((await am({ ids: [A4] }, 'agent1')).status, 403);
-  assert.deepEqual((await am({ ids: [A4, OTHER, 'e'.repeat(24)] })).body, { success: true, data: { updated: 1 } }, 'archived par défaut true ; autre centre ignoré');
+  assert.deepEqual((await am({ ids: [A4, OTHER, 'e'.repeat(24)] })).body, { success: true, data: { updated: 1, mailbox: 'app_only' } }, 'archived par défaut true ; autre centre ignoré');
   assert.equal(inbox.find((x) => x._id === OTHER).archivedAt, undefined);
-  assert.deepEqual((await am({ ids: [A4] })).body.data, { updated: 0 }, 'idempotent : rien à changer');
+  assert.deepEqual((await am({ ids: [A4] })).body.data, { updated: 0, mailbox: 'app_only' }, 'idempotent : rien à changer');
   assert.deepEqual((await get()).body.data.counts, { new: 1, handled: 0, archived: 1 });
-  assert.deepEqual((await am({ ids: [A4], archived: false })).body.data, { updated: 1 }); assert.deepEqual((await get()).body.data.counts, { new: 2, handled: 0, archived: 0 });
+  assert.deepEqual((await am({ ids: [A4], archived: false })).body.data, { updated: 1, mailbox: 'app_only' }); assert.deepEqual((await get()).body.data.counts, { new: 2, handled: 0, archived: 0 });
   await p(B4, { status: 'handled' });
-  assert.deepEqual((await am({ status: 'handled' })).body.data, { updated: 1 }, 'par statut : seulement les traités'); assert.deepEqual((await get('archived')).body.data.items.map((i) => i.id), [B4]);
-  assert.deepEqual((await am({ status: 'handled', archived: false })).body.data, { updated: 1 }); assert.deepEqual((await get()).body.data.counts, { new: 1, handled: 1, archived: 0 });
-  await del(A4); assert.deepEqual((await am({ ids: [A4] })).body.data, { updated: 0 }, 'un supprimé n’est pas archivable'); assert.deepEqual((await am({ ids: [A4], archived: false })).body.data, { updated: 0 });
+  assert.deepEqual((await am({ status: 'handled' })).body.data, { updated: 1, mailbox: 'app_only' }, 'par statut : seulement les traités'); assert.deepEqual((await get('archived')).body.data.items.map((i) => i.id), [B4]);
+  assert.deepEqual((await am({ status: 'handled', archived: false })).body.data, { updated: 1, mailbox: 'app_only' }); assert.deepEqual((await get()).body.data.counts, { new: 1, handled: 1, archived: 0 });
+  await del(A4); assert.deepEqual((await am({ ids: [A4] })).body.data, { updated: 0, mailbox: 'app_only' }, 'un supprimé n’est pas archivable'); assert.deepEqual((await am({ ids: [A4], archived: false })).body.data, { updated: 0, mailbox: 'app_only' });
   // delete-many par statut n'emporte pas les archivés ; par ids oui
-  await am({ ids: [B4] }); assert.deepEqual((await dm({ status: 'handled' })).body.data, { deleted: 0 }); assert.deepEqual((await dm({ ids: [B4] })).body.data, { deleted: 1 });
+  await am({ ids: [B4] }); assert.deepEqual((await dm({ status: 'handled' })).body.data, { deleted: 0, mailbox: 'app_only' }); assert.deepEqual((await dm({ ids: [B4] })).body.data, { deleted: 1, mailbox: 'app_only' });
   // lecture désactivée : la purge existante supprime tout (documents supprimés compris)
   await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: { enabled: false } } });
   assert.equal(inbox.filter((x) => x.companyId === C1).length, 0, 'purge totale inchangée'); assert.equal(inbox.length, 1);
@@ -462,8 +462,8 @@ try {
   assert.equal((await req('GET', `/inbound-emails/${C1}/access`, { user: 'other1' })).status, 403, 'access : jamais un autre centre');
   // autorisation (PUT partiel : n'écrase pas enabled)
   r = await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: { secretaries: true } } });
-  assert.equal(r.status, 200); assert.deepEqual(r.body.data.inbound, { enabled: true, secretaries: true });
-  assert.deepEqual((await req('GET', `/tools/${C1}`, { user: 'agent1' })).body.data.inbound, { enabled: true, secretaries: true });
+  assert.equal(r.status, 200); assert.deepEqual(r.body.data.inbound, { enabled: true, secretaries: true, mailboxActions: false });
+  assert.deepEqual((await req('GET', `/tools/${C1}`, { user: 'agent1' })).body.data.inbound, { enabled: true, secretaries: true, mailboxActions: false });
   assert.deepEqual((await req('GET', `/inbound-emails/${C1}/access`, { user: 'agent1' })).body.data, { allowed: true });
   assert.equal((await req('GET', `/inbound-emails/${C1}`, { user: 'agent1' })).status, 200);
   assert.equal((await req('POST', `/inbound-emails/${C1}/refresh`, { user: 'agent1' })).status, 200);
@@ -473,7 +473,7 @@ try {
   assert.equal((await req('PATCH', `/inbound-emails/${C1}/${g1.id}`, { user: 'agent1', body: { status: 'handled' } })).status, 200);
   assert.equal((await req('PATCH', `/inbound-emails/${C1}/${g1.id}`, { user: 'agent1', body: { archived: true } })).status, 200, 'secrétaire autorisée : archivage');
   assert.equal((await req('POST', `/inbound-emails/${C1}/archive-many`, { user: 'agent1', body: { ids: [g1.id], archived: false } })).body.data.updated, 1);
-  assert.deepEqual((await req('POST', `/inbound-emails/${C1}/delete-many`, { user: 'agent1', body: { ids: [g1.id] } })).body, { success: true, data: { deleted: 1 } }, 'secrétaire autorisée : suppression en lot');
+  assert.deepEqual((await req('POST', `/inbound-emails/${C1}/delete-many`, { user: 'agent1', body: { ids: [g1.id] } })).body, { success: true, data: { deleted: 1, mailbox: 'app_only' } }, 'secrétaire autorisée : suppression en lot');
   assert.equal((await req('DELETE', `/inbound-emails/${C1}/${list.find((i) => i.id !== g1.id).id}`, { user: 'agent1' })).status, 200, 'secrétaire autorisée : suppression');
   assert.equal((await req('DELETE', `/inbound-emails/${C1}/${g1.id}`, { user: 'memberNoCalls' })).status, 403);
   assert.equal((await req('GET', `/inbound-emails/${C1}`, { user: 'memberNoCalls' })).status, 403, 'un membre sans droit reste refusé');
@@ -485,13 +485,143 @@ try {
   assert.equal((await req('GET', `/inbound-emails/${C2}`, { user: 'agent1' })).status, 403, 'agent de C1 sur C2');
   // désactivation de la lecture : secretaries repasse à false, plus d'accès
   r = await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: { enabled: false } } });
-  assert.deepEqual(r.body.data.inbound, { enabled: false, secretaries: false }); assert.equal(toolsDocs[0].inbound.secretaries, false);
+  assert.deepEqual(r.body.data.inbound, { enabled: false, secretaries: false, mailboxActions: false }); assert.equal(toolsDocs[0].inbound.secretaries, false);
   assert.equal((await req('GET', `/inbound-emails/${C1}`, { user: 'agent1' })).status, 403);
   assert.deepEqual((await req('GET', `/inbound-emails/${C1}/access`, { user: 'agent1' })).body.data, { allowed: false });
   assert.deepEqual((await req('GET', `/inbound-emails/${C1}/access`, { user: 'owner1' })).body.data, { allowed: false }, 'lecture désactivée : allowed false pour tous');
   // réactivation : les secrétaires ne sont pas réautorisées automatiquement
   await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: { enabled: true } } });
   assert.equal((await req('GET', `/inbound-emails/${C1}`, { user: 'agent1' })).status, 403);
+
+  // ---------- 13b. répercussion dans la vraie messagerie : corbeille + archivage (consentement d'écriture séparé, réglage mailboxActions)
+  {
+    const WRITE_G = [...READ_G.slice(0, 3), WRITE_SCOPE.google];
+    const WRITE_M = ['Mail.Send', 'https://graph.microsoft.com/Mail.ReadWrite'];
+    // scopes : l'écriture inclut la lecture ; refreshExtra Microsoft ; démarrage { write }
+    assert.ok(hasReadScope('google', [WRITE_SCOPE.google]) && hasReadScope('microsoft', ['Mail.ReadWrite']) && hasWriteScope('microsoft', WRITE_M) && !hasWriteScope('google', READ_G));
+    assert.ok(PROVIDERS.microsoft.refreshExtra({}, ['Mail.ReadWrite']).scope.endsWith(' Mail.ReadWrite'));
+    assert.ok(!PROVIDERS.microsoft.refreshExtra({}, ['Mail.Read']).scope.includes('Mail.ReadWrite') && PROVIDERS.microsoft.refreshExtra({}, ['Mail.Read']).scope.endsWith(' Mail.Read'));
+    assert.ok(!PROVIDERS.microsoft.refreshExtra({}, ['Mail.Send']).scope.includes('Mail.Read'));
+    assert.match(qs(S.startAuthorization({ ...base, provider: 'google', write: true }, FULL)).scope, /gmail\.modify$/);
+    assert.doesNotMatch(qs(S.startAuthorization({ ...base, provider: 'google', read: true }, FULL)).scope, /modify/);
+    assert.match(qs(S.startAuthorization({ ...base, provider: 'microsoft', write: true }, FULL)).scope, /Mail\.ReadWrite$/);
+    assert.throws(() => S.startAuthorization({ ...base, provider: 'zoom', write: true }, FULL), (e) => e.code === 'invalid_request');
+    reset();
+    r = await req('POST', `/connections/${C1}/google/start`, { user: 'owner1', body: { write: true } }); assert.equal(r.status, 200); assert.match(qs(r.body.data.url).scope, /gmail\.modify$/);
+    assert.equal((await req('POST', `/connections/${C1}/google/start`, { user: 'owner1', body: { write: 'oui' } })).status, 400);
+    assert.equal((await req('POST', `/connections/${C1}/zoom/start`, { user: 'owner1', body: { write: true } })).status, 400);
+    assert.equal((await req('POST', `/connections/${C1}/google/start`, { user: 'agent1', body: { write: true } })).status, 403);
+    putConnection(C1, 'google', { scopes: WRITE_G });
+    assert.deepEqual([(r = await req('GET', `/connections/${C1}`, { user: 'member1' })).body.data.google.canRead, r.body.data.google.canModify], [true, true], 'gmail.modify seul : lecture ET écriture');
+    putConnection(C1, 'google', { scopes: READ_G });
+    assert.deepEqual([(r = await req('GET', `/connections/${C1}`, { user: 'member1' })).body.data.google.canRead, r.body.data.google.canModify], [true, false]);
+
+    // réglage : validation stricte, dépend de enabled, remis à false à la désactivation, aucun appel fournisseur
+    reset(); putConnection(C1, 'google', { scopes: READ_G });
+    const put = (inbound, user = 'owner1') => req('PUT', `/tools/${C1}`, { user, body: { inbound } });
+    assert.equal((await put({ mailboxActions: true })).status, 400, 'pas sans lecture activée');
+    assert.equal((await put({ enabled: false, mailboxActions: true })).status, 400);
+    for (const bad of ['true', 1, null]) assert.equal((await put({ enabled: true, mailboxActions: bad })).status, 400, String(bad));
+    assert.equal((await put({ mailboxActions: true }, 'agent1')).status, 403);
+    r = await put({ enabled: true, mailboxActions: true }); assert.equal(r.status, 200); assert.deepEqual(r.body.data.inbound, { enabled: true, secretaries: false, mailboxActions: true });
+    assert.equal(httpCalls.length, 0, 'le réglage n’écrit rien chez le fournisseur');
+    assert.equal((await req('GET', `/tools/${C1}`, { user: 'owner1' })).body.data.inbound.mailboxActions, true);
+    r = await put({ enabled: false }); assert.deepEqual(r.body.data.inbound, { enabled: false, secretaries: false, mailboxActions: false }); assert.equal(toolsDocs[0].inbound.mailboxActions, false);
+    await put({ enabled: true }); assert.equal(toolsDocs[0].inbound.mailboxActions, false, 'pas réactivé automatiquement');
+
+    // jeu de données
+    const mk = (n, provider = 'google', extra = {}) => { const id = n.toString(16).padStart(24, 'e'); inbox.push({ _id: id, companyId: C1, provider, providerMessageId: `${provider[0]}${n}`, receivedAt: new Date(), fromName: 'X', fromEmail: 'x@exemple.fr', subject: `S${n}`, snippet: '', status: 'new', followUpIds: [], ...extra }); return id; };
+    const calls = () => providerCalls().filter((c) => c.method === 'POST');
+    const dele = (id) => req('DELETE', `/inbound-emails/${C1}/${id}`, { user: 'owner1' });
+    const dmany = (ids) => req('POST', `/inbound-emails/${C1}/delete-many`, { user: 'owner1', body: { ids } });
+    const patch = (id, body) => req('PATCH', `/inbound-emails/${C1}/${id}`, { user: 'owner1', body });
+    const amany = (ids, archived) => req('POST', `/inbound-emails/${C1}/archive-many`, { user: 'owner1', body: { ids, ...(archived === undefined ? {} : { archived }) } });
+    const setup = (settingOn, scopes, provider = 'google') => { reset(); toolsDocs.push({ companyId: C1, email: { provider }, inbound: { enabled: true, mailboxActions: settingOn, lastSyncAt: null } }); putConnection(C1, provider, { scopes }); };
+    const okTrash = () => on('POST', /gmail\/v1\/users\/me\/messages\/[^/]+\/trash$/, () => ({ status: 200, json: {} }));
+    const okModify = () => on('POST', /gmail\/v1\/users\/me\/messages\/[^/]+\/modify$/, () => ({ status: 200, json: {} }));
+
+    // réglage faux : application seulement, aucun appel fournisseur, mailbox app_only
+    setup(false, WRITE_G); okTrash(); okModify(); let a = mk(1), b = mk(2), c = mk(3), d = mk(4);
+    assert.deepEqual((await dele(a)).body, { success: true, data: { id: a, mailbox: 'app_only' } });
+    assert.deepEqual((await dmany([b])).body.data, { deleted: 1, mailbox: 'app_only' });
+    r = await patch(c, { archived: true }); assert.deepEqual([r.status, r.body.data.archived, r.body.data.mailbox], [200, true, 'app_only']);
+    assert.deepEqual((await amany([d])).body.data, { updated: 1, mailbox: 'app_only' });
+    assert.equal(httpCalls.length, 0, 'réglage faux : aucun appel au fournisseur');
+    assert.equal((await patch(c, { status: 'handled' })).body.data.mailbox, 'app_only');
+
+    // réglage vrai mais pas de scope d'écriture : 409 write_scope_missing, rien n'est touché
+    setup(true, READ_G); okTrash(); a = mk(1); b = mk(2);
+    for (r of [await dele(a), await dmany([a, b]), await patch(a, { archived: true }), await amany([a, b])]) { assert.equal(r.status, 409); assert.equal(r.body.code, 'write_scope_missing'); }
+    assert.equal(httpCalls.length, 0); assert.ok(inbox.every((x) => !x.deletedAt && !x.archivedAt), 'rien supprimé ni archivé');
+    assert.equal((await patch(a, { status: 'handled' })).status, 200, 'sans action sur la boîte : pas de 409');
+    // lecture désactivée entre-temps : jamais d'écriture chez le fournisseur
+    setup(true, WRITE_G); okTrash(); a = mk(1); toolsDocs[0].inbound.enabled = false;
+    r = await dele(a); assert.equal(r.status, 200); assert.equal(r.body.data.mailbox, 'app_only'); assert.equal(httpCalls.length, 0, 'sans inbound.enabled : aucun appel');
+
+    // Gmail : corbeille (POST …/trash, jamais DELETE), archivage (modify removeLabelIds INBOX), désarchivage (addLabelIds INBOX)
+    setup(true, WRITE_G); okTrash(); okModify(); a = mk(1); b = mk(2);
+    r = await dele(a); assert.deepEqual(r.body, { success: true, data: { id: a, mailbox: 'trashed' } });
+    assert.deepEqual(calls().map((x) => [x.method, x.url]), [['POST', 'https://gmail.googleapis.com/gmail/v1/users/me/messages/g1/trash']]);
+    assert.equal(calls()[0].headers.Authorization, 'Bearer ACCESS_SECRET_G1'); assert.ok(inbox.find((x) => x._id === a).deletedAt);
+    assert.ok(!httpCalls.some((x) => x.method === 'DELETE'), 'jamais de suppression définitive');
+    r = await patch(b, { archived: true }); assert.deepEqual([r.status, r.body.data.archived, r.body.data.mailbox], [200, true, 'synced']);
+    assert.deepEqual([calls()[1].url, calls()[1].body], ['https://gmail.googleapis.com/gmail/v1/users/me/messages/g2/modify', { removeLabelIds: ['INBOX'] }]);
+    r = await patch(b, { archived: false }); assert.deepEqual([r.body.data.archived, r.body.data.mailbox], [false, 'synced']); assert.deepEqual(calls()[2].body, { addLabelIds: ['INBOX'] });
+    assert.equal(inbox.find((x) => x._id === b).archivedAt, null);
+    // archive-many Gmail
+    const g3 = mk(3), g4 = mk(4); const before = calls().length;
+    assert.deepEqual((await amany([g3, g4])).body, { success: true, data: { updated: 2, failed: 0, mailbox: 'synced' } });
+    assert.equal(calls().length - before, 2); assert.ok(calls().slice(before).every((x) => /\/modify$/.test(x.url) && x.body.removeLabelIds[0] === 'INBOX'));
+    assert.deepEqual((await amany([g3], false)).body.data, { updated: 1, failed: 0, mailbox: 'synced' }); assert.deepEqual(calls().at(-1).body, { addLabelIds: ['INBOX'] });
+
+    // échec fournisseur : rien d'effacé en local, 502 provider_error ; message sûr (pas de détail)
+    setup(true, WRITE_G); on('POST', /\/trash$/, () => ({ status: 500, json: { error: 'SECRET_DETAIL' } })); on('POST', /\/modify$/, () => ({ status: 403, json: { error: 'SECRET_DETAIL' } })); a = mk(1); b = mk(2);
+    r = await dele(a); assert.equal(r.status, 502); assert.equal(r.body.code, 'provider_error'); assert.ok(!r.text.includes('SECRET_DETAIL')); assert.equal(inbox.find((x) => x._id === a).deletedAt, undefined);
+    assert.equal(inbox.find((x) => x._id === a).subject, 'S1', 'métadonnées conservées');
+    r = await patch(a, { archived: true }); assert.equal(r.status, 502); assert.equal(inbox.find((x) => x._id === a).archivedAt, undefined);
+    assert.equal((await dmany([a, b])).status, 502, 'tous en échec : 502'); assert.equal((await amany([a, b])).status, 502);
+    assert.ok(inbox.every((x) => !x.deletedAt && !x.archivedAt));
+    // réseau en panne (599 simulé) : idem
+    setup(true, WRITE_G); a = mk(1); r = await dele(a); assert.equal(r.status, 502); assert.equal(inbox[0].deletedAt, undefined);
+
+    // lot partiel : seuls les réussis sont effacés / archivés
+    setup(true, WRITE_G); on('POST', /messages\/g1\/trash$/, () => ({ status: 200, json: {} })); on('POST', /messages\/g2\/trash$/, () => ({ status: 500, json: {} })); on('POST', /messages\/g3\/trash$/, () => ({ status: 404, json: null }));
+    on('POST', /messages\/g1\/modify$/, () => ({ status: 200, json: {} })); on('POST', /messages\/g2\/modify$/, () => ({ status: 500, json: {} })); on('POST', /messages\/g3\/modify$/, () => ({ status: 404, json: null }));
+    a = mk(1); b = mk(2); c = mk(3);
+    r = await dmany([a, b, c]); assert.deepEqual([r.status, r.body.data], [200, { deleted: 2, failed: 1, mailbox: 'trashed' }], '404 fournisseur = succès');
+    assert.deepEqual(inbox.map((x) => !!x.deletedAt), [true, false, true]);
+    setup(true, WRITE_G); on('POST', /messages\/g2\/modify$/, () => ({ status: 500, json: {} })); on('POST', /messages\/g[13]\/modify$/, (q) => ({ status: q.url.includes('g3') ? 404 : 200, json: {} }));
+    a = mk(1); b = mk(2); c = mk(3);
+    r = await amany([a, b, c]); assert.deepEqual([r.status, r.body.data], [200, { updated: 2, failed: 1, mailbox: 'synced' }]); assert.deepEqual(inbox.map((x) => !!x.archivedAt), [true, false, true]);
+    // 404 fournisseur sur un seul e-mail = succès (message déjà absent)
+    setup(true, WRITE_G); on('POST', /\/trash$/, () => ({ status: 404, json: null })); a = mk(1); r = await dele(a); assert.equal(r.status, 200); assert.equal(r.body.data.mailbox, 'trashed'); assert.ok(inbox[0].deletedAt);
+
+    // jeton expiré côté fournisseur (401 deux fois) : reconnexion demandée, rien d'effacé
+    setup(true, WRITE_G); on('POST', /\/trash$/, () => ({ status: 401, json: {} })); on('POST', /oauth2\.googleapis\.com\/token/, () => ({ status: 200, json: { access_token: 'ACCESS_SECRET_G1', expires_in: 3599 } })); a = mk(1);
+    r = await dele(a); assert.equal(r.status, 409); assert.equal(r.body.code, 'needs_reauth'); assert.equal(inbox[0].deletedAt, undefined);
+
+    // Microsoft Graph : déplacement vers deleteditems / archive / inbox ; nouvel identifiant conservé
+    setup(true, WRITE_M, 'microsoft'); toolsDocs[0].email.provider = 'microsoft';
+    on('POST', /graph\.microsoft\.com\/v1\.0\/me\/messages\/m1\/move$/, (q) => ({ status: 201, json: { id: q.body.destinationId === 'archive' ? 'm1-archived' : 'm1-inbox' } }));
+    on('POST', /messages\/m2\/move$/, () => ({ status: 201, json: { id: 'm2-trash' } }));
+    const m1 = mk(1, 'microsoft'); const m2 = mk(2, 'microsoft'); const m3 = mk(3, 'microsoft');
+    assert.deepEqual((await dele(m2)).body.data, { id: m2, mailbox: 'trashed' });
+    assert.deepEqual([calls()[0].url, calls()[0].body], ['https://graph.microsoft.com/v1.0/me/messages/m2/move', { destinationId: 'deleteditems' }]);
+    assert.equal(calls()[0].headers.Authorization, 'Bearer ACCESS_SECRET_M1');
+    r = await patch(m1, { archived: true }); assert.deepEqual([r.status, r.body.data.mailbox], [200, 'synced']);
+    assert.deepEqual(calls()[1].body, { destinationId: 'archive' }); assert.equal(inbox.find((x) => x._id === m1).providerMessageId, 'm1-archived', 'Graph change l’identifiant au déplacement');
+    on('POST', /messages\/m1-archived\/move$/, () => ({ status: 201, json: { id: 'm1-back' } }));
+    r = await patch(m1, { archived: false }); assert.equal(r.status, 200); assert.deepEqual(calls()[2].body, { destinationId: 'inbox' }); assert.match(calls()[2].url, /messages\/m1-archived\/move$/); assert.equal(inbox.find((x) => x._id === m1).providerMessageId, 'm1-back');
+    on('POST', /messages\/m3\/move$/, () => ({ status: 404, json: null }));
+    assert.deepEqual((await amany([m3])).body.data, { updated: 1, failed: 0, mailbox: 'synced' }, '404 = succès');
+    // e-mail lu chez un autre fournisseur que la messagerie actuelle : pas d'écriture
+    const gOld = mk(9, 'google'); const nb = calls().length; r = await dele(gOld); assert.equal(r.status, 409); assert.equal(calls().length, nb);
+
+    // droits : mêmes que les routes inbound (secrétaire sans autorisation : 403 ; autre centre : 404)
+    setup(true, WRITE_G); okTrash(); a = mk(1); assert.equal((await req('DELETE', `/inbound-emails/${C1}/${a}`, { user: 'agent1' })).status, 403); assert.equal(httpCalls.length, 0);
+    assert.equal((await req('DELETE', `/inbound-emails/${C1}/${'f'.repeat(24)}`, { user: 'owner1' })).status, 404); assert.equal(httpCalls.length, 0);
+    reset();
+  }
 
   // ---------- 12. aucun jeton, aucun contenu de message dans les journaux
   const everything = `${responses.join('\n')}\n${logged.join('\n')}`;

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { call, ensure, eventWindow, READ_SCOPE, SecretariatError, VIDEO_LINK_RE } from './common.js';
+import { call, ensure, eventWindow, READ_SCOPE, WRITE_SCOPE, SecretariatError, VIDEO_LINK_RE } from './common.js';
 import { cleanSnippet, cleanSubject, htmlToText, limitBody, parseAddress, stripQuoted } from './mailText.js';
 import { DEFAULT_TIME_ZONE } from '../timeZone.js';
 import { buildMime, toBase64Url } from './mime.js';
@@ -20,6 +20,8 @@ export const google = {
   requiredScopes: [SCOPE_GMAIL_SEND, SCOPE_CALENDAR],
   /** Lecture de la boîte de réception (e-mails entrants) : OPTIONNEL, demandé seulement avec `read: true`. */
   readScope: READ_SCOPE.google,
+  /** Écriture (corbeille / archivage) : OPTIONNEL, demandé seulement avec `write: true`. Inclut la lecture. */
+  writeScope: WRITE_SCOPE.google,
   authorizeUrl: () => 'https://accounts.google.com/o/oauth2/v2/auth',
   tokenUrl: () => 'https://oauth2.googleapis.com/token',
   /** Paramètres propres à Google : refresh_token seulement avec access_type=offline + prompt=consent. */
@@ -137,6 +139,22 @@ export const google = {
     };
     walk(res.json?.payload);
     return limitBody(stripQuoted(plain.length ? plain.join('\n') : htmlToText(html.join('\n'))));
+  },
+
+  /**
+   * Mise à la CORBEILLE (réversible, jamais de suppression définitive) : `users.messages.trash`. 404 (message déjà absent) = réussi. Scope gmail.modify.
+   * [À VÉRIFIER en recette avec un vrai compte.]
+   */
+  async trashMessage({ http, accessToken, id }) {
+    ensure(await call(http, { method: 'POST', url: `${GMAIL}/messages/${encodeURIComponent(id)}/trash`, headers: { Authorization: `Bearer ${accessToken}` } }), 'Mise à la corbeille Gmail', [200, 404]);
+    return { id: null };
+  },
+
+  /** Archivage = retrait du libellé INBOX (`users.messages.modify`) ; désarchivage = ajout de INBOX. 404 = réussi. L'identifiant Gmail ne change pas. */
+  async setArchived({ http, accessToken, id, archived }) {
+    const body = archived ? { removeLabelIds: ['INBOX'] } : { addLabelIds: ['INBOX'] };
+    ensure(await call(http, { method: 'POST', url: `${GMAIL}/messages/${encodeURIComponent(id)}/modify`, headers: { Authorization: `Bearer ${accessToken}` }, body }), 'Archivage Gmail', [200, 404]);
+    return { id: null };
   },
 
   /** Suppression ; 404 et 410 (déjà supprimé) comptent comme réussis. */

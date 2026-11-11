@@ -451,13 +451,13 @@ try {
   assert.equal((await req('DELETE', `/connections/${C1}/google`)).status, 401);
   assert.equal((await req('POST', `/connections/${C1}/google/start`, { user: 'other1', body: { returnTo: 'tools' } })).status, 403, 'autre entreprise');
   assert.equal((await req('DELETE', `/connections/${C1}/google`, { user: 'other1' })).status, 403);
-  const empty = { google: { available: true, connected: false, needsReauth: false, canRead: false, account: null, connectedAt: null }, microsoft: { available: true, connected: false, needsReauth: false, canRead: false, account: null, connectedAt: null }, zoom: { available: true, connected: false, needsReauth: false, canRead: false, account: null, connectedAt: null } };
+  const empty = { google: { available: true, connected: false, needsReauth: false, canRead: false, canModify: false, account: null, connectedAt: null }, microsoft: { available: true, connected: false, needsReauth: false, canRead: false, canModify: false, account: null, connectedAt: null }, zoom: { available: true, connected: false, needsReauth: false, canRead: false, canModify: false, account: null, connectedAt: null } };
   for (const user of ['owner1', 'member1', 'memberNoCalls', 'agent1']) assert.deepEqual((await req('GET', `/connections/${C1}`, { user })).body, { success: true, data: empty }, user);
   putConnection(C1, 'google'); putConnection(C1, 'microsoft', { status: 'needs_reauth' });
   r = await req('GET', `/connections/${C1}`, { user: 'agent1' });
-  assert.deepEqual(r.body.data.google, { available: true, connected: true, needsReauth: false, canRead: false, account: 'centre@gmail.test', connectedAt: '2026-11-01T10:00:00.000Z' });
-  assert.deepEqual(r.body.data.microsoft, { available: true, connected: false, needsReauth: true, canRead: false, account: 'centre@contoso.test', connectedAt: '2026-11-01T10:00:00.000Z' });
-  assert.deepEqual(Object.keys(r.body.data.google).sort(), ['account', 'available', 'canRead', 'connected', 'connectedAt', 'needsReauth']);
+  assert.deepEqual(r.body.data.google, { available: true, connected: true, needsReauth: false, canRead: false, canModify: false, account: 'centre@gmail.test', connectedAt: '2026-11-01T10:00:00.000Z' });
+  assert.deepEqual(r.body.data.microsoft, { available: true, connected: false, needsReauth: true, canRead: false, canModify: false, account: 'centre@contoso.test', connectedAt: '2026-11-01T10:00:00.000Z' });
+  assert.deepEqual(Object.keys(r.body.data.google).sort(), ['account', 'available', 'canModify', 'canRead', 'connected', 'connectedAt', 'needsReauth']);
   assert.deepEqual((await req('GET', `/connections/${C2}`, { user: 'other1' })).body.data, empty, 'autre centre : aucune connexion visible');
   // indisponible : jamais de nom de variable dans la réponse
   const keepEnv = { ...process.env }; for (const k of Object.keys(process.env)) if (/^(GOOGLE|MICROSOFT|ZOOM)_/.test(k)) delete process.env[k];
