@@ -1,80 +1,92 @@
 import mongoose from 'mongoose';
 import { config } from '../config/env.js';
 import { SubscriptionPlan } from '../models/SubscriptionPlan.js';
+import {
+  stripeService,
+  extractStripeProductFeatures,
+  extractStripeProductLimits,
+} from '../services/stripeService.js';
 
-const plans = [
-  {
-    name: 'STARTER',
-    price: 99,
-    stripePriceId: config.stripePriceStarter,
-    description: 'Start your campaigns with simplicity and efficiency',
-    features: [
-      'Active GIGs: 3',
-      'Active REPs: 5',
-      'AI Powered Gig Engine',
-      'AI Powered Script Engine',
-      'AI Powered Learning Planner',
-      'AI Powered GIGS REPS Matching Scheduler',
-      'Qualified REPs on demand',
-      'Dashboard with Standard KPIs',
-      'Email support with assisted onboarding'
-    ],
-    maxGigs: 3,
-    maxReps: 5
-  },
-  {
-    name: 'GROWTH',
-    price: 249,
-    stripePriceId: config.stripePriceGrowth,
-    description: 'Drive multi channel efforts with AI automation',
-    isPopular: true,
-    features: [
-      'Active GIGs: 10',
-      'Active REPs: 15',
-      'Channels: Outbound Calls Only',
-      'All Starter Features',
-      'AI Powered Lead Management Engine',
-      'AI Powered Knowledge Base Engine',
-      'AI Powered Call Monitoring and Audit',
-      'Call storage - 3 months',
-      'Priority support + chat'
-    ],
-    maxGigs: 10,
-    maxReps: 15
-  },
-  {
-    name: 'SCALE',
-    price: 499,
-    stripePriceId: config.stripePriceScale,
-    description: 'Activate Intelligence at scale',
-    features: [
-      'Active GIGs: 25',
-      'Active REPs: 50',
-      'Channels: Outbound Calls Only',
-      'Global Coverage',
-      'All Growth Features Included',
-      'Priority Support - live chat, email',
-      'Customization - Dashboard, Analytics, Integrations'
-    ],
-    maxGigs: 25,
-    maxReps: 50
-  }
-];
+/**
+ * Seed/refresh subscription plans from live Stripe Catalog only.
+ * No hardcoded prices, features, or quota defaults.
+ *
+ * Optional env price IDs (STRIPE_PRICE_*) filter which prices to upsert;
+ * if unset, every active Stripe price with a product is synced.
+ */
+function envPriceAllowlist() {
+  return [
+    config.stripePriceStarter,
+    config.stripePriceGrowth,
+    config.stripePriceScale,
+  ].filter((id) => id && String(id).startsWith('price_') && !String(id).includes('placeholder'));
+}
 
 const seedPlans = async () => {
   try {
-    await mongoose.connect(config.mongodbUri);
-    console.log('✅ Connected to MongoDB for seeding');
+    if (!stripeService.isConfigured()) {
+      throw new Error('STRIPE_SECRET_KEY is required to seed plans from Stripe');
+    }
 
-    for (const planData of plans) {
+    await mongoose.connect(config.mongodbUri);
+    console.log('✅ Connected to MongoDB for seeding from Stripe');
+
+    const stripePrices = await stripeService.getPublicPlans();
+    const allow = envPriceAllowlist();
+    const selected =
+      allow.length > 0
+        ? stripePrices.filter((p) => allow.includes(p.id))
+        : stripePrices;
+
+    console.log(`📡 Syncing ${selected.length} Stripe price(s) (no code defaults)`);
+
+    for (const price of selected) {
+      const product = price.product;
+      if (!product || typeof product !== 'object') {
+        console.warn(`⚠️ Skip ${price.id}: missing product`);
+        continue;
+      }
+
+      const features = extractStripeProductFeatures(product);
+      const limits = extractStripeProductLimits(product);
+      const amount = Number(((price.unit_amount || 0) / 100).toFixed(2));
+      const name = String(product.name || '').trim().toUpperCase();
+      if (!name) {
+        console.warn(`⚠️ Skip ${price.id}: product has no name`);
+        continue;
+      }
+
+      const payload = {
+        name,
+        price: amount,
+        currency: (price.currency || 'eur').toLowerCase(),
+        stripePriceId: price.id,
+        description: product.description || '',
+        features,
+        metadata: product.metadata || {},
+      };
+      if (limits.maxGigs != null) payload.maxGigs = limits.maxGigs;
+      if (limits.maxReps != null) payload.maxReps = limits.maxReps;
+      if (limits.communicationMinutes != null) {
+        payload.communicationMinutes = limits.communicationMinutes;
+      }
+      if (limits.activeLocalNumbers != null) {
+        payload.activeLocalNumbers = limits.activeLocalNumbers;
+      }
+      if (limits.aiToken) payload.aiToken = limits.aiToken;
+
       await SubscriptionPlan.findOneAndUpdate(
-        { name: planData.name },
-        planData,
-        { upsert: true, new: true }
+        { stripePriceId: price.id },
+        payload,
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+
+      console.log(
+        `✅ ${payload.name}: €${Number(payload.price).toFixed(2)} · ${features.length} feature(s) · ${price.id}`
       );
     }
 
-    console.log('✅ Subscription plans seeded successfully');
+    console.log('✅ Subscription plans seeded from Stripe only');
     process.exit(0);
   } catch (error) {
     console.error('❌ Error seeding plans:', error);

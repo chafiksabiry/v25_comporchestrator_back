@@ -13,8 +13,27 @@ import { subscriptionRoutes } from './src/routes/subscription.js';
 import { escrowRoutes } from './src/routes/escrow.js';
 import { walletCompanyRoutes } from './src/routes/walletCompany.js';
 import { minutesCompanyRoutes } from './src/routes/minutesCompany.js';
+import { tokensCompanyRoutes } from './src/routes/tokensCompany.js';
 import { paymentCheckoutRoutes } from './src/routes/paymentCheckout.js';
+import { inboundSettingsRoutes } from './src/routes/inboundSettings.js';
+import { voicemailRoutes } from './src/routes/voicemails.js';
+import { followUpRoutes } from './src/routes/followUps.js';
+import { contactRoutes } from './src/routes/contacts.js';
+import { emailRoutes } from './src/routes/emails.js';
+import { receptionRoutes } from './src/routes/reception.js';
+import { secretariatToolsRoutes } from './src/routes/secretariatTools.js';
+import { reachRoutes } from './src/routes/reach.js';
+import { deviceLinkRoutes } from './src/routes/deviceLink.js';
+import { integrationsRoutes } from './src/routes/integrations.js';
+import { publicApiRoutes } from './src/routes/publicApi.js';
+import { startIntegrationsWorker } from './src/integrations/runtime.js';
+import { internalRoutes } from './src/routes/internal.js';
+import { companyNotificationRoutes } from './src/routes/companyNotifications.js';
+import { startMessageReminders } from './src/services/messageReminders.js';
+import { scanLowResources } from './src/services/companyNotificationService.js';
 import { clearExpiredRetractions } from './src/services/retractionService.js';
+import { resolveExpiredPendingReviews, flagWeeklyAiAudits } from './src/controllers/escrowController.js';
+import { billExpiredTrialLines, terminateSuspendedLines } from './src/services/phoneLineBillingService.js';
 
 const app = express();
 
@@ -35,8 +54,9 @@ mongoose.connect(config.mongodbUri, {
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, x-user-id, x-agent-id');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, x-user-id, x-agent-id, X-Api-Key');
   res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Expose-Headers', 'Content-Disposition');
 
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
@@ -112,7 +132,21 @@ app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/escrow', escrowRoutes);
 app.use('/api/wallet-company', walletCompanyRoutes);
 app.use('/api/minutes-company', minutesCompanyRoutes);
+app.use('/api/tokens-company', tokensCompanyRoutes);
 app.use('/api/payments/checkout', paymentCheckoutRoutes);
+app.use('/api/internal', internalRoutes);
+app.use('/api/integrations', integrationsRoutes);
+app.use('/api/public/v1', publicApiRoutes);
+app.use('/api/inbound-settings', inboundSettingsRoutes);
+app.use('/api/voicemails', voicemailRoutes);
+app.use('/api/follow-ups', followUpRoutes);
+app.use('/api/contacts', contactRoutes);
+app.use('/api/emails', emailRoutes);
+app.use('/api/reception', receptionRoutes);
+app.use('/api/secretariat', secretariatToolsRoutes);
+app.use('/api/reach', reachRoutes);
+app.use('/api/device-link', deviceLinkRoutes);
+app.use('/api/company-notifications', companyNotificationRoutes);
 
 // Health check to verify deployment
 app.get('/api/health', (req, res) => {
@@ -143,6 +177,58 @@ setInterval(() => {
     console.warn('[retraction-cron]', err.message);
   });
 }, RETRACTION_CRON_MS);
+
+// Auto-resolve AI-pre-validated calls/sales the company never decided on
+// before their review deadline (cahier de recette VAL-01). Same cadence as
+// the retraction cron above.
+setInterval(() => {
+  resolveExpiredPendingReviews().catch((err) => {
+    console.warn('[pending-review-cron]', err.message);
+  });
+}, RETRACTION_CRON_MS);
+
+// VAL-03: flag one random AI-resolved call per week per delegated company.
+// Checked hourly so it fires close to the 7-day mark without needing a
+// separate weekly scheduler; flagWeeklyAiAudits() itself only matches rows
+// from the last 7 days, so running it more often is harmless (a company
+// already flagged this week simply has no fresh candidate until the next).
+const AI_AUDIT_CRON_MS = 60 * 60 * 1000;
+setInterval(() => {
+  flagWeeklyAiAudits().catch((err) => {
+    console.warn('[ai-audit-cron]', err.message);
+  });
+}, AI_AUDIT_CRON_MS);
+
+// PAY-19: bill a trial phone line's recurring monthly price once its 15-day
+// trial ends; suspend it immediately on a failed/missing payment. Same hourly
+// cadence as the crons above.
+setInterval(() => {
+  billExpiredTrialLines().catch((err) => {
+    console.warn('[phone-line-billing-cron]', err.message);
+  });
+}, RETRACTION_CRON_MS);
+
+// PAY-19: release a line's number once it has been suspended for 1 month
+// without recovering, before what would have been its next billing cycle.
+setInterval(() => {
+  terminateSuspendedLines().catch((err) => {
+    console.warn('[phone-line-termination-cron]', err.message);
+  });
+}, RETRACTION_CRON_MS);
+
+// Warn companies whose wallet / minutes / tokens run short (the first check runs a minute after boot).
+const runLowResourceScan = () =>
+  scanLowResources().catch((err) => {
+    console.error('[low-resource-scan] failed:', err.message);
+  });
+setTimeout(runLowResourceScan, 60 * 1000);
+setInterval(runLowResourceScan, 15 * 60 * 1000);
+
+// Relance automatique des messages pris à l'accueil (désactivable : MESSAGE_REMINDERS_DISABLED=1).
+startMessageReminders();
+
+// Reprise des journalisations CRM et des webhooks en échec (inactif sans INTEGRATIONS_ENC_KEY).
+startIntegrationsWorker();
 
 // Handle process termination
 process.on('SIGINT', () => {

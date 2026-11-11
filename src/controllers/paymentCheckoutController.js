@@ -1,15 +1,20 @@
+import { findCompanyStripeCustomerId } from '../services/billingCustomer.js';
 import mongoose from 'mongoose';
 import CompanyPayment from '../models/CompanyPayment.js';
 import { paypalService } from '../services/paypalService.js';
 import { stripeService } from '../services/stripeService.js';
-import { fulfillMinutesPurchase, fulfillWalletDeposit } from '../services/paymentFulfillment.js';
+import { bundleBalances, fulfillBundlePurchase, fulfillMinutesPurchase, fulfillTokensPurchase, fulfillWalletDeposit } from '../services/paymentFulfillment.js';
+import { bundleAmountCents, bundleLabel, parseBundleQuantities } from '../services/bundlePurchase.js';
 import { config } from '../config/env.js';
+import { FALLBACK_PURCHASE_CURRENCY, formatAmountLabel, purchaseCurrency } from '../services/purchaseCurrency.js';
 import {
   computeMinutesPurchaseCents,
+  computeTokensPurchaseCents,
   getPlatformPricing,
 } from '../config/minutesPricing.js';
 
-const CURRENCY = (process.env.PAYMENT_CURRENCY || 'EUR').toUpperCase();
+// Le portefeuille (dépôt) reste en EUR : c'est le registre des commissions, pas un achat de produit.
+const WALLET_CURRENCY = 'EUR';
 
 function paypalReturnBase() {
   return (
@@ -65,7 +70,7 @@ function sanitizePaymentReturnUrl(url, fallback) {
   return fallback;
 }
 
-async function computeAmountCents(purpose, { amountEuros, minutes }) {
+async function computeAmountCents(purpose, { amountEuros, minutes, tokens }) {
   if (purpose === 'wallet_deposit') {
     const euros = Number(amountEuros);
     if (!Number.isFinite(euros) || euros <= 0) return null;
@@ -73,6 +78,14 @@ async function computeAmountCents(purpose, { amountEuros, minutes }) {
   }
   if (purpose === 'minutes_purchase') {
     return computeMinutesPurchaseCents(minutes);
+  }
+  if (purpose === 'tokens_purchase') {
+    return computeTokensPurchaseCents(tokens);
+  }
+  if (purpose === 'bundle_purchase') {
+    const qty = parseBundleQuantities({ minutes, tokens });
+    if (!qty) return null;
+    return bundleAmountCents(await computeMinutesPurchaseCents(qty.minutes), await computeTokensPurchaseCents(qty.tokens));
   }
   return null;
 }
@@ -84,6 +97,18 @@ async function fulfillPayment(payment) {
         m.default.findOne({ companyId: payment.companyId })
       );
       return { purpose: payment.purpose, data: { balance: wallet?.balance ?? 0 } };
+    }
+    if (payment.purpose === 'bundle_purchase') {
+      return { purpose: payment.purpose, data: await bundleBalances(payment.companyId) };
+    }
+    if (payment.purpose === 'tokens_purchase') {
+      const toks = await import('../models/TokensCompany.js').then((m) =>
+        m.default.findOne({ companyId: payment.companyId })
+      );
+      return {
+        purpose: payment.purpose,
+        data: { tokens: toks?.tokens ?? 0, purchasedTokens: toks?.purchasedTokens ?? 0 }
+      };
     }
     const mins = await import('../models/MinutesCompany.js').then((m) =>
       m.default.findOne({ companyId: payment.companyId })
@@ -99,6 +124,10 @@ async function fulfillPayment(payment) {
     result = await fulfillWalletDeposit(payment);
   } else if (payment.purpose === 'minutes_purchase') {
     result = await fulfillMinutesPurchase(payment);
+  } else if (payment.purpose === 'tokens_purchase') {
+    result = await fulfillTokensPurchase(payment);
+  } else if (payment.purpose === 'bundle_purchase') {
+    result = await fulfillBundlePurchase(payment);
   } else {
     throw new Error(`Unknown payment purpose: ${payment.purpose}`);
   }
@@ -112,6 +141,8 @@ export const paymentCheckoutController = {
   async getConfig(req, res) {
     try {
       const pricing = await getPlatformPricing();
+      // `?companyId=` : devise du pays de l'entreprise (mêmes montants dans les trois devises) ; sinon EUR.
+      const currency = req.query?.companyId ? await purchaseCurrency(req, req.query.companyId) : FALLBACK_PURCHASE_CURRENCY;
       res.json({
         success: true,
         paypal: {
@@ -123,10 +154,13 @@ export const paymentCheckoutController = {
           enabled: stripeService.isConfigured()
         },
         pricing: {
-          currency: CURRENCY,
+          currency,
           minutePacks: pricing.minutePacks,
           minutesCustomRateCents: pricing.minutesCustomRateCents,
           minutesCustomRateEuros: pricing.minutesCustomRateCents / 100,
+          tokenPacks: pricing.tokenPacks,
+          tokensCustomRateCents: pricing.tokensCustomRateCents,
+          tokensCustomRateEuros: pricing.tokensCustomRateCents / 100,
         }
       });
     } catch (error) {
@@ -137,33 +171,45 @@ export const paymentCheckoutController = {
 
   async initCheckout(req, res) {
     try {
-      const { companyId, purpose, provider, amountEuros, minutes, returnUrl, apiBaseUrl } = req.body;
+      const { companyId, purpose, provider, amountEuros, minutes, tokens, returnUrl, apiBaseUrl } = req.body;
 
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) {
         return res.status(400).json({ error: 'Valid companyId is required' });
       }
-      if (!['wallet_deposit', 'minutes_purchase'].includes(purpose)) {
-        return res.status(400).json({ error: "purpose must be 'wallet_deposit' or 'minutes_purchase'" });
+      if (!['wallet_deposit', 'minutes_purchase', 'tokens_purchase', 'bundle_purchase'].includes(purpose)) {
+        return res.status(400).json({
+          error: "purpose must be 'wallet_deposit', 'minutes_purchase', 'tokens_purchase' or 'bundle_purchase'"
+        });
       }
       if (!['stripe', 'paypal'].includes(provider)) {
         return res.status(400).json({ error: "provider must be 'stripe' or 'paypal'" });
       }
 
-      const amountCents = await computeAmountCents(purpose, { amountEuros, minutes });
+      const currency = purpose === 'wallet_deposit' ? WALLET_CURRENCY : await purchaseCurrency(req, companyId);
+      const amountCents = await computeAmountCents(purpose, { amountEuros, minutes, tokens });
       if (amountCents == null || amountCents <= 0) {
-        return res.status(400).json({ error: 'Invalid amount or minutes quantity' });
+        return res.status(400).json({ error: 'Invalid amount, minutes or tokens quantity' });
       }
 
       const quantity =
-        purpose === 'minutes_purchase' ? Number(minutes) : Number(amountEuros);
+        purpose === 'minutes_purchase'
+          ? Number(minutes)
+          : purpose === 'tokens_purchase'
+            ? Number(tokens)
+            : Number(amountEuros);
 
+      const bundle = purpose === 'bundle_purchase' ? parseBundleQuantities({ minutes, tokens }) : null;
       const payment = await CompanyPayment.create({
         companyId: new mongoose.Types.ObjectId(companyId),
         purpose,
         provider,
         amount: amountCents,
-        currency: CURRENCY,
-        quantity: purpose === 'minutes_purchase' ? quantity : undefined,
+        currency,
+        quantity:
+          purpose === 'minutes_purchase' || purpose === 'tokens_purchase'
+            ? quantity
+            : undefined,
+        ...(bundle ? { meta: { minutes: bundle.minutes, tokens: bundle.tokens } } : {}),
         status: 'pending'
       });
 
@@ -186,12 +232,16 @@ export const paymentCheckoutController = {
 
         const label =
           purpose === 'wallet_deposit'
-            ? `HARX — Crédit portefeuille ${(amountCents / 100).toFixed(2)} €`
-            : `HARX — ${quantity} minutes d'appel`;
+            ? `HARX — Crédit portefeuille ${formatAmountLabel(amountCents, currency)}`
+            : purpose === 'bundle_purchase'
+              ? bundleLabel(bundle)
+              : purpose === 'tokens_purchase'
+                ? `HARX — ${quantity.toLocaleString('fr-FR')} tokens AI`
+                : `HARX — ${quantity} minutes d'appel`;
 
         const paypalOrder = await paypalService.createOrder({
           amountCents,
-          currency: CURRENCY,
+          currency,
           description: label,
           customId: payment._id,
           returnUrl,
@@ -234,17 +284,22 @@ export const paymentCheckoutController = {
 
         const productName =
           purpose === 'wallet_deposit'
-            ? `HARX — Crédit portefeuille ${(amountCents / 100).toFixed(2)} €`
-            : `HARX — ${quantity} minutes d'appel`;
+            ? `HARX — Crédit portefeuille ${formatAmountLabel(amountCents, currency)}`
+            : purpose === 'bundle_purchase'
+              ? bundleLabel(bundle)
+              : purpose === 'tokens_purchase'
+                ? `HARX — ${quantity.toLocaleString('fr-FR')} tokens AI`
+                : `HARX — ${quantity} minutes d'appel`;
 
         try {
           const session = await stripeService.createOneShotCheckoutSession({
             amountCents,
-            currency: CURRENCY,
+            currency,
             productName,
             successUrl,
             cancelUrl,
             clientReferenceId: payment._id,
+            customerId: await findCompanyStripeCustomerId(companyId),
             metadata: { purpose, companyId: String(companyId) }
           });
 

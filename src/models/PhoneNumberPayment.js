@@ -64,7 +64,7 @@ const phoneNumberPaymentSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'succeeded', 'failed', 'refunded'],
+    enum: ['pending', 'authorized', 'succeeded', 'failed', 'refunded'],
     default: 'pending',
     index: true
   },

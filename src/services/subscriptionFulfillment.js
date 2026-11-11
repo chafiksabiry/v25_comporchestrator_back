@@ -2,6 +2,12 @@ import mongoose from 'mongoose';
 import { SubscriptionPlan } from '../models/SubscriptionPlan.js';
 import { Subscription } from '../models/Subscription.js';
 import { stripeService } from './stripeService.js';
+import { ensurePlanMinutesGranted } from './planMinutesGrant.js';
+import { ensurePlanTokensGranted } from './planTokensGrant.js';
+import { pickPlanItem } from './seats.js';
+import { subscriptionPeriod, supersededStripeSubscriptionId } from './subscriptionPeriod.js';
+import { isCallcenterMetadata } from './callcenterTier.js';
+import { priceAmounts } from './currency.js';
 
 export async function resolvePlanByPriceId(priceId) {
   let plan = await SubscriptionPlan.findOne({ stripePriceId: priceId });
@@ -29,6 +35,8 @@ export async function resolvePlanByPriceId(priceId) {
 
   let amountCents = plan ? Math.round(Number(plan.price) * 100) : null;
   let currency = (plan?.currency || 'eur').toUpperCase();
+  /** Montants par devise (mêmes montants en EUR, USD, GBP) ; vide si Stripe n'a pas répondu. */
+  let amounts = {};
 
   if (stripeService.isConfigured()) {
     try {
@@ -37,6 +45,7 @@ export async function resolvePlanByPriceId(priceId) {
       if (sp) {
         amountCents = sp.unit_amount;
         currency = (sp.currency || 'eur').toUpperCase();
+        amounts = priceAmounts(sp);
       }
     } catch (err) {
       console.warn('[subscription] Could not fetch Stripe prices:', err.message);
@@ -46,7 +55,7 @@ export async function resolvePlanByPriceId(priceId) {
   if (!plan || amountCents == null) {
     return null;
   }
-  return { plan, amountCents, currency, stripePriceId: effectivePriceId };
+  return { plan, amountCents, currency, amounts, stripePriceId: effectivePriceId };
 }
 
 /**
@@ -105,6 +114,17 @@ export async function activateCompanySubscription({
         }
       }
     );
+
+    try {
+      await ensurePlanMinutesGranted(companyId);
+    } catch (err) {
+      console.warn('[subscription] plan minutes grant failed:', err?.message || err);
+    }
+    try {
+      await ensurePlanTokensGranted(companyId);
+    } catch (err) {
+      console.warn('[subscription] plan tokens grant failed:', err?.message || err);
+    }
   }
 
   return { planName: plan.name, status, periodEnd };
@@ -134,19 +154,36 @@ export async function activateFromStripeCheckoutSession(session) {
   }
 
   const stripeSubscription = await stripeService.getSubscription(stripeSubscriptionId);
-  const priceId = stripeSubscription.items.data[0].price.id;
+  // Le forfait, pas une éventuelle ligne « siège en plus » (voir seats.js).
+  const priceId = pickPlanItem(stripeSubscription.items.data).price.id;
   const resolved = await resolvePlanByPriceId(priceId);
   if (!resolved?.plan) {
     throw new Error(`Plan not found for price ${priceId}`);
   }
 
-  const periodStart = stripeSubscription.current_period_start
-    ? new Date(stripeSubscription.current_period_start * 1000)
-    : new Date();
-  const periodEnd = stripeSubscription.current_period_end
-    ? new Date(stripeSubscription.current_period_end * 1000)
-    : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  // current_period_start/end can be absent on a subscription that hasn't
+  // billed yet (e.g. a 100%-off promo code, or a free trial) — fall back to
+  // Stripe's own stable start_date/created fields, never to `new Date()`.
+  // A wall-clock fallback makes periodGrantKey() (below) non-deterministic:
+  // two concurrent callers (the Stripe webhook + the frontend's post-redirect
+  // confirm call) would each compute a different grantKey for the exact same
+  // period and both pass ensurePlanMinutesGranted's idempotency check,
+  // double-crediting the plan's included minutes.
+  // Selon la version de l'API Stripe, les dates de période sont sur l'abonnement ou sur sa première ligne.
+  const period = subscriptionPeriod(stripeSubscription);
+  const stableStart = (period.start ? period.start.getTime() / 1000 : null)
+    || stripeSubscription.start_date
+    || stripeSubscription.created;
+  const periodStart = stableStart ? new Date(stableStart * 1000) : new Date();
+  const periodEnd = period.end
+    || (stripeSubscription.trial_end ? new Date(stripeSubscription.trial_end * 1000) : null)
+    || new Date((stableStart || Math.floor(Date.now() / 1000)) * 1000 + 30 * 24 * 60 * 60 * 1000);
 
+  // L'abonnement précédent (autre offre) est lu AVANT d'être remplacé, puis résilié APRÈS : son événement
+  // « customer.subscription.deleted » ne doit pas retrouver notre enregistrement sous son ancien identifiant.
+  // Seulement Call Centre -> Call Centre : un abonnement d'un autre produit (TaaS) n'est jamais résilié par ce changement.
+  const previousRecord = await Subscription.findOne({ userId }).populate('planId').lean();
+  const previous = isCallcenterMetadata(previousRecord?.planId?.metadata) && isCallcenterMetadata(resolved.plan.metadata) ? previousRecord : null;
   await Subscription.findOneAndUpdate(
     { userId },
     {
@@ -165,6 +202,16 @@ export async function activateFromStripeCheckoutSession(session) {
     { upsert: true, new: true }
   );
 
+  const superseded = supersededStripeSubscriptionId(previous, stripeSubscriptionId);
+  if (superseded) {
+    try {
+      await stripeService.cancelSubscription(superseded);
+      console.log(`[subscription] ancien abonnement ${superseded} résilié (remplacé par ${stripeSubscriptionId})`);
+    } catch (err) {
+      console.warn(`[subscription] résiliation de l'ancien abonnement ${superseded} impossible :`, err?.message || err);
+    }
+  }
+
   if (companyId) {
     const nameLower = resolved.plan.name.toLowerCase();
     const companySubscriptionType = nameLower.includes('starter') ? 'standard' : 'premium';
@@ -177,6 +224,17 @@ export async function activateFromStripeCheckoutSession(session) {
         }
       }
     );
+
+    try {
+      await ensurePlanMinutesGranted(companyId);
+    } catch (err) {
+      console.warn('[subscription] plan minutes grant failed:', err?.message || err);
+    }
+    try {
+      await ensurePlanTokensGranted(companyId);
+    } catch (err) {
+      console.warn('[subscription] plan tokens grant failed:', err?.message || err);
+    }
   }
 
   return { plan: resolved.plan, stripeSubscription };

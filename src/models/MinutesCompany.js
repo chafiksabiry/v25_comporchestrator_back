@@ -22,6 +22,20 @@ const minutesCompanySchema = new mongoose.Schema({
     required: true,
     default: 0
   },
+  /** Lifetime minutes credited from subscription plans (not paid packs). */
+  planMinutesGranted: {
+    type: Number,
+    required: true,
+    default: 0
+  },
+  /**
+   * Idempotency keys for plan grants — typically
+   * `${stripeSubscriptionId}:${currentPeriodStartISO}`.
+   */
+  planGrantKeys: {
+    type: [String],
+    default: []
+  },
   consumedSeconds: {
     type: Number,
     required: true,
@@ -31,10 +45,32 @@ const minutesCompanySchema = new mongoose.Schema({
   chargedCallSids: {
     type: [String],
     default: []
-  }
+  },
+  /**
+   * Dated credits: plan inclusion (subscription + renewal) and paid top-ups.
+   * Plan rows carry planName so they stay distinct from recharges.
+   */
+  credits: {
+    type: [{
+      at: { type: Date, required: true },
+      minutes: { type: Number, required: true },
+      planName: { type: String, default: '' },
+      kind: { type: String, enum: ['plan', 'recharge'], required: true },
+      grantKey: { type: String, default: '' },
+    }],
+    default: [],
+  },
 }, {
   timestamps: true
 });
+
+// Guard against duplicate plan-credit ledger rows (e.g. the Stripe webhook
+// and the frontend's post-checkout confirm call both firing for the same
+// billing period) even if an application-level race slips through.
+minutesCompanySchema.index(
+  { 'credits.grantKey': 1 },
+  { unique: true, partialFilterExpression: { 'credits.grantKey': { $type: 'string', $ne: '' } } }
+);
 
 const MinutesCompany = mongoose.model('MinutesCompany', minutesCompanySchema);
 export default MinutesCompany;

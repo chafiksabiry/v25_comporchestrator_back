@@ -27,10 +27,12 @@ const phoneNumberSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'RequirementGroup'
   },
+  // Facultatif : un numéro acheté à la mise en route d'un centre d'appels n'est rattaché à une opération (gig)
+  // qu'à la création de celle-ci (POST /phone-numbers/assign-gig).
   gigId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Gig',
-    required: true
+    required: false
   },
   companyId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -101,6 +103,37 @@ const phoneNumberSchema = new mongoose.Schema({
     default: false
   },
   trialExpiresAt: {
+    type: Date,
+    default: null
+  },
+  // PAY-19: recurring billing lifecycle once the 15-day trial ends.
+  // 'n/a' for non-trial lines (out of this ticket's scope — they only ever
+  // had the one-shot setup fee). A trial line starts 'trial', then becomes:
+  //   'active'          — first post-trial charge succeeded (Stripe subscription running)
+  //   'payment_failed'  — charge attempt failed or no payment method on file
+  //   'suspended'       — set at the same time as payment_failed; line stays
+  //                       provisioned but is given up to 1 month to recover
+  //   'terminated'      — still unpaid after 1 month, number released before
+  //                       what would have been the next billing cycle
+  billingStatus: {
+    type: String,
+    enum: ['n/a', 'trial', 'active', 'payment_failed', 'suspended', 'terminated'],
+    default: 'n/a'
+  },
+  stripeSubscriptionId: {
+    type: String,
+    sparse: true
+  },
+  paymentFailedAt: {
+    type: Date,
+    default: null
+  },
+  suspendedAt: {
+    type: Date,
+    default: null
+  },
+  // suspendedAt + 1 month — when terminateSuspendedLines() releases the number.
+  terminatesAt: {
     type: Date,
     default: null
   },

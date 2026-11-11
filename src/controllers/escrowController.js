@@ -3,16 +3,22 @@ import EscrowWallet from '../models/EscrowWallet.js';
 import EscrowTransaction from '../models/EscrowTransaction.js';
 import AgentWallet from '../models/AgentWallet.js';
 import AgentWithdrawal from '../models/AgentWithdrawal.js';
+import AgentWithdrawalOtp from '../models/AgentWithdrawalOtp.js';
+import twilio from 'twilio';
+import { config } from '../config/env.js';
 import HarxWallet from '../models/HarxWallet.js';
 import HarxCommission from '../models/HarxCommission.js';
 import MinutesCompany from '../models/MinutesCompany.js';
 import WalletCompany from '../models/WalletCompany.js';
 import WalletCompanyEntry from '../models/WalletCompanyEntry.js';
 import RepTransaction from '../models/RepTransaction.js';
+import CompanyAiDelegation from '../models/CompanyAiDelegation.js';
 import { broadcastUpdate } from '../websocket/escrowUpdates.js';
+import { notifyCompany, notifyLowResource } from '../services/companyNotificationService.js';
 import {
   RETRACTION_DAYS,
   computeRetractionEndsAt,
+  resolveRetractionDays,
   isRepShareWithdrawable,
   isRepShareInRetraction,
 } from '../utils/retraction.js';
@@ -21,6 +27,33 @@ import { clearExpiredRetractions, reverseSaleCommission } from '../services/retr
 // 70/30 split enforced server-side. Single source of truth.
 const REP_SHARE = 0.7;
 const HARX_SHARE = 0.3;
+/** VAL-03/VAL-04/VAL-05: minimum AI-agreement rate to enable or keep AI-delegated validation. */
+const AI_DELEGATION_THRESHOLD = 85;
+
+/** First finite number among candidates (supports `{ amount: n }` and numeric strings). Explicit 0 is kept. */
+function firstFiniteNumber(...candidates) {
+  for (const c of candidates) {
+    if (typeof c === 'number' && Number.isFinite(c)) return c;
+    if (typeof c === 'string' && c.trim() !== '') {
+      const n = Number(c);
+      if (Number.isFinite(n)) return n;
+    }
+    if (c && typeof c === 'object') {
+      if (typeof c.amount === 'number' && Number.isFinite(c.amount)) return c.amount;
+      if (typeof c.toString === 'function' && c._bsontype === 'Decimal128') {
+        const n = Number(c.toString());
+        if (Number.isFinite(n)) return n;
+      }
+    }
+  }
+  return undefined;
+}
+
+// APL-09 / user's 13/10 correction: calls credit immediately EXCEPT a
+// REP-declared callback request or appointment ("rdv pris pour rappel") —
+// those two still need company validation before any money moves, same as
+// a sale.
+const CALL_OUTCOMES_REQUIRING_COMPANY_APPROVAL = new Set(['appointment', 'callback_requested']);
 
 const PROSPECT_RUBRIC_KEYS = ['RDV', 'A plus tard', 'PAS INTÉRESSÉS', 'PAS AU COURANT', 'DÉJÀ ÉQUIPÉS'];
 const NON_SALE_CALLOUTCOMES = new Set([
@@ -77,21 +110,32 @@ function callHasValidatedTransactionSale(call, transaction) {
   return !!transaction && transaction.validByCompany === true;
 }
 
-/** Prefer denormalised commission fields written at AI scoring time. */
+/** Prefer gig rates (including explicit 0€). Denormalized call fields are fallback only. */
 function resolveCommissionAmounts(call, transaction, { callRate, txRate }) {
-  const callRepShare = Number(call?.repCallCommission);
-  const txRepShare = Number(
-    transaction?.repTransactionCommission ?? call?.repTransactionCommission ?? NaN
+  const callFromDoc = firstFiniteNumber(call?.repCallCommission);
+  const txFromDoc = firstFiniteNumber(
+    transaction?.repTransactionCommission,
+    call?.repTransactionCommission
   );
 
-  const callGross = callRepShare > 0 ? callRepShare / REP_SHARE : callRate;
-  const txGross = txRepShare > 0 ? txRepShare / REP_SHARE : txRate;
+  const callGross =
+    typeof callRate === 'number' && Number.isFinite(callRate)
+      ? callRate
+      : callFromDoc > 0
+        ? callFromDoc / REP_SHARE
+        : 4;
+  const txGross =
+    typeof txRate === 'number' && Number.isFinite(txRate)
+      ? txRate
+      : txFromDoc > 0
+        ? txFromDoc / REP_SHARE
+        : 30;
 
   return {
     callGross,
     txGross,
-    callRepShare: callRepShare > 0 ? callRepShare : callRate * REP_SHARE,
-    txRepShare: txRepShare > 0 ? txRepShare : txRate * REP_SHARE,
+    callRepShare: callGross * REP_SHARE,
+    txRepShare: txGross * REP_SHARE,
   };
 }
 
@@ -126,6 +170,8 @@ async function bookRepTransaction({
   meta,
   status = 'earned',
   withdrawableAt = null,
+  aiVerdict = null,
+  reviewDeadlineAt = null,
 }) {
   if (!type || !sourceId || !repId || !companyId) return null;
   const grossAmount = Number(amount || 0);
@@ -150,6 +196,8 @@ async function bookRepTransaction({
       harxShare,
       status,
       withdrawableAt: withdrawableAt || undefined,
+      aiVerdict: aiVerdict || undefined,
+      reviewDeadlineAt: reviewDeadlineAt || undefined,
       description,
       meta
     });
@@ -162,13 +210,43 @@ async function bookRepTransaction({
   }
 
   // 2. Debit company wallet — WalletCompany is the SINGLE source of truth.
-  await WalletCompany.findOneAndUpdate(
+  // Happens regardless of status: a `pending_review` row already reserves
+  // the money (cahier de recette PAY-08's "compte intermédiaire") even
+  // though the rep/HARX split below hasn't happened yet.
+  const debitedWallet = await WalletCompany.findOneAndUpdate(
     { companyId },
     { $inc: { balance: -grossAmount } },
     { new: true, upsert: true, setDefaultsOnInsert: true }
   );
+  await notifyLowResource(companyId, 'wallet', debitedWallet?.balance);
 
-  // 3. HARX 30% commission row.
+  // A sale (or a REP-declared appointment/callback) waits for the company's decision: tell the company.
+  if (status === 'pending_review') {
+    const isSale = type === 'transaction';
+    await notifyCompany({
+      companyId,
+      key: `validation-${repTx._id}`,
+      kind: 'validation',
+      title: isSale ? 'Vente à valider' : 'Rendez-vous ou rappel à valider',
+      message: `${isSale ? 'Une vente a été détectée' : 'Un REP a déclaré un rendez-vous ou un rappel'} : ${grossAmount} € en attente de votre décision${
+        reviewDeadlineAt ? ` avant le ${new Date(reviewDeadlineAt).toLocaleDateString('fr-FR')}` : ''
+      }. Sans réponse, elle sera validée automatiquement.`,
+      gigId: gigId ? String(gigId) : null,
+      actionPath: '/dashboard/calls',
+    });
+  }
+
+  // 3. HARX 30% commission row — NOT created yet for a `pending_review` hold;
+  // it's created when resolvePendingReview() settles the row (approve,
+  // refuse-is-a-no-op-here, or auto-timeout).
+  if (status !== 'pending_review') {
+    await createHarxCommissionRow({ type, amount: harxShare, repId, callId, transactionDocId, sourceId, companyId, description });
+  }
+
+  return repTx;
+}
+
+async function createHarxCommissionRow({ type, amount, repId, callId, transactionDocId, sourceId, companyId, description }) {
   const harxTypeByRep = {
     call_validated: 'call_commission',
     transaction: 'transaction_commission',
@@ -177,7 +255,7 @@ async function bookRepTransaction({
   try {
     await new HarxCommission({
       type: harxTypeByRep[type] || 'call_commission',
-      amount: harxShare,
+      amount,
       agentId: String(repId),
       callId: callId ? String(callId) : undefined,
       transactionId: transactionDocId ? String(transactionDocId) : undefined,
@@ -186,22 +264,215 @@ async function bookRepTransaction({
       description: description || `30% HARX cut on ${type}`
     }).save();
   } catch (harxErr) {
-    console.warn('[bookRepTransaction] HarxCommission write skipped:', harxErr.message);
+    console.warn('[createHarxCommissionRow] HarxCommission write skipped:', harxErr.message);
+  }
+}
+
+/**
+ * Settle a `pending_review` hold (cahier de recette PAY-08/PAY-18/VAL-01):
+ *  - 'approve' or 'timeout' -> same outcome as before (earned, or
+ *    pending_retraction for a sale with its own withdrawableAt), HARX
+ *    commission row created now.
+ *  - 'refuse' -> credits the company wallet back, no HARX row ever created.
+ * Idempotent: a row not in 'pending_review' is left untouched.
+ */
+async function resolvePendingReview(repTx, decision, { saleWithdrawableAt } = {}) {
+  if (!repTx || repTx.status !== 'pending_review') return repTx;
+
+  // VAL-03: delegation mode resolves on the AI's own verdict, with nobody
+  // having decided yet — resolvedByAi marks it, companyDecision stays unset
+  // until (if ever) a weekly audit asks the company about this exact row.
+  const isAiDelegated = decision === 'ai_delegated';
+  const effectiveDecision = isAiDelegated
+    ? (repTx.aiVerdict === 'valid' ? 'approve' : 'refuse')
+    : decision;
+  if (isAiDelegated) repTx.resolvedByAi = true;
+
+  if (effectiveDecision === 'refuse') {
+    repTx.status = 'refused';
+    if (!isAiDelegated) {
+      repTx.companyDecision = repTx.aiVerdict === 'invalid' ? 'agreed' : 'contradicted';
+    }
+    await repTx.save();
+    await WalletCompany.findOneAndUpdate(
+      { companyId: repTx.companyId },
+      { $inc: { balance: repTx.amount } },
+      { upsert: true, setDefaultsOnInsert: true }
+    );
+    return repTx;
   }
 
+  // approve, timeout, or ai_delegated-approve
+  repTx.status = repTx.type === 'transaction' ? 'pending_retraction' : 'earned';
+  if (repTx.type === 'transaction' && saleWithdrawableAt) {
+    repTx.withdrawableAt = saleWithdrawableAt;
+  }
+  if (decision === 'approve') {
+    repTx.companyDecision = repTx.aiVerdict === 'valid' ? 'agreed' : 'contradicted';
+  }
+  await repTx.save();
+  await createHarxCommissionRow({
+    type: repTx.type,
+    amount: repTx.harxShare,
+    repId: repTx.repId,
+    callId: repTx.callId,
+    transactionDocId: repTx.transactionDocId,
+    sourceId: repTx.sourceId,
+    companyId: repTx.companyId,
+    description: repTx.description
+  });
+  if (decision === 'timeout' || isAiDelegated) {
+    await notifyCompany({
+      companyId: repTx.companyId,
+      key: `auto-validated-${repTx._id}`,
+      kind: 'transaction',
+      title: decision === 'timeout' ? 'Validation automatique' : 'Transaction validée par l’IA',
+      message:
+        decision === 'timeout'
+          ? `Le délai de validation est dépassé : ${repTx.amount} € ont été validés automatiquement.`
+          : `Votre assistant IA a validé une transaction de ${repTx.amount} €. Une vérification aléatoire hebdomadaire vous sera proposée.`,
+      gigId: repTx.gigId ? String(repTx.gigId) : null,
+      actionPath: '/dashboard/calls',
+    });
+  }
   return repTx;
 }
 
 /**
- * Resolve gig commission rates for a given call. Falls back to historical
- * defaults so we never crash if a gig is mis-configured.
+ * VAL-02: share of company decisions that matched the AI's verdict, on the
+ * full volume since the start. Rows the company never actually decided on
+ * (timeout) are excluded, not counted against it.
  */
-async function resolveGigRates(call) {
+async function computeAiAgreementRate(companyId) {
+  const companyObjectId = mongoose.Types.ObjectId.isValid(companyId)
+    ? new mongoose.Types.ObjectId(companyId)
+    : companyId;
+
+  // Scoped to sale/transaction decisions only (VAL-02 to VAL-05, per the
+  // user's correction: calls credit immediately and are only ever
+  // cancelled, which is not an "AI agreement" decision the same way).
+  const counts = await RepTransaction.aggregate([
+    { $match: { companyId: companyObjectId, type: 'transaction', companyDecision: { $in: ['agreed', 'contradicted'] } } },
+    { $group: { _id: '$companyDecision', count: { $sum: 1 } } }
+  ]);
+
+  const agreed = counts.find((c) => c._id === 'agreed')?.count || 0;
+  const contradicted = counts.find((c) => c._id === 'contradicted')?.count || 0;
+  const totalDecided = agreed + contradicted;
+  const agreementRate = totalDecided > 0 ? Number(((agreed / totalDecided) * 100).toFixed(2)) : null;
+
+  return { companyId: String(companyId), agreed, contradicted, totalDecided, agreementRate };
+}
+
+/**
+ * Weekly scheduled job (cahier de recette VAL-03): for every company with
+ * AI delegation enabled, flag one random AI-resolved row from the last 7
+ * days as an audit for the company to confirm or contradict.
+ */
+export async function flagWeeklyAiAudits() {
+  const enabledCompanies = await CompanyAiDelegation.find({ enabled: true }).lean();
+  let flagged = 0;
+
+  for (const delegation of enabledCompanies) {
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+    // Already flagged (answered or not) one this week — wait for next week.
+    const alreadyFlaggedThisWeek = await RepTransaction.exists({
+      companyId: delegation.companyId,
+      resolvedByAi: true,
+      $or: [{ auditFlag: true }, { auditedAt: { $gte: weekAgo } }],
+      createdAt: { $gte: weekAgo }
+    });
+    if (alreadyFlaggedThisWeek) continue;
+
+    const candidates = await RepTransaction.aggregate([
+      {
+        $match: {
+          companyId: delegation.companyId,
+          resolvedByAi: true,
+          auditFlag: false,
+          companyDecision: { $exists: false },
+          createdAt: { $gte: weekAgo }
+        }
+      },
+      { $sample: { size: 1 } }
+    ]);
+
+    if (candidates.length) {
+      await RepTransaction.updateOne({ _id: candidates[0]._id }, { $set: { auditFlag: true } });
+      flagged += 1;
+      await notifyCompany({
+        companyId: delegation.companyId,
+        key: `ai-audit-${candidates[0]._id}`,
+        kind: 'validation',
+        title: 'Audit IA : une décision à confirmer',
+        message: 'Une décision prise par votre assistant IA cette semaine est à confirmer ou contredire.',
+        actionPath: '/dashboard/calls',
+      });
+      try {
+        broadcastUpdate({ type: 'ai_audit_flagged', companyId: String(delegation.companyId) });
+      } catch (_) { /* noop */ }
+    }
+  }
+
+  return { flagged };
+}
+
+/**
+ * Scheduled job (cahier de recette VAL-01): auto-resolve every
+ * `pending_review` hold whose `reviewDeadlineAt` has passed, exactly as if
+ * the company had approved it — the rep and HARX are paid, the company is
+ * notified. Mirrors `clearExpiredRetractions`' pattern.
+ */
+export async function resolveExpiredPendingReviews() {
+  const now = new Date();
+  const expired = await RepTransaction.find({
+    status: 'pending_review',
+    reviewDeadlineAt: { $lte: now },
+  });
+
+  if (!expired.length) return { resolved: 0 };
+
+  for (const repTx of expired) {
+    try {
+      await resolvePendingReview(repTx, 'timeout');
+      broadcastUpdate({ type: 'rep_wallet_update', repId: String(repTx.repId) });
+      broadcastUpdate({ type: 'escrow_update', companyId: String(repTx.companyId) });
+    } catch (err) {
+      console.error('[resolveExpiredPendingReviews] failed for', String(repTx._id), err.message);
+    }
+  }
+
+  return { resolved: expired.length };
+}
+
+/**
+ * Resolve gig commission rates for a given call. Falls back to historical
+ * defaults only when the gig has no numeric rate configured.
+ * Explicit 0€ rates are preserved (do not use `||` — 0 is falsy).
+ */
+async function resolveGigRates(call, preferredGigId = null) {
   const db = mongoose.connection.db;
-  const gigId = call?.lead?.gigId || call?.gigId;
+  let gigId = preferredGigId || call?.gigId || null;
+
+  // lead may be a bare ObjectId — fetch it to reach gigId.
+  if (!gigId && call?.lead) {
+    if (call.lead.gigId) {
+      gigId = call.lead.gigId;
+    } else {
+      const leadRef = call.lead._id || call.lead;
+      const leadObjectId = mongoose.Types.ObjectId.isValid(leadRef)
+        ? new mongoose.Types.ObjectId(leadRef)
+        : leadRef;
+      const leadDoc = await db.collection('leads').findOne({ _id: leadObjectId });
+      if (leadDoc?.gigId) gigId = leadDoc.gigId;
+    }
+  }
+
   let callRate = 4.0;
   let txRate = 30.0;
   let gigDoc = null;
+  let retractionDays = RETRACTION_DAYS;
 
   if (gigId) {
     const gigObjectId = mongoose.Types.ObjectId.isValid(gigId)
@@ -209,12 +480,200 @@ async function resolveGigRates(call) {
       : gigId;
     gigDoc = await db.collection('gigs').findOne({ _id: gigObjectId });
     if (gigDoc) {
-      callRate = gigDoc.commission?.commission_per_call || gigDoc.rewardPerCall || callRate;
-      txRate = gigDoc.commission?.transactionCommission || gigDoc.rewardPerSale || txRate;
+      const resolvedCall = firstFiniteNumber(
+        gigDoc.commission?.commission_per_call,
+        gigDoc.rewardPerCall
+      );
+      const resolvedTx = firstFiniteNumber(
+        gigDoc.commission?.transactionCommission,
+        gigDoc.rewardPerSale
+      );
+      if (resolvedCall !== undefined) callRate = resolvedCall;
+      if (resolvedTx !== undefined) txRate = resolvedTx;
+      retractionDays = await resolveRetractionDays(db, gigDoc);
     }
   }
 
-  return { callRate, txRate, gig: gigDoc, gigId: gigId || null };
+  return { callRate, txRate, gig: gigDoc, gigId: gigId || null, retractionDays };
+}
+
+/**
+ * Reverse a wrongly booked commission (e.g. default 4€/30€ on a 0€ gig).
+ * Refunds the company wallet and excludes the row from rep earnings.
+ * Does NOT flip transaction.validByCompany (sale signature stays).
+ */
+async function reverseWrongCommission(repTx, reason) {
+  if (!repTx || repTx.status === 'reversed' || repTx.status === 'refused') return null;
+  if (!(Number(repTx.amount) > 0)) return null;
+
+  const now = new Date();
+  repTx.status = 'reversed';
+  repTx.meta = {
+    ...(repTx.meta || {}),
+    reversedAt: now,
+    reverseReason: reason || 'Correction commission gig 0€',
+  };
+  await repTx.save();
+
+  await WalletCompany.findOneAndUpdate(
+    { companyId: repTx.companyId },
+    { $inc: { balance: Number(repTx.amount) } },
+    { upsert: true, setDefaultsOnInsert: true }
+  );
+
+  // Drop the matching HARX cut so lifetime HARX wallet no longer counts it.
+  try {
+    if (repTx.type === 'call_validated' && repTx.callId) {
+      await HarxCommission.deleteMany({
+        type: 'call_commission',
+        callId: String(repTx.callId),
+      });
+    } else if (repTx.type === 'transaction') {
+      const filter = { type: 'transaction_commission' };
+      if (repTx.transactionDocId) filter.transactionId = String(repTx.transactionDocId);
+      else if (repTx.callId) filter.callId = String(repTx.callId);
+      await HarxCommission.deleteMany(filter);
+    }
+  } catch (harxErr) {
+    console.warn('[reverseWrongCommission] HarxCommission cleanup skipped:', harxErr.message);
+  }
+
+  try {
+    broadcastUpdate({
+      type: 'rep_wallet_update',
+      repId: String(repTx.repId),
+      companyId: String(repTx.companyId),
+    });
+  } catch (_) { /* noop */ }
+
+  return repTx;
+}
+
+/**
+ * Refund company / reverse ledger rows booked at default 4€/30€ while the gig
+ * is configured at 0€.
+ */
+async function correctZeroRateOvercharges(companyId) {
+  if (!companyId) return { reversed: 0 };
+  const db = mongoose.connection.db;
+  const companyObjectId = mongoose.Types.ObjectId.isValid(companyId)
+    ? new mongoose.Types.ObjectId(companyId)
+    : companyId;
+
+  const rows = await RepTransaction.find({
+    $or: [{ companyId: companyObjectId }, { companyId: String(companyId) }],
+    status: { $in: ['earned', 'pending_retraction', 'paid'] },
+    amount: { $gt: 0 },
+    type: { $in: ['call_validated', 'transaction'] },
+  });
+
+  let reversed = 0;
+  const touchedRepIds = new Set();
+
+  for (const row of rows) {
+    let call = null;
+    if (row.callId) {
+      call = await db.collection('calls').findOne({ _id: row.callId });
+    }
+    // Sale rows use transactionId as sourceId — resolve call via transaction doc.
+    if (!call && row.transactionDocId) {
+      const txDoc = await db.collection('transactions').findOne({ _id: row.transactionDocId });
+      if (txDoc?.call) {
+        const callRef = mongoose.Types.ObjectId.isValid(txDoc.call)
+          ? new mongoose.Types.ObjectId(txDoc.call)
+          : txDoc.call;
+        call = await db.collection('calls').findOne({ _id: callRef });
+      }
+    }
+    if (!call && row.type === 'transaction' && row.sourceId && mongoose.Types.ObjectId.isValid(row.sourceId)) {
+      const txDoc = await db.collection('transactions').findOne({
+        _id: new mongoose.Types.ObjectId(row.sourceId),
+      });
+      if (txDoc?.call) {
+        const callRef = mongoose.Types.ObjectId.isValid(txDoc.call)
+          ? new mongoose.Types.ObjectId(txDoc.call)
+          : txDoc.call;
+        call = await db.collection('calls').findOne({ _id: callRef });
+      }
+    }
+    if (!call && row.type === 'call_validated' && row.sourceId && mongoose.Types.ObjectId.isValid(row.sourceId)) {
+      call = await db.collection('calls').findOne({
+        _id: new mongoose.Types.ObjectId(row.sourceId),
+      });
+    }
+
+    const { callRate, txRate } = await resolveGigRates(call, row.gigId || null);
+    // If we still have no call/gig signal, skip — don't reverse blindly.
+    if (!call && !row.gigId) {
+      console.warn(
+        '[correctZeroRateOvercharges] skip row without call/gig',
+        String(row._id),
+        row.type,
+        row.sourceId
+      );
+      continue;
+    }
+
+    const booked = Number(row.amount);
+    const expected = row.type === 'call_validated' ? callRate : txRate;
+
+    // Only auto-correct when the gig rate is explicitly 0 but money was taken.
+    if (!(expected === 0 && booked > 0)) {
+      continue;
+    }
+
+    console.log(
+      `[correctZeroRateOvercharges] reversing ${row.type} ${String(row._id)} booked=${booked} expected=${expected}`
+    );
+
+    const done = await reverseWrongCommission(
+      row,
+      `Correction auto: gig à 0€ mais commission ${booked}€ débitée`
+    );
+    if (!done) continue;
+    reversed += 1;
+    touchedRepIds.add(String(row.repId));
+
+    if (call?._id) {
+      const callUpdate = { updatedAt: new Date() };
+      if (row.type === 'call_validated') {
+        callUpdate.repCallCommission = 0;
+        callUpdate.platformCallCommission = 0;
+      } else {
+        callUpdate.repTransactionCommission = 0;
+        callUpdate.platformTransactionCommission = 0;
+        callUpdate.transaction_price = 0;
+      }
+      await db.collection('calls').updateOne({ _id: call._id }, { $set: callUpdate });
+    }
+
+    if (row.type === 'transaction' && row.transactionDocId) {
+      await db.collection('transactions').updateOne(
+        { _id: row.transactionDocId },
+        {
+          $set: {
+            repTransactionCommission: 0,
+            platformTransactionCommission: 0,
+            updatedAt: new Date(),
+          },
+        }
+      );
+    }
+  }
+
+  for (const repId of touchedRepIds) {
+    try {
+      await reconcileAgentEarnings(repId);
+    } catch (err) {
+      console.warn('[correctZeroRateOvercharges] agent reconcile skipped:', err.message);
+    }
+  }
+
+  if (reversed > 0) {
+    console.log(`[correctZeroRateOvercharges] company=${companyId} reversed=${reversed}`);
+  }
+
+  return { reversed };
 }
 
 /**
@@ -278,19 +737,49 @@ async function bookMissingEarningsForCall(call, transaction) {
     ? new mongoose.Types.ObjectId(call.agent)
     : call.agent;
 
-  const { callRate, txRate, gigId } = await resolveGigRates(call);
+  const { callRate, txRate, gigId, retractionDays } = await resolveGigRates(call);
   const { callGross, txGross, txRepShare } = resolveCommissionAmounts(call, transaction, { callRate, txRate });
   const gigObjectId = gigId && mongoose.Types.ObjectId.isValid(gigId)
     ? new mongoose.Types.ObjectId(gigId)
     : gigId || undefined;
 
+  const db = mongoose.connection.db;
   const callSourceId = String(call._id);
+
+  // A sale the AI detects needs a stable `transactions` row from the start
+  // (not only once the company decides) so the pending_review hold's
+  // sourceId never changes — retractSale/the approve endpoint both key off
+  // this doc's _id.
+  if (!transaction && call.transactionDetected && call.validByAI) {
+    const newTx = {
+      call: call._id,
+      agent: call.agent,
+      lead: call.lead,
+      gigId: call.gigId,
+      companyId,
+      validByReps: true,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    const insertRes = await db.collection('transactions').insertOne(newTx);
+    transaction = { _id: insertRes.insertedId, ...newTx };
+  }
+
   const txSourceId = String(transaction?._id || call._id);
 
   let bookedSomething = false;
 
   let callRow = await RepTransaction.findOne({ type: 'call_validated', sourceId: callSourceId });
   if (!callRow) {
+    // Calls credit immediately once the AI validates them (>30s, not
+    // voicemail/fraud/callback-pending) — the company does NOT have to
+    // approve a call first. It only gets a window to CANCEL the credit
+    // afterwards (cancelCallCommission), unlike a transaction/sale, which
+    // must be validated by the company BEFORE anything is credited.
+    //
+    // Exception: a REP-declared callback request or appointment holds
+    // instead, exactly like a sale — the company must approve it.
+    const needsCompanyApproval = CALL_OUTCOMES_REQUIRING_COMPANY_APPROVAL.has(call.callOutcome);
     callRow = await bookRepTransaction({
       type: 'call_validated',
       sourceId: callSourceId,
@@ -299,65 +788,73 @@ async function bookMissingEarningsForCall(call, transaction) {
       gigId: gigObjectId,
       callId: call._id,
       amount: callGross,
-      description: `Appel validé par l'IA — commission ${callGross}€ (70% rep / 30% HARX)`
+      status: needsCompanyApproval ? 'pending_review' : 'earned',
+      aiVerdict: 'valid',
+      reviewDeadlineAt: computeRetractionEndsAt(new Date(), retractionDays),
+      description: needsCompanyApproval
+        ? `Rendez-vous/rappel déclaré par le rep — commission ${callGross}€ en attente de validation`
+        : `Appel validé par l'IA — commission ${callGross}€ (70% rep / 30% HARX)`
     });
     if (callRow) bookedSomething = true;
   }
 
-  let txRow = null;
-  if (callHasValidatedTransactionSale(call, transaction)) {
-    txRow = await RepTransaction.findOne({ type: 'transaction', sourceId: txSourceId });
-    if (!txRow) {
-      const signedAt = transaction?.signedAt ? new Date(transaction.signedAt) : new Date();
-      const retractionEndsAt = transaction?.retractionEndsAt
-        ? new Date(transaction.retractionEndsAt)
-        : computeRetractionEndsAt(signedAt);
+  // Sales are the opposite of calls (cahier de recette VAL-01/VAL-03, as
+  // scoped to the transaction per the user's 13/10 correction): the AI
+  // detecting one does NOT credit anyone — it opens a `pending_review` hold
+  // (the compte intermédiaire) that the company must explicitly approve or
+  // refuse before any money moves to the rep/HARX, or that auto-resolves
+  // after reviewDeadlineAt (VAL-01), or immediately under AI-delegated mode
+  // (VAL-03).
+  let txRow = await RepTransaction.findOne({ type: 'transaction', sourceId: txSourceId });
 
-      txRow = await bookRepTransaction({
-        type: 'transaction',
-        sourceId: txSourceId,
-        repId,
-        companyId,
-        gigId: gigObjectId,
-        callId: call._id,
-        transactionDocId: transaction?._id,
-        amount: txGross,
-        status: 'pending_retraction',
-        withdrawableAt: retractionEndsAt,
-        description: `Vente validée — commission ${txGross}€ (rétractation ${RETRACTION_DAYS}j)`,
-        meta: {
-          signedAt,
-          retractionEndsAt,
-          retractionDays: RETRACTION_DAYS,
-        },
-      });
-      if (txRow) {
-        bookedSomething = true;
-        await syncTransactionRetractionOnSaleBooked(transaction, {
-          signedAt,
-          retractionEndsAt,
-          txRepShare,
-          txGross,
-        });
+  if (!txRow && call.transactionDetected && call.validByAI) {
+    txRow = await bookRepTransaction({
+      type: 'transaction',
+      sourceId: txSourceId,
+      repId,
+      companyId,
+      gigId: gigObjectId,
+      callId: call._id,
+      transactionDocId: transaction?._id,
+      amount: txGross,
+      status: 'pending_review',
+      aiVerdict: 'valid',
+      reviewDeadlineAt: computeRetractionEndsAt(new Date(), retractionDays),
+      description: `Vente détectée par l'IA — commission ${txGross}€ (en attente de validation)`
+    });
+    if (txRow) bookedSomething = true;
+
+    if (txRow && txRow.status === 'pending_review') {
+      const delegation = await CompanyAiDelegation.findOne({ companyId, enabled: true }).lean();
+      if (delegation) {
+        const retractionEndsAt = computeRetractionEndsAt(new Date(), retractionDays);
+        await resolvePendingReview(txRow, 'ai_delegated', { saleWithdrawableAt: retractionEndsAt });
+        if (transaction?._id) {
+          await syncTransactionRetractionOnSaleBooked(transaction, { signedAt: new Date(), retractionEndsAt, txRepShare, txGross });
+        }
       }
-    } else {
-      const signedAt = txRow.meta?.signedAt
-        ? new Date(txRow.meta.signedAt)
-        : txRow.withdrawableAt
-          ? new Date(new Date(txRow.withdrawableAt).getTime() - RETRACTION_DAYS * 24 * 60 * 60 * 1000)
-          : new Date();
-      const retractionEndsAt = txRow.withdrawableAt
-        ? new Date(txRow.withdrawableAt)
-        : computeRetractionEndsAt(signedAt);
-      const ledgerRepShare = Number(txRow.repShare);
-      const ledgerGross = Number(txRow.amount);
-      await syncTransactionRetractionOnSaleBooked(transaction, {
-        signedAt,
-        retractionEndsAt,
-        txRepShare: ledgerRepShare > 0 ? ledgerRepShare : txRepShare,
-        txGross: ledgerGross > 0 ? ledgerGross : txGross,
-      });
     }
+  } else if (txRow && txRow.status === 'pending_review' && transaction?.validByCompany === true) {
+    // The company approved via approveOrRefuseCallTransaction.
+    const retractionEndsAt = computeRetractionEndsAt(new Date(), retractionDays);
+    txRow = await resolvePendingReview(txRow, 'approve', { saleWithdrawableAt: retractionEndsAt });
+    await syncTransactionRetractionOnSaleBooked(transaction, { signedAt: new Date(), retractionEndsAt, txRepShare, txGross });
+  } else if (txRow && txRow.status === 'pending_review' && transaction?.validByCompany === false) {
+    // The company refused.
+    txRow = await resolvePendingReview(txRow, 'refuse');
+  } else if (txRow && txRow.status === 'pending_retraction') {
+    // Already resolved and in its retraction window — keep the `transactions` doc's
+    // denormalised fields in sync (legacy path, pre-dates the pending_review hold).
+    const signedAt = txRow.meta?.signedAt ? new Date(txRow.meta.signedAt) : new Date();
+    const retractionEndsAt = txRow.withdrawableAt ? new Date(txRow.withdrawableAt) : computeRetractionEndsAt(signedAt, retractionDays);
+    const ledgerRepShare = Number(txRow.repShare);
+    const ledgerGross = Number(txRow.amount);
+    await syncTransactionRetractionOnSaleBooked(transaction, {
+      signedAt,
+      retractionEndsAt,
+      txRepShare: ledgerRepShare > 0 ? ledgerRepShare : txRepShare,
+      txGross: ledgerGross > 0 ? ledgerGross : txGross,
+    });
   }
 
   // Notify the rep (and company) in real time that new commissions were booked.
@@ -445,7 +942,9 @@ export async function syncMinutesFromCalls(companyId) {
           { companyId: companyObjectId },
           { companyId: companyId }
         ],
-        duration: { $gt: 0 }
+        duration: { $gt: 0 },
+        // Les appels de test du centre ne consomment pas de minutes.
+        isTest: { $ne: true }
       },
       { projection: { sid: 1, duration: 1 } }
     ).toArray();
@@ -467,8 +966,10 @@ export async function syncMinutesFromCalls(companyId) {
     }
 
     if (newKeys.length === 0) return;
+    // Garde atomique : si une lecture concurrente a déjà inscrit l'un de ces appels, on ne débite pas deux fois
+    // (les appels restants seront repris à la lecture suivante).
     await MinutesCompany.findOneAndUpdate(
-      { companyId },
+      { companyId, chargedCallSids: { $nin: newKeys } },
       {
         $inc: {
           minutes: -addedMinutes,
@@ -597,8 +1098,10 @@ async function reconcileAgentEarnings(agentId) {
       const gig = await db.collection('gigs').findOne({ _id: gigObjectId });
       if (!gig) continue;
 
-      const callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 4.00;
-      const txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 30.00;
+      const callRate =
+        firstFiniteNumber(gig.commission?.commission_per_call, gig.rewardPerCall) ?? 4.0;
+      const txRate =
+        firstFiniteNumber(gig.commission?.transactionCommission, gig.rewardPerSale) ?? 30.0;
       const transaction = await db.collection('transactions').findOne({
         $or: [{ call: call._id }, { call: callIdStr }]
       });
@@ -659,8 +1162,10 @@ async function reconcileHarxEarnings() {
         const gig = await db.collection('gigs').findOne({ _id: gigObjectId });
 
         if (gig) {
-          const callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 4.00;
-          const txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 30.00;
+          const callRate =
+            firstFiniteNumber(gig.commission?.commission_per_call, gig.rewardPerCall) ?? 4.0;
+          const txRate =
+            firstFiniteNumber(gig.commission?.transactionCommission, gig.rewardPerSale) ?? 30.0;
 
           const callIdStr = call._id.toString();
 
@@ -760,6 +1265,22 @@ async function reconcileAgentRewards(agentId) {
       ]
     }).toArray();
 
+    // Correct 0€-gig overcharges for every company this agent worked for.
+    const companyIds = [
+      ...new Set(
+        aiValidatedCalls
+          .map((c) => (c.companyId ? String(c.companyId) : null))
+          .filter(Boolean)
+      ),
+    ];
+    for (const companyId of companyIds) {
+      try {
+        await correctZeroRateOvercharges(companyId);
+      } catch (err) {
+        console.warn('[reconcileAgentRewards] zero-rate correction skipped:', err.message);
+      }
+    }
+
     for (const call of aiValidatedCalls) {
       if (!call.agent || !call.companyId) continue;
 
@@ -781,6 +1302,9 @@ async function reconcileAgentRewards(agentId) {
 async function reconcileCompanyRewards(companyId) {
   if (!companyId) return;
   try {
+    // Refund default 4€/30€ bookings when the gig is actually configured at 0€.
+    await correctZeroRateOvercharges(companyId);
+
     const db = mongoose.connection.db;
     const companyObjectId = mongoose.Types.ObjectId.isValid(companyId)
       ? new mongoose.Types.ObjectId(companyId)
@@ -822,6 +1346,21 @@ async function reconcileCompanyRewards(companyId) {
 
 export const escrowController = {
   // Get wallet status (creates default + demo data if not exists)
+  /** PAY-17: lightweight, server-to-server balance read for the pre-call gate (no heavy reconciliation). */
+  getWalletBalance: async (req, res) => {
+    const { companyId } = req.params;
+    if (!companyId) {
+      return res.status(400).json({ error: 'companyId is required' });
+    }
+    try {
+      const walletCompany = await WalletCompany.findOne({ companyId });
+      res.status(200).json({ success: true, data: { balance: walletCompany?.balance ?? 0 } });
+    } catch (err) {
+      console.error('Error fetching wallet balance:', err);
+      res.status(500).json({ error: 'Failed to fetch wallet balance' });
+    }
+  },
+
   getWallet: async (req, res) => {
     const { companyId } = req.params;
     if (!companyId) {
@@ -1336,8 +1875,10 @@ export const escrowController = {
               const gigIdObj = mongoose.Types.ObjectId.isValid(leadDoc.gigId) ? new mongoose.Types.ObjectId(leadDoc.gigId) : leadDoc.gigId;
               const gig = await db.collection('gigs').findOne({ _id: gigIdObj });
               if (gig) {
-                callRate = gig.commission?.commission_per_call || gig.rewardPerCall || 0;
-                txRate = gig.commission?.transactionCommission || gig.rewardPerSale || 0;
+                callRate =
+                  firstFiniteNumber(gig.commission?.commission_per_call, gig.rewardPerCall) ?? 0;
+                txRate =
+                  firstFiniteNumber(gig.commission?.transactionCommission, gig.rewardPerSale) ?? 0;
               }
             }
           }
@@ -1441,7 +1982,17 @@ export const escrowController = {
 
       const isApprove = action === 'approve';
       const signedAt = new Date();
-      const retractionEndsAt = computeRetractionEndsAt(signedAt);
+      let retractionDaysForCall = RETRACTION_DAYS;
+      if (call.gigId) {
+        const callGigId = mongoose.Types.ObjectId.isValid(call.gigId)
+          ? new mongoose.Types.ObjectId(call.gigId)
+          : call.gigId;
+        const callGigDoc = await db.collection('gigs').findOne({ _id: callGigId });
+        if (callGigDoc) {
+          retractionDaysForCall = await resolveRetractionDays(db, callGigDoc);
+        }
+      }
+      const retractionEndsAt = computeRetractionEndsAt(signedAt, retractionDaysForCall);
 
       // Update calls collection document directly too!
       await db.collection('calls').updateOne(
@@ -1498,10 +2049,14 @@ export const escrowController = {
         }
       }
 
-      // Book the rep earnings (idempotent) and debit WalletCompany.balance.
-      // 70/30 split is enforced inside bookRepTransaction.
+      // This endpoint governs the TRANSACTION/sale only — a call's commission
+      // is already credited immediately when the AI validates it
+      // (bookMissingEarningsForCall) and is cancelled separately
+      // (cancelCallCommission), not approved/refused here. Both approve AND
+      // refuse must run the booking pass: refuse resolves the pending_review
+      // hold (credits the company back, no HARX row), approve releases it.
       let bookedRepTx = { call: null, transaction: null };
-      if (isApprove && call.agent) {
+      if (call.agent) {
         try {
           bookedRepTx = await bookEarningsForApprovedCall(call, transaction);
         } catch (bookErr) {
@@ -1596,8 +2151,14 @@ export const escrowController = {
           gig: gigDoc ? {
             _id: gigDoc._id,
             title: gigDoc.title || gigDoc.name,
-            commission_per_call: gigDoc.commission?.commission_per_call || gigDoc.rewardPerCall,
-            transactionCommission: gigDoc.commission?.transactionCommission || gigDoc.rewardPerSale
+            commission_per_call: firstFiniteNumber(
+              gigDoc.commission?.commission_per_call,
+              gigDoc.rewardPerCall
+            ),
+            transactionCommission: firstFiniteNumber(
+              gigDoc.commission?.transactionCommission,
+              gigDoc.rewardPerSale
+            ),
           } : null
         };
       });
@@ -1644,9 +2205,13 @@ export const escrowController = {
         : companyId;
 
       const { type, status, gigId, limit = 200 } = req.query;
-      const filter = { companyId: companyObjectId };
+      const filter = {
+        $or: [{ companyId: companyObjectId }, { companyId: String(companyId) }],
+      };
       if (type) filter.type = type;
+      // By default hide reversed/refused corrections so the wallet table matches cash.
       if (status) filter.status = status;
+      else filter.status = { $nin: ['reversed', 'refused'] };
       if (gigId && gigId !== 'all' && mongoose.Types.ObjectId.isValid(gigId)) {
         filter.gigId = new mongoose.Types.ObjectId(gigId);
       }
@@ -1843,8 +2408,47 @@ export const escrowController = {
     }
   },
 
+  /** PAY-11: send a real, randomly-generated, short-lived SMS code before a withdrawal can be confirmed. */
+  requestAgentWithdrawalOtp: async (req, res) => {
+    const { agentId } = req.body;
+    if (!agentId) {
+      return res.status(400).json({ error: 'agentId is required' });
+    }
+
+    try {
+      const db = mongoose.connection.db;
+      const agentDoc = await db.collection('agents').findOne({ _id: new mongoose.Types.ObjectId(agentId) });
+      const phone = agentDoc?.personalInfo?.phone;
+      if (!phone) {
+        return res.status(400).json({ error: 'No phone number on file for this agent', code: 'NO_PHONE_ON_FILE' });
+      }
+
+      if (!config.twilioAccountSid || !config.twilioAuthToken || !config.twilioPhoneNumber) {
+        console.error('Missing Twilio configuration for withdrawal OTP (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_PHONE_NUMBER)');
+        return res.status(500).json({ error: 'SMS verification is not configured' });
+      }
+
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+      await AgentWithdrawalOtp.create({ agentId, code, expiresAt });
+
+      const client = twilio(config.twilioAccountSid, config.twilioAuthToken);
+      await client.messages.create({
+        to: phone,
+        from: config.twilioPhoneNumber,
+        body: `HARX : votre code de confirmation de retrait est ${code}. Il expire dans 5 minutes.`,
+      });
+
+      res.status(200).json({ success: true, message: 'Code sent' });
+    } catch (err) {
+      console.error('Error sending withdrawal OTP:', err);
+      res.status(500).json({ error: 'Failed to send verification code' });
+    }
+  },
+
   requestAgentWithdrawal: async (req, res) => {
-    const { agentId, amount, method, methodDetails, description, companyId } = req.body;
+    const { agentId, amount, method, methodDetails, description, companyId, code } = req.body;
     const MIN_WITHDRAWAL_AMOUNT = 1;
     if (!agentId || !amount || amount <= 0 || !method) {
       return res.status(400).json({ error: 'agentId, positive amount, and method are required' });
@@ -1859,7 +2463,25 @@ export const escrowController = {
       });
     }
 
+    if (!code || typeof code !== 'string') {
+      return res.status(400).json({ error: 'Verification code is required', code: 'OTP_REQUIRED' });
+    }
+
     try {
+      // 0. Verify the SMS code sent by requestAgentWithdrawalOtp — the most
+      // recent unconsumed, unexpired code for this agent must match exactly.
+      const otp = await AgentWithdrawalOtp.findOne({
+        agentId,
+        consumedAt: null,
+        expiresAt: { $gt: new Date() },
+      }).sort({ createdAt: -1 });
+
+      if (!otp || otp.code !== code.trim()) {
+        return res.status(400).json({ error: 'Code de vérification incorrect ou expiré.', code: 'OTP_INVALID' });
+      }
+      otp.consumedAt = new Date();
+      await otp.save();
+
       // 1. Book any missing commissions, then reconcile balance
       await reconcileAgentRewards(agentId);
       const wallet = await reconcileAgentEarnings(agentId);
@@ -1972,6 +2594,7 @@ export const escrowController = {
         return res.status(400).json({ error: 'Company ID is required' });
       }
 
+      const zeroRateFix = await correctZeroRateOvercharges(companyId);
       await reconcilePendingTransactions(companyId);
       await reconcileCallCharges(companyId);
       await reconcileCompanyRewards(companyId);
@@ -1980,7 +2603,11 @@ export const escrowController = {
       // Broadcast update via WebSocket (single-arg payload; clients filter by companyId)
       broadcastUpdate({ type: 'reconciliation_complete', companyId });
 
-      res.status(200).json({ success: true, message: 'Reconciliation triggered' });
+      res.status(200).json({
+        success: true,
+        message: 'Reconciliation triggered',
+        zeroRateCommissionsReversed: zeroRateFix?.reversed || 0,
+      });
     } catch (err) {
       console.error('Error triggering reconciliation:', err);
       res.status(500).json({ error: 'Failed to trigger reconciliation' });
@@ -1988,6 +2615,52 @@ export const escrowController = {
   },
 
   /** Company signals a client retraction on a validated sale. */
+  // Company cancels an already-credited call commission, within its
+  // cancellation window (reviewDeadlineAt — same country-based delay as a
+  // sale's retraction window). The AI credits the call immediately; this
+  // is the company's opt-out, not a pre-credit approval.
+  cancelCallCommission: async (req, res) => {
+    const { callId } = req.params;
+    const { reason } = req.body || {};
+    if (!callId) {
+      return res.status(400).json({ error: 'callId is required' });
+    }
+
+    try {
+      const repTx = await RepTransaction.findOne({ type: 'call_validated', sourceId: String(callId) });
+      if (!repTx) {
+        return res.status(404).json({ error: 'No call commission found for this call' });
+      }
+      if (repTx.status === 'reversed' || repTx.status === 'refused') {
+        return res.status(409).json({ error: 'Commission already cancelled' });
+      }
+      if (repTx.reviewDeadlineAt && new Date(repTx.reviewDeadlineAt).getTime() <= Date.now()) {
+        return res.status(410).json({ error: 'Cancellation window has expired for this call' });
+      }
+
+      repTx.status = 'reversed';
+      repTx.companyDecision = 'contradicted';
+      repTx.meta = { ...(repTx.meta || {}), cancelledAt: new Date(), cancelReason: reason || 'Annulé par l\'entreprise' };
+      await repTx.save();
+
+      await WalletCompany.findOneAndUpdate(
+        { companyId: repTx.companyId },
+        { $inc: { balance: repTx.amount } },
+        { upsert: true, setDefaultsOnInsert: true }
+      );
+
+      // Void the 30% HARX cut that was booked alongside the credit.
+      await HarxCommission.deleteOne({ type: 'call_commission', callId: String(callId) });
+
+      await reconcileAgentEarnings(repTx.repId);
+
+      res.status(200).json({ success: true, data: repTx });
+    } catch (err) {
+      console.error('Error cancelling call commission:', err);
+      res.status(500).json({ error: 'Failed to cancel call commission' });
+    }
+  },
+
   retractSale: async (req, res) => {
     const { transactionId } = req.params;
     const { companyId, reason } = req.body;
@@ -2012,6 +2685,175 @@ export const escrowController = {
       const status = err.statusCode || 500;
       if (status >= 500) console.error('Error retracting sale:', err);
       res.status(status).json({ error: err.message || 'Failed to retract sale' });
+    }
+  },
+
+  // Pending AI-prevalidated calls/sales the company hasn't decided on yet —
+  // for the login popup (cahier de recette VAL-01).
+  getPendingReviews: async (req, res) => {
+    const { companyId } = req.params;
+    if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    try {
+      const rows = await RepTransaction.find({ companyId, status: 'pending_review' })
+        .sort({ reviewDeadlineAt: 1 })
+        .lean();
+      res.status(200).json({ success: true, data: rows });
+    } catch (err) {
+      console.error('Error fetching pending reviews:', err);
+      res.status(500).json({ error: 'Failed to fetch pending reviews' });
+    }
+  },
+
+  // AI-agreement rate (cahier de recette VAL-02): share of company decisions
+  // that matched the AI's verdict, over the full volume since the start.
+  // Rows resolved by timeout count neither for nor against (the company
+  // never actually decided).
+  getAiAgreementRate: async (req, res) => {
+    const { companyId } = req.params;
+    if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    try {
+      const data = await computeAiAgreementRate(companyId);
+      res.status(200).json({ success: true, data });
+    } catch (err) {
+      console.error('Error computing AI agreement rate:', err);
+      res.status(500).json({ error: 'Failed to compute AI agreement rate' });
+    }
+  },
+
+  // VAL-03/VAL-04: turn AI-delegated validation on (refused below the 85%
+  // threshold) or off.
+  getAiDelegation: async (req, res) => {
+    const { companyId } = req.params;
+    if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    try {
+      const rate = await computeAiAgreementRate(companyId);
+      const settings = await CompanyAiDelegation.findOne({ companyId }).lean();
+      res.status(200).json({
+        success: true,
+        data: {
+          enabled: settings?.enabled || false,
+          auditFrequency: settings?.auditFrequency || 'weekly',
+          threshold: AI_DELEGATION_THRESHOLD,
+          ...rate
+        }
+      });
+    } catch (err) {
+      console.error('Error fetching AI delegation settings:', err);
+      res.status(500).json({ error: 'Failed to fetch AI delegation settings' });
+    }
+  },
+
+  setAiDelegation: async (req, res) => {
+    const { companyId } = req.params;
+    const { enabled } = req.body;
+    if (!companyId || typeof enabled !== 'boolean') {
+      return res.status(400).json({ error: 'companyId and a boolean enabled are required' });
+    }
+    try {
+      if (enabled) {
+        const rate = await computeAiAgreementRate(companyId);
+        if (!(rate.agreementRate >= AI_DELEGATION_THRESHOLD)) {
+          return res.status(400).json({
+            error: 'AI_AGREEMENT_RATE_TOO_LOW',
+            message: `Taux d'accord actuel ${rate.agreementRate ?? 0} % — le seuil de ${AI_DELEGATION_THRESHOLD} % n'est pas atteint.`,
+            data: rate
+          });
+        }
+      }
+
+      const update = enabled
+        ? { enabled: true, enabledAt: new Date(), disabledAt: null, disabledReason: null }
+        : { enabled: false, disabledAt: new Date(), disabledReason: 'manual' };
+
+      const settings = await CompanyAiDelegation.findOneAndUpdate(
+        { companyId },
+        { $set: update },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      );
+      res.status(200).json({ success: true, data: settings });
+    } catch (err) {
+      console.error('Error updating AI delegation settings:', err);
+      res.status(500).json({ error: 'Failed to update AI delegation settings' });
+    }
+  },
+
+  // VAL-03: this company's currently flagged audit rows, to review.
+  getAiAudits: async (req, res) => {
+    const { companyId } = req.params;
+    if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    try {
+      const rows = await RepTransaction.find({ companyId, auditFlag: true, companyDecision: { $exists: false } })
+        .sort({ createdAt: -1 })
+        .lean();
+      res.status(200).json({ success: true, data: rows });
+    } catch (err) {
+      console.error('Error fetching AI audits:', err);
+      res.status(500).json({ error: 'Failed to fetch AI audits' });
+    }
+  },
+
+  // VAL-05: the company confirms or contradicts an audited row. A
+  // contradiction that drops the agreement rate below the threshold
+  // auto-disables AI delegation.
+  respondToAiAudit: async (req, res) => {
+    const { repTransactionId } = req.params;
+    const { confirm } = req.body; // true = agrees with the AI, false = contradicts
+    if (!repTransactionId || typeof confirm !== 'boolean') {
+      return res.status(400).json({ error: 'repTransactionId and a boolean confirm are required' });
+    }
+    try {
+      const repTx = await RepTransaction.findById(repTransactionId);
+      if (!repTx || !repTx.auditFlag) {
+        return res.status(404).json({ error: 'Audit row not found' });
+      }
+      if (repTx.companyDecision) {
+        return res.status(409).json({ error: 'Audit already answered' });
+      }
+
+      repTx.companyDecision = confirm ? 'agreed' : 'contradicted';
+      repTx.auditedAt = new Date();
+      await repTx.save();
+
+      let delegationDisabled = false;
+      if (!confirm) {
+        const rate = await computeAiAgreementRate(repTx.companyId);
+        if (rate.agreementRate !== null && rate.agreementRate < AI_DELEGATION_THRESHOLD) {
+          await CompanyAiDelegation.findOneAndUpdate(
+            { companyId: repTx.companyId },
+            { $set: { enabled: false, disabledAt: new Date(), disabledReason: 'audit_contradiction' } }
+          );
+          delegationDisabled = true;
+        }
+      }
+
+      res.status(200).json({ success: true, data: { repTransaction: repTx, delegationDisabled } });
+    } catch (err) {
+      console.error('Error responding to AI audit:', err);
+      res.status(500).json({ error: 'Failed to respond to AI audit' });
+    }
+  },
+
+  /** APL-09: company approves/refuses a REP-declared callback/appointment held as pending_review. */
+  approveOrRefuseCallCommission: async (req, res) => {
+    const { repTransactionId } = req.params;
+    const { action } = req.body; // 'approve' or 'refuse'
+    if (!repTransactionId || (action !== 'approve' && action !== 'refuse')) {
+      return res.status(400).json({ error: 'repTransactionId and action ("approve"|"refuse") are required' });
+    }
+    try {
+      const repTx = await RepTransaction.findById(repTransactionId);
+      if (!repTx || repTx.type !== 'call_validated') {
+        return res.status(404).json({ error: 'Call commission not found' });
+      }
+      if (repTx.status !== 'pending_review') {
+        return res.status(409).json({ error: 'This commission is not awaiting review' });
+      }
+
+      const resolved = await resolvePendingReview(repTx, action);
+      res.status(200).json({ success: true, data: resolved });
+    } catch (err) {
+      console.error('Error approving/refusing call commission:', err);
+      res.status(500).json({ error: 'Failed to process call commission decision' });
     }
   },
 

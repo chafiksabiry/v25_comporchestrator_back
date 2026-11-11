@@ -16,6 +16,7 @@ export const config = {
   requirementGroupExpiration: parseInt(process.env.REQUIREMENT_GROUP_EXPIRATION) || 90 * 24 * 60 * 60 * 1000,
   twilioAccountSid: process.env.TWILIO_ACCOUNT_SID,
   twilioAuthToken: process.env.TWILIO_AUTH_TOKEN,
+  twilioPhoneNumber: process.env.TWILIO_PHONE_NUMBER,
   stripeSecretKey: process.env.STRIPE_SECRET_KEY,
   stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
   /** Public API base injected into stripe-return.html (?apiBase=). Must include /api. */
@@ -35,8 +36,26 @@ export const config = {
   stripePriceStarter: process.env.STRIPE_PRICE_STARTER || 'price_starter_placeholder',
   stripePriceGrowth: process.env.STRIPE_PRICE_GROWTH || 'price_growth_placeholder',
   stripePriceScale: process.env.STRIPE_PRICE_SCALE || 'price_scale_placeholder',
+  // PAY-19: recurring monthly price charged once a phone line's 15-day free
+  // trial ends. Distinct from PHONE_LINE_SETUP_FEE_CENTS (one-shot, paid at
+  // acquisition for non-trial lines).
+  stripePricePhoneLine: process.env.STRIPE_PRICE_PHONE_LINE || 'price_phone_line_placeholder',
+  phoneLineMonthlyPriceCents: parseInt(process.env.PHONE_LINE_MONTHLY_PRICE_CENTS || '999', 10),
+  // Royaume-Uni : dossier réglementaire Twilio « United Kingdom: Local - Business » (approuvé) et son adresse. Tant que ces deux
+  // variables sont vides, la recherche de numéros +44 répond « dossier requis » (rien n'est vendu sans dossier approuvé).
+  // Numéros de l'inventaire Twilio à ne JAMAIS proposer à la vente (numéros propres de HARX, séparés par des virgules, format E.164).
+  twilioInventoryExclude: String(process.env.TWILIO_INVENTORY_EXCLUDE || '')
+    .split(',').map((x) => x.trim()).filter(Boolean),
+  twilioGbBundleSid: process.env.TWILIO_GB_BUNDLE_SID || '',
+  twilioGbAddressSid: process.env.TWILIO_GB_ADDRESS_SID || '',
   twilioFrenchBundleSid: process.env.TWILIO_FRENCH_BUNDLE_SID || 'BUf007aeefc1a71ad9ac096a4d205563b0',
   twilioFrenchAddressSid: process.env.TWILIO_FRENCH_ADDRESS_SID || 'ADfa022505e9b0433a23c8b4f6e56cf15a',
+  // Dossier « France: National - Business » (approuvé) et son adresse : requis pour les numéros que Twilio classe « national » (ex. +33 1 62 04).
+  // Clés de notification push Twilio (console Twilio > Voice > Push Credentials) : APNs VoIP pour iOS, FCM pour Android.
+  twilioPushCredentialSidIos: process.env.TWILIO_PUSH_CREDENTIAL_SID_IOS || '',
+  twilioPushCredentialSidAndroid: process.env.TWILIO_PUSH_CREDENTIAL_SID_ANDROID || '',
+  twilioFrenchNationalBundleSid: process.env.TWILIO_FRENCH_NATIONAL_BUNDLE_SID || 'BUe5aead3361e804e3aa18d455178dd069',
+  twilioFrenchNationalAddressSid: process.env.TWILIO_FRENCH_NATIONAL_ADDRESS_SID || 'AD5d0160ef54cf901e419ac73e873b970e',
   twilioFrenchBusinessInfo: {
     businessName: 'AI AGENTS & CO',
     registrationNumber: '942597915',

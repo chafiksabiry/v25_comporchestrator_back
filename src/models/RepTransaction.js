@@ -68,13 +68,40 @@ const repTransactionSchema = new mongoose.Schema({
 
   status: {
     type: String,
-    enum: ['earned', 'pending_retraction', 'paid', 'refused', 'reversed'],
+    enum: ['pending_review', 'earned', 'pending_retraction', 'paid', 'refused', 'reversed'],
     default: 'earned',
     index: true
   },
 
   /** Sale commissions become withdrawable after the retraction window. */
   withdrawableAt: { type: Date, required: false, index: true },
+
+  /**
+   * What the AI proposed ('valid' | 'invalid'). Basis for the company's
+   * AI-agreement rate (VAL-02).
+   */
+  aiVerdict: { type: String, enum: ['valid', 'invalid'], required: false },
+  /**
+   * `call_validated` rows: the deadline by which the company can still
+   * cancel an already-credited call commission (cancelCallCommission).
+   * Calls credit immediately on AI validation — this is a cancellation
+   * window, not an approval deadline (see bookMissingEarningsForCall).
+   * `transaction` rows awaiting `pending_review` (not currently created —
+   * sales are still gated on explicit company approval) would use the
+   * same field as their original approval-deadline meaning.
+   */
+  reviewDeadlineAt: { type: Date, required: false, index: true },
+  companyDecision: { type: String, enum: ['agreed', 'contradicted'], required: false },
+
+  /**
+   * VAL-03: true when the AI resolved this row on its own (delegation
+   * mode) without the company deciding. VAL-03/VAL-05: a weekly job flags
+   * one such row as `auditFlag` for the company to confirm/contradict —
+   * that response sets `companyDecision` and counts in the agreement rate.
+   */
+  resolvedByAi: { type: Boolean, default: false },
+  auditFlag: { type: Boolean, default: false, index: true },
+  auditedAt: { type: Date, required: false },
 
   description: { type: String },
   meta: { type: mongoose.Schema.Types.Mixed }
