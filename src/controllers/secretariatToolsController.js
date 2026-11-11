@@ -4,6 +4,7 @@ import FollowUpItem from '../models/FollowUpItem.js';
 import { canManage } from '../services/followUps.js';
 import { buildCalendarIcs } from '../services/ics.js';
 import { isVisioUrl } from '../services/visio.js';
+import { purgeInboundEmails } from '../services/inboundEmailStore.js';
 import { connectedProviders } from '../services/secretariatConnections.js';
 import {
   feedTokenMatches, feedUrlFor, hashFeedToken, isFeedTokenShape, loadTools, newFeedToken, toView, validateToolsPatch,
@@ -42,6 +43,8 @@ export const secretariatToolsController = {
       const checked = validateToolsPatch(req.body, await loadTools(companyId), external ? await connectedProviders(companyId) : new Set());
       if (checked.error) return fail(res, 400, checked.error);
       const doc = await SecretariatTools.findOneAndUpdate({ companyId }, { $set: checked.set }, { upsert: true, new: true, setDefaultsOnInsert: true }).lean();
+      // Désactivation des e-mails entrants : lecture arrêtée (réglage déjà écrit) puis purge immédiate de tous les e-mails stockés du centre.
+      if (checked.set['inbound.enabled'] === false) await purgeInboundEmails(companyId);
       res.json({ success: true, data: toView(doc) });
     } catch (error) {
       console.error('secretariat tools update:', error.message);

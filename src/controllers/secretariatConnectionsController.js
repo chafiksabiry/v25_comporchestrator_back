@@ -37,7 +37,11 @@ export const secretariatConnectionsController = {
       const returnTo = req.body?.returnTo === undefined ? 'tools' : req.body.returnTo;
       if (!RETURN_TO.includes(returnTo)) return fail(res, 400, 'Page de retour invalide.');
       if (!isAvailable(provider)) return fail(res, 409, messages.unavailable(provider));
-      const url = startAuthorization({ companyId: String(companyId), userId: req.companyAccess.userId, provider, returnTo });
+      // `read: true` : demande en plus le scope (optionnel) de lecture de la boîte de réception (e-mails entrants).
+      const read = req.body?.read === undefined ? false : req.body.read;
+      if (typeof read !== 'boolean') return fail(res, 400, 'Le champ « read » doit être vrai ou faux.');
+      if (read && !['google', 'microsoft'].includes(provider)) return fail(res, 400, 'La lecture des e-mails n’est pas disponible pour ce fournisseur.');
+      const url = startAuthorization({ companyId: String(companyId), userId: req.companyAccess.userId, provider, returnTo, read });
       res.json({ success: true, data: { url } });
     } catch (error) {
       if (error instanceof SecretariatError) return fail(res, error.code === 'unavailable' ? 409 : 500, error.message);

@@ -29,6 +29,11 @@ const schema = new mongoose.Schema(
     },
     /** Fuseau IANA par défaut des rendez-vous du centre ('' = non réglé : Europe/Paris). */
     timeZone: { type: String, default: '', maxlength: 64 },
+    /** E-mails entrants (lecture de la messagerie connectée) : désactivé par défaut ; `lastSyncAt` = dernière lecture chez le fournisseur. */
+    inbound: {
+      enabled: { type: Boolean, default: false },
+      lastSyncAt: { type: Date, default: null },
+    },
     agendaFeed: {
       tokenHash: { type: String, default: null },
       createdAt: { type: Date, default: null },
