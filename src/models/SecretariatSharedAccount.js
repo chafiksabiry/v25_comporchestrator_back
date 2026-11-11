@@ -5,7 +5,7 @@ import mongoose from 'mongoose';
  * « Équipe commerciale »…), connecté par le titulaire, plusieurs par société. Distinct de `SecretariatConnection`, qui reste la
  * connexion unique par fournisseur de la société (comportement inchangé).
  * `permissions` dit ce que les secrétaires peuvent faire avec ce compte : envoyer des e-mails en son nom (`send`), consulter et
- * gérer son agenda (`calendar`). AUCUNE lecture de boîte de réception (périmètre Google restreint non demandé).
+ * gérer son agenda (`calendar`). AUCUNE lecture de boîte de réception pour un compte partagé (périmètre Google restreint non demandé) ; seule une messagerie PERSONNELLE peut, par choix de sa propriétaire, activer la lecture (`inbound`).
  * `personalUserId` renseigné = messagerie PERSONNELLE d'une secrétaire (droits fixes envoi + agenda), invisible du titulaire et des autres secrétaires.
  * Les jetons ne sont jamais en clair : `credentialsEnc` = AES-256-GCM, contexte authentifié « secretariat-shared:<société>:<compte> ».
  */
@@ -27,6 +27,14 @@ const schema = new mongoose.Schema(
     connectedBy: { type: String, default: '' },
     /** Messagerie PERSONNELLE d'une secrétaire : identifiant de son propriétaire (null = compte partagé par le titulaire). Jamais visible d'un autre. */
     personalUserId: { type: String, default: null },
+    /**
+     * Lecture des e-mails REÇUS de la messagerie PERSONNELLE (jamais pour un compte partagé). `readEnabled` : la secrétaire a donné le consentement de lecture
+     * (gmail.readonly / Mail.Read, séparé de l'envoi) ET n'a pas arrêté la lecture ; `lastSyncAt` : dernière lecture chez le fournisseur.
+     */
+    inbound: {
+      readEnabled: { type: Boolean, default: false },
+      lastSyncAt: { type: Date, default: null },
+    },
   },
   { timestamps: true, collection: 'secretariat_shared_accounts' }
 );

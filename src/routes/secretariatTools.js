@@ -2,7 +2,7 @@ import express from 'express';
 import { secretariatToolsController as c } from '../controllers/secretariatToolsController.js';
 import { secretariatConnectionsController as cx } from '../controllers/secretariatConnectionsController.js';
 import { secretariatAccountsController as ac } from '../controllers/secretariatAccountsController.js';
-import { inboundEmailsController as ib } from '../controllers/inboundEmailsController.js';
+import { inboundEmailsController as ib, mineInboundController as mi } from '../controllers/inboundEmailsController.js';
 import { callQueuesController as q } from '../controllers/callQueuesController.js';
 import { receptionLineController as rl } from '../controllers/receptionLineController.js';
 import { authenticate } from '../middleware/auth.js';
@@ -32,6 +32,17 @@ router.post('/inbound-emails/:companyId/archive-many', authenticate, requireComp
 // Comptes partagés avec les secrétaires (boîte / agenda d'un patron ou collègue) : titulaire/responsable gèrent, une secrétaire ne voit que les comptes autorisés (contrôleur + service).
 router.get('/accounts/:companyId', authenticate, requireCompanyParam, ac.list);
 // Messagerie PERSONNELLE de la secrétaire (SA boîte, visible d'elle seule) : déclarée AVANT les routes à paramètres pour ne jamais être capturée par elles.
+// E-mails REÇUS de SA messagerie personnelle (lecture optionnelle, secrétaire seulement, identité = session ; tout autre appelant : « introuvable »).
+router.get('/accounts/:companyId/mine/inbound', authenticate, requireCompanyParam, mi.state);
+router.post('/accounts/:companyId/mine/inbound/:accountId/enable', authenticate, requireCompanyParam, mi.enable);
+router.post('/accounts/:companyId/mine/inbound/:accountId/stop', authenticate, requireCompanyParam, mi.stop);
+router.get('/accounts/:companyId/mine/inbound/:accountId/emails', authenticate, requireCompanyParam, mi.list);
+router.post('/accounts/:companyId/mine/inbound/:accountId/refresh', authenticate, requireCompanyParam, mi.refresh);
+router.post('/accounts/:companyId/mine/inbound/:accountId/delete-many', authenticate, requireCompanyParam, mi.deleteMany);
+router.post('/accounts/:companyId/mine/inbound/:accountId/archive-many', authenticate, requireCompanyParam, mi.archiveMany);
+router.get('/accounts/:companyId/mine/inbound/:accountId/emails/:id/body', authenticate, requireCompanyParam, mi.body);
+router.patch('/accounts/:companyId/mine/inbound/:accountId/emails/:id', authenticate, requireCompanyParam, mi.update);
+router.delete('/accounts/:companyId/mine/inbound/:accountId/emails/:id', authenticate, requireCompanyParam, mi.remove);
 router.post('/accounts/:companyId/mine/:provider/start', authenticate, requireCompanyParam, ac.startMine);
 router.delete('/accounts/:companyId/mine/:accountId', authenticate, requireCompanyParam, ac.removeMine);
 router.post('/accounts/:companyId/:provider/start', authenticate, requireCompanyParam, ac.start);

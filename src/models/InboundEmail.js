@@ -11,6 +11,13 @@ export const INBOUND_TTL_SECONDS = 30 * 24 * 3600;
 const schema = new mongoose.Schema(
   {
     companyId: { type: mongoose.Schema.Types.ObjectId, required: true },
+    /**
+     * PORTÉE. null / absent = e-mail de la boîte de l'ENTREPRISE (comportement historique). Renseigné = e-mail de la messagerie PERSONNELLE d'une secrétaire :
+     * `ownerUserId` = sa personne (identifiant de la session), `accountId` = son compte (SecretariatSharedAccount). Un tel e-mail n'est lisible que par elle :
+     * TOUTE requête de la vue entreprise filtre `ownerUserId: null`, TOUTE requête personnelle filtre `ownerUserId` ET `accountId`.
+     */
+    ownerUserId: { type: String, default: null },
+    accountId: { type: mongoose.Schema.Types.ObjectId, default: null },
     provider: { type: String, enum: ['google', 'microsoft'], required: true },
     providerMessageId: { type: String, required: true, maxlength: 512 },
     fromName: { type: String, default: '', maxlength: 120 },
@@ -30,8 +37,9 @@ const schema = new mongoose.Schema(
   { timestamps: true, collection: 'secretariat_inbound_emails' }
 );
 
-schema.index({ companyId: 1, providerMessageId: 1 }, { unique: true });
-schema.index({ companyId: 1, receivedAt: -1 });
+// Unicité par portée (entreprise : ownerUserId et accountId nuls). L'ancien index unique { companyId, providerMessageId } doit être supprimé en base (voir la note de livraison).
+schema.index({ companyId: 1, ownerUserId: 1, accountId: 1, providerMessageId: 1 }, { unique: true });
+schema.index({ companyId: 1, ownerUserId: 1, accountId: 1, receivedAt: -1 });
 schema.index({ fetchedAt: 1 }, { expireAfterSeconds: INBOUND_TTL_SECONDS });
 
 export default mongoose.models.InboundEmail || mongoose.model('InboundEmail', schema);

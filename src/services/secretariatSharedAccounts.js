@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import SecretariatSharedAccount from '../models/SecretariatSharedAccount.js';
 import { disconnectSharedAccount, messages, SHARED_LABEL_MAX, sharedReauthMessage, withConnection } from './secretariatConnections.js';
-import { SecretariatError } from './secretariatProviders/common.js';
+import { hasReadScope, SecretariatError } from './secretariatProviders/common.js';
 import { PROVIDERS } from './secretariatProviders/index.js';
 import { DEFAULT_TIME_ZONE, normalizeTimeZone, UNKNOWN_TIME_ZONE_MESSAGE } from './timeZone.js';
 
@@ -14,7 +14,8 @@ import { DEFAULT_TIME_ZONE, normalizeTimeZone, UNKNOWN_TIME_ZONE_MESSAGE } from 
  *    jamais listée au titulaire / aux responsables ni aux autres secrétaires, jamais modifiable par eux ; non autorisé = « introuvable » ;
  *  - un compte à reconnecter répond 409 `account_needs_reauth` : jamais de repli sur un autre compte ;
  *  - les jetons ne sortent jamais d'ici (les vues ne contiennent que des champs d'affichage).
- * AUCUNE lecture de boîte de réception (elle exigerait gmail.readonly, périmètre restreint soumis à vérification Google).
+ * Comptes PARTAGÉS : AUCUNE lecture de boîte de réception (elle exigerait gmail.readonly, périmètre restreint soumis à vérification Google).
+ * Messagerie PERSONNELLE : lecture optionnelle de SA boîte par sa seule propriétaire (inboundEmails.js, portée « mine »), jamais d'écriture.
  */
 export const NOT_FOUND = 'Compte introuvable.';
 export const MAX_TITLE = 150;
@@ -72,10 +73,10 @@ const base = (d) => ({
 export const managerView = (d) => ({ ...base(d), permissions: { send: d.permissions?.send === true, calendar: d.permissions?.calendar === true }, connectedAt: d.connectedAt ? new Date(d.connectedAt).toISOString() : null });
 /** Vue d'une secrétaire : ce qu'elle peut faire, rien d'autre (pas de date de connexion, pas de réglage). */
 export const secretaryView = (d) => (d.personalUserId
-  ? { ...base(d), mine: true, can: { send: true, calendar: true } } // c'est SA messagerie : droits fixes
+  ? { ...base(d), mine: true, can: { send: true, calendar: true }, inbound: { readEnabled: d.inbound?.readEnabled === true && hasReadScope(d.provider, d.scopes) } } // c'est SA messagerie : droits fixes ; état de la lecture de SA boîte
   : { ...base(d), can: { send: d.permissions?.send === true, calendar: d.permissions?.calendar === true } });
 
-const DISPLAY_FIELDS = 'provider label ownerName accountEmail status permissions connectedAt personalUserId';
+const DISPLAY_FIELDS = 'provider label ownerName accountEmail status permissions connectedAt personalUserId scopes inbound';
 /** Messagerie personnelle de cet utilisateur ? (jamais vrai pour un compte partagé ni pour la messagerie d'une autre personne) */
 const isMine = (d, access) => Boolean(d.personalUserId) && String(d.personalUserId) === String(access.userId);
 
