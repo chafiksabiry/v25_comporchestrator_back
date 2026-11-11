@@ -137,7 +137,11 @@ export async function sendFromAccount(companyId, account, message) {
 
 // ---------- agenda
 const MASKED = 'Occupé';
-const publicEvent = (e) => ({ id: e.id, title: e.private ? MASKED : e.title || '(sans titre)', startsAt: e.startsAt, endsAt: e.endsAt, allDay: e.allDay, location: e.private ? '' : e.location, private: e.private, busy: e.busy });
+// Un événement privé n'expose rien d'autre que « Occupé » : ni lieu, ni lien, ni numéro, ni description.
+export const publicEvent = (e) => ({
+  id: e.id, title: e.private ? MASKED : e.title || '(sans titre)', startsAt: e.startsAt, endsAt: e.endsAt, allDay: e.allDay, location: e.private ? '' : e.location, private: e.private, busy: e.busy,
+  joinUrl: e.private ? '' : e.joinUrl || '', dialIn: e.private ? [] : Array.isArray(e.dialIn) ? e.dialIn : [], conferenceCode: e.private ? '' : e.conferenceCode || '', description: e.private ? '' : e.description || '',
+});
 
 /** Fenêtre de lecture : deux dates valides, début < fin, 62 jours au plus. */
 export function parseRange(from, to) {

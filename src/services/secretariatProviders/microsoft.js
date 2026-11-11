@@ -1,3 +1,4 @@
+import { dialIn, plainDescription, safeVideoUrl, videoUrlIn } from './eventConnection.js';
 import { call, ensure, eventWindow, hasReadScope, hasWriteScope, READ_SCOPE, WRITE_SCOPE, SecretariatError, VIDEO_LINK_RE } from './common.js';
 import { cleanSnippet, cleanSubject, htmlToText, limitBody, stripQuoted } from './mailText.js';
 
@@ -83,13 +84,13 @@ export const microsoft = {
    * @returns {Promise<Array<{id: string, title: string, startsAt: string, endsAt: string, allDay: boolean, location: string, private: boolean, busy: boolean}>>}
    */
   async listEvents({ http, accessToken, from, to }) {
-    const q = new URLSearchParams({ startDateTime: from.toISOString(), endDateTime: to.toISOString(), $top: '250', $orderby: 'start/dateTime', $select: 'id,subject,start,end,isAllDay,location,sensitivity,showAs,isCancelled' });
+    const q = new URLSearchParams({ startDateTime: from.toISOString(), endDateTime: to.toISOString(), $top: '250', $orderby: 'start/dateTime', $select: 'id,subject,start,end,isAllDay,location,sensitivity,showAs,isCancelled,onlineMeeting,bodyPreview' });
     const res = ensure(await call(http, { method: 'GET', url: `${GRAPH}/me/calendarView?${q}`, headers: { Authorization: `Bearer ${accessToken}`, Prefer: 'outlook.timezone="UTC"' } }), 'Lecture du calendrier Outlook', [200]);
     const when = (t) => (t?.dateTime ? new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(t.dateTime) ? t.dateTime : `${t.dateTime}Z`) : null);
     return (Array.isArray(res.json?.value) ? res.json.value : []).filter((e) => e && !e.isCancelled).flatMap((e) => {
       const startsAt = when(e.start); const endsAt = when(e.end);
       if (!e.id || !startsAt || !endsAt || Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) return [];
-      return [{ id: String(e.id), title: String(e.subject || ''), startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), allDay: e.isAllDay === true, location: String(e.location?.displayName || ''), private: e.sensitivity === 'private' || e.sensitivity === 'confidential', busy: e.showAs !== 'free' }];
+      return [{ id: String(e.id), title: String(e.subject || ''), startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), allDay: e.isAllDay === true, location: String(e.location?.displayName || ''), private: e.sensitivity === 'private' || e.sensitivity === 'confidential', busy: e.showAs !== 'free', ...connection(e) }];
     });
   },
 
@@ -138,3 +139,15 @@ export const microsoft = {
     ensure(await call(http, { method: 'DELETE', url: `${GRAPH}/me/events/${encodeURIComponent(id)}`, headers: { Authorization: `Bearer ${accessToken}` } }), 'Suppression Outlook', [200, 204, 404]);
   },
 };
+
+/** Pour rejoindre : lien Teams (sinon un lien de visio du lieu / de l'aperçu), numéro d'appel et code de conférence, aperçu du texte. */
+function connection(e) {
+  const m = e.onlineMeeting || {};
+  const phone = dialIn(m.tollNumber, m.conferenceId);
+  return {
+    joinUrl: safeVideoUrl(m.joinUrl) || videoUrlIn(e.location?.displayName, e.bodyPreview),
+    dialIn: phone ? [phone] : [],
+    conferenceCode: String(m.conferenceId || '').replace(/[^\w-]/g, '').slice(0, 40),
+    description: plainDescription(e.bodyPreview),
+  };
+}
