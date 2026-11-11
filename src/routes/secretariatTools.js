@@ -58,6 +58,8 @@ router.put('/queues/:companyId', authenticate, requireCompanyParam, q.replace);
 router.put('/queues/:companyId/:queueId', authenticate, requireCompanyParam, q.update);
 router.delete('/queues/:companyId/:queueId', authenticate, requireCompanyParam, q.remove);
 router.get('/staff/:companyId', authenticate, requireCompanyParam, q.listStaff);
+// SES propres langues et compétences (secrétaire seulement, identité = session) : déclarée AVANT la route à paramètre /:userId pour ne pas être capturée par elle.
+router.put('/staff/:companyId/me', authenticate, requireCompanyParam, q.updateMyStaff);
 router.put('/staff/:companyId/:userId', authenticate, requireCompanyParam, q.updateStaff);
 router.get('/routing-preview/:companyId', authenticate, requireCompanyParam, q.preview);
 // PUBLIC : retour OAuth du fournisseur. Inoffensif sans état signé valide (JWT 10 min lié au centre, à l'utilisateur et au fournisseur).
