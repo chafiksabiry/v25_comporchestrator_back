@@ -27,10 +27,12 @@ const phoneNumberSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'RequirementGroup'
   },
+  // Facultatif : un numéro acheté à la mise en route d'un centre d'appels n'est rattaché à une opération (gig)
+  // qu'à la création de celle-ci (POST /phone-numbers/assign-gig).
   gigId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Gig',
-    required: true
+    required: false
   },
   companyId: {
     type: mongoose.Schema.Types.ObjectId,

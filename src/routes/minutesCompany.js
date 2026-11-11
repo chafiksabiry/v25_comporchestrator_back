@@ -7,7 +7,6 @@ const router = express.Router();
 const company = [authenticate, requireCompanyAccess];
 
 router.get('/:companyId', ...company, minutesCompanyController.getMinutes);
-router.post('/buy-minutes', ...company, minutesCompanyController.buyMinutes);
 // Called by the calls service when a call ends. No user JWT is available.
 router.post('/charge-call', minutesCompanyController.chargeCall);
 

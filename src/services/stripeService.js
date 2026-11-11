@@ -1,13 +1,29 @@
 import Stripe from 'stripe';
 import { config } from '../config/env.js';
+import { resolvePromotionCodeId, withPromotion } from './promotionCode.js';
+
+let stripeOverride = null;
+/** Réservé aux tests : injecte un faux client Stripe (null pour revenir au vrai). */
+export function __setStripeClientForTests(client) { stripeOverride = client; }
 
 function getStripe() {
+  if (stripeOverride) return stripeOverride;
   if (!config.stripeSecretKey) {
     const err = new Error('Stripe not configured (STRIPE_SECRET_KEY)');
     err.code = 'STRIPE_NOT_CONFIGURED';
     throw err;
   }
   return new Stripe(config.stripeSecretKey);
+}
+
+let sharedClient = null;
+/** Client Stripe partagé (réutilisé pour le cache des prix de sièges) ; null si Stripe n'est pas configuré. */
+function getSharedClient() {
+  if (!config.stripeSecretKey) return null;
+  if (!sharedClient || sharedClient.key !== config.stripeSecretKey) {
+    sharedClient = { key: config.stripeSecretKey, client: new Stripe(config.stripeSecretKey) };
+  }
+  return sharedClient.client;
 }
 
 /**
@@ -31,11 +47,26 @@ async function createOneShotCheckoutSession({
   cancelUrl,
   clientReferenceId,
   metadata = {},
-  captureMethod = 'automatic'
+  captureMethod = 'automatic',
+  customerId = null,
+  invoiceDescription = null
 }) {
   const manual = captureMethod === 'manual';
+  // Facture téléchargeable pour les achats ponctuels. Non activée en capture manuelle (autorisation puis capture
+  // différée après commande du numéro) : le comportement de la facture Checkout y est incertain et ne doit pas casser l'achat.
+  const invoiceCreation = manual ? {} : {
+    invoice_creation: {
+      enabled: true,
+      invoice_data: {
+        description: String(invoiceDescription || productName).slice(0, 500),
+        metadata: { ...(metadata.purpose ? { purpose: String(metadata.purpose) } : {}), ...(metadata.companyId ? { companyId: String(metadata.companyId) } : {}) }
+      }
+    }
+  };
   return getStripe().checkout.sessions.create({
     mode: 'payment',
+    ...(customerId ? { customer: customerId } : {}),
+    ...invoiceCreation,
     payment_method_types: ['card'],
     line_items: [
       {
@@ -445,14 +476,17 @@ async function resolveSubscriptionPriceId({ priceId, planName }) {
 
 export const stripeService = {
   isConfigured,
+  /** Client Stripe partagé pour les lectures publiques mises en cache (offres de lancement) ; null si Stripe n'est pas configuré. */
+  sharedClient: getSharedClient,
+  getSharedClient,
   createOneShotCheckoutSession,
   retrieveSession,
   captureCheckoutSession,
   cancelCheckoutAuthorization,
   refundCheckoutSession,
-  createCheckoutSession: async (userId, priceId, successUrl, cancelUrl, metadata = {}) => {
+  createCheckoutSession: async (userId, priceId, successUrl, cancelUrl, metadata = {}, promotionCodeId = null, currency = null) => {
     try {
-      const session = await getStripe().checkout.sessions.create({
+      const session = await getStripe().checkout.sessions.create(withPromotion({
         payment_method_types: ['card'],
         line_items: [
           {
@@ -461,8 +495,10 @@ export const stripeService = {
           },
         ],
         mode: 'subscription',
-        allow_promotion_codes: true,
-        payment_method_collection: 'if_required',
+        // Prix multi-devises : la devise choisie (mêmes montants en EUR, USD, GBP).
+        ...(currency ? { currency: String(currency).toLowerCase() } : {}),
+        // Plus d'essai sans carte : la carte est demandée dès la souscription.
+        payment_method_collection: 'always',
         success_url: successUrl,
         cancel_url: cancelUrl,
         redirect_on_completion: 'always',
@@ -472,13 +508,12 @@ export const stripeService = {
           ...metadata
         },
         subscription_data: {
-          trial_period_days: 7, 
           metadata: {
             userId: userId.toString(),
             ...metadata
           },
         },
-      });
+      }, promotionCodeId));
       return session;
     } catch (error) {
       console.error('Error creating Stripe checkout session:', error);
@@ -490,25 +525,28 @@ export const stripeService = {
    * Create an EMBEDDED Stripe Checkout Session (UI rendered inside HARX as a modal).
    * No redirect: the front uses onComplete + confirm endpoint.
    */
-  createEmbeddedSubscriptionSession: async (userId, priceId, metadata = {}) => {
-    return getStripe().checkout.sessions.create({
+  createEmbeddedSubscriptionSession: async (userId, priceId, metadata = {}, promotionCodeId = null, currency = null) => {
+    return getStripe().checkout.sessions.create(withPromotion({
       ui_mode: 'embedded_page',
       mode: 'subscription',
       payment_method_types: ['card'],
       line_items: [{ price: priceId, quantity: 1 }],
-      allow_promotion_codes: true,
-      // Skip asking for a card when nothing is actually due today (free
-      // trial, or a 100%-off promo code applied) — Stripe still collects
-      // one automatically before any future real charge becomes due.
-      payment_method_collection: 'if_required',
+      ...(currency ? { currency: String(currency).toLowerCase() } : {}),
+      // Plus d'essai sans carte : la carte est demandée dès la souscription.
+      payment_method_collection: 'always',
       redirect_on_completion: 'never',
       client_reference_id: userId.toString(),
       metadata: { userId: userId.toString(), ...metadata },
       subscription_data: {
-        trial_period_days: 7,
         metadata: { userId: userId.toString(), ...metadata },
       },
-    });
+    }, promotionCodeId));
+  },
+
+  /** Résout un code promotionnel d'abonnement en id Stripe (null si aucun code) ; lève `invalid_promotion_code`. */
+  resolvePromotionCode: async (code) => {
+    if (code == null || !String(code).trim()) return null;
+    return resolvePromotionCodeId(getStripe(), code);
   },
 
   handleWebhook: async (signature, rawBody) => {
@@ -545,7 +583,7 @@ export const stripeService = {
       const stripe = getStripe();
       const prices = await stripe.prices.list({
         active: true,
-        expand: ['data.product'],
+        expand: ['data.product', 'data.currency_options'],
         limit: 100,
       });
 
@@ -577,7 +615,7 @@ export const stripeService = {
   retrievePriceWithProduct: async (priceId) => {
     if (!priceId || !String(priceId).startsWith('price_')) return null;
     const stripe = getStripe();
-    const price = await stripe.prices.retrieve(priceId, { expand: ['product'] });
+    const price = await stripe.prices.retrieve(priceId, { expand: ['product', 'currency_options'] });
     if (!price?.active) return null;
     let product = price.product;
     if (!product || typeof product === 'string') {
@@ -592,6 +630,11 @@ export const stripeService = {
 
   getSubscription: async (subscriptionId) => {
     return await getStripe().subscriptions.retrieve(subscriptionId);
+  },
+
+  /** Résilie un abonnement Stripe tout de suite (celui qu'un changement d'offre vient de remplacer). */
+  cancelSubscription: async (subscriptionId) => {
+    return await getStripe().subscriptions.cancel(subscriptionId);
   },
 
   /**

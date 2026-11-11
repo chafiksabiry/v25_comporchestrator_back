@@ -1,3 +1,4 @@
+import { notifyLowResource } from '../services/companyNotificationService.js';
 import TokensCompany, {
   isAiProviderAllowed,
   normalizeAiProviders,
@@ -279,6 +280,7 @@ export const tokensCompanyController = {
         tool,
         meta,
       });
+      await notifyLowResource(companyId, 'tokens', updated.tokens);
 
       res.status(200).json({
         success: true,

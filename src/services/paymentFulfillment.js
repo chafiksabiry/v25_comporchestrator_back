@@ -4,6 +4,8 @@ import TokensCompany from '../models/TokensCompany.js';
 import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
 import WalletCompany from '../models/WalletCompany.js';
 import WalletCompanyEntry from '../models/WalletCompanyEntry.js';
+import { notifyCompany } from './companyNotificationService.js';
+import { creditBundle } from './bundlePurchase.js';
 
 export async function fulfillWalletDeposit(payment) {
   const euros = Number((payment.amount / 100).toFixed(2));
@@ -34,6 +36,15 @@ export async function fulfillWalletDeposit(payment) {
     console.warn('WalletCompanyEntry log failed (PayPal deposit):', logErr.message);
   }
 
+  await notifyCompany({
+    companyId: payment.companyId,
+    key: `payment-${payment._id}`,
+    kind: 'wallet',
+    title: 'Dépôt crédité',
+    message: `${euros.toFixed(2)} € ont été ajoutés à votre portefeuille. Nouveau solde : ${Number(wallet.balance).toFixed(2)} €.`,
+    actionPath: '/dashboard/wallet',
+  });
+
   return { balance: wallet.balance, credited: euros };
 }
 
@@ -50,6 +61,15 @@ export async function fulfillMinutesPurchase(payment) {
   wallet.minutes = Number((wallet.minutes + minutes).toFixed(2));
   wallet.purchasedMinutes = Number(((wallet.purchasedMinutes || 0) + minutes).toFixed(2));
   await wallet.save();
+
+  await notifyCompany({
+    companyId: payment.companyId,
+    key: `payment-${payment._id}`,
+    kind: 'minutes',
+    title: 'Minutes ajoutées',
+    message: `${minutes.toLocaleString('fr-FR')} minutes d'appel ont été ajoutées. Total : ${wallet.minutes.toLocaleString('fr-FR')} min.`,
+    actionPath: '/dashboard/minutes',
+  });
 
   return {
     minutes: wallet.minutes,
@@ -73,12 +93,38 @@ export async function fulfillTokensPurchase(payment) {
   wallet.lastPurchasedAt = new Date();
   await wallet.save();
 
+  await notifyCompany({
+    companyId: payment.companyId,
+    key: `payment-${payment._id}`,
+    kind: 'tokens',
+    title: 'Tokens AI ajoutés',
+    message: `${tokens.toLocaleString('fr-FR')} tokens AI ont été ajoutés. Solde : ${wallet.tokens.toLocaleString('fr-FR')}.`,
+    actionPath: '/dashboard/tokens',
+  });
+
   return {
     tokens: wallet.tokens,
     purchasedTokens: wallet.purchasedTokens,
     lastPurchasedAt: wallet.lastPurchasedAt,
     credited: tokens
   };
+}
+
+/** Pack minutes + jetons : crédite chaque solde une seule fois (voir bundlePurchase.js). */
+export async function fulfillBundlePurchase(payment) {
+  const flag = (name) => `meta.${name}`;
+  const result = await creditBundle(payment, {
+    claim: async (name) => (await CompanyPayment.updateOne({ _id: payment._id, [flag(name)]: { $ne: true } }, { $set: { [flag(name)]: true } })).modifiedCount === 1,
+    release: (name) => CompanyPayment.updateOne({ _id: payment._id }, { $set: { [flag(name)]: false } }),
+    creditMinutes: fulfillMinutesPurchase,
+    creditTokens: fulfillTokensPurchase,
+  });
+  return { ...result, ...(await bundleBalances(payment.companyId)) };
+}
+
+export async function bundleBalances(companyId) {
+  const [mins, toks] = await Promise.all([MinutesCompany.findOne({ companyId }), TokensCompany.findOne({ companyId })]);
+  return { balances: { minutes: mins?.minutes ?? 0, tokens: toks?.tokens ?? 0 } };
 }
 
 /**
@@ -88,6 +134,7 @@ export async function fulfillTokensPurchase(payment) {
  *   - 'wallet_deposit'             → CompanyPayment + fulfillWalletDeposit
  *   - 'minutes_purchase'           → CompanyPayment + fulfillMinutesPurchase
  *   - 'tokens_purchase'            → CompanyPayment + fulfillTokensPurchase
+ *   - 'bundle_purchase'            → CompanyPayment + fulfillBundlePurchase
  *   - anything else                → CompanyPayment fallback (purpose read from the row)
  * All branches are idempotent.
  */
@@ -144,6 +191,8 @@ async function fulfillStripeCompanyPaymentSession(session) {
     result = await fulfillMinutesPurchase(payment);
   } else if (payment.purpose === 'tokens_purchase') {
     result = await fulfillTokensPurchase(payment);
+  } else if (payment.purpose === 'bundle_purchase') {
+    result = await fulfillBundlePurchase(payment);
   } else {
     console.warn(`[payments] Unknown CompanyPayment purpose '${payment.purpose}' for payment ${payment._id}`);
     return { skipped: true, reason: `unknown purpose ${payment.purpose}` };

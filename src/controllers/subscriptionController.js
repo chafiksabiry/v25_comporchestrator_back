@@ -1,8 +1,11 @@
+import { createLaunchOffersService } from '../services/launchOffers.js';
 import mongoose from 'mongoose';
 import { SubscriptionPlan } from '../models/SubscriptionPlan.js';
 import { Subscription } from '../models/Subscription.js';
 import CompanyPayment from '../models/CompanyPayment.js';
 import { stripeService } from '../services/stripeService.js';
+import { callcenterTierFromMetadata, isCallcenterMetadata } from '../services/callcenterTier.js';
+import { subscriptionUpdateFields } from '../services/subscriptionPeriod.js';
 import { paypalService } from '../services/paypalService.js';
 import {
   resolvePlanByPriceId,
@@ -11,6 +14,7 @@ import {
 } from '../services/subscriptionFulfillment.js';
 import { fulfillStripeCheckoutSessionPayment } from '../services/paymentFulfillment.js';
 import { config } from '../config/env.js';
+import { currencyForCountry, normalizeCurrency, pickCurrency, priceAmounts } from '../services/currency.js';
 
 function numberOrNull(value) {
   const n = Number(value);
@@ -94,7 +98,7 @@ async function resolveLivePlanLimits(plan) {
   }
 }
 
-function returnBase() {
+export function returnBase() {
   return (
     process.env.STRIPE_RETURN_BASE_URL
     || process.env.PAYPAL_RETURN_BASE_URL
@@ -106,7 +110,7 @@ function publicApiBase() {
   return config.publicApiBaseUrl;
 }
 
-function sanitizeReturnUrl(url, fallback) {
+export function sanitizeReturnUrl(url, fallback) {
   if (!url || typeof url !== 'string') return fallback;
   try {
     const parsed = new URL(url);
@@ -138,19 +142,68 @@ function sanitizeReturnUrl(url, fallback) {
   return fallback;
 }
 
+/** Produit Call Centre (voir isCallcenterMetadata) ; exporté pour les tests. */
+export function isCallcenterProduct(product) {
+  return isCallcenterMetadata(product?.metadata);
+}
+
+/** Inscrit en base les prix Stripe actifs et récurrents des produits Call Centre qui n'y sont pas encore. */
+async function registerCallcenterPlans(stripePrices) {
+  for (const price of stripePrices) {
+    try {
+      const product = price.product;
+      if (!isCallcenterProduct(product) || !price.recurring || price.unit_amount == null) continue;
+      if (await SubscriptionPlan.exists({ stripePriceId: price.id })) continue;
+      await SubscriptionPlan.create({
+        name: product.name,
+        price: Number((price.unit_amount / 100).toFixed(2)),
+        currency: price.currency || 'eur',
+        stripePriceId: price.id,
+        description: product.description || '',
+        // Les métadonnées du produit (palier, limites) sont lues par les autres services dès le premier achat : la
+        // limite de lignes et de sièges de Nomad Solo ne doit pas attendre la première lecture de l'abonnement.
+        metadata: Object.fromEntries(
+          Object.entries(metadataObject(product.metadata)).map(([key, value]) => [key, String(value ?? '')])
+        ),
+      });
+    } catch (err) {
+      console.warn('[subscriptions/plans] Call Centre plan registration failed:', err.message);
+    }
+  }
+}
+
+const launchOffers = createLaunchOffersService({ getClient: () => stripeService.sharedClient() });
+
 export const subscriptionController = {
+  /** GET /api/subscriptions/launch-offers (public) : remises de lancement Call Centre lues dans Stripe, mises en cache 5 min. */
+  getLaunchOffers: async (_req, res) => {
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json(await launchOffers.get());
+  },
+
   getPlans: async (req, res) => {
     try {
-      // 1. La DB est la source de vérité : seuls les plans listés ici sont publiés.
-      const dbPlans = await SubscriptionPlan.find({ stripePriceId: { $exists: true, $ne: '' } });
+      const callcenterOnly = req.query.product === 'callcenter';
+      // `?currency=usd|gbp|eur` : prix dans cette devise quand le prix Stripe la propose (mêmes montants), sinon devise de base.
+      // `?country=GB|US|…` (sans `currency`) : devise déduite du pays du souscripteur (GB -> gbp, US -> usd, sinon eur).
+      const requestedCurrency = req.query.currency
+        ? normalizeCurrency(req.query.currency, '')
+        : req.query.country
+          ? currencyForCountry(req.query.country)
+          : '';
 
-      // 2. Métadonnées Stripe (prix actuel, nom produit) pour les plans connus.
+      // 1. Métadonnées Stripe (prix actuel, nom produit) pour les plans connus.
       let stripePrices = [];
       try {
         stripePrices = await stripeService.getPublicPlans();
       } catch (err) {
         console.warn('[subscriptions/plans] Stripe lookup failed, using DB only:', err.message);
       }
+
+      // 2. La DB est la source de vérité : seuls les plans listés ici sont publiés.
+      //    Les forfaits Call Centre y sont inscrits dès qu'un prix Stripe actif porte harx_product=callcenter.
+      await registerCallcenterPlans(stripePrices);
+      const dbPlans = await SubscriptionPlan.find({ stripePriceId: { $exists: true, $ne: '' } });
 
       const seen = new Set();
       const mergedPlans = (
@@ -200,22 +253,33 @@ export const subscriptionController = {
               return null;
             }
             const product = stripePrice.product;
+            // Marketplace et Call Centre ont chacun leur catalogue : on ne mélange pas les forfaits.
+            if (isCallcenterProduct(product) !== callcenterOnly) return null;
             const marketingFeatures = stripeService.extractStripeProductFeatures(product);
             const stripeLimits = stripeService.extractStripeProductLimits(product);
             const displayFeatures = stripeService.buildStripePlanDisplayFeatures(product);
+            const amounts = priceAmounts(stripePrice);
+            const baseCurrency = stripePrice.currency || 'eur';
+            const shownCurrency = pickCurrency(requestedCurrency, amounts, baseCurrency);
+            const shownCents = amounts[shownCurrency] ?? stripePrice.unit_amount;
 
             return {
               _id: dbPlan._id,
               name: product.name || dbPlan.name,
               // Keep integer Stripe cents — never round euros for display.
-              priceCents: stripePrice.unit_amount,
-              price: Number((stripePrice.unit_amount / 100).toFixed(2)),
-              currency: stripePrice.currency || 'eur',
+              priceCents: shownCents,
+              price: Number((shownCents / 100).toFixed(2)),
+              currency: shownCurrency,
+              /** Montants (centimes) par devise proposée par le prix Stripe, ex. { eur: 4900, usd: 4900, gbp: 4900 }. */
+              prices: amounts,
+              currencies: Object.keys(amounts),
               stripePriceId: effectivePriceId,
               description: product.description || '',
               features: displayFeatures,
               marketingFeatures,
               metadata: product.metadata || {},
+              /** Palier canonique (nomad_solo, accueil, full_scope, multi_clients) ; anciennes valeurs converties. */
+              callcenterTier: callcenterTierFromMetadata(product.metadata),
               isPopular: Boolean(dbPlan.isPopular),
               maxGigs: stripeLimits.maxGigs,
               maxReps: stripeLimits.maxReps,
@@ -278,12 +342,38 @@ export const subscriptionController = {
   /** Popup checkout init — Stripe subscription or PayPal (first month). */
   initPopupCheckout: async (req, res) => {
     try {
-      const { userId, companyId, priceId, planName, provider, returnUrl, apiBaseUrl, uiMode } = req.body;
+      const { userId, companyId, priceId, planName, provider, returnUrl, apiBaseUrl, uiMode, promotionCode, currency: bodyCurrency, country } = req.body;
+      // `currency` explicite prioritaire ; sinon déduite du pays du souscripteur ; sinon devise du prix.
+      const requestedCurrency = bodyCurrency || (country ? currencyForCountry(country) : undefined);
       if (!userId || !companyId || !priceId || !provider) {
         return res.status(400).json({ error: 'userId, companyId, priceId and provider are required' });
       }
       if (!['stripe', 'paypal'].includes(provider)) {
         return res.status(400).json({ error: "provider must be 'stripe' or 'paypal'" });
+      }
+
+      // Code promotionnel (offre de lancement) : abonnement Stripe uniquement, résolu avant toute création de paiement.
+      let promotionCodeId = null;
+      let promotionCodeText = null;
+      if (promotionCode != null && String(promotionCode).trim()) {
+        if (provider !== 'stripe') {
+          return res.status(400).json({
+            error: 'promotion_code_unsupported',
+            message: 'Le code promotionnel n\u2019est disponible que pour le paiement par carte (Stripe).',
+          });
+        }
+        if (!stripeService.isConfigured()) {
+          return res.status(503).json({ error: 'Stripe not configured', message: 'Définissez STRIPE_SECRET_KEY.' });
+        }
+        try {
+          promotionCodeId = await stripeService.resolvePromotionCode(promotionCode);
+          promotionCodeText = String(promotionCode).trim();
+        } catch (err) {
+          if (err?.code === 'invalid_promotion_code') {
+            return res.status(400).json({ error: 'invalid_promotion_code', message: err.message });
+          }
+          throw err;
+        }
       }
 
       let resolved;
@@ -301,7 +391,11 @@ export const subscriptionController = {
       if (!resolved) {
         return res.status(404).json({ error: 'Plan not found for this priceId' });
       }
-      const { plan, amountCents, currency, stripePriceId: effectivePriceId } = resolved;
+      const { plan, stripePriceId: effectivePriceId } = resolved;
+      // Devise choisie par le visiteur (mêmes montants en EUR, USD, GBP) si le prix Stripe la propose ; sinon celle du prix.
+      const chosenCurrency = pickCurrency(requestedCurrency, resolved.amounts, resolved.currency);
+      const amountCents = resolved.amounts?.[chosenCurrency] ?? resolved.amountCents;
+      const currency = chosenCurrency.toUpperCase();
 
       const payment = await CompanyPayment.create({
         companyId: new mongoose.Types.ObjectId(companyId),
@@ -315,7 +409,8 @@ export const subscriptionController = {
           companyId: String(companyId),
           stripePriceId: effectivePriceId,
           planId: plan._id,
-          planName: planName || plan.name
+          planName: planName || plan.name,
+          ...(promotionCodeText ? { promotionCode: promotionCodeText } : {})
         }
       });
 
@@ -360,7 +455,9 @@ export const subscriptionController = {
           const session = await stripeService.createEmbeddedSubscriptionSession(
             userId,
             effectivePriceId,
-            metadata
+            metadata,
+            promotionCodeId,
+            chosenCurrency
           );
           payment.providerRef = session.id;
           payment.checkoutUrl = '';
@@ -395,7 +492,9 @@ export const subscriptionController = {
           effectivePriceId,
           successUrl,
           cancelUrl,
-          metadata
+          metadata,
+          promotionCodeId,
+          chosenCurrency
         );
         checkoutUrl = session.url;
         payment.providerRef = session.id;
@@ -622,14 +721,10 @@ async function handleCheckoutSessionCompleted(session) {
 }
 
 async function handleSubscriptionUpdated(subscription) {
+  // Statut (trialing, active, past_due, canceled…) toujours à jour ; les dates seulement si Stripe les fournit.
   await Subscription.findOneAndUpdate(
     { stripeSubscriptionId: subscription.id },
-    {
-      status: subscription.status,
-      currentPeriodStart: new Date(subscription.current_period_start * 1000),
-      currentPeriodEnd: new Date(subscription.current_period_end * 1000),
-      cancelAtPeriodEnd: subscription.cancel_at_period_end,
-    }
+    subscriptionUpdateFields(subscription)
   );
 }
 
