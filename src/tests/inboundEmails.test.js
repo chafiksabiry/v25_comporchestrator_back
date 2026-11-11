@@ -145,6 +145,7 @@ const directory = {
   memberNoCalls: { companyId: C1, isOwner: false, permissions: {} },
   agent1: { companyId: C1, isOwner: false, isAgent: true },
   other1: { companyId: C2, isOwner: true },
+  agent2: { companyId: C2, isOwner: false, isAgent: true },
 };
 globalThis.fetch = async (url, init) => {
   const s = String(url);
@@ -190,13 +191,13 @@ try {
 
   // ---------- 4. réglage inbound.enabled
   reset();
-  assert.deepEqual((await req('GET', `/tools/${C1}`, { user: 'owner1' })).body.data.inbound, { enabled: false }, 'désactivé par défaut');
+  assert.deepEqual((await req('GET', `/tools/${C1}`, { user: 'owner1' })).body.data.inbound, { enabled: false, secretaries: false }, 'désactivé par défaut');
   for (const bad of [{ enabled: 'true' }, { enabled: 1 }, { enabled: null }, [], 'x', null]) assert.equal((await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: bad } })).status, 400, JSON.stringify(bad));
   assert.equal((await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: {} } })).status, 400, 'rien à modifier');
   for (const user of ['agent1', 'memberNoCalls']) assert.equal((await req('PUT', `/tools/${C1}`, { user, body: { inbound: { enabled: true } } })).status, 403);
   r = await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: { enabled: true } } });
-  assert.equal(r.status, 200); assert.deepEqual(r.body.data.inbound, { enabled: true });
-  assert.deepEqual((await req('GET', `/tools/${C1}`, { user: 'agent1' })).body.data.inbound, { enabled: true });
+  assert.equal(r.status, 200); assert.deepEqual(r.body.data.inbound, { enabled: true, secretaries: false });
+  assert.deepEqual((await req('GET', `/tools/${C1}`, { user: 'agent1' })).body.data.inbound, { enabled: true, secretaries: false });
   assert.equal((await req('GET', `/tools/${C2}`, { user: 'other1' })).body.data.inbound.enabled, false, 'isolation entre centres');
 
   // ---------- 5. accès : désactivé / pas de messagerie / pas de lecture — AUCUN appel fournisseur
@@ -331,6 +332,51 @@ try {
   assert.ok(idx.some(([f, o]) => f.companyId === 1 && f.providerMessageId === 1 && o.unique === true), 'index unique société + message');
   assert.deepEqual(Object.keys(InboundEmail.schema.paths).filter((x) => /body|text|html|content/i.test(x)), []);
   assert.equal(InboundEmail.schema.path('snippet').options.maxlength, 200);
+
+  // ---------- 13. secrétaires : accès seulement si l'entreprise l'a autorisé
+  reset(); enable(); putConnection(C1, 'google', { scopes: READ_G }); gmailStd();
+  const routes = [['GET', `/inbound-emails/${C1}`], ['POST', `/inbound-emails/${C1}/refresh`], ['GET', `/inbound-emails/${C1}/${'a'.repeat(24)}/body`], ['PATCH', `/inbound-emails/${C1}/${'a'.repeat(24)}`]];
+  const status = async (user, m, p) => (await req(m, p, { user, body: { status: 'handled' } })).status;
+  // validation du réglage
+  for (const bad of [{ secretaries: 'true' }, { secretaries: 1 }, { secretaries: null }]) assert.equal((await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: bad } })).status, 400, JSON.stringify(bad));
+  assert.equal((await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: { enabled: false, secretaries: true } } })).status, 400, 'pas de secrétaires sans lecture');
+  assert.equal((await req('PUT', `/tools/${C1}`, { user: 'agent1', body: { inbound: { secretaries: true } } })).status, 403, 'une secrétaire ne modifie pas les réglages');
+  assert.equal(toolsDocs[0].inbound.secretaries, undefined);
+  // non autorisée (défaut) : 403 partout, access = false sans 403
+  for (const [m, p] of routes) assert.equal(await status('agent1', m, p), 403, `agent non autorisé ${m} ${p}`);
+  r = await req('GET', `/inbound-emails/${C1}/access`, { user: 'agent1' }); assert.equal(r.status, 200); assert.deepEqual(r.body, { success: true, data: { allowed: false } });
+  assert.deepEqual((await req('GET', `/inbound-emails/${C1}/access`, { user: 'owner1' })).body.data, { allowed: true });
+  assert.deepEqual((await req('GET', `/inbound-emails/${C1}/access`, { user: 'member1' })).body.data, { allowed: true });
+  assert.deepEqual((await req('GET', `/inbound-emails/${C1}/access`, { user: 'memberNoCalls' })).body.data, { allowed: false });
+  assert.equal((await req('GET', `/inbound-emails/${C1}/access`)).status, 401);
+  assert.equal((await req('GET', `/inbound-emails/${C1}/access`, { user: 'other1' })).status, 403, 'access : jamais un autre centre');
+  // autorisation (PUT partiel : n'écrase pas enabled)
+  r = await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: { secretaries: true } } });
+  assert.equal(r.status, 200); assert.deepEqual(r.body.data.inbound, { enabled: true, secretaries: true });
+  assert.deepEqual((await req('GET', `/tools/${C1}`, { user: 'agent1' })).body.data.inbound, { enabled: true, secretaries: true });
+  assert.deepEqual((await req('GET', `/inbound-emails/${C1}/access`, { user: 'agent1' })).body.data, { allowed: true });
+  assert.equal((await req('GET', `/inbound-emails/${C1}`, { user: 'agent1' })).status, 200);
+  assert.equal((await req('POST', `/inbound-emails/${C1}/refresh`, { user: 'agent1' })).status, 200);
+  I.resetRefreshThrottle();
+  const list = (await req('GET', `/inbound-emails/${C1}`, { user: 'agent1' })).body.data.items; assert.ok(list.length > 0); const g1 = list.find((i) => i.subject === 'Demande de rendez-vous');
+  assert.equal((await req('GET', `/inbound-emails/${C1}/${g1.id}/body`, { user: 'agent1' })).status, 200);
+  assert.equal((await req('PATCH', `/inbound-emails/${C1}/${g1.id}`, { user: 'agent1', body: { status: 'handled' } })).status, 200);
+  assert.equal((await req('GET', `/inbound-emails/${C1}`, { user: 'memberNoCalls' })).status, 403, 'un membre sans droit reste refusé');
+  // isolation : la secrétaire d'un autre centre (non autorisé) ne passe pas, ni sur C1 ni sur C2
+  assert.equal((await req('GET', `/inbound-emails/${C1}`, { user: 'agent2' })).status, 403);
+  assert.equal((await req('GET', `/inbound-emails/${C1}/access`, { user: 'agent2' })).status, 403);
+  toolsDocs.push({ companyId: C2, inbound: { enabled: true, secretaries: false } });
+  assert.equal((await req('GET', `/inbound-emails/${C2}`, { user: 'agent2' })).status, 403, 'C2 n’a pas autorisé ses secrétaires');
+  assert.equal((await req('GET', `/inbound-emails/${C2}`, { user: 'agent1' })).status, 403, 'agent de C1 sur C2');
+  // désactivation de la lecture : secretaries repasse à false, plus d'accès
+  r = await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: { enabled: false } } });
+  assert.deepEqual(r.body.data.inbound, { enabled: false, secretaries: false }); assert.equal(toolsDocs[0].inbound.secretaries, false);
+  assert.equal((await req('GET', `/inbound-emails/${C1}`, { user: 'agent1' })).status, 403);
+  assert.deepEqual((await req('GET', `/inbound-emails/${C1}/access`, { user: 'agent1' })).body.data, { allowed: false });
+  assert.deepEqual((await req('GET', `/inbound-emails/${C1}/access`, { user: 'owner1' })).body.data, { allowed: false }, 'lecture désactivée : allowed false pour tous');
+  // réactivation : les secrétaires ne sont pas réautorisées automatiquement
+  await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: { enabled: true } } });
+  assert.equal((await req('GET', `/inbound-emails/${C1}`, { user: 'agent1' })).status, 403);
 
   // ---------- 12. aucun jeton, aucun contenu de message dans les journaux
   const everything = `${responses.join('\n')}\n${logged.join('\n')}`;
