@@ -29,6 +29,7 @@ app.use(express.json());
 mongoose.connect(config.mongodbUri)
   .then(async () => {
     console.log('Connected to MongoDB');
+    console.log('[db-diag] database name:', mongoose.connection.db?.databaseName, 'host:', mongoose.connection.host);
     try {
       await runMigrations();
       console.log('Migrations completed successfully');

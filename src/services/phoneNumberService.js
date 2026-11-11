@@ -1,3 +1,6 @@
+import { buildLocalSearchOptions } from './numberSearchOptions.js';
+import { addressSidFromAssignments, isRejectedRange, rememberRejectedRange } from './rejectedNumberRanges.js';
+import { countryOfE164 } from '../utils/e164Country.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { config } from '../config/env.js';
 import telnyx from 'telnyx';
@@ -5,6 +8,9 @@ import twilio from 'twilio';
 import axios from 'axios';
 import FormData from 'form-data';
 import mongoose from 'mongoose';
+
+/** Nom convivial donné par la plateforme aux numéros qu'elle achète : sert à reconnaître l'inventaire proposable. */
+export const INVENTORY_FRIENDLY_PREFIX = 'Gig Number:';
 
 class PhoneNumberService {
   constructor() {
@@ -80,8 +86,8 @@ class PhoneNumberService {
   }
 
   async purchaseNumber(phoneNumber, provider, gigId, requirementGroupId, companyId, options = {}) {
-    if (!gigId || !companyId) {
-      throw new Error('gigId and companyId are required to purchase a number');
+    if (!companyId) {
+      throw new Error('companyId is required to purchase a number');
     }
 
     // France is Twilio-only — never route +33 through Telnyx.
@@ -232,23 +238,7 @@ class PhoneNumberService {
       // without it Twilio AvailablePhoneNumbers often returns only ~10 rows.
       // Twilio SDK param is voiceEnabled (not voice).
       const pageSize = Math.min(Math.max(limit, 50), 100);
-      if (countryCode === 'FR' && !areaCode) {
-        numbers = await listWithTimeout({
-          limit: pageSize,
-          pageSize,
-          voiceEnabled: true
-        });
-      } else {
-        const searchOptions = {
-          limit: pageSize,
-          pageSize,
-          voiceEnabled: true
-        };
-        if (areaCode) {
-          searchOptions.areaCode = areaCode;
-        }
-        numbers = await listWithTimeout(searchOptions);
-      }
+      numbers = await listWithTimeout(buildLocalSearchOptions({ pageSize, areaCode, locality: searchParams.locality }));
 
       console.log(`✅ Found ${numbers.length} numbers for ${countryCode}`);
 
@@ -259,7 +249,7 @@ class PhoneNumberService {
       // are actually compatible with our approved bundle — otherwise the user
       // pays for a line Twilio will refuse (error 21649).
       const compatible = numbers.filter((n) =>
-        this.isCompatibleWithLocalBundle(n.phoneNumber, countryCode)
+        this.isCompatibleWithLocalBundle(n.phoneNumber, countryCode) && !isRejectedRange(n.phoneNumber)
       );
 
       if (compatible.length !== numbers.length) {
@@ -397,6 +387,7 @@ class PhoneNumberService {
   getBundleSidForCountry(isoCountry) {
     const cc = String(isoCountry || '').toUpperCase();
     if (cc === 'FR') return config.twilioFrenchBundleSid || null;
+    if (cc === 'GB') return config.twilioGbBundleSid || null;
     return null;
   }
 
@@ -409,26 +400,7 @@ class PhoneNumberService {
    * to block payments for countries we haven't mapped yet).
    */
   guessCountryFromE164(phoneNumber) {
-    const raw = String(phoneNumber || '').replace(/[^\d+]/g, '');
-    if (!raw.startsWith('+')) return null;
-    // Order matters: longer prefixes must be tested first.
-    const prefixes = [
-      ['+1', 'US'],
-      ['+33', 'FR'],
-      ['+44', 'GB'],
-      ['+49', 'DE'],
-      ['+34', 'ES'],
-      ['+39', 'IT'],
-      ['+31', 'NL'],
-      ['+32', 'BE'],
-      ['+41', 'CH'],
-      ['+352', 'LU'],
-      ['+212', 'MA']
-    ].sort((a, b) => b[0].length - a[0].length);
-    for (const [prefix, iso] of prefixes) {
-      if (raw.startsWith(prefix)) return iso;
-    }
-    return null;
+    return countryOfE164(phoneNumber);
   }
 
   /**
@@ -568,43 +540,6 @@ class PhoneNumberService {
     }
   }
 
-  async getAllPhoneNumbers() {
-    try {
-      console.log('📞 Fetching all phone numbers');
-
-      // Récupérer tous les numéros de téléphone de la base de données
-      const numbers = await PhoneNumber.find({})
-        .sort({ createdAt: -1 }) // Les plus récents d'abord
-        .lean();
-
-      return numbers
-        .filter((number) => {
-          const st = String(number.status || '').toLowerCase();
-          return st !== 'cancelled' && st !== 'released' && st !== 'terminated';
-        })
-        .map(number => ({
-          id: number._id,
-          _id: number._id,
-          phoneNumber: number.phoneNumber,
-          provider: number.provider,
-          status: number.status,
-          orderStatus: number.orderStatus,
-          features: number.features,
-          gigId: number.gigId,
-          companyId: number.companyId,
-          createdAt: number.createdAt,
-          updatedAt: number.updatedAt,
-          price: number.price,
-          currency: number.currency,
-          isTrial: Boolean(number.isTrial),
-          trialExpiresAt: number.trialExpiresAt || null,
-        }));
-    } catch (error) {
-      console.error('❌ Error fetching all phone numbers:', error);
-      throw error;
-    }
-  }
-
   async updateNumberOrderStatus({ eventId, occurredAt, orderId, orderStatus, phoneNumbers, requirementsMet, subOrderIds }) {
     try {
       console.log(`📝 Processing number order update for ${phoneNumbers.length} numbers`);
@@ -654,27 +589,93 @@ class PhoneNumberService {
     }
   }
 
+  /**
+   * Numéros déjà dans l'inventaire Twilio et pas encore rattachés à un compte HARX : proposés en premier à l'achat.
+   * Tout numéro de l'inventaire (déjà payé), compatible voix, qu'aucune entreprise ne détient dans la base HARX, est éligible, quel que soit
+   * son nom dans la console Twilio (numéro acheté à la main compris). Seule exception, un choix explicite : les numéros listés dans
+   * TWILIO_INVENTORY_EXCLUDE (ex. un numéro que HARX garde pour son propre usage) ne sont jamais offerts.
+   */
+  isInventoryCandidate(n) {
+    const e164 = String(n?.phoneNumber || '');
+    if (!e164.startsWith('+')) return false;
+    if (n?.capabilities && n.capabilities.voice === false) return false;
+    return !(config.twilioInventoryExclude || []).includes(e164);
+  }
+
+  /** Parmi des numéros possédés, ceux qu'aucune entreprise ne détient dans la base HARX (surchargé dans les tests). */
+  async unassignedAmong(owned) {
+    if (!owned.length) return [];
+    const docs = await PhoneNumber.find({ phoneNumber: { $in: owned.map((n) => n.phoneNumber) } }).select('phoneNumber').lean();
+    const taken = new Set(docs.map((d) => d.phoneNumber));
+    return owned.filter((n) => !taken.has(n.phoneNumber));
+  }
+
+  async listClaimableInventory({ countryCode, limit = 50 } = {}) {
+    const cc = String(countryCode || '').toUpperCase();
+    const owned = await this.twilioClient.incomingPhoneNumbers.list({ limit: 1000 });
+    const candidates = owned.filter((n) => this.isInventoryCandidate(n) && this.guessCountryFromE164(n.phoneNumber) === cc);
+    const free = await this.unassignedAmong(candidates);
+    return free.slice(0, limit).map((n) => ({
+      phoneNumber: n.phoneNumber,
+      friendlyName: n.phoneNumber,
+      locality: null,
+      region: null,
+      isoCountry: cc,
+      type: 'local',
+      inventory: true,
+      capabilities: { voice: n.capabilities?.voice !== false, SMS: Boolean(n.capabilities?.sms ?? n.capabilities?.SMS), MMS: Boolean(n.capabilities?.mms ?? n.capabilities?.MMS) },
+    }));
+  }
+
+  /** Le numéro (déjà possédé chez Twilio) si une entreprise peut le prendre ; `null` s'il n'est pas dans l'inventaire ou n'est pas éligible. */
+  async findClaimableInventoryNumber(phoneNumber) {
+    let owned;
+    try {
+      owned = await this.twilioClient.incomingPhoneNumbers.list({ phoneNumber, limit: 1 });
+    } catch (err) {
+      console.warn('[telephony] inventaire Twilio illisible:', err.message);
+      return null;
+    }
+    const n = Array.isArray(owned) ? owned.find((x) => x.phoneNumber === phoneNumber) : null;
+    if (!n) return { owned: false, claimable: false, number: null };
+    const free = this.isInventoryCandidate(n) ? await this.unassignedAmong([n]) : [];
+    return { owned: true, claimable: free.length > 0, number: n };
+  }
+
   async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId, { bundleSid, addressSid, type, price, currency, paymentRef, isTrial, trialExpiresAt } = {}) {
-    if (!gigId || !companyId) {
-      throw new Error('gigId and companyId are required to purchase a phone number');
+    if (!companyId) {
+      throw new Error('companyId is required to purchase a phone number');
     }
 
     console.log(`🛒 Attempting to purchase number: ${phoneNumber} for gig: ${gigId}`);
 
     let purchasedNumber;
     try {
+      // Numéro déjà dans l'inventaire Twilio : on le prend sans le racheter ; s'il est possédé mais pas proposable (déjà détenu par une entreprise,
+      // sans voix ou exclu par la configuration), on refuse plutôt que de tenter un achat qui échouerait.
+      const inventory = await this.findClaimableInventoryNumber(phoneNumber);
+      if (inventory?.owned && !inventory.claimable) {
+        const err = new Error('Ce numéro n’est pas disponible.');
+        err.code = 'NUMBER_NOT_AVAILABLE';
+        err.status = 409;
+        throw err;
+      }
       const purchaseOptions = {
         phoneNumber: phoneNumber,
         friendlyName: 'Gig Number:' + phoneNumber,
       };
 
-      const currentBundleSid = bundleSid || (phoneNumber.startsWith('+33') ? config.twilioFrenchBundleSid : null);
-      const currentAddressSid = addressSid || (phoneNumber.startsWith('+33') ? config.twilioFrenchAddressSid : null);
+      const currentBundleSid = bundleSid
+        || (phoneNumber.startsWith('+33') ? config.twilioFrenchBundleSid : null)
+        || (phoneNumber.startsWith('+44') ? config.twilioGbBundleSid || null : null);
+      const currentAddressSid = addressSid
+        || (phoneNumber.startsWith('+33') ? config.twilioFrenchAddressSid : null)
+        || (phoneNumber.startsWith('+44') ? config.twilioGbAddressSid || null : null);
 
       // Fail early (before Twilio IncomingPhoneNumbers.create) when the
       // configured FR bundle is not a "local" regulation — same 21649 Twilio
       // would return, so the controller can refund the payment.
-      if (currentBundleSid && phoneNumber.startsWith('+33')) {
+      if (!inventory?.claimable && currentBundleSid && phoneNumber.startsWith('+33')) {
         if (!this.isCompatibleWithLocalBundle(phoneNumber, 'FR')) {
           const err = new Error(
             `Bundle [${currentBundleSid}] does not have the correct regulation type to provision this number`
@@ -690,11 +691,71 @@ class PhoneNumberService {
       if (currentBundleSid) purchaseOptions.bundleSid = currentBundleSid;
       if (currentAddressSid) purchaseOptions.addressSid = currentAddressSid;
 
-      purchasedNumber = await this.twilioClient.incomingPhoneNumbers
-        .create(purchaseOptions);
+      try {
+        if (inventory?.claimable) {
+          purchasedNumber = inventory.number;
+          console.log(`📦 Numéro pris dans l'inventaire Twilio : ${phoneNumber}`);
+        } else {
+          purchasedNumber = await this.twilioClient.incomingPhoneNumbers.create(purchaseOptions);
+        }
+      } catch (firstError) {
+        // Twilio classe certains numéros +33 1… « national » : ils exigent le dossier National, pas le dossier Local.
+        const nationalBundle = config.twilioFrenchNationalBundleSid;
+        const canRetry = firstError?.code === 21649 && !bundleSid && phoneNumber.startsWith('+33')
+          && nationalBundle && nationalBundle !== currentBundleSid;
+        if (!canRetry) throw firstError;
+        console.warn(`[telephony] ${phoneNumber} refusé avec le dossier Local (21649) : nouvel essai avec le dossier National ${nationalBundle}.`);
+        // L'adresse doit être contenue dans le dossier National. On essaie, dans l'ordre : la dernière qui a fonctionné,
+        // celles rattachées au dossier, celle configurée, puis les adresses françaises validées du compte.
+        const candidates = [];
+        const add = (sid) => { if (sid && !candidates.includes(sid)) candidates.push(sid); };
+        add(this._nationalAddressSid);
+        try {
+          const assignments = await this.twilioClient.numbers.v2.regulatoryCompliance.bundles(nationalBundle).itemAssignments.list({ limit: 50 });
+          console.log(`[telephony] éléments du dossier National : ${assignments.map((a) => a.objectSid).join(', ') || '(aucun)'}`);
+          add(addressSidFromAssignments(assignments));
+        } catch (assignErr) {
+          console.warn(`[telephony] éléments du dossier ${nationalBundle} illisibles:`, assignErr.message);
+        }
+        add(config.twilioFrenchNationalAddressSid);
+        try {
+          const addresses = await this.twilioClient.addresses.list({ limit: 50 });
+          addresses.filter((ad) => ad.isoCountry === 'FR' && ad.validated).forEach((ad) => add(ad.sid));
+        } catch (listErr) {
+          console.warn('[telephony] adresses du compte illisibles:', listErr.message);
+        }
+        console.log(`[telephony] dossier National ${nationalBundle}, adresses à essayer : ${candidates.join(', ') || '(aucune)'}`);
+        let lastError = firstError;
+        for (const addressSid of candidates.length ? candidates.slice(0, 8) : [null]) {
+          try {
+            purchasedNumber = await this.twilioClient.incomingPhoneNumbers.create({
+              ...purchaseOptions,
+              bundleSid: nationalBundle,
+              ...(addressSid ? { addressSid } : {}),
+            });
+            if (addressSid) {
+              this._nationalAddressSid = addressSid;
+              console.log(`[telephony] adresse ${addressSid} acceptée par le dossier National.`);
+            }
+            lastError = null;
+            break;
+          } catch (tryError) {
+            lastError = tryError;
+            if (!/not contained in bundle/i.test(String(tryError?.message || ''))) break;
+            console.warn(`[telephony] adresse ${addressSid} absente du dossier National, suivante.`);
+          }
+        }
+        if (lastError) throw lastError;
+        console.log('[telephony] achat réussi avec le dossier National.');
+      }
       console.log('✅ Twilio purchase successful:', JSON.stringify(purchasedNumber, null, 2));
     } catch (twilioError) {
       console.error('❌ detailed Twilio API Error:', JSON.stringify(twilioError, Object.getOwnPropertyNames(twilioError), 2));
+      if (twilioError.code === 21649) {
+        // Refusé avec les dossiers Local puis National : on ne repropose plus sa plage.
+        const range = rememberRejectedRange(phoneNumber);
+        if (range) console.warn(`[telephony] plage ${range} refusée par l'opérateur (21649) : elle n'est plus proposée.`);
+      }
       const error = new Error(`Twilio Purchase Failed: ${twilioError.message}`);
       error.code = twilioError.code;
       error.status = twilioError.status;

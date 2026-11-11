@@ -1,0 +1,128 @@
+/**
+ * Export iCalendar (RFC 5545) d'un rendez-vous interne HARX. Logique pure : aucun accès base ni réseau.
+ *  - lignes terminées par CRLF et repliées à 75 octets (UTF-8, sans couper un caractère) ;
+ *  - texte échappé (`\`, `;`, `,` et retours à la ligne) ;
+ *  - UID stable (identifiant de l'élément) : réimporter le fichier met à jour l'événement au lieu d'en créer un autre ;
+ *  - horaires en UTC (suffixe Z), sans TZID ni VTIMEZONE : valide, et affiché à l'heure locale du lecteur quel que soit le fuseau
+ *    du rendez-vous ; SEQUENCE croissant à chaque déplacement.
+ */
+import { DEFAULT_TIME_ZONE, formatWallTime, isValidTimeZone } from './timeZone.js';
+
+export const ICS_UID_DOMAIN = 'harx.ai';
+const CRLF = '\r\n';
+
+/** Échappement d'une valeur TEXT (RFC 5545, 3.3.11). */
+export function escapeText(value) {
+  return String(value ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/;/g, '\;')
+    .replace(/,/g, '\\,')
+    .replace(/\r\n|\r|\n/g, '\\n');
+}
+
+/** Replie une ligne à 75 octets au plus (UTF-8), la suite commençant par une espace. */
+export function foldLine(line) {
+  if (Buffer.byteLength(line, 'utf8') <= 75) return line;
+  const parts = [];
+  let current = '';
+  let size = 0;
+  let limit = 75;
+  for (const ch of line) {
+    const bytes = Buffer.byteLength(ch, 'utf8');
+    if (size + bytes > limit) {
+      parts.push(current);
+      current = '';
+      size = 0;
+      limit = 74; // la ligne de continuation commence par une espace
+    }
+    current += ch;
+    size += bytes;
+  }
+  parts.push(current);
+  return parts.join(`${CRLF} `);
+}
+
+const pad = (n, w = 2) => String(n).padStart(w, '0');
+
+/** Date UTC au format `20261103T090000Z`. */
+export function formatUtc(date) {
+  return `${pad(date.getUTCFullYear(), 4)}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}T${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}Z`;
+}
+
+/** Nom de fichier proposé au téléchargement. */
+export function icsFilename(item) {
+  const d = new Date(item.dueAt);
+  const stamp = Number.isNaN(d.getTime()) ? 'rendez-vous' : formatWallTime(d, item.timeZone && isValidTimeZone(item.timeZone) ? item.timeZone : DEFAULT_TIME_ZONE).slice(0, 13).replace('T', '-');
+  return `rendez-vous-${stamp}.ics`;
+}
+
+export const icsUid = (item) => `${String(item.id)}@${ICS_UID_DOMAIN}`;
+
+/**
+ * @param {{id: string, title: string, note?: string, contactName?: string, contactPhone?: string, dueAt: string|Date,
+ *          durationMinutes?: number|null, status?: string, videoUrl?: string, sequence?: number, updatedAt?: string|Date,
+ *          createdAt?: string|Date, assignee?: {name?: string}}} item vue de l'élément (voir `toItem`)
+ * @returns {string} contenu du fichier .ics
+ */
+function eventLines(item) {
+  const start = new Date(item.dueAt || NaN);
+  if (!item.id || Number.isNaN(start.getTime())) throw new Error('Rendez-vous sans date : export impossible.');
+  const minutes = Number.isFinite(Number(item.durationMinutes)) && Number(item.durationMinutes) > 0 ? Number(item.durationMinutes) : 30;
+  const end = new Date(start.getTime() + minutes * 60_000);
+  const stampSource = new Date(item.updatedAt || item.createdAt || start);
+  const stamp = Number.isNaN(stampSource.getTime()) ? start : stampSource;
+  const canceled = item.status === 'canceled';
+
+  const description = [
+    item.contactName ? `Rendez-vous avec ${item.contactName}.` : '',
+    item.contactPhone ? `Téléphone : ${item.contactPhone}` : '',
+    item.assignee?.name ? `En charge : ${item.assignee.name}` : '',
+    item.location ? `Lieu : ${item.location}` : '',
+    item.videoUrl ? `Visio : ${item.videoUrl}` : '',
+    item.note ? `Note : ${item.note}` : '',
+  ].filter(Boolean).join('\n');
+
+  return [
+    'BEGIN:VEVENT',
+    `UID:${icsUid(item)}`,
+    `DTSTAMP:${formatUtc(stamp)}`,
+    `DTSTART:${formatUtc(start)}`,
+    `DTEND:${formatUtc(end)}`,
+    `SEQUENCE:${Math.max(0, Math.floor(Number(item.sequence) || 0))}`,
+    `SUMMARY:${escapeText(item.title || 'Rendez-vous')}`,
+    ...(description ? [`DESCRIPTION:${escapeText(description)}`] : []),
+    ...(item.location || item.videoUrl ? [`LOCATION:${escapeText(item.location || item.videoUrl)}`] : []),
+    ...(item.videoUrl ? [`URL:${item.videoUrl}`] : []),
+    `STATUS:${canceled ? 'CANCELLED' : 'CONFIRMED'}`,
+    'TRANSP:OPAQUE',
+    ...(canceled ? [] : ['BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:Rappel de rendez-vous', 'TRIGGER:-PT15M', 'END:VALARM']),
+    'END:VEVENT',
+  ];
+}
+
+const calendarHeader = (extra = []) => [
+  'BEGIN:VCALENDAR',
+  'VERSION:2.0',
+  'PRODID:-//HARX//Call Centre Agenda//FR',
+  'CALSCALE:GREGORIAN',
+  'METHOD:PUBLISH',
+  ...extra,
+];
+
+export function buildAppointmentIcs(item) {
+  const lines = [...calendarHeader(), ...eventLines(item), 'END:VCALENDAR'];
+  return lines.map(foldLine).join(CRLF) + CRLF;
+}
+
+/**
+ * Flux d'abonnement : plusieurs rendez-vous dans un seul calendrier. Un élément inexploitable (sans date) est ignoré
+ * au lieu de faire échouer tout le flux.
+ */
+export function buildCalendarIcs(items, { name = 'Rendez-vous HARX' } = {}) {
+  const events = [];
+  for (const item of items) {
+    try { events.push(...eventLines(item)); } catch { /* rendez-vous sans date : ignoré */ }
+  }
+  const header = calendarHeader([`X-WR-CALNAME:${escapeText(name)}`, 'REFRESH-INTERVAL;VALUE=DURATION:PT1H', 'X-PUBLISHED-TTL:PT1H']);
+  return [...header, ...events, 'END:VCALENDAR'].map(foldLine).join(CRLF) + CRLF;
+}

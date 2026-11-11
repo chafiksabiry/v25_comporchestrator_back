@@ -13,7 +13,7 @@ const companyPaymentSchema = new mongoose.Schema({
   purpose: {
     type: String,
     required: true,
-    enum: ['wallet_deposit', 'minutes_purchase', 'tokens_purchase', 'subscription_upgrade'],
+    enum: ['wallet_deposit', 'minutes_purchase', 'tokens_purchase', 'bundle_purchase', 'subscription_upgrade'],
     index: true
   },
   provider: {
@@ -21,7 +21,7 @@ const companyPaymentSchema = new mongoose.Schema({
     required: true,
     enum: ['stripe', 'paypal']
   },
-  /** Charge amount in cents (EUR). */
+  /** Charge amount in cents, in `currency` (devise du pays de l'entreprise : EUR, USD ou GBP, mêmes montants). */
   amount: {
     type: Number,
     required: true,
@@ -53,7 +53,7 @@ const companyPaymentSchema = new mongoose.Schema({
   },
   failureReason: { type: String },
   fulfilledAt: { type: Date },
-  /** planId, userId, stripePriceId, planName for subscription_upgrade */
+  /** planId, userId, stripePriceId, planName for subscription_upgrade ; { minutes, tokens, minutesCredited, tokensCredited } for bundle_purchase */
   meta: { type: mongoose.Schema.Types.Mixed }
 }, { timestamps: true });
 

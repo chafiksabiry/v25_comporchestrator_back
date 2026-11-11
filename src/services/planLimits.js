@@ -1,5 +1,6 @@
 import { Subscription } from '../models/Subscription.js';
 import { stripeService } from './stripeService.js';
+import { CALLCENTER_TIER_LINES, callcenterTierFromMetadata } from './callcenterTier.js';
 
 function numberOrNull(value) {
   const n = Number(value);
@@ -28,13 +29,23 @@ export async function loadCompanyPlanLimits(companyId) {
   if (!plan || typeof plan === 'string') return null;
 
   const metadata = metadataObject(plan.metadata);
+  const productEntry = Object.entries(metadata).find(([k]) => k.trim().toLowerCase() === 'harx_product');
   const fromMeta = stripeService.extractStripeProductLimits({ metadata });
   return {
     planName: plan.name ? String(plan.name) : null,
+    /** Produit du forfait (metadata `harx_product`), ex. `callcenter` ; null pour les forfaits TaaS. */
+    product: productEntry ? String(productEntry[1] ?? '').trim().toLowerCase() || null : null,
+    /** Palier Call Centre canonique (metadata `callcenter_tier`), null sinon. */
+    callcenterTier: callcenterTierFromMetadata(metadata),
     maxGigs: numberOrNull(fromMeta.maxGigs) ?? numberOrNull(plan.maxGigs),
     maxReps: numberOrNull(fromMeta.maxReps) ?? numberOrNull(plan.maxReps),
     communicationMinutes: numberOrNull(fromMeta.communicationMinutes) ?? numberOrNull(plan.communicationMinutes),
-    activeLocalNumbers: numberOrNull(fromMeta.activeLocalNumbers) ?? numberOrNull(plan.activeLocalNumbers),
+    activeLocalNumbers:
+      numberOrNull(fromMeta.activeLocalNumbers) ??
+      numberOrNull(plan.activeLocalNumbers) ??
+      (productEntry && String(productEntry[1] ?? '').trim().toLowerCase() === 'callcenter'
+        ? numberOrNull(CALLCENTER_TIER_LINES[callcenterTierFromMetadata(metadata)])
+        : null),
     aiToken: fromMeta.aiToken || (plan.aiToken ? String(plan.aiToken) : null),
     aiTokensIncluded: numberOrNull(fromMeta.aiTokensIncluded) ?? numberOrNull(plan.aiTokensIncluded),
   };
@@ -43,13 +54,15 @@ export async function loadCompanyPlanLimits(companyId) {
 export function localNumberLimitPayload(limits, existingCount) {
   const max = limits?.activeLocalNumbers;
   if (max == null || existingCount < max) return null;
-  const plan = limits.planName || 'actuel';
+  const plan = limits.planName || 'actuelle';
   return {
     error: 'Active local number limit',
     code: 'ACTIVE_LOCAL_NUMBER_LIMIT',
     max,
     existingCount,
     planName: limits.planName,
-    message: `Le plan ${plan} inclut ${max} numéro${max > 1 ? 's' : ''} local${max > 1 ? 'aux' : ''} actif${max > 1 ? 's' : ''}. Passez à un plan supérieur pour en ajouter.`,
+    message: `L'offre ${plan} inclut ${max} numéro${max > 1 ? 's' : ''} local${max > 1 ? 'aux' : ''} actif${max > 1 ? 's' : ''}. Passez à une offre supérieure pour en ajouter.`,
   };
 }
+
+export { isLineTrialAllowed, isLineIncluded } from './lineTrialPolicy.js';
