@@ -39,6 +39,11 @@ function eventOf(item, tools) {
   return { timeZone: resolveItemTimeZone(item, tools), title: item.title, description: describe(item), location: item.location || item.videoUrl || '', startsAt: start, endsAt: new Date(start.getTime() + (Number(item.durationMinutes) || DEFAULT_MINUTES) * 60000) };
 }
 
+/** Événement d'agenda d'un rendez-vous (titre, description, lieu, créneau, fuseau résolu) : sert aussi à l'agenda délégué (voir delegatedAppointments.js). */
+export async function appointmentEvent(companyId, appt) {
+  return eventOf({ ...appt, videoUrl: '' }, mergedTools(await loadTools(companyId)));
+}
+
 /** Adaptateur d'agenda d'UN centre pour calendarSync (rendez-vous = vue `toItem` + companyId + calendarExternalId). */
 function calendarAdapter(companyId, provider) {
   const P = PROVIDERS[provider];

@@ -74,6 +74,14 @@ export function validateCreate(body, access, now = Date.now()) {
   const contactEmail = typeof b.contactEmail === 'string' ? b.contactEmail.trim().toLowerCase() : '';
   if (contactEmail && !isValidEmail(contactEmail)) return bad('Adresse e-mail invalide.');
   if (b.videoLink !== undefined && typeof b.videoLink !== 'boolean') return bad('Option de visio invalide.');
+  // Agenda délégué (compte partagé) où ajouter aussi le rendez-vous : facultatif, rendez-vous uniquement. Les droits sont vérifiés par le contrôleur.
+  let calendarAccountId = null;
+  if (b.calendarAccountId !== undefined && b.calendarAccountId !== null && b.calendarAccountId !== '') {
+    if (model !== 'appointment') return bad('L’agenda délégué ne concerne que les rendez-vous.');
+    if (!isObjectId(b.calendarAccountId)) return bad('Agenda délégué invalide.');
+    calendarAccountId = b.calendarAccountId;
+  }
+  if (b.ignoreConflicts !== undefined && typeof b.ignoreConflicts !== 'boolean') return bad('Option invalide.');
   if (b.location !== undefined && typeof b.location !== 'string') return bad('Le lieu doit être un texte.');
   if (typeof b.location === 'string' && b.location.trim().length > MAX_LOCATION) return bad(`Le lieu doit faire ${MAX_LOCATION} caractères au maximum.`);
   if (model === 'appointment' && !contactName) return bad('Indiquez la personne concernée par le rendez-vous.');
@@ -107,6 +115,8 @@ export function validateCreate(body, access, now = Date.now()) {
       contactName, contactPhone, contactEmail,
       location: model === 'appointment' && typeof b.location === 'string' ? b.location.trim() : '',
       videoLink: model === 'appointment' && b.videoLink === true,
+      calendarAccountId,
+      ignoreConflicts: b.ignoreConflicts === true,
       dueAt: due.date || null,
       timeZone: zone.value,
       durationMinutes,
@@ -162,6 +172,8 @@ export function validatePatch(body, item, now = Date.now()) {
     if (typeof b.location !== 'string' || b.location.trim().length > MAX_LOCATION) return bad(`Le lieu doit être un texte de ${MAX_LOCATION} caractères au maximum.`);
     set.location = b.location.trim();
   }
+  // L'agenda délégué d'un rendez-vous ne change jamais : on accepte seulement la valeur déjà enregistrée (aucun déplacement d'agenda).
+  if (b.calendarAccountId !== undefined && String(b.calendarAccountId ?? '') !== String(item.calendarAccountId ?? '')) return bad('L’agenda d’un rendez-vous existant ne peut pas être changé.');
   if (b.contactEmail !== undefined) {
     const e = typeof b.contactEmail === 'string' ? b.contactEmail.trim().toLowerCase() : null;
     if (e === null || (e && !isValidEmail(e))) return bad('Adresse e-mail invalide.');
@@ -240,7 +252,10 @@ export function toItem(i) {
     sequence: o.sequence || 0,
     updatedAt: o.updatedAt || null,
     fromAiPlan: o.fromAiPlan === true,
-    calendar: { status: o.calendarStatus || 'not_connected', provider: o.calendarProvider || null },
+    calendar: {
+      status: o.calendarStatus || 'not_connected', provider: o.calendarProvider || null,
+      accountId: o.calendarAccountId || null, accountLabel: o.calendarAccountId ? o.calendarAccountLabel || null : null, message: o.calendarMessage || null,
+    },
     ...(o.model === MESSAGE_MODEL ? {
       message: {
         callerCompany: o.callerCompany || '', forEntryId: o.forEntryId || '', forName: o.forName || '', urgency: o.urgency === 'urgent' ? 'urgent' : 'normal',

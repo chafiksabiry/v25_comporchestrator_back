@@ -667,7 +667,7 @@ try {
   on('POST', /calendar\/v3\/calendars\/primary\/events\?sendUpdates=none$/, gEvent);
   on('PATCH', /primary\/events\/evG1/, gEvent); on('DELETE', /primary\/events\/evG1/, () => ({ status: 204, json: null }));
   let a = await create();
-  assert.equal(a.code, 201, JSON.stringify(a.body)); assert.deepEqual(a.body.data.calendar, { status: 'synced', provider: 'google' });
+  assert.equal(a.code, 201, JSON.stringify(a.body)); assert.deepEqual(a.body.data.calendar, { status: 'synced', provider: 'google', accountId: null, accountLabel: null, message: null });
   let item = store.at(-1); assert.equal(item.calendarExternalId, 'evG1');
   const posted = callsTo(/primary\/events/)[0].body; assert.equal(posted.summary, item.title); assert.ok(!('attendees' in posted)); assert.ok(!JSON.stringify(posted).includes('0612')); assert.match(posted.description, /Rendez-vous avec Mme Durand/);
   let p = await patch(item, { dueAt: future(8) });
@@ -679,7 +679,7 @@ try {
   p = await patch(item, { status: 'todo' }); assert.equal(item.calendarExternalId, 'evG1', 'réouverture : événement recréé');
   // échec du fournisseur : le rendez-vous HARX existe, statut failed visible
   reset(); std(); on('POST', /primary\/events/, () => ({ status: 500, json: null }));
-  a = await create(); assert.equal(a.code, 201); assert.deepEqual(a.body.data.calendar, { status: 'failed', provider: 'google' }); item = store.at(-1); assert.ok(!item.calendarExternalId);
+  a = await create(); assert.equal(a.code, 201); assert.deepEqual(a.body.data.calendar, { status: 'failed', provider: 'google', accountId: null, accountLabel: null, message: null }); item = store.at(-1); assert.ok(!item.calendarExternalId);
   on('POST', /primary\/events/, gEvent); p = await patch(item, { title: 'Nouveau titre' });
   assert.equal(p.body.data.calendar.status, 'synced', 'une modification ultérieure retente la synchronisation'); assert.equal(item.calendarExternalId, 'evG1');
   on('PATCH', /primary\/events\/evG1/, () => ({ status: 500, json: null })); p = await patch(item, { title: 'Encore' });
@@ -688,11 +688,11 @@ try {
   conns.length = 0; reset(); std();
   a = await create(); assert.equal(a.code, 201); assert.equal(a.body.data.calendar.status, 'failed'); assert.equal(httpCalls.length, 0);
   // aucun agenda : comme avant
-  setTools({}); a = await create(); assert.deepEqual(a.body.data.calendar, { status: 'not_connected', provider: null }); assert.equal(httpCalls.length, 0);
+  setTools({}); a = await create(); assert.deepEqual(a.body.data.calendar, { status: 'not_connected', provider: null, accountId: null, accountLabel: null, message: null }); assert.equal(httpCalls.length, 0);
   // agenda Microsoft
   setTools({ agenda: { provider: 'microsoft' } }); reset(); std(); putConnection(C1, 'microsoft');
   on('POST', /graph\.microsoft\.com\/v1\.0\/me\/events$/, () => ({ status: 201, json: { id: 'AAMk=ev9' } })); on('PATCH', /me\/events\/AAMk%3Dev9/, () => ({ status: 200, json: { id: 'AAMk=ev9' } })); on('DELETE', /me\/events\/AAMk%3Dev9/, () => ({ status: 204, json: null }));
-  a = await create(); assert.deepEqual(a.body.data.calendar, { status: 'synced', provider: 'microsoft' }); item = store.at(-1); assert.equal(item.calendarExternalId, 'AAMk=ev9');
+  a = await create(); assert.deepEqual(a.body.data.calendar, { status: 'synced', provider: 'microsoft', accountId: null, accountLabel: null, message: null }); item = store.at(-1); assert.equal(item.calendarExternalId, 'AAMk=ev9');
   await patch(item, { durationMinutes: 60 }); assert.equal(callsTo(/me\/events\//).filter((x) => x.method === 'PATCH').length, 1);
   await patch(item, { status: 'canceled' }); assert.equal(callsTo(/me\/events\//).filter((x) => x.method === 'DELETE').length, 1); assert.equal(item.calendarExternalId, null);
   // agenda changé après coup : l'événement est supprimé là où il a été créé
@@ -737,7 +737,7 @@ try {
   setTools({ visio: { provider: 'google_meet', customUrl: '', chosen: true } }); reset(); std(); putConnection(C1, 'google');
   on('POST', /primary\/events/, meetEvent); on('DELETE', /primary\/events\/evMeet/, () => ({ status: 204, json: null }));
   a = await create({ videoLink: true }); item = store.at(-1);
-  assert.equal(a.body.data.videoUrl, MEET); assert.deepEqual(a.body.data.calendar, { status: 'not_connected', provider: null }); assert.equal(item.videoExternalId, 'evMeet');
+  assert.equal(a.body.data.videoUrl, MEET); assert.deepEqual(a.body.data.calendar, { status: 'not_connected', provider: null, accountId: null, accountLabel: null, message: null }); assert.equal(item.videoExternalId, 'evMeet');
   await patch(item, { status: 'canceled' }); assert.equal(callsTo(/primary\/events\/evMeet/).filter((x) => x.method === 'DELETE').length, 1);
   // Teams (événement avec réunion en ligne)
   const TEAMS = 'https://teams.microsoft.com/l/meetup-join/19%3ameeting_ABCdef%40thread.v2/0?context=%7b%22Tid%22%3a%22x%22%7d';
