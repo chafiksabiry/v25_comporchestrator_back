@@ -20,10 +20,10 @@ async function mayRead(req, companyId) {
   return inbound.enabled === true && inbound.secretaries === true;
 }
 
-/** 409 : inbound_disabled | no_mailbox | read_scope_missing | needs_reauth ; 502 provider_error ; jamais le détail du fournisseur, ni un contenu de message. */
+/** 409 : inbound_disabled | no_mailbox | read_scope_missing | write_scope_missing | needs_reauth ; 502 provider_error ; jamais le détail du fournisseur, ni un contenu de message. */
 function sendError(res, error, what) {
   if (error instanceof SecretariatError) {
-    if (['inbound_disabled', 'no_mailbox', 'read_scope_missing', 'needs_reauth'].includes(error.code)) return fail(res, 409, error.code, error.message);
+    if (['inbound_disabled', 'no_mailbox', 'read_scope_missing', 'write_scope_missing', 'needs_reauth'].includes(error.code)) return fail(res, 409, error.code, error.message);
     if (['not_connected', 'unavailable'].includes(error.code)) return fail(res, 409, 'no_mailbox', 'Aucune messagerie n’est connectée. Connectez-la dans Paramétrage > Outils.');
     if (error.code === 'provider_refused') return fail(res, 409, 'read_scope_missing', 'Le fournisseur a refusé la lecture : l’autorisation de lecture est absente ou révoquée.');
     if (error.code === 'invalid_request') return fail(res, 400, 'invalid_request', error.message);
@@ -70,7 +70,7 @@ export const inboundEmailsController = {
     res.json({ success: true, data });
   }, 'body'),
   update: guard(async (companyId, req, res) => res.json({ success: true, data: await markHandled(companyId, req.params.id, req.body) }), 'update'),
-  /** Suppression DANS L'APPLICATION seulement (aucune écriture chez le fournisseur). Re-suppression : 404. */
+  /** Suppression dans l'application ; avec `inbound.mailboxActions` + scope d'écriture : mise à la corbeille chez le fournisseur d'abord. Re-suppression : 404. */
   remove: guard(async (companyId, req, res) => res.json({ success: true, data: await deleteInbound(companyId, req.params.id) }), 'remove'),
   deleteMany: guard(async (companyId, req, res) => res.json({ success: true, data: await deleteManyInbound(companyId, req.body) }), 'deleteMany'),
   archiveMany: guard(async (companyId, req, res) => res.json({ success: true, data: await archiveManyInbound(companyId, req.body) }), 'archiveMany'),

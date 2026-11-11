@@ -32,7 +32,7 @@ export const DEFAULT_TOOLS = Object.freeze({
   agenda: { provider: 'none' },
   visio: { provider: 'jitsi', customUrl: '', chosen: false },
   timeZone: '',
-  inbound: { enabled: false, secretaries: false, lastSyncAt: null },
+  inbound: { enabled: false, secretaries: false, mailboxActions: false, lastSyncAt: null },
   agendaFeed: { tokenHash: null },
 });
 
@@ -104,13 +104,19 @@ export function validateToolsPatch(body, current, connected = new Set()) {
       if (typeof i.enabled !== 'boolean') return bad('« inbound.enabled » doit être vrai ou faux.');
       set['inbound.enabled'] = i.enabled;
       // Désactivation : la dernière lecture est oubliée (les e-mails stockés sont purgés par le contrôleur).
-      if (!i.enabled) { set['inbound.lastSyncAt'] = null; set['inbound.secretaries'] = false; }
+      if (!i.enabled) { set['inbound.lastSyncAt'] = null; set['inbound.secretaries'] = false; set['inbound.mailboxActions'] = false; }
     }
     if (i.secretaries !== undefined) {
       if (typeof i.secretaries !== 'boolean') return bad('« inbound.secretaries » doit être vrai ou faux.');
       const enabledAfter = i.enabled !== undefined ? i.enabled : cur.inbound.enabled === true;
       if (i.secretaries && !enabledAfter) return bad('Activez d’abord la lecture des e-mails entrants avant de l’ouvrir aux secrétaires.');
       set['inbound.secretaries'] = i.secretaries;
+    }
+    if (i.mailboxActions !== undefined) {
+      if (typeof i.mailboxActions !== 'boolean') return bad('« inbound.mailboxActions » doit être vrai ou faux.');
+      const enabledAfter = i.enabled !== undefined ? i.enabled : cur.inbound.enabled === true;
+      if (i.mailboxActions && !enabledAfter) return bad('Activez d’abord la lecture des e-mails entrants avant de répercuter la suppression et l’archivage dans la messagerie.');
+      set['inbound.mailboxActions'] = i.mailboxActions; // aucune écriture chez le fournisseur à ce stade : le réglage ne fait qu'autoriser les actions ultérieures
     }
   }
 
@@ -160,7 +166,7 @@ export function toView(doc, feedUrl = null) {
     visio: { provider: t.visio.provider, customUrl: t.visio.customUrl },
     agenda: { provider: t.agenda.provider, feedUrl: feedUrl || null },
     timeZone: t.timeZone,
-    inbound: { enabled: t.inbound.enabled === true, secretaries: t.inbound.enabled === true && t.inbound.secretaries === true },
+    inbound: { enabled: t.inbound.enabled === true, secretaries: t.inbound.enabled === true && t.inbound.secretaries === true, mailboxActions: t.inbound.enabled === true && t.inbound.mailboxActions === true },
     configured: {
       email: Boolean(email.fromName || email.replyTo || email.signature) || email.provider !== 'platform',
       // Vrai seulement si un fournisseur connecté (Google Meet, Teams, Zoom) est choisi ; 'jitsi' / 'custom' = aucune visio.

@@ -10,7 +10,14 @@ export const PROVIDER_LABEL = { google: 'Google', microsoft: 'Microsoft 365', zo
 export const READ_SCOPE = { google: 'https://www.googleapis.com/auth/gmail.readonly', microsoft: 'Mail.Read' };
 const normScope = (s) => String(s).trim().toLowerCase().replace(/^https:\/\/graph\.microsoft\.com\//, '');
 /** Le scope de lecture est-il présent parmi les scopes obtenus ? (Microsoft peut renvoyer « Mail.Read » ou l'URI Graph complète.) */
-export const hasReadScope = (provider, scopes) => Boolean(READ_SCOPE[provider]) && Array.isArray(scopes) && scopes.some((s) => normScope(s) === normScope(READ_SCOPE[provider]));
+/**
+ * Scope d'ÉCRITURE de la boîte (mise à la corbeille / archivage répercutés dans la messagerie), OPTIONNEL et SÉPARÉ : demandé seulement avec `{ write: true }`.
+ * Il inclut la lecture (gmail.modify, Mail.ReadWrite) : sa présence suffit donc aussi à `hasReadScope`. Google : scope restreint (vérification Google requise).
+ */
+export const WRITE_SCOPE = { google: 'https://www.googleapis.com/auth/gmail.modify', microsoft: 'Mail.ReadWrite' };
+const hasScope = (scopes, wanted) => Array.isArray(scopes) && scopes.some((s) => normScope(s) === normScope(wanted));
+export const hasWriteScope = (provider, scopes) => Boolean(WRITE_SCOPE[provider]) && hasScope(scopes, WRITE_SCOPE[provider]);
+export const hasReadScope = (provider, scopes) => Boolean(READ_SCOPE[provider]) && (hasScope(scopes, READ_SCOPE[provider]) || hasWriteScope(provider, scopes));
 
 /**
  * Erreur « métier » des connecteurs. `message` est TOUJOURS un texte français sûr (jamais de jeton, d'en-tête ni de corps de réponse).

@@ -41,7 +41,11 @@ export const secretariatConnectionsController = {
       const read = req.body?.read === undefined ? false : req.body.read;
       if (typeof read !== 'boolean') return fail(res, 400, 'Le champ « read » doit être vrai ou faux.');
       if (read && !['google', 'microsoft'].includes(provider)) return fail(res, 400, 'La lecture des e-mails n’est pas disponible pour ce fournisseur.');
-      const url = startAuthorization({ companyId: String(companyId), userId: req.companyAccess.userId, provider, returnTo, read });
+      // `write: true` : demande en plus le scope (optionnel, séparé) d'écriture (corbeille / archivage dans la messagerie ; inclut la lecture).
+      const write = req.body?.write === undefined ? false : req.body.write;
+      if (typeof write !== 'boolean') return fail(res, 400, 'Le champ « write » doit être vrai ou faux.');
+      if (write && !['google', 'microsoft'].includes(provider)) return fail(res, 400, 'La gestion de la messagerie n’est pas disponible pour ce fournisseur.');
+      const url = startAuthorization({ companyId: String(companyId), userId: req.companyAccess.userId, provider, returnTo, read, write });
       res.json({ success: true, data: { url } });
     } catch (error) {
       if (error instanceof SecretariatError) return fail(res, error.code === 'unavailable' ? 409 : 500, error.message);

@@ -34,6 +34,8 @@ const schema = new mongoose.Schema(
       enabled: { type: Boolean, default: false },
       /** Ouvre la rubrique aux secrétaires (rôle agent) de l'entreprise ; sans effet si `enabled` est faux. */
       secretaries: { type: Boolean, default: false },
+      /** Répercute suppression (corbeille) ET archivage dans la vraie messagerie ; exige le scope d'écriture (canModify). Faux si `enabled` est faux. */
+      mailboxActions: { type: Boolean, default: false },
       lastSyncAt: { type: Date, default: null },
     },
     agendaFeed: {
