@@ -1,13 +1,24 @@
 import mongoose from 'mongoose';
 import { canManage } from '../services/followUps.js';
 import { inboundView, markHandled, readInboundBody, refreshInbound } from '../services/inboundEmails.js';
+import { loadTools, mergedTools } from '../services/secretariatTools.js';
 import { SecretariatError } from '../services/secretariatProviders/common.js';
 
-const NOT_ALLOWED = 'Seuls le titulaire et les membres autorisés à gérer les appels peuvent consulter les e-mails entrants.';
+const NOT_ALLOWED = 'Seuls le titulaire, les membres autorisés à gérer les appels et, si l’entreprise l’a autorisé, les secrétaires peuvent consulter les e-mails entrants.';
 const fail = (res, status, code, message) => res.status(status).json({ success: false, code, error: message, message });
 const companyOid = (req) => (mongoose.Types.ObjectId.isValid(req.params.companyId) ? new mongoose.Types.ObjectId(req.params.companyId) : null);
-/** Mêmes droits que les réglages « Outils » en écriture : titulaire ou membre autorisé (jamais un agent, jamais un appel de service sans personne). */
+/** Titulaire ou membre autorisé (jamais un agent, jamais un appel de service sans personne). */
 const mayManage = (req) => Boolean(req.companyAccess) && canManage(req.companyAccess);
+/**
+ * Accès aux e-mails entrants : gestionnaire, OU secrétaire (rôle agent, entreprise du JWT déjà vérifiée par requireCompanyParam)
+ * quand l'entreprise a activé la lecture ET l'a ouverte aux secrétaires.
+ */
+async function mayRead(req, companyId) {
+  if (mayManage(req)) return true;
+  if (req.companyAccess?.role !== 'agent') return false;
+  const { inbound } = mergedTools(await loadTools(companyId));
+  return inbound.enabled === true && inbound.secretaries === true;
+}
 
 /** 409 : inbound_disabled | no_mailbox | read_scope_missing | needs_reauth ; 502 provider_error ; jamais le détail du fournisseur, ni un contenu de message. */
 function sendError(res, error, what) {
@@ -27,7 +38,7 @@ const guard = (handler, what) => async (req, res) => {
   try {
     const companyId = companyOid(req);
     if (!companyId) return fail(res, 400, 'invalid_request', 'Identifiant de centre invalide.');
-    if (!mayManage(req)) return fail(res, 403, 'forbidden', NOT_ALLOWED);
+    if (!(await mayRead(req, String(companyId)))) return fail(res, 403, 'forbidden', NOT_ALLOWED);
     return await handler(String(companyId), req, res);
   } catch (error) {
     return sendError(res, error, what);
@@ -35,6 +46,18 @@ const guard = (handler, what) => async (req, res) => {
 };
 
 export const inboundEmailsController = {
+  /** Léger, pour tout membre : { allowed } seulement (jamais de 403 pour un agent non autorisé). */
+  async access(req, res) {
+    try {
+      const companyId = companyOid(req);
+      if (!companyId) return fail(res, 400, 'invalid_request', 'Identifiant de centre invalide.');
+      const { inbound } = mergedTools(await loadTools(String(companyId)));
+      const allowed = inbound.enabled === true && (await mayRead(req, String(companyId)));
+      res.json({ success: true, data: { allowed } });
+    } catch (error) {
+      return sendError(res, error, 'access');
+    }
+  },
   list: guard(async (companyId, req, res) => res.json({ success: true, data: await inboundView(companyId) }), 'list'),
   refresh: guard(async (companyId, req, res) => res.json({ success: true, data: await refreshInbound(companyId) }), 'refresh'),
   body: guard(async (companyId, req, res) => {

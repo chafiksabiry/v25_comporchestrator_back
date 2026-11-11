@@ -20,7 +20,8 @@ router.post('/tools/:companyId/agenda-feed', authenticate, requireCompanyParam, 
 router.get('/connections/:companyId', authenticate, requireCompanyParam, cx.list);
 router.post('/connections/:companyId/:provider/start', authenticate, requireCompanyParam, cx.start);
 router.delete('/connections/:companyId/:provider', authenticate, requireCompanyParam, cx.remove);
-// E-mails ENTRANTS (messagerie connectée, métadonnées seulement ; corps relu en direct) : titulaire/responsable autorisé (contrôleur).
+// E-mails ENTRANTS (messagerie connectée, métadonnées seulement ; corps relu en direct) : titulaire/responsable autorisé, ou secrétaire si l'entreprise l'a ouvert (contrôleur).
+router.get('/inbound-emails/:companyId/access', authenticate, requireCompanyParam, ib.access);
 router.get('/inbound-emails/:companyId', authenticate, requireCompanyParam, ib.list);
 router.post('/inbound-emails/:companyId/refresh', authenticate, requireCompanyParam, ib.refresh);
 router.get('/inbound-emails/:companyId/:id/body', authenticate, requireCompanyParam, ib.body);

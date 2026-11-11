@@ -32,6 +32,8 @@ const schema = new mongoose.Schema(
     /** E-mails entrants (lecture de la messagerie connectée) : désactivé par défaut ; `lastSyncAt` = dernière lecture chez le fournisseur. */
     inbound: {
       enabled: { type: Boolean, default: false },
+      /** Ouvre la rubrique aux secrétaires (rôle agent) de l'entreprise ; sans effet si `enabled` est faux. */
+      secretaries: { type: Boolean, default: false },
       lastSyncAt: { type: Date, default: null },
     },
     agendaFeed: {
