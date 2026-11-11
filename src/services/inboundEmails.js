@@ -2,9 +2,10 @@ import mongoose from 'mongoose';
 import InboundEmail from '../models/InboundEmail.js';
 import FollowUpItem from '../models/FollowUpItem.js';
 import SecretariatConnection from '../models/SecretariatConnection.js';
+import SecretariatSharedAccount from '../models/SecretariatSharedAccount.js';
 import SecretariatTools from '../models/SecretariatTools.js';
-import { MAILBOX_PROVIDERS, withConnection } from './secretariatConnections.js';
-import { purgeInboundEmails } from './inboundEmailStore.js';
+import { MAILBOX_PROVIDERS, messages, withConnection } from './secretariatConnections.js';
+import { purgeInboundEmails, purgePersonalInbox } from './inboundEmailStore.js';
 import { loadTools, mergedTools } from './secretariatTools.js';
 import { hasReadScope, hasWriteScope, SecretariatError } from './secretariatProviders/common.js';
 import { PROVIDERS } from './secretariatProviders/index.js';
@@ -14,12 +15,44 @@ import { PROVIDERS } from './secretariatProviders/index.js';
  * Garde-fous : aucune lecture chez le fournisseur sans `inbound.enabled` ET sans scope de lecture ; seules des MÉTADONNÉES sont stockées
  * (modèle InboundEmail, TTL 30 jours) ; le corps est relu en direct à la demande, jamais stocké ni journalisé ; isolation stricte par centre.
  * Les appels aux fournisseurs (Gmail messages.list/get, Graph /me/mailFolders/inbox/messages) sont À VÉRIFIER en recette avec un vrai compte.
+ *
+ * DEUX PORTÉES, mêmes règles :
+ *  - ENTREPRISE (premier argument = identifiant de société, chaîne) : e-mails de la boîte du centre, `ownerUserId` et `accountId` nuls ;
+ *  - PERSONNELLE (`mineScope(société, utilisateur, compte)`) : e-mails de la messagerie PERSONNELLE d'une secrétaire (SecretariatSharedAccount.personalUserId),
+ *    lisibles par elle SEULE. Le compte est TOUJOURS rechargé avec société + propriétaire (`loadMine`) : toute autre personne, un autre compte ou une autre
+ *    société obtient « introuvable ». Consentement de lecture séparé et optionnel (`inbound.readEnabled` + scope), indépendant du réglage `inbound.enabled`
+ *    de l'entreprise ; AUCUN scope d'écriture : suppression / archivage = application seulement (`mailbox: 'app_only'`). Chaque requête filtre la portée.
  */
 export const PAGE_SIZE = 25;
 export const REFRESH_MIN_INTERVAL_MS = 30_000;
 const oid = (id) => new mongoose.Types.ObjectId(String(id));
 const OID_RE = /^[0-9a-fA-F]{24}$/;
 export const isId = (v) => typeof v === 'string' && OID_RE.test(v);
+
+/** Portée PERSONNELLE : les trois identifiants viennent de la SESSION (jamais du corps de requête). */
+export const mineScope = (companyId, userId, accountId) => ({ companyId: String(companyId), userId: String(userId), accountId: String(accountId) });
+const asScope = (s) => (s && typeof s === 'object' ? s : { companyId: String(s), userId: null, accountId: null });
+const isMine = (s) => Boolean(s.userId);
+/** Filtre de portée de TOUTE requête sur les e-mails stockés : l'entreprise ne voit jamais un e-mail personnel, et inversement. */
+const scopeFilter = (s) => (isMine(s)
+  ? { companyId: oid(s.companyId), ownerUserId: String(s.userId), accountId: oid(s.accountId) }
+  : { companyId: oid(s.companyId), ownerUserId: null, accountId: null });
+const connOpts = (s) => (isMine(s) ? { accountId: String(s.accountId) } : {});
+const connect = (s, provider, fn) => withConnection(s.companyId, provider, fn, connOpts(s));
+
+/**
+ * Messagerie personnelle de la secrétaire : rechargée avec société ET propriétaire. Inconnue, d'une autre personne ou d'une autre société : not_found.
+ * @returns {Promise<{_id: any, provider: string, accountEmail: string, status: string, scopes: string[], inbound?: {readEnabled?: boolean, lastSyncAt?: Date|null}}>}
+ */
+export async function loadMine(s) {
+  if (!isMine(s) || !isId(String(s.accountId))) throw new SecretariatError('not_found', MINE_NOT_FOUND);
+  const acc = await SecretariatSharedAccount.findOne({ _id: oid(s.accountId), companyId: oid(s.companyId), personalUserId: String(s.userId) }).select('provider accountEmail status scopes inbound').lean();
+  if (!acc) throw new SecretariatError('not_found', MINE_NOT_FOUND);
+  return acc;
+}
+export const MINE_NOT_FOUND = 'Messagerie introuvable.';
+/** Lecture activée = consentement donné, pas arrêté, ET scope de lecture réellement accordé. */
+export const mineReadEnabled = (acc) => acc?.inbound?.readEnabled === true && hasReadScope(acc.provider, acc.scopes);
 
 const attempts = new Map();
 /** Remet à zéro la limite de fréquence (tests). */
@@ -45,6 +78,7 @@ const ERRORS = {
   needs_reauth: 'La connexion de la messagerie a expiré ou a été révoquée. Reconnectez-la dans Paramétrage > Outils.',
   read_scope_missing: 'La messagerie connectée n’a pas l’autorisation de lecture. Autorisez la lecture dans Paramétrage > Outils.',
   write_scope_missing: 'La messagerie connectée n’a pas l’autorisation de gérer les e-mails (corbeille, archivage). Donnez cette autorisation dans Paramétrage > Outils.',
+  mine_read_scope_missing: 'La lecture de votre messagerie n’est pas activée. Activez-la depuis votre profil.',
 };
 
 /**
@@ -52,7 +86,10 @@ const ERRORS = {
  * ET scope d'écriture (`canModify`). Renvoie { sync: false } (application seulement), { sync: true, provider } ; lève write_scope_missing (réglage vrai mais
  * pas d'autorisation d'écriture : rien n'est touché), no_mailbox ou needs_reauth.
  */
-async function mailboxSync(companyId) {
+async function mailboxSync(scope) {
+  const s = asScope(scope);
+  if (isMine(s)) return { sync: false }; // messagerie personnelle : AUCUN scope d'écriture, application seulement
+  const companyId = s.companyId;
   const tools = mergedTools(await loadTools(companyId));
   if (tools.inbound.enabled !== true || tools.inbound.mailboxActions !== true) return { sync: false };
   const found = await locateMailbox(companyId, tools.email.provider);
@@ -90,7 +127,15 @@ async function providerWriteMany(companyId, provider, docs, op) {
 }
 
 /** Contrôle d'accès à la lecture : lève inbound_disabled | no_mailbox | needs_reauth | read_scope_missing. */
-async function requireReadAccess(companyId) {
+async function requireReadAccess(scope) {
+  const s = asScope(scope);
+  if (isMine(s)) {
+    const acc = await loadMine(s);
+    if (acc.status === 'needs_reauth') throw new SecretariatError('needs_reauth', messages.personalNeedsReauth()); // jamais de repli sur un autre compte
+    if (!mineReadEnabled(acc)) throw new SecretariatError('read_scope_missing', ERRORS.mine_read_scope_missing);
+    return { provider: acc.provider, account: acc.accountEmail, lastSyncAt: acc.inbound?.lastSyncAt };
+  }
+  const companyId = s.companyId;
   const tools = mergedTools(await loadTools(companyId));
   if (tools.inbound.enabled !== true) throw new SecretariatError('inbound_disabled', ERRORS.inbound_disabled);
   const found = await locateMailbox(companyId, tools.email.provider);
@@ -116,61 +161,74 @@ const ARCHIVED = { deletedAt: null, archivedAt: { $ne: null } };
 /**
  * Vue renvoyée par GET et par le rafraîchissement. Ne lit RIEN chez le fournisseur.
  * `view` : 'active' (défaut : ni archivés ni supprimés) | 'archived' (archivés non supprimés). `counts` : new/handled sur les actifs, archived = nombre d'archivés.
+ * Portée personnelle : `enabled` = lecture activée par la secrétaire (jamais le réglage de l'entreprise), + `needsReauth` et `email` ; rien n'est listé tant que la lecture n'est pas activée.
  */
-export async function inboundView(companyId, view = 'active') {
+export async function inboundView(scope, view = 'active') {
+  const s = asScope(scope);
   if (view !== 'active' && view !== 'archived') throw new SecretariatError('invalid_request', 'Vue invalide : « active » ou « archived ».');
-  const tools = mergedTools(await loadTools(companyId));
+  const fil = scopeFilter(s);
+  const list = (extra) => InboundEmail.find({ ...fil, ...extra }).sort({ receivedAt: -1 }).limit(PAGE_SIZE).lean();
+  const count = (extra) => InboundEmail.countDocuments({ ...fil, ...extra });
+  const counted = (enabled) => (enabled
+    ? Promise.all([list(view === 'archived' ? ARCHIVED : ACTIVE), count({ ...ACTIVE, status: 'new' }), count({ ...ACTIVE, status: 'handled' }), count(ARCHIVED)])
+    : [[], 0, 0, 0]);
+  const iso = (v) => { const d = v ? new Date(v) : null; return d && !Number.isNaN(d.getTime()) ? d.toISOString() : null; };
+  if (isMine(s)) {
+    const acc = await loadMine(s);
+    const enabled = acc.inbound?.readEnabled === true;
+    const [rows, nw, handled, archived] = await counted(enabled);
+    return {
+      enabled, canRead: acc.status === 'connected' && mineReadEnabled(acc), needsReauth: acc.status === 'needs_reauth', email: acc.accountEmail, provider: acc.provider,
+      lastSyncAt: iso(acc.inbound?.lastSyncAt), counts: { new: nw, handled, archived }, items: rows.map(toItem),
+    };
+  }
+  const tools = mergedTools(await loadTools(s.companyId));
   const enabled = tools.inbound.enabled === true;
-  const cid = oid(companyId);
-  const [located, rows, counts] = await Promise.all([
-    locateMailbox(companyId, tools.email.provider),
-    enabled ? InboundEmail.find({ companyId: cid, ...(view === 'archived' ? ARCHIVED : ACTIVE) }).sort({ receivedAt: -1 }).limit(PAGE_SIZE).lean() : [],
-    enabled
-      ? Promise.all([
-        InboundEmail.countDocuments({ companyId: cid, ...ACTIVE, status: 'new' }),
-        InboundEmail.countDocuments({ companyId: cid, ...ACTIVE, status: 'handled' }),
-        InboundEmail.countDocuments({ companyId: cid, ...ARCHIVED }),
-      ])
-      : [0, 0, 0],
-  ]);
-  const last = tools.inbound.lastSyncAt ? new Date(tools.inbound.lastSyncAt) : null;
-  return {
-    enabled, canRead: located.canRead, lastSyncAt: last && !Number.isNaN(last.getTime()) ? last.toISOString() : null,
-    counts: { new: counts[0], handled: counts[1], archived: counts[2] }, items: rows.map(toItem),
-  };
+  const [located, [rows, nw, handled, archived]] = await Promise.all([locateMailbox(s.companyId, tools.email.provider), counted(enabled)]);
+  return { enabled, canRead: located.canRead, lastSyncAt: iso(tools.inbound.lastSyncAt), counts: { new: nw, handled, archived }, items: rows.map(toItem) };
 }
 
-/** Rafraîchissement : lit les messages récents chez le fournisseur et n'enregistre que des métadonnées. Au plus un appel fournisseur par centre toutes les 30 s. */
-export async function refreshInbound(companyId, now = Date.now()) {
-  const access = await requireReadAccess(companyId);
-  const key = String(companyId);
+/** Rafraîchissement : lit les messages récents chez le fournisseur et n'enregistre que des métadonnées. Au plus un appel fournisseur par portée toutes les 30 s. */
+export async function refreshInbound(scope, now = Date.now()) {
+  const s = asScope(scope);
+  const access = await requireReadAccess(s);
+  const key = isMine(s) ? `mine:${s.accountId}` : String(s.companyId);
   const lastSync = access.lastSyncAt ? new Date(access.lastSyncAt).getTime() : 0;
-  if (now - Math.max(attempts.get(key) || 0, lastSync) < REFRESH_MIN_INTERVAL_MS) return inboundView(companyId); // trop tôt : état stocké, aucun appel fournisseur
+  if (now - Math.max(attempts.get(key) || 0, lastSync) < REFRESH_MIN_INTERVAL_MS) return inboundView(s); // trop tôt : état stocké, aucun appel fournisseur
   attempts.set(key, now);
-  const messages = await withConnection(companyId, access.provider, (accessToken, http) => PROVIDERS[access.provider].listInbox({ http, accessToken, limit: PAGE_SIZE }));
-  // Désactivé (ou retiré) pendant la lecture : on n'écrit rien.
-  if (mergedTools(await loadTools(companyId)).inbound.enabled !== true) throw new SecretariatError('inbound_disabled', ERRORS.inbound_disabled);
-  for (const m of messages.slice(0, PAGE_SIZE)) {
+  const fetched = await connect(s, access.provider, (accessToken, http) => PROVIDERS[access.provider].listInbox({ http, accessToken, limit: PAGE_SIZE }));
+  // Désactivée (ou retirée) pendant la lecture : on n'écrit rien. Personnelle : arrêt de la lecture ou déconnexion = plus rien n'est écrit, et le reste est purgé.
+  const stillEnabled = async () => {
+    if (!isMine(s)) return mergedTools(await loadTools(s.companyId)).inbound.enabled === true;
+    try { return (await loadMine(s)).inbound?.readEnabled === true; } catch { return false; }
+  };
+  const gone = async () => { if (isMine(s)) await purgePersonalInbox(s.companyId, s.userId, s.accountId); else await purgeInboundEmails(s.companyId); };
+  const goneError = () => (isMine(s) ? new SecretariatError('read_scope_missing', ERRORS.mine_read_scope_missing) : new SecretariatError('inbound_disabled', ERRORS.inbound_disabled));
+  if (!(await stillEnabled())) { if (isMine(s)) await gone(); throw goneError(); }
+  const fil = scopeFilter(s);
+  for (const m of fetched.slice(0, PAGE_SIZE)) {
     await InboundEmail.updateOne(
-      { companyId: oid(companyId), providerMessageId: m.id },
+      { ...fil, providerMessageId: m.id },
       { $setOnInsert: { provider: access.provider, fromName: m.fromName, fromEmail: m.fromEmail, subject: m.subject, receivedAt: m.receivedAt, snippet: m.snippet, status: 'new', followUpIds: [], fetchedAt: new Date() } },
       { upsert: true }
     );
   }
-  await SecretariatTools.updateOne({ companyId: oid(companyId) }, { $set: { 'inbound.lastSyncAt': new Date(now) } });
-  // Désactivé pendant l'écriture : purge (aucun résidu après un « off »).
-  if (mergedTools(await loadTools(companyId)).inbound.enabled !== true) { await purgeInboundEmails(companyId); throw new SecretariatError('inbound_disabled', ERRORS.inbound_disabled); }
-  return inboundView(companyId);
+  if (isMine(s)) await SecretariatSharedAccount.updateOne({ _id: oid(s.accountId), companyId: oid(s.companyId), personalUserId: String(s.userId) }, { $set: { 'inbound.lastSyncAt': new Date(now) } });
+  else await SecretariatTools.updateOne({ companyId: oid(s.companyId) }, { $set: { 'inbound.lastSyncAt': new Date(now) } });
+  // Désactivée pendant l'écriture : purge (aucun résidu après un « off »).
+  if (!(await stillEnabled())) { await gone(); throw goneError(); }
+  return inboundView(s);
 }
 
 /** Corps d'un message lu EN DIRECT (texte, ≤ 20 000 caractères). Jamais stocké, jamais journalisé. */
-export async function readInboundBody(companyId, id) {
+export async function readInboundBody(scope, id) {
+  const s = asScope(scope);
   if (!isId(id)) throw new SecretariatError('invalid_request', 'Identifiant d’e-mail invalide.');
-  const access = await requireReadAccess(companyId);
-  const doc = await InboundEmail.findOne({ _id: oid(id), companyId: oid(companyId), deletedAt: null }).select('provider providerMessageId').lean();
+  const access = await requireReadAccess(s);
+  const doc = await InboundEmail.findOne({ _id: oid(id), ...scopeFilter(s), deletedAt: null }).select('provider providerMessageId').lean();
   if (!doc) throw new SecretariatError('not_found', 'E-mail introuvable.');
   if (doc.provider !== access.provider) throw new SecretariatError('no_mailbox', ERRORS.no_mailbox); // la messagerie a changé depuis la lecture
-  const text = await withConnection(companyId, access.provider, (accessToken, http) => PROVIDERS[access.provider].readBody({ http, accessToken, id: doc.providerMessageId }));
+  const text = await connect(s, access.provider, (accessToken, http) => PROVIDERS[access.provider].readBody({ http, accessToken, id: doc.providerMessageId }));
   return { text };
 }
 
@@ -178,9 +236,10 @@ const plainBody = (body) => (body && typeof body === 'object' && !Array.isArray(
 
 /**
  * Marque « traité » (et rattache, facultatif, un élément « À traiter » du MÊME centre) et/ou archive / désarchive. Fonctionne sans lecture chez le fournisseur.
- * Idempotent. Un e-mail supprimé est introuvable (404).
+ * Idempotent. Un e-mail supprimé est introuvable (404). Portée personnelle : toujours dans l'application seulement.
  */
-export async function markHandled(companyId, id, body) {
+export async function markHandled(scope, id, body) {
+  const s = asScope(scope);
   if (!isId(id)) throw new SecretariatError('invalid_request', 'Identifiant d’e-mail invalide.');
   const b = plainBody(body);
   if (b.status === undefined && b.archived === undefined) throw new SecretariatError('invalid_request', 'Indiquez « status » ou « archived ».');
@@ -188,24 +247,26 @@ export async function markHandled(companyId, id, body) {
   if (b.archived !== undefined && typeof b.archived !== 'boolean') throw new SecretariatError('invalid_request', 'Le champ « archived » doit être un booléen.');
   if (b.followUpId !== undefined && b.status === undefined) throw new SecretariatError('invalid_request', 'Un élément à traiter se rattache avec le statut « handled ».');
   if (b.followUpId !== undefined && !isId(b.followUpId)) throw new SecretariatError('invalid_request', 'Identifiant d’élément à traiter invalide.');
-  if (b.followUpId !== undefined && !(await FollowUpItem.exists({ _id: oid(b.followUpId), companyId: oid(companyId) }))) throw new SecretariatError('invalid_request', 'Élément à traiter introuvable.');
+  if (b.followUpId !== undefined && !(await FollowUpItem.exists({ _id: oid(b.followUpId), companyId: oid(s.companyId) }))) throw new SecretariatError('invalid_request', 'Élément à traiter introuvable.');
+  if (isMine(s)) await loadMine(s); // portée personnelle : propriétaire vérifié avant toute écriture
+  const fil = scopeFilter(s);
   const $set = {};
   if (b.status === 'handled') $set.status = 'handled';
   if (b.archived !== undefined) $set.archivedAt = b.archived ? new Date() : null;
-  // Archivage répercuté dans la messagerie (réglage + autorisation d'écriture) : appel fournisseur AVANT la mise à jour locale.
+  // Archivage répercuté dans la messagerie (réglage + autorisation d'écriture ; jamais en portée personnelle) : appel fournisseur AVANT la mise à jour locale.
   let mailbox = 'app_only';
   if (b.archived !== undefined) {
-    const current = await InboundEmail.findOne({ _id: oid(id), companyId: oid(companyId), deletedAt: null }).select('provider providerMessageId').lean();
+    const current = await InboundEmail.findOne({ _id: oid(id), ...fil, deletedAt: null }).select('provider providerMessageId').lean();
     if (!current) throw new SecretariatError('not_found', 'E-mail introuvable.');
-    const sync = await mailboxSync(companyId);
+    const sync = await mailboxSync(s);
     if (sync.sync) {
-      const newId = await providerWrite(companyId, sync.provider, current, b.archived ? 'archive' : 'unarchive');
+      const newId = await providerWrite(s.companyId, sync.provider, current, b.archived ? 'archive' : 'unarchive');
       if (newId) $set.providerMessageId = newId;
       mailbox = 'synced';
     }
   }
   const doc = await InboundEmail.findOneAndUpdate(
-    { _id: oid(id), companyId: oid(companyId), deletedAt: null },
+    { _id: oid(id), ...fil, deletedAt: null },
     { $set, ...(b.followUpId !== undefined ? { $addToSet: { followUpIds: oid(b.followUpId) } } : {}) },
     { new: true }
   ).lean();
@@ -213,17 +274,19 @@ export async function markHandled(companyId, id, body) {
   return { ...toItem(doc), mailbox };
 }
 
-/** Suppression logique (application seulement) : marqueur `deletedAt` + effacement des métadonnées ; le document reste jusqu'au TTL. Déjà supprimé / inconnu / autre centre : not_found (404). */
+/** Suppression logique (application seulement) : marqueur `deletedAt` + effacement des métadonnées ; le document reste jusqu'au TTL. Déjà supprimé / inconnu / autre portée : not_found (404). */
 const DELETE_SET = () => ({ deletedAt: new Date(), fromName: '', fromEmail: '', subject: '', snippet: '', followUpIds: [] });
 
-export async function deleteInbound(companyId, id) {
+export async function deleteInbound(scope, id) {
+  const s = asScope(scope);
   if (!isId(id)) throw new SecretariatError('invalid_request', 'Identifiant d’e-mail invalide.');
-  const filter = { _id: oid(id), companyId: oid(companyId), deletedAt: null };
+  if (isMine(s)) await loadMine(s);
+  const filter = { _id: oid(id), ...scopeFilter(s), deletedAt: null };
   const doc = await InboundEmail.findOne(filter).select('provider providerMessageId').lean();
   if (!doc) throw new SecretariatError('not_found', 'E-mail introuvable.');
   // Réglage + autorisation d'écriture : MISE À LA CORBEILLE chez le fournisseur AVANT l'effacement local ; échec (≠ 404) : rien n'est effacé.
-  const sync = await mailboxSync(companyId);
-  if (sync.sync) await providerWrite(companyId, sync.provider, doc, 'trash');
+  const sync = await mailboxSync(s);
+  if (sync.sync) await providerWrite(s.companyId, sync.provider, doc, 'trash');
   const res = await InboundEmail.updateOne(filter, { $set: DELETE_SET() });
   if (!res || !res.matchedCount) throw new SecretariatError('not_found', 'E-mail introuvable.');
   return { id: String(id), mailbox: sync.sync ? 'trashed' : 'app_only' };
@@ -248,20 +311,22 @@ function parseBulk(body) {
  * Avec répercussion dans la messagerie : corbeille chez le fournisseur d'abord, effacement local des seuls réussis ; tous en échec : provider_error (502).
  * @returns {{deleted: number, failed?: number, mailbox: 'trashed'|'app_only'}}
  */
-export async function deleteManyInbound(companyId, body) {
+export async function deleteManyInbound(scope, body) {
+  const s = asScope(scope);
   const sel = parseBulk(body);
-  const filter = { companyId: oid(companyId), deletedAt: null, ...(sel.ids ? { _id: { $in: sel.ids } } : { status: 'handled', archivedAt: null }) };
-  const sync = await mailboxSync(companyId);
+  if (isMine(s)) await loadMine(s);
+  const filter = { ...scopeFilter(s), deletedAt: null, ...(sel.ids ? { _id: { $in: sel.ids } } : { status: 'handled', archivedAt: null }) };
+  const sync = await mailboxSync(s);
   if (!sync.sync) {
     const res = await InboundEmail.updateMany(filter, { $set: DELETE_SET() });
     return { deleted: res?.matchedCount ?? res?.modifiedCount ?? 0, mailbox: 'app_only' };
   }
   const docs = await InboundEmail.find(filter).select('provider providerMessageId').lean();
-  const results = await providerWriteMany(companyId, sync.provider, docs, 'trash');
+  const results = await providerWriteMany(s.companyId, sync.provider, docs, 'trash');
   const okIds = results.filter((r) => r.ok).map((r) => r.doc._id);
   const failed = results.length - okIds.length;
   if (failed > 0 && !okIds.length) throw new SecretariatError('provider_error', 'La messagerie est momentanément indisponible. Réessayez dans un instant.');
-  if (okIds.length) await InboundEmail.updateMany({ companyId: oid(companyId), deletedAt: null, _id: { $in: okIds } }, { $set: DELETE_SET() });
+  if (okIds.length) await InboundEmail.updateMany({ ...scopeFilter(s), deletedAt: null, _id: { $in: okIds } }, { $set: DELETE_SET() });
   return { deleted: okIds.length, failed, mailbox: 'trashed' };
 }
 
@@ -270,23 +335,38 @@ export async function deleteManyInbound(companyId, body) {
  * appel fournisseur d'abord, mise à jour locale des seuls réussis ; tous en échec : provider_error (502).
  * @returns {{updated: number, failed?: number, mailbox: 'synced'|'app_only'}}
  */
-export async function archiveManyInbound(companyId, body) {
+export async function archiveManyInbound(scope, body) {
+  const s = asScope(scope);
   const sel = parseBulk(body);
   const b = plainBody(body);
   if (b.archived !== undefined && typeof b.archived !== 'boolean') throw new SecretariatError('invalid_request', 'Le champ « archived » doit être un booléen.');
   const archived = b.archived !== false;
-  const filter = { companyId: oid(companyId), deletedAt: null, archivedAt: archived ? null : { $ne: null }, ...(sel.ids ? { _id: { $in: sel.ids } } : { status: 'handled' }) };
-  const sync = await mailboxSync(companyId);
+  if (isMine(s)) await loadMine(s);
+  const filter = { ...scopeFilter(s), deletedAt: null, archivedAt: archived ? null : { $ne: null }, ...(sel.ids ? { _id: { $in: sel.ids } } : { status: 'handled' }) };
+  const sync = await mailboxSync(s);
   if (!sync.sync) {
     const res = await InboundEmail.updateMany(filter, { $set: { archivedAt: archived ? new Date() : null } });
     return { updated: res?.matchedCount ?? res?.modifiedCount ?? 0, mailbox: 'app_only' };
   }
   const docs = await InboundEmail.find(filter).select('provider providerMessageId').lean();
-  const results = await providerWriteMany(companyId, sync.provider, docs, archived ? 'archive' : 'unarchive');
+  const results = await providerWriteMany(s.companyId, sync.provider, docs, archived ? 'archive' : 'unarchive');
   const ok = results.filter((r) => r.ok);
   const failed = results.length - ok.length;
   if (failed > 0 && !ok.length) throw new SecretariatError('provider_error', 'La messagerie est momentanément indisponible. Réessayez dans un instant.');
   const at = archived ? new Date() : null;
-  for (const r of ok) await InboundEmail.updateOne({ _id: r.doc._id, companyId: oid(companyId), deletedAt: null }, { $set: { archivedAt: at, ...(r.newId ? { providerMessageId: r.newId } : {}) } });
+  for (const r of ok) await InboundEmail.updateOne({ _id: r.doc._id, ...scopeFilter(s), deletedAt: null }, { $set: { archivedAt: at, ...(r.newId ? { providerMessageId: r.newId } : {}) } });
   return { updated: ok.length, failed, mailbox: 'synced' };
+}
+
+/**
+ * Arrêt de la lecture de la messagerie PERSONNELLE : la lecture est désactivée (le consentement n'est plus utilisé), les métadonnées stockées sont PURGÉES
+ * immédiatement et plus rien n'est relu. Le jeton (qui sert aussi à l'envoi) n'est PAS révoqué chez le fournisseur : seule une déconnexion le fait.
+ */
+export async function stopMineReading(scope) {
+  const s = asScope(scope);
+  await loadMine(s);
+  await SecretariatSharedAccount.updateOne({ _id: oid(s.accountId), companyId: oid(s.companyId), personalUserId: String(s.userId) }, { $set: { 'inbound.readEnabled': false } });
+  await purgePersonalInbox(s.companyId, s.userId, s.accountId);
+  attempts.delete(`mine:${s.accountId}`);
+  return inboundView(s);
 }

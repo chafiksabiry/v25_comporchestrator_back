@@ -33,6 +33,7 @@ const A = await import('../services/secretariatSharedAccounts.js');
 const E = await import('../services/emailService.js');
 const { encryptJson, decryptJson, loadKey } = await import('../integrations/crypto.js');
 const { default: SecretariatSharedAccount } = await import('../models/SecretariatSharedAccount.js');
+const { default: InboundEmail } = await import('../models/InboundEmail.js');
 const { default: SecretariatConnection } = await import('../models/SecretariatConnection.js');
 const { default: SecretariatTools } = await import('../models/SecretariatTools.js');
 const { default: EmailLog } = await import('../models/EmailLog.js');
@@ -112,6 +113,7 @@ SecretariatSharedAccount.findOneAndUpdate = (f, upd, opts = {}) => {
   return chain([d], true);
 };
 SecretariatSharedAccount.updateOne = async (f, upd) => { const d = accounts.find((x) => match(x, f)); if (d) for (const [p, v] of Object.entries(upd.$set)) setPath(d, p, v); return {}; };
+InboundEmail.deleteMany = async () => ({}); // purge des e-mails d'une messagerie personnelle à sa déconnexion (couverte par personalInbox.test.js)
 SecretariatSharedAccount.deleteOne = async (f) => { const i = accounts.findIndex((x) => match(x, f)); if (i >= 0) accounts.splice(i, 1); return { deletedCount: i >= 0 ? 1 : 0 }; };
 SecretariatConnection.findOne = (f) => chain(conns.filter((d) => match(d, f)).slice(0, 1), true);
 SecretariatConnection.find = (f) => chain(conns.filter((d) => match(d, f)), false);
@@ -510,7 +512,7 @@ try {
   }
   r = await req('GET', `/accounts/${C1}`, { user: 'sophie' });
   assert.equal(r.body.data.accounts[0].mine, true, 'la sienne d’abord'); assert.deepEqual(r.body.data.accounts.slice(1).map((a) => a.mine), r.body.data.accounts.slice(1).map(() => undefined), 'puis les comptes délégués autorisés'); assert.ok(r.body.data.accounts.length >= 2 && r.body.data.accounts.some((x) => x.label === 'Équipe commerciale'));
-  assert.deepEqual(r.body.data.accounts[0], { id: sophieAcc._id, provider: 'google', label: 'Ma messagerie', ownerName: '', email: 'sophie@cabinet.test', status: 'connected', needsReauth: false, mine: true, can: { send: true, calendar: true } });
+  assert.deepEqual(r.body.data.accounts[0], { id: sophieAcc._id, provider: 'google', label: 'Ma messagerie', ownerName: '', email: 'sophie@cabinet.test', status: 'connected', needsReauth: false, mine: true, can: { send: true, calendar: true }, inbound: { readEnabled: false } });
   assert.equal(r.body.data.accounts[1].mine, undefined); assert.ok(!r.text.includes('paul@cabinet.test') && !r.text.includes(paulAcc._id), 'jamais celle d’une autre secrétaire');
   r = await req('GET', `/accounts/${C1}`, { user: 'paul' });
   assert.equal(r.body.data.accounts[0].email, 'paul@cabinet.test'); assert.ok(!r.text.includes('sophie@cabinet.test') && !r.text.includes(sophieAcc._id));

@@ -8,7 +8,7 @@ import { decryptJson, encryptJson, integrationsEnabled, loadKey } from '../integ
 import { defaultHttp } from '../integrations/http.js';
 import { oauthStatus } from '../integrations/oauth.js';
 import { call, hasReadScope, hasWriteScope, isProviderId, PROVIDER_IDS, PROVIDER_LABEL, SecretariatError } from './secretariatProviders/common.js';
-import { purgeInboundEmails } from './inboundEmailStore.js';
+import { purgeInboundEmails, purgePersonalInbox } from './inboundEmailStore.js';
 import { PROVIDERS } from './secretariatProviders/index.js';
 import { isValidTenant, tenantOf } from './secretariatProviders/microsoft.js';
 
@@ -124,9 +124,11 @@ export function readState(state, provider) {
     if (!['google', 'microsoft'].includes(provider) || !sh || typeof sh !== 'object') return null;
     // Messagerie PERSONNELLE de la secrétaire : droits fixes (envoi + agenda), propriétaire = l'utilisateur de l'état (jamais un autre).
     if (sh.personal !== undefined && sh.personal !== true) return null;
+    // `read` (consentement de LECTURE de sa boîte de réception) n'existe que pour la messagerie personnelle ; jamais d'écriture.
+    if (sh.read !== undefined && (sh.read !== true || sh.personal !== true)) return null;
     if (sh.personal === true) {
       if (sh.accountId !== undefined) return null;
-      return { ...base, shared: { label: PERSONAL_LABEL, ownerName: trim(sh.ownerName).slice(0, SHARED_LABEL_MAX), send: true, calendar: true, personal: true } };
+      return { ...base, shared: { label: PERSONAL_LABEL, ownerName: trim(sh.ownerName).slice(0, SHARED_LABEL_MAX), send: true, calendar: true, personal: true, ...(sh.read === true ? { read: true } : {}) } };
     }
     const label = trim(sh.label); const ownerName = trim(sh.ownerName);
     if (!label || label.length > SHARED_LABEL_MAX || ownerName.length > SHARED_LABEL_MAX) return null;
@@ -169,6 +171,8 @@ export async function completeConnection({ state, code }, { http = httpImpl, env
   const accountEmail = trim(await P.accountEmail({ http, accessToken: token.accessToken }));
   if (!/^[^\s@]+@[^\s@]+$/.test(accountEmail) || accountEmail.length > 254) throw new SecretariatError('no_account', 'Le compte connecté n’a pas d’adresse e-mail lisible.');
   const secrets = { accessToken: token.accessToken, refreshToken: token.refreshToken, expiresAt: token.expiresAt };
+  // Consentement de lecture de la messagerie personnelle : le scope de lecture doit avoir été réellement accordé (sinon rien n'est enregistré, le compte existant est intact).
+  if (state.shared?.read === true && !hasReadScope(provider, token.scopes)) throw new SecretariatError('missing_permissions', 'Toutes les autorisations demandées n’ont pas été accordées.');
   if (state.shared) return storeSharedAccount({ state, accountEmail, secrets, scopes: token.scopes.length ? token.scopes : P.scopes, env });
   const credentialsEnc = encryptJson(secrets, { context: context(companyId, provider), key: loadKey(env) });
   await SecretariatConnection.findOneAndUpdate(
@@ -196,7 +200,8 @@ async function storeSharedAccount({ state, accountEmail, secrets, scopes, env })
   const taken = () => new SecretariatError('email_in_use', 'Cette adresse est déjà connectée dans cette société (compte partagé ou messagerie d’une autre personne). Utilisez une autre adresse.');
   if (shared.personal) {
     // Messagerie personnelle : une seule par fournisseur et par secrétaire (reconnexion = mise à jour, même adresse obligatoire).
-    doc = await SecretariatSharedAccount.findOne({ companyId: oid(companyId), provider, personalUserId: String(userId) }).select('accountEmail').lean();
+    doc = await SecretariatSharedAccount.findOne({ companyId: oid(companyId), provider, personalUserId: String(userId) }).select('accountEmail inbound').lean();
+    if (shared.read && !doc) throw new SecretariatError('invalid_request', 'Connectez d’abord votre messagerie avant d’activer la lecture.');
     if (doc && String(doc.accountEmail).toLowerCase() !== email) throw new SecretariatError('wrong_account', 'Ce n’est pas la même adresse que celle déjà connectée : déconnectez d’abord votre messagerie, puis reconnectez-la.');
     if (!doc && (await SecretariatSharedAccount.findOne({ companyId: oid(companyId), provider, accountEmail: email }).select('_id').lean())) throw taken();
   } else if (shared.accountId) {
@@ -209,13 +214,20 @@ async function storeSharedAccount({ state, accountEmail, secrets, scopes, env })
     if (!doc && (await SecretariatSharedAccount.countDocuments({ companyId: oid(companyId), personalUserId: null })) >= MAX_SHARED_ACCOUNTS) throw new SecretariatError('too_many_accounts', 'Nombre maximum de comptes partagés atteint.');
   }
   const accountId = doc ? String(doc._id) : String(new mongoose.Types.ObjectId());
+  // Lecture de la boîte (messagerie personnelle seulement) : activée par le consentement de lecture ; une reconnexion simple la conserve seulement si le nouveau jeton a encore le scope.
+  let readEnabled = false;
+  if (shared.personal) {
+    const was = doc?.inbound?.readEnabled === true;
+    readEnabled = shared.read === true || (was && hasReadScope(provider, scopes));
+    if (was && !readEnabled) await purgePersonalInbox(companyId, userId, accountId); // perte du scope de lecture : plus rien n'est conservé
+  }
   const credentialsEnc = encryptJson(secrets, { context: sharedContext(companyId, accountId), key: loadKey(env) });
   await SecretariatSharedAccount.findOneAndUpdate(
     { _id: oid(accountId), companyId: oid(companyId) },
-    { $set: { provider, label: shared.label, ownerName: shared.ownerName, accountEmail: email, credentialsEnc, scopes, status: 'connected', connectedAt: new Date(), connectedBy: userId, ...(shared.personal ? { personalUserId: String(userId) } : {}), 'permissions.send': shared.send, 'permissions.calendar': shared.calendar } },
+    { $set: { provider, label: shared.label, ownerName: shared.ownerName, accountEmail: email, credentialsEnc, scopes, status: 'connected', connectedAt: new Date(), connectedBy: userId, ...(shared.personal ? { personalUserId: String(userId), 'inbound.readEnabled': readEnabled } : {}), 'permissions.send': shared.send, 'permissions.calendar': shared.calendar } },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
-  return { companyId, provider, accountEmail: email, accountId, ...(shared.personal ? { personal: true } : {}) };
+  return { companyId, provider, accountEmail: email, accountId, ...(shared.personal ? { personal: true, ...(shared.read ? { read: true } : {}) } : {}) };
 }
 
 /** Messageries pouvant envoyer les e-mails du secrétariat (les e-mails ne partent JAMAIS de HARX : seulement de la boîte connectée du centre). */
@@ -450,6 +462,8 @@ export async function disconnectSharedAccount(companyId, accountId, { http = htt
   if (owner !== undefined) where.filter = { ...where.filter, personalUserId: owner === null ? null : String(owner) };
   const conn = await SecretariatSharedAccount.findOne(where.filter).select('+credentialsEnc');
   if (!conn) return false;
+  // Messagerie personnelle : ses e-mails stockés sont purgés AVANT la suppression des jetons (échec = rien n'est perdu, la déconnexion peut être rejouée).
+  if (conn.personalUserId) await purgePersonalInbox(companyId, conn.personalUserId, conn._id);
   try {
     const cfg = providerConfig(conn.provider, env);
     const P = PROVIDERS[conn.provider];

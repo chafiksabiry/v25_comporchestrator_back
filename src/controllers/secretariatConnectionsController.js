@@ -74,7 +74,7 @@ export const secretariatConnectionsController = {
       if (req.query?.error !== undefined) return done(state.returnTo, { error: 'access_denied' }); // refus de l'utilisateur chez le fournisseur
       if (!isAvailable(provider)) return done(state.returnTo, { error: 'unavailable' });
       const done_ = await completeConnection({ state, code: typeof req.query?.code === 'string' ? req.query.code : '' });
-      return done(state.returnTo, done_?.personal ? { connected: provider, personal: '1' } : done_?.accountId ? { connected: provider, shared: '1' } : { connected: provider });
+      return done(state.returnTo, done_?.personal ? { connected: provider, personal: '1', ...(done_.read ? { read: '1' } : {}) } : done_?.accountId ? { connected: provider, shared: '1' } : { connected: provider });
     } catch (error) {
       const fromProvider = ['provider_error', 'provider_refused', 'invalid_link'].includes(error.code);
       const code = error instanceof SecretariatError && ERROR_CODES.has(error.code) ? error.code : fromProvider ? 'exchange_failed' : 'storage_failed';
