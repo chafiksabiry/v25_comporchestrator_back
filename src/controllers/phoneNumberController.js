@@ -1678,6 +1678,7 @@ class PhoneNumberController {
       await phoneNumberService.twilioClient.incomingPhoneNumbers(sid).update({ voiceUrl, voiceMethod: 'POST' });
       await PhoneNumber.updateOne({ _id: line._id }, { $set: { 'metadata.inboundWebhook': voiceUrl } });
       const session = startInboundTestSession(e164);
+      console.log(`🧪 Test d'appel entrant démarré sur ${e164} (société ${line.companyId}) jusqu'à ${new Date(session.expiresAt).toISOString()}`);
       res.json({ success: true, data: { phoneNumber: e164, status: session.status, startedAt: session.startedAt, expiresAt: session.expiresAt } });
     } catch (error) {
       console.error('Error in startInboundTest:', error.message);
@@ -1852,6 +1853,7 @@ class PhoneNumberController {
       // Langue des textes de l'entreprise dits à l'appelant : pays de la ligne appelée (français sans numéro lisible).
       const language = languageForPhone(to);
       const received = to ? receiveInboundCall(to, { from, callSid }) : null;
+      if (!received) console.log(`📞 Appel entrant sur ${to || '(numéro illisible)'} depuis ${from} : aucun test en attente (état : ${JSON.stringify(to ? getInboundTest(to) : null)})`);
       if (received) {
         await PhoneNumber.updateMany(
           { phoneNumber: { $in: [to, to.replace(/^\+/, '')] } },
