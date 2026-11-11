@@ -47,11 +47,26 @@ async function createOneShotCheckoutSession({
   cancelUrl,
   clientReferenceId,
   metadata = {},
-  captureMethod = 'automatic'
+  captureMethod = 'automatic',
+  customerId = null,
+  invoiceDescription = null
 }) {
   const manual = captureMethod === 'manual';
+  // Facture téléchargeable pour les achats ponctuels. Non activée en capture manuelle (autorisation puis capture
+  // différée après commande du numéro) : le comportement de la facture Checkout y est incertain et ne doit pas casser l'achat.
+  const invoiceCreation = manual ? {} : {
+    invoice_creation: {
+      enabled: true,
+      invoice_data: {
+        description: String(invoiceDescription || productName).slice(0, 500),
+        metadata: { ...(metadata.purpose ? { purpose: String(metadata.purpose) } : {}), ...(metadata.companyId ? { companyId: String(metadata.companyId) } : {}) }
+      }
+    }
+  };
   return getStripe().checkout.sessions.create({
     mode: 'payment',
+    ...(customerId ? { customer: customerId } : {}),
+    ...invoiceCreation,
     payment_method_types: ['card'],
     line_items: [
       {

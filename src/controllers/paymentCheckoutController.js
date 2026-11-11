@@ -1,3 +1,4 @@
+import { findCompanyStripeCustomerId } from '../services/billingCustomer.js';
 import mongoose from 'mongoose';
 import CompanyPayment from '../models/CompanyPayment.js';
 import { paypalService } from '../services/paypalService.js';
@@ -298,6 +299,7 @@ export const paymentCheckoutController = {
             successUrl,
             cancelUrl,
             clientReferenceId: payment._id,
+            customerId: await findCompanyStripeCustomerId(companyId),
             metadata: { purpose, companyId: String(companyId) }
           });
 
