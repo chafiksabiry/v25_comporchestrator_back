@@ -49,10 +49,10 @@ for (const code of ['fr', 'en', 'ar', 'es']) assert.ok(L.isRoutingLanguage(code)
 assert.equal(L.normalizeLanguageCode(' AR '), 'ar');
 for (const bad of ['xx', 'fra', 'fr-FR', '', 42, null, undefined]) assert.equal(L.normalizeLanguageCode(bad), null, String(bad));
 assert.equal(L.languageInfo('ar').nameFr, 'arabe'); assert.equal(L.languageInfo('ar').nameNative, 'العربية');
-assert.deepEqual(L.menuVoice('fr'), { voice: 'Polly.Lea', language: 'fr-FR' });
-assert.deepEqual(L.menuVoice('en'), { voice: 'Polly.Joanna', language: 'en-US' });
+assert.deepEqual(L.menuVoice('fr'), { voice: 'Polly.Lea-Generative', language: 'fr-FR' });
+assert.deepEqual(L.menuVoice('en'), { voice: 'Polly.Joanna-Generative', language: 'en-US' });
 assert.deepEqual(L.menuVoice('ar'), { voice: 'Polly.Zeina', language: 'arb' });
-for (const [c, v] of [['es', 'Polly.Lucia'], ['de', 'Polly.Vicki'], ['it', 'Polly.Carla'], ['pt', 'Polly.Ines'], ['nl', 'Polly.Lotte']]) assert.equal(L.menuVoice(c).voice, v, c);
+for (const [c, v] of [['es', 'Polly.Lucia-Generative'], ['de', 'Polly.Vicki-Generative'], ['it', 'Polly.Bianca-Generative'], ['pt', 'Polly.Ines-Neural'], ['nl', 'Polly.Lotte']]) assert.equal(L.menuVoice(c).voice, v, c);
 assert.deepEqual(L.menuVoice('he'), L.menuVoice('en'), 'langue sans voix : repli sur l\'anglais');
 assert.deepEqual(L.menuVoice('zz'), L.menuVoice('en'));
 assert.equal(L.defaultMenuPhrase('fr', '1'), 'Pour le français, tapez 1.');
@@ -140,12 +140,12 @@ assert.ok(menu.startsWith(`<Gather numDigits="1" timeout="6" action="${WEBHOOK}/
 assert.ok(menu.endsWith(`</Gather><Redirect method="POST">${WEBHOOK}/inbound-menu?a=1</Redirect>`), 'sans touche : rappel du même webhook');
 const says = [...menu.matchAll(/<Say language="([^"]+)" voice="([^"]+)">([^<]*)<\/Say>/g)].map((m) => m.slice(1));
 assert.deepEqual(says, [
-  ['fr-FR', 'Polly.Lea', 'Pour le français, tapez 1.'],
-  ['en-US', 'Polly.Joanna', 'For English, press 2.'],
+  ['fr-FR', 'Polly.Lea-Generative', 'Pour le français, tapez 1.'],
+  ['en-US', 'Polly.Joanna-Generative', 'For English, press 2.'],
   ['arb', 'Polly.Zeina', 'للعربية اضغط ثلاثة'],
-  ['en-US', 'Polly.Joanna', 'For Hebrew, press 4.'],
-  ['fr-FR', 'Polly.Lea', 'Pour la comptabilité, tapez 5.'],
-  ['fr-FR', 'Polly.Lea', 'Pour Ventes, tapez 6.'],
+  ['en-US', 'Polly.Joanna-Generative', 'For Hebrew, press 4.'],
+  ['fr-FR', 'Polly.Lea-Generative', 'Pour la comptabilité, tapez 5.'],
+  ['fr-FR', 'Polly.Lea-Generative', 'Pour Ventes, tapez 6.'],
 ], 'ordre par touche, phrase dans SA langue, texte personnalisé prioritaire, repli anglais, file sans langue : français');
 assert.ok(R.buildMenuBody({ queues: [mq(1), mq(2)], baseUrl: BASE, attempt: 2 }).includes('inbound-menu?a=2'));
 assert.ok(R.buildMenuBody({ queues: [mq(1, { name: 'A & <B>' })], baseUrl: BASE }).includes('Pour A &amp; &lt;B&gt;, tapez 1.'), 'échappement XML');
@@ -245,7 +245,7 @@ assert.equal(await inbound(), wrap(dialOf(['cc-alice', 'cc-bob'])), 'sans file :
 settingsDoc = { ringTimeoutSeconds: 45, greetingText: 'Bonjour', voice: 'nova' }; present('alice');
 const legacyWithSettings = F.buildInboundTwiml({ settings: settingsDoc, baseUrl: BASE, companyId: C1, identities: ['cc-alice'], from: CALLER, resultUrl: RESULT, linePhone: LINE });
 assert.equal(await inbound(), wrap(legacyWithSettings), 'sans file, avec accueil et délai paramétrés');
-assert.ok(legacyWithSettings.startsWith('<Say language="fr-FR" voice="Polly.Lea">Bonjour</Say><Dial timeout="45"'));
+assert.ok(legacyWithSettings.startsWith('<Say language="fr-FR" voice="Polly.Lea-Generative">Bonjour</Say><Dial timeout="45"'));
 present();
 assert.equal(await inbound(), wrap(F.buildInboundTwiml({ settings: settingsDoc, baseUrl: BASE, companyId: C1, identities: [], from: CALLER, resultUrl: RESULT, linePhone: LINE })), 'sans file ni conseiller : répondeur');
 reachDoc = { forwardEnabled: true, mobileNumber: '+33611223344', mobileRingSeconds: 25 };
@@ -306,7 +306,7 @@ seed([
 present('alice', 'bob', 'chloe');
 settingsDoc = { greetingText: 'Bienvenue', voice: 'nova' };
 t = await inbound();
-assert.ok(t.startsWith(wrap('').replace('</Response>', '') + '<Say language="fr-FR" voice="Polly.Lea">Bienvenue</Say><Gather numDigits="1" timeout="6" action="https://orch.test/api/phone-numbers/webhooks/twilio/inbound-menu?a=1" method="POST">'), 'accueil puis menu');
+assert.ok(t.startsWith(wrap('').replace('</Response>', '') + '<Say language="fr-FR" voice="Polly.Lea-Generative">Bienvenue</Say><Gather numDigits="1" timeout="6" action="https://orch.test/api/phone-numbers/webhooks/twilio/inbound-menu?a=1" method="POST">'), 'accueil puis menu');
 assert.ok(t.includes('Pour le français, tapez 1.') && t.includes('For English, press 2.') && t.includes('arb'));
 assert.ok(!t.includes('<Client>'), 'le menu précède toute sonnerie');
 settingsDoc = null;
