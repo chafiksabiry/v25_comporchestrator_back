@@ -1,0 +1,925 @@
+{
+ "generatedFrom": "scripts/buildKnowledgeBase.mjs",
+ "chunks": [
+  {
+   "title": "Data model states - AgentWithdrawal.js",
+   "heading": "Allowed values in AgentWithdrawal.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/AgentWithdrawal.js"
+   ],
+   "text": "Allowed values of fields in the AgentWithdrawal model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nmethod: 'bank', 'paypal'\nstatus: 'pending', 'completed', 'failed', 'processing'"
+  },
+  {
+   "title": "Data model states - CallQueue.js",
+   "heading": "Allowed values in CallQueue.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/CallQueue.js"
+   ],
+   "text": "Allowed values of fields in the CallQueue model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\ndirection: 'inbound', 'outbound'\nstrategy: 'simultaneous', 'longest_idle', 'round_robin'\nmenuKey: '1', '2', '3', '4', '5', '6', '7', '8', '9'"
+  },
+  {
+   "title": "Data model states - CompanyAiDelegation.js",
+   "heading": "Allowed values in CompanyAiDelegation.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/CompanyAiDelegation.js"
+   ],
+   "text": "Allowed values of fields in the CompanyAiDelegation model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nauditFrequency: 'weekly'"
+  },
+  {
+   "title": "Data model states - CompanyNotification.js",
+   "heading": "Allowed values in CompanyNotification.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/CompanyNotification.js"
+   ],
+   "text": "Allowed values of fields in the CompanyNotification model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nkind: 'enrollment_request', 'enrollment_accepted', 'enrollment_rejected', 'matching', 'transaction', 'validation', 'fraud', 'resource', 'wallet', 'tokens', 'minutes', 'phone', 'subscription', 'info', 'voicemail',"
+  },
+  {
+   "title": "Data model states - CompanyPayment.js",
+   "heading": "Allowed values in CompanyPayment.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/CompanyPayment.js"
+   ],
+   "text": "Allowed values of fields in the CompanyPayment model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\npurpose: 'wallet_deposit', 'minutes_purchase', 'tokens_purchase', 'bundle_purchase', 'subscription_upgrade'\nprovider: 'stripe', 'paypal'\nstatus: 'pending', 'succeeded', 'failed', 'refunded'"
+  },
+  {
+   "title": "Data model states - Contact.js",
+   "heading": "Allowed values in Contact.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/Contact.js"
+   ],
+   "text": "Allowed values of fields in the Contact model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nlabel: 'mobile', 'work', 'home', 'other'\nlabel: 'work', 'personal', 'other'\ndirection: 'inbound', 'outbound'\nstatus: 'lead', 'prospect', 'client', 'partner', 'other'\nsource: 'inbound_call', 'outbound_call', 'manual'"
+  },
+  {
+   "title": "Data model states - EmailLog.js",
+   "heading": "Allowed values in EmailLog.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/EmailLog.js"
+   ],
+   "text": "Allowed values of fields in the EmailLog model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nstatus: 'sent', 'failed'"
+  },
+  {
+   "title": "Data model states - EscrowTransaction.js",
+   "heading": "Allowed values in EscrowTransaction.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/EscrowTransaction.js"
+   ],
+   "text": "Allowed values of fields in the EscrowTransaction model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\ntype: 'deposit', 'withdrawal', 'buy_minutes', 'escrow_lock', 'escrow_release', 'escrow_refund', // Legacy values: kept for historical rows only, never written anymore. 'call_charge', 'reward_charge', 'transaction_charge', 'bonus_charge'\nstatus: 'pending', 'completed', 'failed'"
+  },
+  {
+   "title": "Data model states - EscrowWallet.js",
+   "heading": "Allowed values in EscrowWallet.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/EscrowWallet.js"
+   ],
+   "text": "Allowed values of fields in the EscrowWallet model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nstatus: 'locked', 'released', 'refunded'"
+  },
+  {
+   "title": "Data model states - FollowUpItem.js",
+   "heading": "Allowed values in FollowUpItem.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/FollowUpItem.js"
+   ],
+   "text": "Allowed values of fields in the FollowUpItem model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nstatus: 'completed', 'no-answer', 'busy', 'failed', 'canceled', 'rejected'\nmodel: 'voicemail_callback', 'missed_callback', 'appointment', 'transfer', 'message_taken'\noriginType: 'voicemail', 'missed_call', 'call', 'none'\nstatus: 'todo', 'done', 'canceled'\nurgency: 'normal', 'urgent'\nvideoProvider: '', 'google_meet', 'teams', 'zoom'\ncalendarStatus: 'not_connected', 'synced', 'failed'"
+  },
+  {
+   "title": "Data model states - HarxCommission.js",
+   "heading": "Allowed values in HarxCommission.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/HarxCommission.js"
+   ],
+   "text": "Allowed values of fields in the HarxCommission model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\ntype: 'minute_purchase', 'call_commission', 'transaction_commission', 'bonus_commission', 'phone_number'"
+  },
+  {
+   "title": "Data model states - InboundCall.js",
+   "heading": "Allowed values in InboundCall.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/InboundCall.js"
+   ],
+   "text": "Allowed values of fields in the InboundCall model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nstatus: 'ringing', 'answered', 'abandoned', 'missed', 'no_agent', 'voicemail'\nroute: 'browser', 'mobile', 'voicemail'\nansweredOn: 'browser', 'mobile'\nmode: 'dial', 'message'\nresult: 'ringing', 'answered', 'no_answer', 'busy', 'failed', 'caller_hung_up', 'message_left', 'message_offered'"
+  },
+  {
+   "title": "Data model states - InboundEmail.js",
+   "heading": "Allowed values in InboundEmail.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/InboundEmail.js"
+   ],
+   "text": "Allowed values of fields in the InboundEmail model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nprovider: 'google', 'microsoft'\nstatus: 'new', 'handled'"
+  },
+  {
+   "title": "Data model states - IntegrationConnection.js",
+   "heading": "Allowed values in IntegrationConnection.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/IntegrationConnection.js"
+   ],
+   "text": "Allowed values of fields in the IntegrationConnection model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nprovider: 'hubspot', 'zoho', 'dynamics'\nstatus: 'untested', 'ok', 'error'"
+  },
+  {
+   "title": "Data model states - IntegrationJob.js",
+   "heading": "Allowed values in IntegrationJob.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/IntegrationJob.js"
+   ],
+   "text": "Allowed values of fields in the IntegrationJob model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nkind: 'crm_call', 'webhook'\nstatus: 'pending', 'done', 'dead'"
+  },
+  {
+   "title": "Data model states - MinutesCompany.js",
+   "heading": "Allowed values in MinutesCompany.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/MinutesCompany.js"
+   ],
+   "text": "Allowed values of fields in the MinutesCompany model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nkind: 'plan', 'recharge'"
+  },
+  {
+   "title": "Data model states - PaypalCheckout.js",
+   "heading": "Allowed values in PaypalCheckout.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/PaypalCheckout.js"
+   ],
+   "text": "Allowed values of fields in the PaypalCheckout model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\npurpose: 'minutes', 'wallet'\nstatus: 'pending', 'succeeded', 'failed'"
+  },
+  {
+   "title": "Data model states - PhoneNumber.js",
+   "heading": "Allowed values in PhoneNumber.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/PhoneNumber.js"
+   ],
+   "text": "Allowed values of fields in the PhoneNumber model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nprovider: 'telnyx', 'twilio'\nbillingStatus: 'n/a', 'trial', 'active', 'payment_failed', 'suspended', 'terminated'"
+  },
+  {
+   "title": "Data model states - PhoneNumberPayment.js",
+   "heading": "Allowed values in PhoneNumberPayment.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/PhoneNumberPayment.js"
+   ],
+   "text": "Allowed values of fields in the PhoneNumberPayment model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nprovider: 'stripe', 'paypal'\nstatus: 'pending', 'authorized', 'succeeded', 'failed', 'refunded'"
+  },
+  {
+   "title": "Data model states - ReceptionDirectory.js",
+   "heading": "Allowed values in ReceptionDirectory.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/ReceptionDirectory.js"
+   ],
+   "text": "Allowed values of fields in the ReceptionDirectory model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nkind: 'owner', 'manager', 'collaborator', 'service'\nsuggestedUrgency: 'normal', 'urgent'"
+  },
+  {
+   "title": "Data model states - RepTransaction.js",
+   "heading": "Allowed values in RepTransaction.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/RepTransaction.js"
+   ],
+   "text": "Allowed values of fields in the RepTransaction model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\ntype: 'call_validated', 'transaction', 'bonus'\nstatus: 'pending_review', 'earned', 'pending_retraction', 'paid', 'refused', 'reversed'\naiVerdict: 'valid', 'invalid'\ncompanyDecision: 'agreed', 'contradicted'"
+  },
+  {
+   "title": "Data model states - SecretariatConnection.js",
+   "heading": "Allowed values in SecretariatConnection.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/SecretariatConnection.js"
+   ],
+   "text": "Allowed values of fields in the SecretariatConnection model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nprovider: 'google', 'microsoft', 'zoom'\nstatus: 'connected', 'needs_reauth'"
+  },
+  {
+   "title": "Data model states - SecretariatSharedAccount.js",
+   "heading": "Allowed values in SecretariatSharedAccount.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/SecretariatSharedAccount.js"
+   ],
+   "text": "Allowed values of fields in the SecretariatSharedAccount model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nprovider: 'google', 'microsoft'\nstatus: 'connected', 'needs_reauth'"
+  },
+  {
+   "title": "Data model states - SecretariatTools.js",
+   "heading": "Allowed values in SecretariatTools.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/SecretariatTools.js"
+   ],
+   "text": "Allowed values of fields in the SecretariatTools model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nprovider: 'platform', 'google', 'microsoft'\nprovider: 'none', 'google', 'microsoft'\nprovider: 'jitsi', 'custom', 'google_meet', 'teams', 'zoom'"
+  },
+  {
+   "title": "Data model states - Subscription.js",
+   "heading": "Allowed values in Subscription.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/Subscription.js"
+   ],
+   "text": "Allowed values of fields in the Subscription model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nprovider: 'stripe', 'paypal'\nstatus: 'active', 'past_due', 'canceled', 'incomplete', 'incomplete_expired', 'trialing', 'unpaid'"
+  },
+  {
+   "title": "Data model states - TelnyxRequirementGroup.js",
+   "heading": "Allowed values in TelnyxRequirementGroup.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/TelnyxRequirementGroup.js"
+   ],
+   "text": "Allowed values of fields in the TelnyxRequirementGroup model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nstatus: 'pending', 'active', 'rejected'\ntype: 'document', 'textual', 'address'\nstatus: 'pending', 'completed'"
+  },
+  {
+   "title": "Data model states - Voicemail.js",
+   "heading": "Allowed values in Voicemail.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/Voicemail.js"
+   ],
+   "text": "Allowed values of fields in the Voicemail model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nfollowUpStatus: 'new', 'to_call', 'called', 'closed'\nanalysisStatus: 'pending', 'done', 'failed', 'needs_tokens'"
+  },
+  {
+   "title": "Data model states - WalletCompanyEntry.js",
+   "heading": "Allowed values in WalletCompanyEntry.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/WalletCompanyEntry.js"
+   ],
+   "text": "Allowed values of fields in the WalletCompanyEntry model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\ntype: 'deposit', 'withdrawal', 'refund', 'adjustment'\ndirection: 'credit', 'debit'\nstatus: 'pending', 'completed', 'failed'"
+  },
+  {
+   "title": "Data model states - Agent.js",
+   "heading": "Allowed values in Agent.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/models/Agent.js"
+   ],
+   "text": "Allowed values of fields in the Agent model (calls (call journal, call analysis/QA, leads of the call dashboard)):\ncategory: 'Communication', 'Problem Solving', 'Customer Service'\nstatus: 'draft', 'in_progress', 'completed'"
+  },
+  {
+   "title": "Data model states - Call.js",
+   "heading": "Allowed values in Call.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/models/Call.js"
+   ],
+   "text": "Allowed values of fields in the Call model (calls (call journal, call analysis/QA, leads of the call dashboard)):\nrole: \"member\", \"agent\"\ndirection: \"inbound\", \"outbound\", \"outbound-dial\", \"outbound-api\", \"Inbound\", \"Outbound\"\nprovider: \"twilio\", \"qalqul\", \"telnyx\"\nstatus: \"active\", \"completed\", \"missed\", \"failed\"\ncallOutcome: 'transaction', // vente conclue 'appointment', // RDV fixé 'callback_requested', // rappel demandé (callbackAt set) 'argued_interested', // argumenté, intéressé mais pas signé 'refusal', // refus catégorique 'not_interested', // pas intéressé 'already_equipped', // déjà équipé (B2C/B2B concurrent) 'voicemail', // messagerie vocale 'no_answer', // pas de réponse 'busy', // occupé 'wrong_number', // numéro invalide 'fraud', // fraude détectée 'too_short', // ≤30s, indécidable (pas d'analyse IA) 'connected_no_sale', // legacy connecté sans issue claire 'not_argumented', // >30s analysé : connecté mais non argumenté (invalide)\ncallOutcomeSource: 'ai', 'rep', 'company', 'system'\nai_call_status: 'pending', 'processing', 'scored', 'auto_refused', 'too_short', 'error'\nsuggestedDisposition: 'to_call', 'called_unreachable', 'called_voicemail', 'called_wrong_number', 'called_callback', 'called_rdv', 'not_argumented', 'argued_rdv', 'argued_declined', 'argued_done', null\nverdict: 'up', 'down', null\ncompanyValidation: 'pending', 'approved', 'rejected'\nagentValidation: 'pending', 'approved', 'rejected'"
+  },
+  {
+   "title": "Data model states - Integration.js",
+   "heading": "Allowed values in Integration.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/models/Integration.js"
+   ],
+   "text": "Allowed values of fields in the Integration model (calls (call journal, call analysis/QA, leads of the call dashboard)):\ntype: 'twilio', 'whatsapp', 'telegram', 'gmail'\nstatus: 'connected', 'disconnected', 'error'"
+  },
+  {
+   "title": "Data model states - IntegrationConnection.js",
+   "heading": "Allowed values in IntegrationConnection.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/models/IntegrationConnection.js"
+   ],
+   "text": "Allowed values of fields in the IntegrationConnection model (calls (call journal, call analysis/QA, leads of the call dashboard)):\nstatus: 'active', 'error', 'pending'"
+  },
+  {
+   "title": "Data model states - Lead.js",
+   "heading": "Allowed values in Lead.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/models/Lead.js"
+   ],
+   "text": "Allowed values of fields in the Lead model (calls (call journal, call analysis/QA, leads of the call dashboard)):\nstatus: 'new', 'contacted', 'qualified', 'proposal', 'won', 'lost'\nnextAction: 'call', 'email', 'meeting', 'follow-up'\nnextFollowUpType: null, 'appointment', 'callback'\nnextFollowUpSource: null, 'rep', 'ai'"
+  },
+  {
+   "title": "Data model states - Transaction.js",
+   "heading": "Allowed values in Transaction.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/models/Transaction.js"
+   ],
+   "text": "Allowed values of fields in the Transaction model (calls (call journal, call analysis/QA, leads of the call dashboard)):\nretractionStatus: 'pending', 'cleared', 'retracted'"
+  },
+  {
+   "title": "Data model states - User.js",
+   "heading": "Allowed values in User.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/models/User.js"
+   ],
+   "text": "Allowed values of fields in the User model (calls (call journal, call analysis/QA, leads of the call dashboard)):\nrole: 'user', 'admin'"
+  },
+  {
+   "title": "Data model states - LanguageVideoJob.js",
+   "heading": "Allowed values in LanguageVideoJob.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_rep_back/src/models/LanguageVideoJob.js"
+   ],
+   "text": "Allowed values of fields in the LanguageVideoJob model (REP dashboard):\nstatus: 'queued', 'processing', 'completed', 'failed'"
+  },
+  {
+   "title": "Data model states - Profile.js",
+   "heading": "Allowed values in Profile.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_rep_back/src/models/Profile.js"
+   ],
+   "text": "Allowed values of fields in the Profile model (REP dashboard):\ncategory: 'Communication', 'Problem Solving', 'Customer Service'\ncategory: 'Communication', 'Problem Solving', 'Customer Service'\nproficiency: 'Expert', 'Advanced', 'Intermediate', 'Basic', 'Novice'\nstatus: 'draft', 'in_progress', 'completed'"
+  },
+  {
+   "title": "Data model states - RepNotification.js",
+   "heading": "Allowed values in RepNotification.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_rep_back/src/models/RepNotification.js"
+   ],
+   "text": "Allowed values of fields in the RepNotification model (REP dashboard):\nkind: 'enrollment', 'script_required', 'certification_required', 'general', 'matching', 'teammate', 'training_added', 'action_assigned', 'kb_document', 'script_added', 'deactivated',"
+  },
+  {
+   "title": "Data model states - Agent.js",
+   "heading": "Allowed values in Agent.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/models/Agent.js"
+   ],
+   "text": "Allowed values of fields in the Agent model (dashboard (leads import, CRM, integrations)):\ncategory: 'Communication', 'Problem Solving', 'Customer Service'\nstatus: 'draft', 'in_progress', 'completed'"
+  },
+  {
+   "title": "Data model states - Call.js",
+   "heading": "Allowed values in Call.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/models/Call.js"
+   ],
+   "text": "Allowed values of fields in the Call model (dashboard (leads import, CRM, integrations)):\ndirection: \"inbound\", \"outbound\", \"outbound-dial\", \"outbound-api\", \"Inbound\", \"Outbound\"\nprovider: \"twilio\", \"qalqul\"\ncallOutcome: 'transaction', 'appointment', 'callback_requested', 'argued_interested', 'refusal', 'not_interested', 'already_equipped', 'voicemail', 'no_answer', 'busy', 'wrong_number', 'fraud', 'too_short', 'connected_no_sale',\ncallOutcomeSource: 'ai', 'rep', 'system'\nai_call_status: 'pending', 'processing', 'scored', 'auto_refused', 'error'\ncompanyValidation: 'pending', 'approved', 'rejected'\nagentValidation: 'pending', 'approved', 'rejected'"
+  },
+  {
+   "title": "Data model states - Integration.js",
+   "heading": "Allowed values in Integration.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/models/Integration.js"
+   ],
+   "text": "Allowed values of fields in the Integration model (dashboard (leads import, CRM, integrations)):\ncategory: 'crm', 'chat', 'communication', 'phone', 'email', 'ticketing', 'authentication'\nstatus: 'connected', 'error', 'pending'"
+  },
+  {
+   "title": "Data model states - IntegrationConnection.js",
+   "heading": "Allowed values in IntegrationConnection.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/models/IntegrationConnection.js"
+   ],
+   "text": "Allowed values of fields in the IntegrationConnection model (dashboard (leads import, CRM, integrations)):\nstatus: 'active', 'error', 'pending'"
+  },
+  {
+   "title": "Data model states - Lead.js",
+   "heading": "Allowed values in Lead.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/models/Lead.js"
+   ],
+   "text": "Allowed values of fields in the Lead model (dashboard (leads import, CRM, integrations)):\nrepDisposition: null, 'to_call', // À appeler 'called_unreachable', // Appelé - Injoignable 'called_voicemail', // Appelé - Répondeur 'called_wrong_number',// Appelé - Numéro non attribué 'called_callback', // Appelé - Souhaite être rappelé 'called_rdv', // Appelé - RDV pris pour rappel 'argued_rdv', // Appel argumenté - RDV pris / délai réflexion 'argued_declined', // Appel argumenté - Transaction déclinée 'argued_done', // Appel argumenté - Transaction aboutie\npendingDisposition: null, 'to_call', 'called_unreachable', 'called_voicemail', 'called_wrong_number', 'called_callback', 'called_rdv', 'argued_rdv', 'argued_declined', 'argued_done',\nnextFollowUpType: null, 'appointment', 'callback'\nnextFollowUpSource: null, 'rep', 'ai'"
+  },
+  {
+   "title": "Data model states - PhoneNumber.js",
+   "heading": "Allowed values in PhoneNumber.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/models/PhoneNumber.js"
+   ],
+   "text": "Allowed values of fields in the PhoneNumber model (dashboard (leads import, CRM, integrations)):\nprovider: 'telnyx'"
+  },
+  {
+   "title": "Data model states - TelnyxRequirementGroup.js",
+   "heading": "Allowed values in TelnyxRequirementGroup.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/models/TelnyxRequirementGroup.js"
+   ],
+   "text": "Allowed values of fields in the TelnyxRequirementGroup model (dashboard (leads import, CRM, integrations)):\nstatus: 'pending', 'active', 'rejected'\ntype: 'document', 'textual', 'address'\nstatus: 'pending', 'completed'"
+  },
+  {
+   "title": "Data model states - User.js",
+   "heading": "Allowed values in User.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/models/User.js"
+   ],
+   "text": "Allowed values of fields in the User model (dashboard (leads import, CRM, integrations)):\nrole: 'user', 'admin'"
+  },
+  {
+   "title": "Data model states - ZohoConfig.js",
+   "heading": "Allowed values in ZohoConfig.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/models/ZohoConfig.js"
+   ],
+   "text": "Allowed values of fields in the ZohoConfig model (dashboard (leads import, CRM, integrations)):\ncrmModule: 'Deals', 'Leads', 'Contacts'"
+  },
+  {
+   "title": "Data model states - companyModel.ts",
+   "heading": "Allowed values in companyModel.ts",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_gigsmanualcreation_backend/src/models/companyModel.ts"
+   ],
+   "text": "Allowed values of fields in the companyModel model (gigs (GIG creation and management)):\nsubscription: 'free', 'standard', 'premium'"
+  },
+  {
+   "title": "Data model states - gigModel.ts",
+   "heading": "Allowed values in gigModel.ts",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_gigsmanualcreation_backend/src/models/gigModel.ts"
+   ],
+   "text": "Allowed values of fields in the gigModel model (gigs (GIG creation and management)):\ntype: 'hot', 'warm', 'cold'\nstatus: 'to_activate', 'active', 'inactive', 'archived'"
+  },
+  {
+   "title": "Data model states - userModel.ts",
+   "heading": "Allowed values in userModel.ts",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_gigsmanualcreation_backend/src/models/userModel.ts"
+   ],
+   "text": "Allowed values of fields in the userModel model (gigs (GIG creation and management)):\naction: 'register', 'login'"
+  },
+  {
+   "title": "Data model states - Analysis.js",
+   "heading": "Allowed values in Analysis.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/models/Analysis.js"
+   ],
+   "text": "Allowed values of fields in the Analysis model (knowledge base (documents and RAG)):\nstatus: 'in_progress', 'completed', 'failed'\ntype: 'document', 'collection', 'knowledge-base'\narea: 'topic', 'structure', 'quality', 'accessibility'\npriority: 'high', 'medium', 'low'\neffort: 'small', 'medium', 'large'"
+  },
+  {
+   "title": "Data model states - CallRecording.js",
+   "heading": "Allowed values in CallRecording.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/models/CallRecording.js"
+   ],
+   "text": "Allowed values of fields in the CallRecording model (knowledge base (documents and RAG)):\nstatus: 'pending', 'processing', 'completed', 'failed'\nstatus: 'pending', 'processing', 'completed', 'failed'\nstatus: 'pending', 'processing', 'completed', 'failed'\nsentiment: 'positive', 'negative', 'neutral'"
+  },
+  {
+   "title": "Data model states - Document.js",
+   "heading": "Allowed values in Document.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/models/Document.js"
+   ],
+   "text": "Allowed values of fields in the Document model (knowledge base (documents and RAG)):\nprocessingStatus: 'pending', 'processing', 'completed', 'failed'"
+  },
+  {
+   "title": "Data model states - FineTuningJob.js",
+   "heading": "Allowed values in FineTuningJob.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/models/FineTuningJob.js"
+   ],
+   "text": "Allowed values of fields in the FineTuningJob model (knowledge base (documents and RAG)):\nstatus: 'created', 'pending', 'running', 'succeeded', 'failed', 'cancelled', 'validating_files', 'queued', 'running', 'succeeded', 'failed', 'cancelled'"
+  },
+  {
+   "title": "Data model states - Script.js",
+   "heading": "Allowed values in Script.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/models/Script.js"
+   ],
+   "text": "Allowed values of fields in the Script model (knowledge base (documents and RAG)):\nrole: 'agent', 'lead'"
+  },
+  {
+   "title": "Data model states - User.js",
+   "heading": "Allowed values in User.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/models/User.js"
+   ],
+   "text": "Allowed values of fields in the User model (knowledge base (documents and RAG)):\naction: 'register', 'login'"
+  },
+  {
+   "title": "Data model states - Agent.js",
+   "heading": "Allowed values in Agent.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/models/Agent.js"
+   ],
+   "text": "Allowed values of fields in the Agent model (matching (REP/GIG matching, enrollment, time slots and reservations)):\ncategory: 'Problem Solving', 'Communication', 'Customer Service', 'Technical Knowledge'\nproficiency: 'Novice', 'Intermediate', 'Advanced', 'Expert'\ncategory: 'Communication', 'Problem Solving', 'Customer Service', 'Technical Knowledge'\nday: 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'\nstatus: 'draft', 'active', 'inactive', 'completed'\nstatus: 'not_started', 'in_progress', 'completed'\nstatus: 'not_started', 'in_progress', 'completed'\nstatus: 'not_started', 'in_progress', 'completed'\nstatus: 'not_started', 'in_progress', 'completed'\nstatus: 'invited', 'requested', 'enrolled', 'rejected', 'expired', 'cancelled', 'archived'"
+  },
+  {
+   "title": "Data model states - Company.js",
+   "heading": "Allowed values in Company.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/models/Company.js"
+   ],
+   "text": "Allowed values of fields in the Company model (matching (REP/GIG matching, enrollment, time slots and reservations)):\nsubscription: 'free', 'basic', 'premium', 'enterprise'"
+  },
+  {
+   "title": "Data model states - Gig.js",
+   "heading": "Allowed values in Gig.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/models/Gig.js"
+   ],
+   "text": "Allowed values of fields in the Gig model (matching (REP/GIG matching, enrollment, time slots and reservations)):\ntype: 'hot', 'warm', 'cold'\nstatus: 'invited', 'requested', 'enrolled', 'rejected', 'expired', 'cancelled', 'archived'\nstatus: 'to_activate', 'active', 'inactive', 'archived'"
+  },
+  {
+   "title": "Data model states - GigAgent.js",
+   "heading": "Allowed values in GigAgent.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/models/GigAgent.js"
+   ],
+   "text": "Allowed values of fields in the GigAgent model (matching (REP/GIG matching, enrollment, time slots and reservations)):\nstatus: 'pending', 'accepted', 'rejected', 'completed', 'cancelled', 'enrolled'\nmatchStatus: 'perfect_match', 'partial_match', 'no_match'\ntype: 'technical', 'professional', 'soft', 'contactCenter'\ntype: 'technical', 'professional', 'soft', 'contactCenter'\ntype: 'technical', 'professional', 'soft', 'contactCenter'\nmatchStatus: 'perfect_match', 'partial_match', 'no_match'\nmatchStatus: 'perfect_match', 'partial_match', 'no_match', 'neutral_match'\nmatchStatus: 'perfect_match', 'partial_match', 'no_match', 'neutral_match'\nmatchStatus: 'perfect_match', 'partial_match', 'no_match'\nmatchStatus: 'perfect_match', 'partial_match', 'no_match'\nmatchStatus: 'perfect_match', 'partial_match', 'no_match'\nmatchStatus: 'perfect_match', 'partial_match', 'no_match'\nmatchStatus: 'perfect_match', 'partial_match', 'no_match'\nagentResponse: 'accepted', 'rejected', 'pending'\nenrollmentStatus: 'invited', 'requested', 'accepted', 'rejected', 'expired', 'removed', 'enrolled', 'archived', 'cancelled'\ngigStanding: 'active', 'paused'\npriority: 'low', 'medium', 'high', 'urgent'"
+  },
+  {
+   "title": "Data model states - Match.js",
+   "heading": "Allowed values in Match.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/models/Match.js"
+   ],
+   "text": "Allowed values of fields in the Match model (matching (REP/GIG matching, enrollment, time slots and reservations)):\nstatus: 'pending', 'accepted', 'rejected', 'completed'"
+  },
+  {
+   "title": "Data model states - ReservationSlot.js",
+   "heading": "Allowed values in ReservationSlot.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/models/ReservationSlot.js"
+   ],
+   "text": "Allowed values of fields in the ReservationSlot model (matching (REP/GIG matching, enrollment, time slots and reservations)):\nstatus: 'reserved', 'cancelled'"
+  },
+  {
+   "title": "Data model states - Slot.js",
+   "heading": "Allowed values in Slot.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/models/Slot.js"
+   ],
+   "text": "Allowed values of fields in the Slot model (matching (REP/GIG matching, enrollment, time slots and reservations)):\nstatus: 'available', 'full', 'cancelled'"
+  },
+  {
+   "title": "Data model states - Certification.ts",
+   "heading": "Allowed values in Certification.ts",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/models/Certification.ts"
+   ],
+   "text": "Allowed values of fields in the Certification model (training (journeys, assessments)):\nstatus: 'certified', 'revoked'"
+  },
+  {
+   "title": "Data model states - Company.ts",
+   "heading": "Allowed values in Company.ts",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/models/Company.ts"
+   ],
+   "text": "Allowed values of fields in the Company model (training (journeys, assessments)):\nsize: 'small', 'medium', 'large', 'enterprise'"
+  },
+  {
+   "title": "Data model states - Gig.ts",
+   "heading": "Allowed values in Gig.ts",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/models/Gig.ts"
+   ],
+   "text": "Allowed values of fields in the Gig model (training (journeys, assessments)):\nstatus: 'active', 'inactive', 'completed'"
+  },
+  {
+   "title": "Data model states - RepNotification.ts",
+   "heading": "Allowed values in RepNotification.ts",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/models/RepNotification.ts"
+   ],
+   "text": "Allowed values of fields in the RepNotification model (training (journeys, assessments)):\nkind: 'enrollment', 'script_required', 'certification_required', 'general'"
+  },
+  {
+   "title": "Data model states - RepProgress.ts",
+   "heading": "Allowed values in RepProgress.ts",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/models/RepProgress.ts"
+   ],
+   "text": "Allowed values of fields in the RepProgress model (training (journeys, assessments)):\nstatus: 'pending', 'in_progress', 'completed'\nstatus: 'pending', 'in_progress', 'passed', 'failed'\nstatus: 'not_started', 'in_progress', 'completed'"
+  },
+  {
+   "title": "Data model states - TrainingChatSession.ts",
+   "heading": "Allowed values in TrainingChatSession.ts",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/models/TrainingChatSession.ts"
+   ],
+   "text": "Allowed values of fields in the TrainingChatSession model (training (journeys, assessments)):\nrole: 'user', 'assistant'\nstatus: 'pending', 'in_progress', 'completed'\nplan: 'pending', 'in_progress', 'completed'"
+  },
+  {
+   "title": "Data model states - TrainingImageSet.ts",
+   "heading": "Allowed values in TrainingImageSet.ts",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/models/TrainingImageSet.ts"
+   ],
+   "text": "Allowed values of fields in the TrainingImageSet model (training (journeys, assessments)):\nrenderMode: 'ai_images', 'template_slides'"
+  },
+  {
+   "title": "Data model states - TrainingJourney.ts",
+   "heading": "Allowed values in TrainingJourney.ts",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/models/TrainingJourney.ts"
+   ],
+   "text": "Allowed values of fields in the TrainingJourney model (training (journeys, assessments)):\ndifficulty: 'beginner', 'intermediate', 'advanced'\nstatus: 'draft', 'rehearsal', 'active', 'completed', 'archived'\nlayoutStyle: 'modern', 'corporate', 'creative'\ntype: 'icon', 'image'"
+  },
+  {
+   "title": "Data model states - TrainingPodcast.ts",
+   "heading": "Allowed values in TrainingPodcast.ts",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/models/TrainingPodcast.ts"
+   ],
+   "text": "Allowed values of fields in the TrainingPodcast model (training (journeys, assessments)):\nrole: 'user', 'assistant'"
+  },
+  {
+   "title": "Data model states - TrainingVideo.ts",
+   "heading": "Allowed values in TrainingVideo.ts",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/models/TrainingVideo.ts"
+   ],
+   "text": "Allowed values of fields in the TrainingVideo model (training (journeys, assessments)):\nstatus: 'generated', 'saved', 'failed'"
+  },
+  {
+   "title": "Data model states - User.ts",
+   "heading": "Allowed values in User.ts",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/models/User.ts"
+   ],
+   "text": "Allowed values of fields in the User model (training (journeys, assessments)):\nrole: 'trainee', 'trainer', 'admin', 'rep'\nlearningStyle: 'visual', 'auditory', 'kinesthetic', 'reading'"
+  },
+  {
+   "title": "Data model states - AgentInvitation.js",
+   "heading": "Allowed values in AgentInvitation.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/models/AgentInvitation.js"
+   ],
+   "text": "Allowed values of fields in the AgentInvitation model (registration (accounts, login, company members, call-center)):\nkind: 'agent', 'member'\nstatus: 'pending', 'accepted', 'declined'"
+  },
+  {
+   "title": "Data model states - CallCenterClient.js",
+   "heading": "Allowed values in CallCenterClient.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/models/CallCenterClient.js"
+   ],
+   "text": "Allowed values of fields in the CallCenterClient model (registration (accounts, login, company members, call-center)):\nkind: 'external', 'internal'\nstatus: 'active', 'archived'"
+  },
+  {
+   "title": "Data model states - CallCenterClientAccess.js",
+   "heading": "Allowed values in CallCenterClientAccess.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/models/CallCenterClientAccess.js"
+   ],
+   "text": "Allowed values of fields in the CallCenterClientAccess model (registration (accounts, login, company members, call-center)):\nstatus: 'invited', 'active', 'revoked'"
+  },
+  {
+   "title": "Data model states - CallCenterOperationProfile.js",
+   "heading": "Allowed values in CallCenterOperationProfile.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/models/CallCenterOperationProfile.js"
+   ],
+   "text": "Allowed values of fields in the CallCenterOperationProfile model (registration (accounts, login, company members, call-center)):\ngoal: 'min', 'max'"
+  },
+  {
+   "title": "Data model states - CallCenterWorkspaceState.js",
+   "heading": "Allowed values in CallCenterWorkspaceState.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/models/CallCenterWorkspaceState.js"
+   ],
+   "text": "Allowed values of fields in the CallCenterWorkspaceState model (registration (accounts, login, company members, call-center)):\nscope: 'company', 'user'"
+  },
+  {
+   "title": "Data model states - CompanyMembership.js",
+   "heading": "Allowed values in CompanyMembership.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/models/CompanyMembership.js"
+   ],
+   "text": "Allowed values of fields in the CompanyMembership model (registration (accounts, login, company members, call-center)):\npreset: 'admin', 'operator', 'readonly', 'custom'\nstatus: 'pending', 'invited', 'active'"
+  },
+  {
+   "title": "Data model states - User.js",
+   "heading": "Allowed values in User.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/models/User.js"
+   ],
+   "text": "Allowed values of fields in the User model (registration (accounts, login, company members, call-center)):\naction: 'register', 'login'\nproduct: 'callcentre', null\nstatus: 'active', 'ended'\ninvitationStatus: 'none', 'pending', 'invited', 'active'"
+  },
+  {
+   "title": "Data model states - Activity.js",
+   "heading": "Allowed values in Activity.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/models/Activity.js"
+   ],
+   "text": "Allowed values of fields in the Activity model (REP profile wizard (REP profile, skills, languages, REP subscription)):\ncategory: 'Customer Support', 'Technical Support', 'Sales', 'Administrative', 'Surveys & Research'"
+  },
+  {
+   "title": "Data model states - Agent.js",
+   "heading": "Allowed values in Agent.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/models/Agent.js"
+   ],
+   "text": "Allowed values of fields in the Agent model (REP profile wizard (REP profile, skills, languages, REP subscription)):\nsource: 'cv', 'video', 'assessment', 'experience', 'language'\ncategory: 'Communication', 'Problem Solving', 'Customer Service', 'Activities', 'Industries'\nproficiency: 'A1', 'A2', 'B1', 'B2', 'C1', 'C2'\ncategory: 'Communication', 'Problem Solving', 'Customer Service', 'Activities', 'Industries'\nproficiency: 'Expert', 'Advanced', 'Intermediate', 'Basic', 'Novice'\nstatus: 'draft', 'in_progress', 'completed'\nstatus: 'not_started', 'in_progress', 'completed'\nstatus: 'not_started', 'in_progress', 'completed'\nstatus: 'not_started', 'in_progress', 'completed'\nstatus: 'not_started', 'in_progress', 'completed'\nstatus: 'not_started', 'in_progress', 'completed'\nday: 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'\nstatus: 'invited', 'requested', 'enrolled', 'rejected', 'expired', 'cancelled'"
+  },
+  {
+   "title": "Data model states - Gig.js",
+   "heading": "Allowed values in Gig.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/models/Gig.js"
+   ],
+   "text": "Allowed values of fields in the Gig model (REP profile wizard (REP profile, skills, languages, REP subscription)):\ntype: 'hot', 'warm', 'cold'\nstatus: 'to_activate', 'active', 'inactive', 'archived'"
+  },
+  {
+   "title": "Data model states - Plan.js",
+   "heading": "Allowed values in Plan.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/models/Plan.js"
+   ],
+   "text": "Allowed values of fields in the Plan model (REP profile wizard (REP profile, skills, languages, REP subscription)):\ntargetUserType: 'company', 'representative'"
+  },
+  {
+   "title": "Data model states - ProfessionalSkill.js",
+   "heading": "Allowed values in ProfessionalSkill.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/models/ProfessionalSkill.js"
+   ],
+   "text": "Allowed values of fields in the ProfessionalSkill model (REP profile wizard (REP profile, skills, languages, REP subscription)):\ncategory: 'Professional Communication', 'Organization & Performance', 'Customer Relationship & Retention', 'Training & Onboarding'"
+  },
+  {
+   "title": "Data model states - RepSubscription.js",
+   "heading": "Allowed values in RepSubscription.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/models/RepSubscription.js"
+   ],
+   "text": "Allowed values of fields in the RepSubscription model (REP profile wizard (REP profile, skills, languages, REP subscription)):\nprovider: 'stripe', 'manual'\nstatus: 'active', 'trialing', 'past_due', 'canceled', 'incomplete', 'unpaid', 'inactive'"
+  },
+  {
+   "title": "Data model states - SoftSkill.js",
+   "heading": "Allowed values in SoftSkill.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/models/SoftSkill.js"
+   ],
+   "text": "Allowed values of fields in the SoftSkill model (REP profile wizard (REP profile, skills, languages, REP subscription)):\ncategory: 'Communication & Interpersonal Skills', 'Behavioral & Mindset Skills', 'Conflict & Difficult Situations'"
+  },
+  {
+   "title": "Data model states - TechnicalSkill.js",
+   "heading": "Allowed values in TechnicalSkill.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/models/TechnicalSkill.js"
+   ],
+   "text": "Allowed values of fields in the TechnicalSkill model (REP profile wizard (REP profile, skills, languages, REP subscription)):\ncategory: 'Call Center & Telephony', 'Tools & Technology', 'Sales & Commercial Techniques', 'Qualification & Analysis', 'Regulatory & Compliance', 'Data & Quality'"
+  },
+  {
+   "title": "Data model states - User.js",
+   "heading": "Allowed values in User.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/models/User.js"
+   ],
+   "text": "Allowed values of fields in the User model (REP profile wizard (REP profile, skills, languages, REP subscription)):\naction: 'register', 'login'"
+  },
+  {
+   "title": "Data model states - CompanyModel.ts",
+   "heading": "Allowed values in CompanyModel.ts",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_searchcompanywizard_backend/src/infrastructure/database/models/CompanyModel.ts"
+   ],
+   "text": "Allowed values of fields in the CompanyModel model (company profile wizard (company search/profile)):\nsubscription: 'free', 'standard', 'premium'"
+  },
+  {
+   "title": "Data model states - onboardingProgress.ts",
+   "heading": "Allowed values in onboardingProgress.ts",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_searchcompanywizard_backend/src/infrastructure/models/onboardingProgress.ts"
+   ],
+   "text": "Allowed values of fields in the onboardingProgress model (company profile wizard (company search/profile)):\nstatus: 'pending', 'in_progress', 'completed'\nstatus: 'pending', 'in_progress', 'completed'"
+  }
+ ]
+}

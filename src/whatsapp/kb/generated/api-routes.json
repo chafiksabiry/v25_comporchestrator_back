@@ -1,0 +1,1295 @@
+{
+ "generatedFrom": "scripts/buildKnowledgeBase.mjs",
+ "chunks": [
+  {
+   "title": "API routes - v25_comporchestrator_back - app",
+   "heading": "app",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/app.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/app.js\nEndpoints (relative to the mount):\nPOST /api/subscriptions/webhook"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - address",
+   "heading": "address",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/address.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/address.js\nEndpoints (relative to the mount):\nPOST /\nGET /:addressId"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - call",
+   "heading": "call",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/call.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/call.js\nEndpoints (relative to the mount):\nPOST /answer\nPOST /dial\nPOST /hangup\nPOST /record/start\nPOST /record/stop"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - companyNotifications",
+   "heading": "companyNotifications",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/companyNotifications.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/companyNotifications.js\nEndpoints (relative to the mount):\nGET /:companyId\nPUT /:companyId/read-all\nPUT /:companyId/:id/read\nDELETE /:companyId/:id\nDELETE /:companyId"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - contacts",
+   "heading": "contacts",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/contacts.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/contacts.js\nEndpoints (relative to the mount):\nGET /\nGET /by-phone\nPOST /\nPATCH /:id\nPOST /:id/calls\nDELETE /:id"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - deviceLink",
+   "heading": "deviceLink",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/deviceLink.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/deviceLink.js\nEndpoints (relative to the mount):\nPOST /\nPOST /redeem"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - document",
+   "heading": "document",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/document.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/document.js\nEndpoints (relative to the mount):\nPOST /\nGET /:documentId\nGET /:documentId/download\nDELETE /:documentId"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - emails",
+   "heading": "emails",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/emails.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/emails.js\nEndpoints (relative to the mount):\nGET /config\nGET /\nPOST /"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - escrow",
+   "heading": "escrow",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/escrow.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/escrow.js\nEndpoints (relative to the mount):\nGET /wallet/:companyId\nGET /transactions/:companyId\nPOST /deposit\nPOST /withdraw\nPOST /lock\nPOST /release/:contractId\nPOST /refund/:contractId\nGET /gigs-and-reps/:companyId\nGET /calls/:companyId\nPOST /calls/approve/:callId\nPOST /calls/:callId/cancel-commission\nPOST /transaction/:transactionId/retract\nGET /harx/commissions\nGET /pending-reviews/:companyId\nGET /ai-agreement-rate/:companyId\nGET /ai-delegation/:companyId\nPATCH /ai-delegation/:companyId\nGET /ai-audits/:companyId\nPOST /ai-audits/:repTransactionId/respond\nPOST /call-commissions/:repTransactionId/respond\nPOST /reconcile/:companyId\nPOST /call-analysis-help\nPOST /call-analysis-complete\nGET /agent/wallet/:agentId\nGET /agent/withdrawals/:agentId\nPOST /agent/withdraw/request-code\nPOST /agent/withdraw\nGET /agent/transactions/:agentId\nPOST /agent/bonus\nGET /company/rep-transactions/:companyId"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - escrow",
+   "heading": "escrow",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/escrow.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/escrow.js\nEndpoints (relative to the mount):\nGET /company/agent-withdrawals/:companyId\nPOST /company/agent-withdrawals/approve/:withdrawalId"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - followUps",
+   "heading": "followUps",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/followUps.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/followUps.js\nEndpoints (relative to the mount):\nGET /\nGET /assignees\nGET /missed-calls\nPOST /\nPATCH /:id\nPOST /:id/calls\nGET /:id/ics\nPOST /:id/transfer"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - inboundSettings",
+   "heading": "inboundSettings",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/inboundSettings.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/inboundSettings.js\nEndpoints (relative to the mount):\nGET /\nPUT /\nPUT /audio/:kind\nGET /audio/:companyId/:kind/:version.mp3"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - integrations",
+   "heading": "integrations",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/integrations.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/integrations.js\nEndpoints (relative to the mount):\nGET /oauth/:provider/callback\nGET /\nPUT /connection\nPOST /connection/test\nPATCH /connection\nDELETE /connection\nGET /oauth/:provider/start\nPOST /import\nGET /journal\nPOST /journal/:id/retry\nPOST /api-keys\nDELETE /api-keys/:id\nPOST /webhooks\nPATCH /webhooks/:id\nDELETE /webhooks/:id\nPOST /webhooks/:id/test"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - internal",
+   "heading": "internal",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/internal.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/internal.js\nEndpoints (relative to the mount):\nGET /companies/:companyId/minutes-balance\nGET /companies/:companyId/wallet-balance\nGET /companies/:companyId/tokens-balance\nPOST /company-notifications\nPOST /call-ended"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - minutesCompany",
+   "heading": "minutesCompany",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/minutesCompany.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/minutesCompany.js\nEndpoints (relative to the mount):\nGET /:companyId\nPOST /charge-call"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - paymentCheckout",
+   "heading": "paymentCheckout",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/paymentCheckout.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/paymentCheckout.js\nEndpoints (relative to the mount):\nGET /config\nPOST /init\nPOST /confirm"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - phoneNumber",
+   "heading": "phoneNumber",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/phoneNumber.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/phoneNumber.js\nEndpoints (relative to the mount):\nGET /search\nGET /search/twilio\nPOST /purchase\nPOST /purchase/twilio\nGET /trial/eligibility/:companyId\nGET /checkout/config\nPOST /checkout/init\nPOST /checkout/confirm\nGET /checkout/orphans/:companyId\nPOST /checkout/recover\nGET /twilio/requirements\nPOST /twilio/end-users\nPOST /twilio/documents\nPOST /twilio/bundles\nPOST /twilio/bundles/:sid/items\nPOST /twilio/bundles/:sid/submit\nPOST /twilio/addresses\nGET /\nPATCH /assign-gig\nPOST /assign-gig\nDELETE /:id\nPOST /terminate\nGET /gig/:gigId/check\nPOST /:phoneNumber/configure-voice\nPOST /test-call\nGET /test-call/:callId/status\nPOST /test-call/:callId/hangup\nPOST /webhooks/twilio/call-status\nPOST /inbound-test\nGET /inbound-test/status"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - phoneNumber",
+   "heading": "phoneNumber",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/phoneNumber.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/phoneNumber.js\nEndpoints (relative to the mount):\nPOST /voice/token\nPOST /voice/outbound-check\nPOST /voice/presence\nPOST /webhooks/twilio/browser-outbound\nPOST /webhooks/twilio/inbound-call\nPOST /webhooks/twilio/inbound-menu\nPOST /webhooks/twilio/inbound-queue-next\nPOST /webhooks/twilio/inbound-dial-result\nPOST /webhooks/twilio/transfer-result\nPOST /webhooks/twilio/call-announce\nPOST /webhooks/twilio/call-recording\nPOST /webhooks/twilio/voicemail-done\nPOST /webhooks/twilio/voicemail-recording\nGET /inbound-stats\nPOST /webhooks/twilio/voicemail-callback\nPOST /webhooks/twilio/test-call-twiml\nPOST /webhooks/twilio/test-call-gather\nPOST /webhooks/telnyx/number-order\nPOST /webhooks/telnyx/call-control"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - publicApi",
+   "heading": "publicApi",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/publicApi.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/publicApi.js\nEndpoints (relative to the mount):\nGET /calls\nGET /contacts"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - reach",
+   "heading": "reach",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/reach.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/reach.js\nEndpoints (relative to the mount):\nGET /settings\nPUT /settings\nGET /push/public-key\nGET /push/status\nPOST /push/subscribe\nPOST /push/unsubscribe\nPOST /push/test"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - reception",
+   "heading": "reception",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/reception.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/reception.js\nEndpoints (relative to the mount):\nGET /directory\nPUT /directory\nPOST /messages\nPOST /messages/:id/seen\nPOST /transfer\nGET /transfers\nGET /scripts\nPUT /scripts\nGET /callers\nPUT /callers\nGET /callers/check\nGET /follow-up-settings\nPUT /follow-up-settings\nGET /follow-up-stats"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - requirement",
+   "heading": "requirement",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/requirement.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/requirement.js\nEndpoints (relative to the mount):\nGET /countries/:countryCode/requirements"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - secretariatTools",
+   "heading": "secretariatTools",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/secretariatTools.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/secretariatTools.js\nEndpoints (relative to the mount):\nGET /reception-line\nGET /tools/:companyId\nPUT /tools/:companyId\nPOST /tools/:companyId/agenda-feed\nGET /connections/:companyId\nPOST /connections/:companyId/:provider/start\nDELETE /connections/:companyId/:provider\nGET /inbound-emails/:companyId/access\nGET /inbound-emails/:companyId\nPOST /inbound-emails/:companyId/refresh\nGET /inbound-emails/:companyId/:id/body\nPATCH /inbound-emails/:companyId/:id\nDELETE /inbound-emails/:companyId/:id\nPOST /inbound-emails/:companyId/delete-many\nPOST /inbound-emails/:companyId/archive-many\nGET /accounts/:companyId\nGET /accounts/:companyId/mine/inbound\nPOST /accounts/:companyId/mine/inbound/:accountId/enable\nPOST /accounts/:companyId/mine/inbound/:accountId/stop\nGET /accounts/:companyId/mine/inbound/:accountId/emails\nPOST /accounts/:companyId/mine/inbound/:accountId/refresh\nPOST /accounts/:companyId/mine/inbound/:accountId/delete-many\nPOST /accounts/:companyId/mine/inbound/:accountId/archive-many\nGET /accounts/:companyId/mine/inbound/:accountId/emails/:id/body\nPATCH /accounts/:companyId/mine/inbound/:accountId/emails/:id\nDELETE /accounts/:companyId/mine/inbound/:accountId/emails/:id\nPOST /accounts/:companyId/mine/:provider/start\nDELETE /accounts/:companyId/mine/:accountId\nPOST /accounts/:companyId/:provider/start\nPOST /accounts/:companyId/:accountId/reconnect"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - secretariatTools",
+   "heading": "secretariatTools",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/secretariatTools.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/secretariatTools.js\nEndpoints (relative to the mount):\nPATCH /accounts/:companyId/:accountId\nDELETE /accounts/:companyId/:accountId\nGET /accounts/:companyId/:accountId/events\nPOST /accounts/:companyId/:accountId/events\nGET /queues/:companyId\nPOST /queues/:companyId\nPUT /queues/:companyId\nPUT /queues/:companyId/:queueId\nDELETE /queues/:companyId/:queueId\nGET /staff/:companyId\nPUT /staff/:companyId/me\nPUT /staff/:companyId/:userId\nGET /routing-preview/:companyId\nGET /oauth/:provider/callback\nGET /agenda/:token.ics"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - subscription",
+   "heading": "subscription",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/subscription.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/subscription.js\nEndpoints (relative to the mount):\nGET /seats\nPOST /seats/sync\nPOST /portal\nGET /invoices\nGET /payment-methods\nPOST /payment-methods/setup-intent\nPOST /payment-methods/:id/default\nDELETE /payment-methods/:id\nGET /plans\nGET /launch-offers\nGET /current/:companyId\nGET /checkout/config\nPOST /checkout/init\nPOST /checkout/confirm\nPOST /checkout\nPOST /webhook"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - telnyxRequirementGroup",
+   "heading": "telnyxRequirementGroup",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/telnyxRequirementGroup.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/telnyxRequirementGroup.js\nEndpoints (relative to the mount):\nPOST /\nGET /:groupId\nGET /companies/:companyId/zones/:destinationZone\nPATCH /:groupId/requirements\nGET /company/:companyId/status\nGET /:groupId/status"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - tokensCompany",
+   "heading": "tokensCompany",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/tokensCompany.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/tokensCompany.js\nEndpoints (relative to the mount):\nGET /:companyId/check\nGET /:companyId/usage-by-gig\nGET /:companyId/usage\nGET /:companyId/purchases\nGET /:companyId\nPATCH /:companyId/ai-providers\nPOST /buy-tokens\nPOST /charge-usage"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - voicemails",
+   "heading": "voicemails",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/voicemails.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/voicemails.js\nEndpoints (relative to the mount):\nGET /\nGET /:id/audio\nPATCH /:id\nPOST /:id/callback-token\nPOST /:id/analyze"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - walletCompany",
+   "heading": "walletCompany",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/walletCompany.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/walletCompany.js\nEndpoints (relative to the mount):\nGET /entries/:companyId\nGET /agent-withdrawals/:companyId\nPOST /agent-withdrawals/approve/:withdrawalId\nGET /:companyId\nPOST /deposit\nPOST /withdraw"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - webhook",
+   "heading": "webhook",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/webhook.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/routes/webhook.js\nEndpoints (relative to the mount):\nPOST /telnyx"
+  },
+  {
+   "title": "API routes - v25_comporchestrator_back - routes",
+   "heading": "routes",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/whatsapp/routes.js"
+   ],
+   "text": "Service: orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)\nRoute file: v25_comporchestrator_back/src/whatsapp/routes.js\nEndpoints (relative to the mount):\nGET /webhook\nPOST /webhook\nGET /config\nPOST /link-token\nGET /admin/status\nGET /admin/tickets\nPOST /admin/tickets/:id/reply"
+  },
+  {
+   "title": "API routes - v25_dash_calls_backend - app",
+   "heading": "app",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/app.js"
+   ],
+   "text": "Service: calls (call journal, call analysis/QA, leads of the call dashboard)\nRoute file: v25_dash_calls_backend/src/app.js\nEndpoints (relative to the mount):\nGET /ai-voice-stream/health"
+  },
+  {
+   "title": "API routes - v25_dash_calls_backend - analytics",
+   "heading": "analytics (mounted at /api/analytics)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/routes/analytics.js"
+   ],
+   "text": "Service: calls (call journal, call analysis/QA, leads of the call dashboard)\nRoute file: v25_dash_calls_backend/src/routes/analytics.js\nMounted at: /api/analytics\nEndpoints (relative to the mount):\nGET /overview\nGET /calls\nGET /agents\nGET /quality"
+  },
+  {
+   "title": "API routes - v25_dash_calls_backend - auth",
+   "heading": "auth (mounted at /api/auth)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/routes/auth.js"
+   ],
+   "text": "Service: calls (call journal, call analysis/QA, leads of the call dashboard)\nRoute file: v25_dash_calls_backend/src/routes/auth.js\nMounted at: /api/auth\nEndpoints (relative to the mount):\nPOST /register\nPOST /login\nPOST /logout\nGET /profile"
+  },
+  {
+   "title": "API routes - v25_dash_calls_backend - calls",
+   "heading": "calls (mounted at /api/calls)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/routes/calls.js"
+   ],
+   "text": "Service: calls (call journal, call analysis/QA, leads of the call dashboard)\nRoute file: v25_dash_calls_backend/src/routes/calls.js\nMounted at: /api/calls\nEndpoints (relative to the mount):\nGET /company/:companyId/fraud-stats\nGET /company/:companyId/fraud-calls\nGET /agent/:agentId/fraud-stats\nPATCH /:id/fraud-review\nGET /agent/:agentId\nPOST /token\nGET /token\nPOST /store-call\nPOST /center-call\nPOST /recording\nGET /line-for-lead/:leadId\nPOST /telnyx/finalize\nPOST /telnyx/record-start\nPOST /:id/analyze\nPOST /:id/request-analysis-help\nPOST /:id/calibrate-score\nPOST /dialplan\nPOST /call\nGET /call/status/:callId\nPOST /outgoing\nGET /status/:callSid\nGET /status/:callSid\nPOST /hangup/:callSid\nGET /token\nPOST /end\nPOST /fetch-recording\nPOST /call-details\nPOST /recording/start\nPOST /recording/stop\nPOST /amd-callback"
+  },
+  {
+   "title": "API routes - v25_dash_calls_backend - calls",
+   "heading": "calls (mounted at /api/calls)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/routes/calls.js"
+   ],
+   "text": "Service: calls (call journal, call analysis/QA, leads of the call dashboard)\nRoute file: v25_dash_calls_backend/src/routes/calls.js\nMounted at: /api/calls\nEndpoints (relative to the mount):\nPOST /store-call-in-db-at-start-call\nPOST /store-call-in-db-at-end-call\nPOST /ai-assist\nPOST /personality-analysis\nPOST /get-login-token\nGET /get-login-token\nPOST /ai-outbound\nPOST /ai-outbound/hangup\nPOST /webhooks/telnyx/ai-outbound\nPOST /webhooks/telnyx/call-control\nPOST /webhooks/twilio/ai-outbound/voice\nPOST /webhooks/twilio/ai-outbound/status\nPOST /webhooks/twilio/ai-outbound/recording"
+  },
+  {
+   "title": "API routes - v25_dash_calls_backend - callsAnalytics",
+   "heading": "callsAnalytics (mounted at /api/calls)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/routes/callsAnalytics.js"
+   ],
+   "text": "Service: calls (call journal, call analysis/QA, leads of the call dashboard)\nRoute file: v25_dash_calls_backend/src/routes/callsAnalytics.js\nMounted at: /api/calls\nEndpoints (relative to the mount):\nGET /company/:companyId/analytics/overview\nGET /company/:companyId/analytics/outcomes\nGET /company/:companyId/analytics/reps\nGET /company/:companyId/analytics/recent\nGET /company/:companyId/analytics/rep-payouts\nGET /company/:companyId/analytics/callbacks\nGET /company/:companyId/analytics/operation-measures"
+  },
+  {
+   "title": "API routes - v25_dash_calls_backend - clientPortal",
+   "heading": "clientPortal (mounted at /api/client-portal)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/routes/clientPortal.js"
+   ],
+   "text": "Service: calls (call journal, call analysis/QA, leads of the call dashboard)\nRoute file: v25_dash_calls_backend/src/routes/clientPortal.js\nMounted at: /api/client-portal\nEndpoints (relative to the mount):\nGET /me\nGET /overview\nGET /calls"
+  },
+  {
+   "title": "API routes - v25_dash_calls_backend - dashboard",
+   "heading": "dashboard (mounted at /api/dashboard)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/routes/dashboard.js"
+   ],
+   "text": "Service: calls (call journal, call analysis/QA, leads of the call dashboard)\nRoute file: v25_dash_calls_backend/src/routes/dashboard.js\nMounted at: /api/dashboard\nEndpoints (relative to the mount):\nGET /stats\nGET /live-calls\nGET /top-gigs\nGET /top-reps"
+  },
+  {
+   "title": "API routes - v25_dash_calls_backend - gigs",
+   "heading": "gigs (mounted at /api/gigs)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/routes/gigs.js"
+   ],
+   "text": "Service: calls (call journal, call analysis/QA, leads of the call dashboard)\nRoute file: v25_dash_calls_backend/src/routes/gigs.js\nMounted at: /api/gigs\nEndpoints (relative to the mount):\nPUT /:id/voice-assistant\nGET /:id/voice-assistant"
+  },
+  {
+   "title": "API routes - v25_dash_calls_backend - internalCenter",
+   "heading": "internalCenter (mounted at /api/internal-center)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/routes/internalCenter.js"
+   ],
+   "text": "Service: calls (call journal, call analysis/QA, leads of the call dashboard)\nRoute file: v25_dash_calls_backend/src/routes/internalCenter.js\nMounted at: /api/internal-center\nEndpoints (relative to the mount):\nGET /:companyId/calls\nGET /:companyId/contacts\nPOST /:companyId/leads/import"
+  },
+  {
+   "title": "API routes - v25_dash_calls_backend - repTransactions",
+   "heading": "repTransactions (mounted at /api/rep-transactions)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/routes/repTransactions.js"
+   ],
+   "text": "Service: calls (call journal, call analysis/QA, leads of the call dashboard)\nRoute file: v25_dash_calls_backend/src/routes/repTransactions.js\nMounted at: /api/rep-transactions\nEndpoints (relative to the mount):\nGET /company/:companyId"
+  },
+  {
+   "title": "API routes - v25_dash_calls_backend - vertex",
+   "heading": "vertex (mounted at /api/vertex)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/routes/vertex.js"
+   ],
+   "text": "Service: calls (call journal, call analysis/QA, leads of the call dashboard)\nRoute file: v25_dash_calls_backend/src/routes/vertex.js\nMounted at: /api/vertex\nEndpoints (relative to the mount):\nPOST /audio/summarize\nPOST /summarize\nPOST /audio/transcribe\nPOST /transcribe-short\nPOST /transcribe-long\nPOST /call/score\nPOST /call/post-actions\nPOST /evaluate-language\nPOST /upload\nPOST /upload-buffer"
+  },
+  {
+   "title": "API routes - v25_dash_calls_backend - voiceMenu",
+   "heading": "voiceMenu (mounted at /api/voice-menu)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/routes/voiceMenu.js"
+   ],
+   "text": "Service: calls (call journal, call analysis/QA, leads of the call dashboard)\nRoute file: v25_dash_calls_backend/src/routes/voiceMenu.js\nMounted at: /api/voice-menu\nEndpoints (relative to the mount):\nPOST /suggest\nPOST /tts\nPOST /action-plan\nPOST /directory-suggest\nPOST /analyze-voicemail"
+  },
+  {
+   "title": "API routes - v25_dash_rep_back - index",
+   "heading": "index",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_rep_back/src/index.js"
+   ],
+   "text": "Service: REP dashboard\nRoute file: v25_dash_rep_back/src/index.js\nEndpoints (relative to the mount):\nGET /health"
+  },
+  {
+   "title": "API routes - v25_dash_rep_back - notificationRoutes",
+   "heading": "notificationRoutes (mounted at /api/notifications)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_rep_back/src/routes/notificationRoutes.js"
+   ],
+   "text": "Service: REP dashboard\nRoute file: v25_dash_rep_back/src/routes/notificationRoutes.js\nMounted at: /api/notifications\nEndpoints (relative to the mount):\nGET /\nGET /unread-count\nPOST /upsert\nPATCH /mark-all-read\nDELETE /\nDELETE /key/:key\nPATCH /:id/read\nDELETE /:id"
+  },
+  {
+   "title": "API routes - v25_dash_rep_back - profileRoutes",
+   "heading": "profileRoutes (mounted at /api/profiles)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_rep_back/src/routes/profileRoutes.js"
+   ],
+   "text": "Service: REP dashboard\nRoute file: v25_dash_rep_back/src/routes/profileRoutes.js\nMounted at: /api/profiles\nEndpoints (relative to the mount):\nGET /generate-test-token/:userId\nGET /\nGET /user/:id\nPUT /\nPUT /:id\nPUT /:id/basic-info\nPUT /:id/experience\nPUT /:id/skills\nPOST /:id/language-assessment\nPOST /:id/contact-center-assessment\nGET /:id/exists\nGET /reps-score\nGET /completion-status\nGET /:id/plan\nPOST /:id/identity/recheck\nPOST /:id/language/accent/recheck\nPOST /:id/experience/analyze-video\nGET /:id/language/analyze-video/jobs/:jobId\nPOST /:id/language/analyze-video"
+  },
+  {
+   "title": "API routes - v25_dashboard_backend - address",
+   "heading": "address",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/routes/address.js"
+   ],
+   "text": "Service: dashboard (leads import, CRM, integrations)\nRoute file: v25_dashboard_backend/src/routes/address.js\nEndpoints (relative to the mount):\nPOST /\nGET /:addressId"
+  },
+  {
+   "title": "API routes - v25_dashboard_backend - analytics",
+   "heading": "analytics (mounted at /api/analytics)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/routes/analytics.js"
+   ],
+   "text": "Service: dashboard (leads import, CRM, integrations)\nRoute file: v25_dashboard_backend/src/routes/analytics.js\nMounted at: /api/analytics\nEndpoints (relative to the mount):\nGET /overview\nGET /calls\nGET /agents\nGET /quality"
+  },
+  {
+   "title": "API routes - v25_dashboard_backend - auth",
+   "heading": "auth (mounted at /api/auth)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/routes/auth.js"
+   ],
+   "text": "Service: dashboard (leads import, CRM, integrations)\nRoute file: v25_dashboard_backend/src/routes/auth.js\nMounted at: /api/auth\nEndpoints (relative to the mount):\nPOST /register\nPOST /login\nPOST /logout\nGET /profile"
+  },
+  {
+   "title": "API routes - v25_dashboard_backend - call",
+   "heading": "call",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/routes/call.js"
+   ],
+   "text": "Service: dashboard (leads import, CRM, integrations)\nRoute file: v25_dashboard_backend/src/routes/call.js\nEndpoints (relative to the mount):\nPOST /answer\nPOST /dial\nPOST /hangup\nPOST /record/start\nPOST /record/stop"
+  },
+  {
+   "title": "API routes - v25_dashboard_backend - dashboard",
+   "heading": "dashboard (mounted at /api/dashboard)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/routes/dashboard.js"
+   ],
+   "text": "Service: dashboard (leads import, CRM, integrations)\nRoute file: v25_dashboard_backend/src/routes/dashboard.js\nMounted at: /api/dashboard\nEndpoints (relative to the mount):\nGET /stats\nGET /live-calls\nGET /top-gigs\nGET /top-reps"
+  },
+  {
+   "title": "API routes - v25_dashboard_backend - document",
+   "heading": "document",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/routes/document.js"
+   ],
+   "text": "Service: dashboard (leads import, CRM, integrations)\nRoute file: v25_dashboard_backend/src/routes/document.js\nEndpoints (relative to the mount):\nPOST /\nGET /:documentId\nGET /:documentId/download\nDELETE /:documentId"
+  },
+  {
+   "title": "API routes - v25_dashboard_backend - file-processing",
+   "heading": "file-processing (mounted at /api/file-processing)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/routes/file-processing.js"
+   ],
+   "text": "Service: dashboard (leads import, CRM, integrations)\nRoute file: v25_dashboard_backend/src/routes/file-processing.js\nMounted at: /api/file-processing\nEndpoints (relative to the mount):\nGET /test\nPOST /process\nPOST /analyze\nPOST /apply-mapping\nGET /mapping/:gigId\nPUT /mapping/:gigId\nGET /visibility/:gigId\nGET /script-variables/:gigId"
+  },
+  {
+   "title": "API routes - v25_dashboard_backend - gigs",
+   "heading": "gigs",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/routes/gigs.js"
+   ],
+   "text": "Service: dashboard (leads import, CRM, integrations)\nRoute file: v25_dashboard_backend/src/routes/gigs.js\nEndpoints (relative to the mount):\nGET /\nGET /:id\nPUT /:id\nDELETE /:id"
+  },
+  {
+   "title": "API routes - v25_dashboard_backend - leads",
+   "heading": "leads (mounted at /api/leads)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/routes/leads.js"
+   ],
+   "text": "Service: dashboard (leads import, CRM, integrations)\nRoute file: v25_dashboard_backend/src/routes/leads.js\nMounted at: /api/leads\nEndpoints (relative to the mount):\nPOST /upload-csv\nPOST /bulk\nPOST /archive\nPOST /:id/archive\nPOST /:id/cockpit-claim\nPOST /:id/cockpit-release\nPUT /:id/disposition\nPUT /:id/disposition/confirm"
+  },
+  {
+   "title": "API routes - v25_dashboard_backend - phoneNumber",
+   "heading": "phoneNumber",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/routes/phoneNumber.js"
+   ],
+   "text": "Service: dashboard (leads import, CRM, integrations)\nRoute file: v25_dashboard_backend/src/routes/phoneNumber.js\nEndpoints (relative to the mount):\nGET /search\nGET /search/twilio\nPOST /purchase\nPOST /purchase/twilio\nGET /\nDELETE /:id\nGET /gig/:gigId/check\nPOST /:phoneNumber/configure-voice\nPOST /webhooks/telnyx/number-order"
+  },
+  {
+   "title": "API routes - v25_dashboard_backend - requirement",
+   "heading": "requirement",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/routes/requirement.js"
+   ],
+   "text": "Service: dashboard (leads import, CRM, integrations)\nRoute file: v25_dashboard_backend/src/routes/requirement.js\nEndpoints (relative to the mount):\nGET /countries/:countryCode/requirements"
+  },
+  {
+   "title": "API routes - v25_dashboard_backend - speech-to-text",
+   "heading": "speech-to-text (mounted at /api/speechToText)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/routes/speech-to-text.js"
+   ],
+   "text": "Service: dashboard (leads import, CRM, integrations)\nRoute file: v25_dashboard_backend/src/routes/speech-to-text.js\nMounted at: /api/speechToText\nEndpoints (relative to the mount):\nGET /test\nPOST /transcribe"
+  },
+  {
+   "title": "API routes - v25_dashboard_backend - telnyxRequirementGroup",
+   "heading": "telnyxRequirementGroup",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/routes/telnyxRequirementGroup.js"
+   ],
+   "text": "Service: dashboard (leads import, CRM, integrations)\nRoute file: v25_dashboard_backend/src/routes/telnyxRequirementGroup.js\nEndpoints (relative to the mount):\nPOST /\nGET /:groupId\nGET /companies/:companyId/zones/:destinationZone\nPATCH /:groupId/requirements\nGET /company/:companyId/status\nGET /:groupId/status"
+  },
+  {
+   "title": "API routes - v25_dashboard_backend - vertex",
+   "heading": "vertex (mounted at /api/vertex)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/routes/vertex.js"
+   ],
+   "text": "Service: dashboard (leads import, CRM, integrations)\nRoute file: v25_dashboard_backend/src/routes/vertex.js\nMounted at: /api/vertex\nEndpoints (relative to the mount):\nGET /test\nPOST /audio/summarize\nPOST /audio/transcribe\nPOST /call/score\nPOST /call/post-actions"
+  },
+  {
+   "title": "API routes - v25_dashboard_backend - webhook",
+   "heading": "webhook",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/routes/webhook.js"
+   ],
+   "text": "Service: dashboard (leads import, CRM, integrations)\nRoute file: v25_dashboard_backend/src/routes/webhook.js\nEndpoints (relative to the mount):\nPOST /telnyx"
+  },
+  {
+   "title": "API routes - v25_dashboard_backend - zoho",
+   "heading": "zoho (mounted at /api/zoho)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/routes/zoho.js"
+   ],
+   "text": "Service: dashboard (leads import, CRM, integrations)\nRoute file: v25_dashboard_backend/src/routes/zoho.js\nMounted at: /api/zoho\nEndpoints (relative to the mount):\nPOST /configure\nPOST /token\nPOST /disconnect\nGET /auth\nGET /callback\nGET /auth/callback\nPOST /refresh-token\nGET /leads\nPOST /leads\nPUT /leads/:id\nPOST /leads/sync-all\nGET /fields\nGET /records/table\nPUT /field-mapping\nGET /deals\nGET /deals/count\nGET /leads-by-pipeline\nGET /contacts\nGET /chats\nGET /chats/:id/messages\nPOST /chats/:id/messages\nGET /folders\nGET /emails/sent\nGET /emails/inbox\nGET /emails/archived\nPOST /emails/:id/archive\nGET /check-configuration\nGET /pipelines\nGET /config/user/:userId\nGET /config/:id"
+  },
+  {
+   "title": "API routes - v25_dashboard_backend - zoho",
+   "heading": "zoho (mounted at /api/zoho)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/routes/zoho.js"
+   ],
+   "text": "Service: dashboard (leads import, CRM, integrations)\nRoute file: v25_dashboard_backend/src/routes/zoho.js\nMounted at: /api/zoho\nEndpoints (relative to the mount):\nGET /configs\nPOST /config/user/:userId/refresh-token"
+  },
+  {
+   "title": "API routes - v25_gigsmanualcreation_backend - aiRoute",
+   "heading": "aiRoute (mounted at /api/ai)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_gigsmanualcreation_backend/src/route/aiRoute.ts"
+   ],
+   "text": "Service: gigs (GIG creation and management)\nRoute file: v25_gigsmanualcreation_backend/src/route/aiRoute.ts\nMounted at: /api/ai\nEndpoints (relative to the mount):\nPOST /transcribe-audio\nPOST /generate-gig-suggestions\nPOST /generate-skills\nPOST /generate-timezones\nPOST /generate-destinations\nPOST /analyze-title\nPOST /test-gig-suggestions\nGET /test-api-connections\nGET /test-populate\nGET /categories\nGET /timezones\nPOST /test-activity-mapping"
+  },
+  {
+   "title": "API routes - v25_gigsmanualcreation_backend - bulkRoute",
+   "heading": "bulkRoute (mounted at /api/bulk)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_gigsmanualcreation_backend/src/route/bulkRoute.ts"
+   ],
+   "text": "Service: gigs (GIG creation and management)\nRoute file: v25_gigsmanualcreation_backend/src/route/bulkRoute.ts\nMounted at: /api/bulk\nEndpoints (relative to the mount):\nPOST /gigs\nPOST /countries\nPOST /validate"
+  },
+  {
+   "title": "API routes - v25_gigsmanualcreation_backend - countryRoute",
+   "heading": "countryRoute (mounted at /api/countries)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_gigsmanualcreation_backend/src/route/countryRoute.ts"
+   ],
+   "text": "Service: gigs (GIG creation and management)\nRoute file: v25_gigsmanualcreation_backend/src/route/countryRoute.ts\nMounted at: /api/countries\nEndpoints (relative to the mount):\nGET /\nGET /:id\nGET /code/:code\nPOST /\nPOST /bulk\nPUT /:id\nDELETE /:id"
+  },
+  {
+   "title": "API routes - v25_gigsmanualcreation_backend - currencyRoute",
+   "heading": "currencyRoute (mounted at /api/currencies)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_gigsmanualcreation_backend/src/route/currencyRoute.ts"
+   ],
+   "text": "Service: gigs (GIG creation and management)\nRoute file: v25_gigsmanualcreation_backend/src/route/currencyRoute.ts\nMounted at: /api/currencies\nEndpoints (relative to the mount):\nGET /\nGET /stats\nPOST /seed\nGET /id/:id\nGET /:code\nPOST /\nPUT /:code\nDELETE /:code"
+  },
+  {
+   "title": "API routes - v25_gigsmanualcreation_backend - gigRoute",
+   "heading": "gigRoute (mounted at /api/gigs)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_gigsmanualcreation_backend/src/route/gigRoute.ts"
+   ],
+   "text": "Service: gigs (GIG creation and management)\nRoute file: v25_gigsmanualcreation_backend/src/route/gigRoute.ts\nMounted at: /api/gigs\nEndpoints (relative to the mount):\nPOST /\nGET /\nGET /active\nGET /:id\nGET /:id/details\nGET /:id/destination-zone\nPUT /:id\nPATCH /:id/setup-steps\nDELETE /:id\nGET /user/:userId\nGET /company/:companyId\nGET /company/:companyId/last\nGET /company/:companyId/has-gigs\nGET /company/:companyId/has-leads\nPOST /proxy/upload-dalle-image"
+  },
+  {
+   "title": "API routes - v25_gigsmanualcreation_backend - sectorRoute",
+   "heading": "sectorRoute (mounted at /api/sectors)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_gigsmanualcreation_backend/src/route/sectorRoute.ts"
+   ],
+   "text": "Service: gigs (GIG creation and management)\nRoute file: v25_gigsmanualcreation_backend/src/route/sectorRoute.ts\nMounted at: /api/sectors\nEndpoints (relative to the mount):\nGET /\nGET /:id\nPOST /\nPUT /:id\nDELETE /:id"
+  },
+  {
+   "title": "API routes - v25_gigsmanualcreation_backend - server",
+   "heading": "server",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_gigsmanualcreation_backend/src/server.ts"
+   ],
+   "text": "Service: gigs (GIG creation and management)\nRoute file: v25_gigsmanualcreation_backend/src/server.ts\nEndpoints (relative to the mount):\nGET /"
+  },
+  {
+   "title": "API routes - v25_knowledgebase_backend - app",
+   "heading": "app",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/app.js"
+   ],
+   "text": "Service: knowledge base (documents and RAG)\nRoute file: v25_knowledgebase_backend/src/app.js\nEndpoints (relative to the mount):\nGET /health"
+  },
+  {
+   "title": "API routes - v25_knowledgebase_backend - index",
+   "heading": "index",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/index.js"
+   ],
+   "text": "Service: knowledge base (documents and RAG)\nRoute file: v25_knowledgebase_backend/src/index.js\nEndpoints (relative to the mount):\nGET /health"
+  },
+  {
+   "title": "API routes - v25_knowledgebase_backend - analysisRoutes",
+   "heading": "analysisRoutes (mounted at /api/analysis)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/routes/analysisRoutes.js"
+   ],
+   "text": "Service: knowledge base (documents and RAG)\nRoute file: v25_knowledgebase_backend/src/routes/analysisRoutes.js\nMounted at: /api/analysis\nEndpoints (relative to the mount):\nPOST /start\nPOST /ask\nGET /:companyId\nGET /:companyId/all"
+  },
+  {
+   "title": "API routes - v25_knowledgebase_backend - callRecordingRoutes",
+   "heading": "callRecordingRoutes (mounted at /api/call-recordings)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/routes/callRecordingRoutes.js"
+   ],
+   "text": "Service: knowledge base (documents and RAG)\nRoute file: v25_knowledgebase_backend/src/routes/callRecordingRoutes.js\nMounted at: /api/call-recordings\nEndpoints (relative to the mount):\nGET /\nPOST /upload\nDELETE /:id\nPOST /:recordingId/analyze/summary\nPOST /:recordingId/analyze/transcription\nPOST /:recordingId/analyze/scoring"
+  },
+  {
+   "title": "API routes - v25_knowledgebase_backend - companyRoutes",
+   "heading": "companyRoutes (mounted at /api/companies)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/routes/companyRoutes.js"
+   ],
+   "text": "Service: knowledge base (documents and RAG)\nRoute file: v25_knowledgebase_backend/src/routes/companyRoutes.js\nMounted at: /api/companies\nEndpoints (relative to the mount):\nPOST /add"
+  },
+  {
+   "title": "API routes - v25_knowledgebase_backend - documentRoutes",
+   "heading": "documentRoutes (mounted at /api/documents)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/routes/documentRoutes.js"
+   ],
+   "text": "Service: knowledge base (documents and RAG)\nRoute file: v25_knowledgebase_backend/src/routes/documentRoutes.js\nMounted at: /api/documents\nEndpoints (relative to the mount):\nPOST /upload\nGET /\nGET /gig/:gigId\nGET /:id\nGET /:id/analysis\nDELETE /:id\nPUT /:id"
+  },
+  {
+   "title": "API routes - v25_knowledgebase_backend - fineTuningRoutes",
+   "heading": "fineTuningRoutes (mounted at /api/fine-tuning)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/routes/fineTuningRoutes.js"
+   ],
+   "text": "Service: knowledge base (documents and RAG)\nRoute file: v25_knowledgebase_backend/src/routes/fineTuningRoutes.js\nMounted at: /api/fine-tuning\nEndpoints (relative to the mount):\nPOST /jobs\nGET /jobs\nGET /jobs/:id\nPUT /jobs/:id/status\nPOST /jobs/:id/cancel\nPOST /test"
+  },
+  {
+   "title": "API routes - v25_knowledgebase_backend - ragRoutes",
+   "heading": "ragRoutes (mounted at /api/rag)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/routes/ragRoutes.js"
+   ],
+   "text": "Service: knowledge base (documents and RAG)\nRoute file: v25_knowledgebase_backend/src/routes/ragRoutes.js\nMounted at: /api/rag\nEndpoints (relative to the mount):\nPOST /corpus/initialize\nPOST /corpus/sync\nPOST /query\nPOST /analyze/:id\nGET /corpus/:companyId/status\nGET /corpus/:companyId/documents\nGET /corpus/:companyId/documents/:documentId\nGET /corpus/:companyId/stats\nGET /corpus/:companyId/search\nPOST /generate-script\nPOST /scripts\nPUT /scripts/:scriptId\nGET /scripts\nPUT /scripts/:scriptId/status\nDELETE /scripts/:scriptId\nPOST /translate-analysis"
+  },
+  {
+   "title": "API routes - v25_knowledgebase_backend - scriptRoutes",
+   "heading": "scriptRoutes (mounted at /api/scripts)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/routes/scriptRoutes.js"
+   ],
+   "text": "Service: knowledge base (documents and RAG)\nRoute file: v25_knowledgebase_backend/src/routes/scriptRoutes.js\nMounted at: /api/scripts\nEndpoints (relative to the mount):\nGET /gig/:gigId\nGET /company/:companyId\nPUT /:scriptId/status\nPOST /:scriptId/regenerate\nPOST /:scriptId/refine\nPUT /:scriptId/content\nPOST /:scriptId/replicas\nDELETE /:scriptId/replicas/:replicaIndex\nDELETE /:scriptId"
+  },
+  {
+   "title": "API routes - v25_matching_backend - agentRoutes",
+   "heading": "agentRoutes (mounted at /api/agents)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/routes/agentRoutes.js"
+   ],
+   "text": "Service: matching (REP/GIG matching, enrollment, time slots and reservations)\nRoute file: v25_matching_backend/src/routes/agentRoutes.js\nMounted at: /api/agents\nEndpoints (relative to the mount):\nGET /\nGET /:id\nPOST /\nPUT /:id\nDELETE /:id"
+  },
+  {
+   "title": "API routes - v25_matching_backend - enrollmentRoutes",
+   "heading": "enrollmentRoutes (mounted at /api/enrollment)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/routes/enrollmentRoutes.js"
+   ],
+   "text": "Service: matching (REP/GIG matching, enrollment, time slots and reservations)\nRoute file: v25_matching_backend/src/routes/enrollmentRoutes.js\nMounted at: /api/enrollment\nEndpoints (relative to the mount):\nPOST /invite\nPOST /accept\nPOST /reject\nPOST /request\nPOST /request/accept\nPOST /request/reject\nPOST /:id/accept\nPOST /:id/reject\nGET /agent/:agentId\nGET /gig/:gigId\nGET /agent/:agentId/gigs\nGET /gig/:gigId/agents\nPOST /gig/remove-agent\nPOST /:id/resend\nPOST /:id/cancel\nGET /company/:companyId/step-completion"
+  },
+  {
+   "title": "API routes - v25_matching_backend - gigAgentRoutes",
+   "heading": "gigAgentRoutes (mounted at /api/gig-agents)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/routes/gigAgentRoutes.js"
+   ],
+   "text": "Service: matching (REP/GIG matching, enrollment, time slots and reservations)\nRoute file: v25_matching_backend/src/routes/gigAgentRoutes.js\nMounted at: /api/gig-agents\nEndpoints (relative to the mount):\nGET /\nGET /stats\nGET /session-planning\nPUT /session-planning\nPOST /standing\nGET /:id\nPOST /\nPUT /:id\nDELETE /:id\nGET /agent/:agentId\nGET /gig/:gigId\nGET /status/:status\nPOST /:id/resend-email\nGET /invited/agent/:agentId\nGET /invited/company/:companyId\nGET /enrolled/agent/:agentId\nGET /enrollment-requests/company/:companyId\nGET /active-agents/company/:companyId\nPOST /enrollment-requests/:id/accept\nPOST /enrollment-requests/:id/reject\nPOST /enrollment-requests/:id/cancel\nPOST /invitations/:id/accept\nPOST /invitations/:id/reject\nPOST /invitations/:id/archive\nPOST /enrollment-request/:agentId/:gigId\nGET /agents/:agentId/gigs\nGET /gigs/:gigId/agents"
+  },
+  {
+   "title": "API routes - v25_matching_backend - gigMatchingWeightsRoutes",
+   "heading": "gigMatchingWeightsRoutes (mounted at /api/gig-matching-weights)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/routes/gigMatchingWeightsRoutes.js"
+   ],
+   "text": "Service: matching (REP/GIG matching, enrollment, time slots and reservations)\nRoute file: v25_matching_backend/src/routes/gigMatchingWeightsRoutes.js\nMounted at: /api/gig-matching-weights\nEndpoints (relative to the mount):\nGET /all\nGET /:gigId\nPOST /:gigId\nPOST /:gigId/reset\nDELETE /:gigId"
+  },
+  {
+   "title": "API routes - v25_matching_backend - gigRoutes",
+   "heading": "gigRoutes (mounted at /api/gigs)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/routes/gigRoutes.js"
+   ],
+   "text": "Service: matching (REP/GIG matching, enrollment, time slots and reservations)\nRoute file: v25_matching_backend/src/routes/gigRoutes.js\nMounted at: /api/gigs\nEndpoints (relative to the mount):\nPOST /\nGET /\nGET /:id\nPUT /:id\nDELETE /:id\nPOST /find-gigs-for-agent\nPOST /find-agents-for-gig\nPOST /:id/availability\nGET /:id/availability\nPUT /:id/availability"
+  },
+  {
+   "title": "API routes - v25_matching_backend - matchRoutes",
+   "heading": "matchRoutes (mounted at /api/matches)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/routes/matchRoutes.js"
+   ],
+   "text": "Service: matching (REP/GIG matching, enrollment, time slots and reservations)\nRoute file: v25_matching_backend/src/routes/matchRoutes.js\nMounted at: /api/matches\nEndpoints (relative to the mount):\nGET /\nGET /:id\nGET /gig/:id\nPOST /\nPUT /:id\nDELETE /:id\nPOST /gig/:id\nPOST /rep/:id\nPOST /create-gig-agent\nPOST /rep/:id\nPOST /optimize\nPOST /language/gig/:id"
+  },
+  {
+   "title": "API routes - v25_matching_backend - slotRoutes",
+   "heading": "slotRoutes (mounted at /api/slots)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/routes/slotRoutes.js"
+   ],
+   "text": "Service: matching (REP/GIG matching, enrollment, time slots and reservations)\nRoute file: v25_matching_backend/src/routes/slotRoutes.js\nMounted at: /api/slots\nEndpoints (relative to the mount):\nPOST /generate\nGET /\nPOST /upsert\nPOST /bulk-upsert\nPOST /:slotId/reserve\nDELETE /reservations/:reservationId\nPATCH /reservations/:reservationId\nDELETE /:id\nGET /reservations"
+  },
+  {
+   "title": "API routes - v25_matching_backend - timeSlotRoutes",
+   "heading": "timeSlotRoutes (mounted at /api/time-slots)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/routes/timeSlotRoutes.js"
+   ],
+   "text": "Service: matching (REP/GIG matching, enrollment, time slots and reservations)\nRoute file: v25_matching_backend/src/routes/timeSlotRoutes.js\nMounted at: /api/time-slots\nEndpoints (relative to the mount):\nGET /\nPOST /\nDELETE /:id\nPATCH /:id/cancel"
+  },
+  {
+   "title": "API routes - v25_platform_training_backend - app",
+   "heading": "app",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/app.ts"
+   ],
+   "text": "Service: training (journeys, assessments)\nRoute file: v25_platform_training_backend/src/app.ts\nEndpoints (relative to the mount):\nGET /"
+  },
+  {
+   "title": "API routes - v25_platform_training_backend - aiRoutes",
+   "heading": "aiRoutes (mounted at /api/ai)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/routes/aiRoutes.ts"
+   ],
+   "text": "Service: training (journeys, assessments)\nRoute file: v25_platform_training_backend/src/routes/aiRoutes.ts\nMounted at: /api/ai\nEndpoints (relative to the mount):\nPOST /generate-training/:gigId\nGET /gig/:gigId/knowledge-documents\nGET /gig/:gigId/call-recordings\nPOST /chat\nPOST /generate-podcast-script\nPOST /podcast/chat\nPOST /podcast/save\nGET /podcast/list\nPOST /video/generate\nGET /video/status/:jobId\nPOST /video/save\nGET /video/list\nPOST /training-images/generate\nPOST /training-images/save\nPOST /training-slides-json/generate\nPOST /training-slides-json/save\nGET /training-images/status/:jobId\nGET /training-images/status\nGET /training-images/list\nPOST /chat/title\nGET /chat/history\nGET /chat/history/:sessionId\nPOST /analyze-document\nPOST /generate-program\nPOST /generate-quiz\nPOST /generate-curriculum\nPOST /generate-presentation\nPOST /edit-slide\nPOST /synthesize-programs\nPOST /export-pptx"
+  },
+  {
+   "title": "API routes - v25_platform_training_backend - aiRoutes",
+   "heading": "aiRoutes (mounted at /api/ai)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/routes/aiRoutes.ts"
+   ],
+   "text": "Service: training (journeys, assessments)\nRoute file: v25_platform_training_backend/src/routes/aiRoutes.ts\nMounted at: /api/ai\nEndpoints (relative to the mount):\nPOST /export-pptx-python"
+  },
+  {
+   "title": "API routes - v25_platform_training_backend - authRoutes",
+   "heading": "authRoutes (mounted at /api/auth)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/routes/authRoutes.ts"
+   ],
+   "text": "Service: training (journeys, assessments)\nRoute file: v25_platform_training_backend/src/routes/authRoutes.ts\nMounted at: /api/auth\nEndpoints (relative to the mount):\nPOST /login\nPOST /register\nGET /me\nPOST /logout"
+  },
+  {
+   "title": "API routes - v25_platform_training_backend - certificationRoutes",
+   "heading": "certificationRoutes (mounted at /certifications)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/routes/certificationRoutes.ts"
+   ],
+   "text": "Service: training (journeys, assessments)\nRoute file: v25_platform_training_backend/src/routes/certificationRoutes.ts\nMounted at: /certifications\nEndpoints (relative to the mount):\nGET /rep/:repId\nGET /verify/:certificateId\nPOST /issue/:repId/:journeyId"
+  },
+  {
+   "title": "API routes - v25_platform_training_backend - healthRoutes",
+   "heading": "healthRoutes (mounted at /)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/routes/healthRoutes.ts"
+   ],
+   "text": "Service: training (journeys, assessments)\nRoute file: v25_platform_training_backend/src/routes/healthRoutes.ts\nMounted at: /\nEndpoints (relative to the mount):\nGET /health\nGET /cors-test"
+  },
+  {
+   "title": "API routes - v25_platform_training_backend - journeyRoutes",
+   "heading": "journeyRoutes (mounted at /api/training_journeys)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/routes/journeyRoutes.ts"
+   ],
+   "text": "Service: training (journeys, assessments)\nRoute file: v25_platform_training_backend/src/routes/journeyRoutes.ts\nMounted at: /api/training_journeys\nEndpoints (relative to the mount):\nPOST /\nGET /\nGET /dashboard\nGET /trainer/companyId/:companyId\nGET /trainer/companyId/:companyId/gigId/:gigId\nPOST /trainer/companyId/:companyId/participants-progress\nGET /status/:status\nGET /rep-progress\nGET /progress/:repId/:courseId\nPOST /section/start\nPOST /section/complete\nPOST /quiz/start\nPOST /quiz/submit\nPOST /rep-progress\nPOST /tracking-events\nGET /tracking-events\nGET /rep/:repId/trainings-progress\nGET /rep/:repId/progress/gig/:gigId\nGET /rep/:repId/progress-summary\nGET /rep/:repId/slide-progress-summary\nGET /rep/:repId/training-tracking\nGET /rep/:repId/script-reads\nPOST /script/read\nGET /certification/:repId/:journeyId\nGET /journey/:journeyId/reps-progress\nGET /gig/:gigId\nPOST /generate-thumbnail\nPOST /suggest-vision\nPOST /suggest-target-roles\nGET /rep/:repId"
+  },
+  {
+   "title": "API routes - v25_platform_training_backend - journeyRoutes",
+   "heading": "journeyRoutes (mounted at /api/training_journeys)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/routes/journeyRoutes.ts"
+   ],
+   "text": "Service: training (journeys, assessments)\nRoute file: v25_platform_training_backend/src/routes/journeyRoutes.ts\nMounted at: /api/training_journeys\nEndpoints (relative to the mount):\nGET /:id\nPUT /:id\nPOST /:id/edit-with-prompt\nPOST /:id/launch\nDELETE /:id\nPATCH /:id/archive"
+  },
+  {
+   "title": "API routes - v25_platform_training_backend - uploadRoutes",
+   "heading": "uploadRoutes (mounted at /api/upload)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/routes/uploadRoutes.ts"
+   ],
+   "text": "Service: training (journeys, assessments)\nRoute file: v25_platform_training_backend/src/routes/uploadRoutes.ts\nMounted at: /api/upload\nEndpoints (relative to the mount):\nPOST /image\nPOST /video\nPOST /document\nDELETE /:publicId"
+  },
+  {
+   "title": "API routes - v25_registration_backend - index",
+   "heading": "index",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/index.js"
+   ],
+   "text": "Service: registration (accounts, login, company members, call-center)\nRoute file: v25_registration_backend/src/index.js\nEndpoints (relative to the mount):\nGET /email/logo-pink.png\nGET /email/harx-banner.jpg\nGET /"
+  },
+  {
+   "title": "API routes - v25_registration_backend - adminRoutes",
+   "heading": "adminRoutes (mounted at /api/admin)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/routes/adminRoutes.js"
+   ],
+   "text": "Service: registration (accounts, login, company members, call-center)\nRoute file: v25_registration_backend/src/routes/adminRoutes.js\nMounted at: /api/admin\nEndpoints (relative to the mount):\nPOST /login\nGET /stats\nGET /users\nGET /users/:userId\nPATCH /users/:userId/financials\nGET /wallet/overview\nGET /pricing/minutes\nPATCH /pricing/minutes\nGET /pricing/phone-line\nPATCH /pricing/phone-line\nGET /plans/company\nPATCH /plans/company/:planId\nGET /plans/rep\nPATCH /plans/rep/:planId\nGET /objectives\nPATCH /objectives\nGET /onboarding-satisfaction\nGET /countries\nPATCH /countries/:countryId/retraction-days"
+  },
+  {
+   "title": "API routes - v25_registration_backend - agentInvitationRoutes",
+   "heading": "agentInvitationRoutes (mounted at /api/agent-invitations)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/routes/agentInvitationRoutes.js"
+   ],
+   "text": "Service: registration (accounts, login, company members, call-center)\nRoute file: v25_registration_backend/src/routes/agentInvitationRoutes.js\nMounted at: /api/agent-invitations\nEndpoints (relative to the mount):\nGET /mine\nPOST /:id/accept\nPOST /:id/decline"
+  },
+  {
+   "title": "API routes - v25_registration_backend - authRoutes",
+   "heading": "authRoutes (mounted at /api/auth)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/routes/authRoutes.js"
+   ],
+   "text": "Service: registration (accounts, login, company members, call-center)\nRoute file: v25_registration_backend/src/routes/authRoutes.js\nMounted at: /api/auth\nEndpoints (relative to the mount):\nPOST /register\nPOST /check-email\nPOST /check-phone\nPOST /login\nPOST /verify-email\nPOST /reengage-login\nPOST /invite-login\nPOST /reengage-request\nPOST /linkedin\nPOST /signin/linkedin\nPOST /send-otp\nPOST /verify-otp\nPOST /verify-account\nPOST /generate-verification-code\nPOST /change-password\nPOST /send-verification-email\nPOST /check-first-login\nPOST /change-user-type\nPOST /check-user-type\nPOST /product\nPOST /resend-verification"
+  },
+  {
+   "title": "API routes - v25_registration_backend - callCenterRoutes",
+   "heading": "callCenterRoutes (mounted at /api/call-center)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/routes/callCenterRoutes.js"
+   ],
+   "text": "Service: registration (accounts, login, company members, call-center)\nRoute file: v25_registration_backend/src/routes/callCenterRoutes.js\nMounted at: /api/call-center\nEndpoints (relative to the mount):\nGET /agents\nPOST /agents\nPOST /agents/:userId/resend-invite\nDELETE /agents/:userId\nDELETE /agents/:userId/employment\nGET /clients\nPOST /clients\nPUT /clients/:id\nPOST /clients/:id/archive\nPOST /clients/:id/restore\nDELETE /clients/:id\nGET /operation-clients\nPUT /operation-clients/:gigId\nGET /branding\nPUT /branding\nGET /client-access\nPOST /client-access\nPATCH /client-access/:userId\nPOST /client-access/:userId/resend\nDELETE /client-access/:userId\nPOST /onboarding-feedback\nGET /operation-profiles\nPUT /operation-profiles/:gigId\nGET /workspace-state\nPUT /workspace-state\nPUT /company-profile\nGET /schedule/my-shifts\nGET /schedule/my-requests\nPOST /schedule/requests\nPOST /schedule/requests/:id/cancel"
+  },
+  {
+   "title": "API routes - v25_registration_backend - callCenterRoutes",
+   "heading": "callCenterRoutes (mounted at /api/call-center)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/routes/callCenterRoutes.js"
+   ],
+   "text": "Service: registration (accounts, login, company members, call-center)\nRoute file: v25_registration_backend/src/routes/callCenterRoutes.js\nMounted at: /api/call-center\nEndpoints (relative to the mount):\nGET /schedule/shifts\nPUT /schedule/agents/:userId/shifts\nGET /schedule/requests\nPOST /schedule/requests/:id/decision"
+  },
+  {
+   "title": "API routes - v25_registration_backend - companyMemberRoutes",
+   "heading": "companyMemberRoutes (mounted at /api/company-members)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/routes/companyMemberRoutes.js"
+   ],
+   "text": "Service: registration (accounts, login, company members, call-center)\nRoute file: v25_registration_backend/src/routes/companyMemberRoutes.js\nMounted at: /api/company-members\nEndpoints (relative to the mount):\nGET /catalog\nGET /me\nGET /\nPOST /\nPOST /presence\nGET /roles\nPOST /roles\nPATCH /roles/:roleId\nDELETE /roles/:roleId\nPOST /:userId/reinvite\nPATCH /:userId\nDELETE /:userId"
+  },
+  {
+   "title": "API routes - v25_registration_backend - countryWaitlistRoutes",
+   "heading": "countryWaitlistRoutes (mounted at /api/country-waitlist)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/routes/countryWaitlistRoutes.js"
+   ],
+   "text": "Service: registration (accounts, login, company members, call-center)\nRoute file: v25_registration_backend/src/routes/countryWaitlistRoutes.js\nMounted at: /api/country-waitlist\nEndpoints (relative to the mount):\nPOST /"
+  },
+  {
+   "title": "API routes - v25_registration_backend - files",
+   "heading": "files (mounted at /api/files)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/routes/files.js"
+   ],
+   "text": "Service: registration (accounts, login, company members, call-center)\nRoute file: v25_registration_backend/src/routes/files.js\nMounted at: /api/files\nEndpoints (relative to the mount):\nPOST /upload\nGET /\nDELETE /:id\nPATCH /:id/toggle-public\nGET /export"
+  },
+  {
+   "title": "API routes - v25_registration_backend - newsletterRoutes",
+   "heading": "newsletterRoutes (mounted at /api/newsletter)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/routes/newsletterRoutes.js"
+   ],
+   "text": "Service: registration (accounts, login, company members, call-center)\nRoute file: v25_registration_backend/src/routes/newsletterRoutes.js\nMounted at: /api/newsletter\nEndpoints (relative to the mount):\nPOST /subscribe"
+  },
+  {
+   "title": "API routes - v25_registration_backend - plansRoutes",
+   "heading": "plansRoutes (mounted at /api/plans)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/routes/plansRoutes.js"
+   ],
+   "text": "Service: registration (accounts, login, company members, call-center)\nRoute file: v25_registration_backend/src/routes/plansRoutes.js\nMounted at: /api/plans\nEndpoints (relative to the mount):\nGET /company\nGET /rep"
+  },
+  {
+   "title": "API routes - v25_registration_backend - userRoutes",
+   "heading": "userRoutes (mounted at /api/users)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/routes/userRoutes.js"
+   ],
+   "text": "Service: registration (accounts, login, company members, call-center)\nRoute file: v25_registration_backend/src/routes/userRoutes.js\nMounted at: /api/users\nEndpoints (relative to the mount):\nGET /:userId\nPATCH /:userId\nPOST /:userId/email/request-change\nPOST /:userId/email/confirm-change\nPOST /:userId/password/request-change\nPOST /:userId/password/confirm-change\nPOST /:userId/phone/request-change\nPOST /:userId/phone/confirm-change\nPOST /:userId/change-password\nGET /:userId/ip-history"
+  },
+  {
+   "title": "API routes - v25_repscreationwizard_backend - index",
+   "heading": "index",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/index.js"
+   ],
+   "text": "Service: REP profile wizard (REP profile, skills, languages, REP subscription)\nRoute file: v25_repscreationwizard_backend/src/index.js\nEndpoints (relative to the mount):\nPOST /api/stripe/webhook\nGET /oauth2callback"
+  },
+  {
+   "title": "API routes - v25_repscreationwizard_backend - activityRoutes",
+   "heading": "activityRoutes (mounted at /api/activities)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/routes/activityRoutes.js"
+   ],
+   "text": "Service: REP profile wizard (REP profile, skills, languages, REP subscription)\nRoute file: v25_repscreationwizard_backend/src/routes/activityRoutes.js\nMounted at: /api/activities\nEndpoints (relative to the mount):\nGET /\nGET /categories\nGET /category/:category\nPOST /\nGET /:id\nPUT /:id\nDELETE /:id\nPATCH /:id/toggle-status"
+  },
+  {
+   "title": "API routes - v25_repscreationwizard_backend - agentRoutes",
+   "heading": "agentRoutes (mounted at /api/profiles)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/routes/agentRoutes.js"
+   ],
+   "text": "Service: REP profile wizard (REP profile, skills, languages, REP subscription)\nRoute file: v25_repscreationwizard_backend/src/routes/agentRoutes.js\nMounted at: /api/profiles\nEndpoints (relative to the mount):\nGET /plans/representative\nGET /:id\nPOST /\nPUT /:id\nPUT /:id/basic-info\nPUT /:id/experience\nPUT /:id/skills\nPOST /:id/language-assessment\nPOST /:id/contact-center-assessment\nPOST /:id/assessment\nPUT /:id/onboarding-progress\nPUT /:id/onboarding-satisfaction\nPOST /:id/refresh-onboarding-status\nPOST /:id/fix-current-phase\nPUT /:id/plan\nGET /:id/plan\nPUT /:id/photo\nDELETE /:id/photo\nPUT /:id/video\nDELETE /:id/video\nDELETE /:id\nGET /\nPOST /:id/favorites/:gigId\nDELETE /:id/favorites/:gigId\nGET /:id/favorites"
+  },
+  {
+   "title": "API routes - v25_repscreationwizard_backend - authRoutes",
+   "heading": "authRoutes (mounted at /api/auth)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/routes/authRoutes.js"
+   ],
+   "text": "Service: REP profile wizard (REP profile, skills, languages, REP subscription)\nRoute file: v25_repscreationwizard_backend/src/routes/authRoutes.js\nMounted at: /api/auth\nEndpoints (relative to the mount):\nPOST /generate-token\nPOST /register\nPOST /login"
+  },
+  {
+   "title": "API routes - v25_repscreationwizard_backend - contactCenterRoutes",
+   "heading": "contactCenterRoutes (mounted at /api/contact-center)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/routes/contactCenterRoutes.js"
+   ],
+   "text": "Service: REP profile wizard (REP profile, skills, languages, REP subscription)\nRoute file: v25_repscreationwizard_backend/src/routes/contactCenterRoutes.js\nMounted at: /api/contact-center\nEndpoints (relative to the mount):\nPOST /generate-scenario\nPOST /analyze-response"
+  },
+  {
+   "title": "API routes - v25_repscreationwizard_backend - cvRoutes",
+   "heading": "cvRoutes (mounted at /api/cv)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/routes/cvRoutes.js"
+   ],
+   "text": "Service: REP profile wizard (REP profile, skills, languages, REP subscription)\nRoute file: v25_repscreationwizard_backend/src/routes/cvRoutes.js\nMounted at: /api/cv\nEndpoints (relative to the mount):\nPOST /extract-basic-info\nPOST /analyze-experience\nPOST /analyze-skills\nPOST /analyze-achievements\nPOST /analyze-availability\nPOST /generate-summary\nPOST /translate"
+  },
+  {
+   "title": "API routes - v25_repscreationwizard_backend - industryRoutes",
+   "heading": "industryRoutes (mounted at /api/industries)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/routes/industryRoutes.js"
+   ],
+   "text": "Service: REP profile wizard (REP profile, skills, languages, REP subscription)\nRoute file: v25_repscreationwizard_backend/src/routes/industryRoutes.js\nMounted at: /api/industries\nEndpoints (relative to the mount):\nGET /\nPOST /\nGET /:id\nPUT /:id\nDELETE /:id\nPATCH /:id/toggle-status"
+  },
+  {
+   "title": "API routes - v25_repscreationwizard_backend - internalRoutes",
+   "heading": "internalRoutes (mounted at /api/internal)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/routes/internalRoutes.js"
+   ],
+   "text": "Service: REP profile wizard (REP profile, skills, languages, REP subscription)\nRoute file: v25_repscreationwizard_backend/src/routes/internalRoutes.js\nMounted at: /api/internal\nEndpoints (relative to the mount):\nGET /agents/:agentId/plan-limits"
+  },
+  {
+   "title": "API routes - v25_repscreationwizard_backend - ipRoutes",
+   "heading": "ipRoutes (mounted at /api/ip)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/routes/ipRoutes.js"
+   ],
+   "text": "Service: REP profile wizard (REP profile, skills, languages, REP subscription)\nRoute file: v25_repscreationwizard_backend/src/routes/ipRoutes.js\nMounted at: /api/ip\nEndpoints (relative to the mount):\nGET /lookup/:ip\nGET /status\nGET /test\nGET /client\nGET /user/:userId/latest\nPOST /user/test/create"
+  },
+  {
+   "title": "API routes - v25_repscreationwizard_backend - languageAssessmentRoutes",
+   "heading": "languageAssessmentRoutes (mounted at /api/language-assessment)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/routes/languageAssessmentRoutes.js"
+   ],
+   "text": "Service: REP profile wizard (REP profile, skills, languages, REP subscription)\nRoute file: v25_repscreationwizard_backend/src/routes/languageAssessmentRoutes.js\nMounted at: /api/language-assessment\nEndpoints (relative to the mount):\nPOST /analyze\nPOST /get-language-code\nPOST /generate-passage\nPOST /get-passage\nPOST /get-new-passage"
+  },
+  {
+   "title": "API routes - v25_repscreationwizard_backend - languageRoutes",
+   "heading": "languageRoutes (mounted at /api/languages)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/routes/languageRoutes.js"
+   ],
+   "text": "Service: REP profile wizard (REP profile, skills, languages, REP subscription)\nRoute file: v25_repscreationwizard_backend/src/routes/languageRoutes.js\nMounted at: /api/languages\nEndpoints (relative to the mount):\nGET /\nGET /popular\nGET /search\nGET /stats\nGET /:code"
+  },
+  {
+   "title": "API routes - v25_repscreationwizard_backend - skillRoutes",
+   "heading": "skillRoutes (mounted at /api/skills)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/routes/skillRoutes.js"
+   ],
+   "text": "Service: REP profile wizard (REP profile, skills, languages, REP subscription)\nRoute file: v25_repscreationwizard_backend/src/routes/skillRoutes.js\nMounted at: /api/skills\nEndpoints (relative to the mount):\nGET /stats\nGET /:type\nGET /:type/grouped\nGET /:type/category/:category\nGET /:type/search\nGET /:type/:skillId\nGET /agent/:agentId\nPOST /agent/:agentId/add\nPUT /agent/:agentId\nDELETE /agent/:agentId/remove"
+  },
+  {
+   "title": "API routes - v25_repscreationwizard_backend - speechToTextRoute",
+   "heading": "speechToTextRoute (mounted at /api/speechToText)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/routes/speechToTextRoute.js"
+   ],
+   "text": "Service: REP profile wizard (REP profile, skills, languages, REP subscription)\nRoute file: v25_repscreationwizard_backend/src/routes/speechToTextRoute.js\nMounted at: /api/speechToText\nEndpoints (relative to the mount):\nGET /test\nPOST /\nPOST /transcribe\nPOST /transcribe"
+  },
+  {
+   "title": "API routes - v25_repscreationwizard_backend - stripeRoutes",
+   "heading": "stripeRoutes (mounted at /api/stripe)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/routes/stripeRoutes.js"
+   ],
+   "text": "Service: REP profile wizard (REP profile, skills, languages, REP subscription)\nRoute file: v25_repscreationwizard_backend/src/routes/stripeRoutes.js\nMounted at: /api/stripe\nEndpoints (relative to the mount):\nGET /rep/config\nPOST /subscriptions/checkout/init\nPOST /subscriptions/checkout/confirm\nPOST /subscriptions/cancel"
+  },
+  {
+   "title": "API routes - v25_repscreationwizard_backend - timezoneRoutes",
+   "heading": "timezoneRoutes (mounted at /api/timezones)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/routes/timezoneRoutes.js"
+   ],
+   "text": "Service: REP profile wizard (REP profile, skills, languages, REP subscription)\nRoute file: v25_repscreationwizard_backend/src/routes/timezoneRoutes.js\nMounted at: /api/timezones\nEndpoints (relative to the mount):\nGET /\nGET /countries\nGET /country/:countryCode\nGET /zone/:zoneName(*)"
+  },
+  {
+   "title": "API routes - v25_repscreationwizard_backend - vertexRoute",
+   "heading": "vertexRoute (mounted at /api/vertex)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/routes/vertexRoute.js"
+   ],
+   "text": "Service: REP profile wizard (REP profile, skills, languages, REP subscription)\nRoute file: v25_repscreationwizard_backend/src/routes/vertexRoute.js\nMounted at: /api/vertex\nEndpoints (relative to the mount):\nGET /test\nPOST /authentication\nPOST /audio/summary\nPOST /language/evaluate\nPOST /contactCenter/evaluate\nPOST /audio/upload"
+  },
+  {
+   "title": "API routes - v25_searchcompanywizard_backend - companyRoutes",
+   "heading": "companyRoutes (mounted at /api/companies)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_searchcompanywizard_backend/src/infrastructure/routes/companyRoutes.ts"
+   ],
+   "text": "Service: company profile wizard (company search/profile)\nRoute file: v25_searchcompanywizard_backend/src/infrastructure/routes/companyRoutes.ts\nMounted at: /api/companies\nEndpoints (relative to the mount):\nPOST /\nGET /\nGET /user/:userId\nGET /:id/details\nGET /:id\nPUT /:id\nPUT /:id/subscription\nDELETE /:id"
+  },
+  {
+   "title": "API routes - v25_searchcompanywizard_backend - onboardingProgressRoutes",
+   "heading": "onboardingProgressRoutes (mounted at /api/onboarding)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_searchcompanywizard_backend/src/infrastructure/routes/onboardingProgressRoutes.ts"
+   ],
+   "text": "Service: company profile wizard (company search/profile)\nRoute file: v25_searchcompanywizard_backend/src/infrastructure/routes/onboardingProgressRoutes.ts\nMounted at: /api/onboarding\nEndpoints (relative to the mount):\nGET /companies/:userId/onboardingProgress\nPOST /companies/:companyId/onboarding\nGET /companies/:companyId/onboarding\nPUT /companies/:companyId/onboarding/phases/:phaseId/steps/:stepId\nPUT /phases/:phaseId/steps/:stepId/complete\nPUT /companies/:companyId/onboarding/current-phase\nPOST /companies/:companyId/onboarding/reset\nPUT /companies/:companyId/onboarding/complete-last\nPUT /companies/:companyId/onboarding/fix-current-phase"
+  },
+  {
+   "title": "API routes - v25_searchcompanywizard_backend - openaiRoutes",
+   "heading": "openaiRoutes (mounted at /api/openai)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_searchcompanywizard_backend/src/infrastructure/routes/openaiRoutes.ts"
+   ],
+   "text": "Service: company profile wizard (company search/profile)\nRoute file: v25_searchcompanywizard_backend/src/infrastructure/routes/openaiRoutes.ts\nMounted at: /api/openai\nEndpoints (relative to the mount):\nGET /status\nPOST /search-logo\nPOST /search\nPOST /generate-profile\nPOST /generate-from-url\nPOST /generate-uniqueness"
+  },
+  {
+   "title": "API routes - v25_searchcompanywizard_backend - uploadsRoutes",
+   "heading": "uploadsRoutes (mounted at /api/uploads)",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_searchcompanywizard_backend/src/infrastructure/routes/uploadsRoutes.ts"
+   ],
+   "text": "Service: company profile wizard (company search/profile)\nRoute file: v25_searchcompanywizard_backend/src/infrastructure/routes/uploadsRoutes.ts\nMounted at: /api/uploads\nEndpoints (relative to the mount):\nPOST /image"
+  }
+ ]
+}
