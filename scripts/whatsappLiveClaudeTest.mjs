@@ -35,7 +35,12 @@ const mod = createWhatsAppModule({
 let n = 0;
 const ask = async (from, text) => {
   const before = sent.length;
-  await mod.agent.processMessage({ id: `wamid.${++n}`, from, name: 'Live Test', text, type: 'text', supported: true, timestamp: new Date() });
+  const res = await mod.agent.processMessage({ id: `wamid.${++n}`, from, name: 'Live Test', text, type: 'text', supported: true, timestamp: new Date() });
+  // Un message de secours (Claude injoignable, refus, limite de débit) ne prouve rien : on interrompt le test.
+  if (res.error || res.refusal || res.rateLimited) {
+    console.error(`\nFAIL  Claude did not answer (${res.error ? 'API error' : res.refusal ? 'refusal' : 'rate limited'}). Check ANTHROPIC_API_KEY, billing and model access; see the [whatsapp-agent] log line above.`);
+    process.exit(1);
+  }
   return sent.slice(before).map((s) => s.text).join('\n');
 };
 
