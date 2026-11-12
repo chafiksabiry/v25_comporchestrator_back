@@ -802,10 +802,14 @@ class PhoneNumberController {
       // be rejected (21649) after payment. Other markets (US, etc.) are
       // Telnyx and must not be blocked by a missing Twilio bundle — that
       // used to abort checkout before Stripe/PayPal returned a URL.
-      const lineProvider = resolvePhoneProvider(req.body.lineProvider, { phoneNumber });
+      let lineProvider = resolvePhoneProvider(req.body.lineProvider, { phoneNumber });
       const isoCountry = phoneNumberService.guessCountryFromE164(phoneNumber);
       // Un numéro déjà dans l'inventaire Twilio a déjà son dossier : aucun contrôle de dossier avant paiement.
-      const inventoryCheck = lineProvider === 'twilio' ? await phoneNumberService.findClaimableInventoryNumber(phoneNumber) : null;
+      // Sans opérateur demandé, un numéro de l'inventaire Twilio est une ligne Twilio (l'achat passe par Twilio) : le contrôle du crédit
+      // Telnyx ne le concerne pas et ne doit pas le refuser.
+      let inventoryCheck = lineProvider === 'twilio' || !req.body.lineProvider ? await phoneNumberService.findClaimableInventoryNumber(phoneNumber) : null;
+      if (lineProvider === 'telnyx' && !req.body.lineProvider && inventoryCheck?.owned) lineProvider = 'twilio';
+      else if (lineProvider !== 'twilio') inventoryCheck = null;
       if (inventoryCheck?.owned && !inventoryCheck.claimable) {
         return res.status(409).json({ error: 'Number not available', code: 'NUMBER_NOT_AVAILABLE', message: 'Ce numéro n’est pas disponible.' });
       }
