@@ -268,7 +268,7 @@ try {
   const [mid] = d.items.map((i) => i.id).slice(1);
   const stored = JSON.stringify(inbox);
   r = await req('GET', `/inbound-emails/${C1}/${mid}/body`, { user: 'owner1' });
-  assert.equal(r.status, 200); assert.deepEqual(r.body, { success: true, data: { text: BODY_SECRET } }, 'texte brut, historique cité tronqué');
+  assert.equal(r.status, 200); assert.deepEqual(r.body, { success: true, data: { text: BODY_SECRET, html: '<p>html</p>' } }, 'texte brut (historique cité tronqué) et HTML d’origine');
   assert.match(providerCalls().at(-1).url, /messages\/g1\?format=full/);
   assert.equal(JSON.stringify(inbox), stored, 'le corps n’est pas stocké'); assert.ok(!JSON.stringify(inbox).includes(BODY_SECRET));
   assert.equal((await req('GET', `/inbound-emails/${C1}/pas-un-id/body`, { user: 'owner1' })).status, 400);
@@ -277,6 +277,12 @@ try {
   // HTML seul -> texte ; 20 000 caractères max
   on('GET', /messages\/g1\?format=full/, () => ({ status: 200, json: { payload: { mimeType: 'text/html', body: { data: b64(`<p>${'a'.repeat(30000)}</p>`) } } } }));
   assert.equal((await req('GET', `/inbound-emails/${C1}/${mid}/body`, { user: 'owner1' })).body.data.text.length, 20000);
+  // Partie HTML d'origine : renvoyée en plus du texte (mise en page), plafonnée ; absente quand le message n'a que du texte brut
+  on('GET', /messages\/g1\?format=full/, () => ({ status: 200, json: { payload: { mimeType: 'multipart/alternative', parts: [{ mimeType: 'text/plain', body: { data: b64('Bonjour en texte') } }, { mimeType: 'text/html', body: { data: b64('<table><tr><td style="color:red">Bonjour en HTML</td></tr></table>') } }] } } }));
+  r = await req('GET', `/inbound-emails/${C1}/${mid}/body`, { user: 'owner1' });
+  assert.equal(r.body.data.text, 'Bonjour en texte'); assert.equal(r.body.data.html, '<table><tr><td style="color:red">Bonjour en HTML</td></tr></table>', 'HTML d’origine renvoyé');
+  on('GET', /messages\/g1\?format=full/, () => ({ status: 200, json: { payload: { mimeType: 'text/html', body: { data: b64(`<p>${'b'.repeat(500000)}</p>`) } } } }));
+  assert.equal((await req('GET', `/inbound-emails/${C1}/${mid}/body`, { user: 'owner1' })).body.data.html.length, 400000, 'HTML plafonné à 400 000 caractères');
   // panne fournisseur -> 502
   on('GET', /messages\/g1\?format=full/, () => ({ status: 503, json: null }));
   r = await req('GET', `/inbound-emails/${C1}/${mid}/body`, { user: 'owner1' }); assert.equal(r.status, 502); assert.equal(r.body.code, 'provider_error');
