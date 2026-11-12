@@ -220,7 +220,7 @@ export async function refreshInbound(scope, now = Date.now()) {
   return inboundView(s);
 }
 
-/** Corps d'un message lu EN DIRECT (texte, ≤ 20 000 caractères). Jamais stocké, jamais journalisé. */
+/** Corps d'un message lu EN DIRECT (texte ≤ 20 000 caractères, plus la partie HTML d'origine quand le message en a une). Jamais stocké, jamais journalisé. */
 export async function readInboundBody(scope, id) {
   const s = asScope(scope);
   if (!isId(id)) throw new SecretariatError('invalid_request', 'Identifiant d’e-mail invalide.');
@@ -228,8 +228,11 @@ export async function readInboundBody(scope, id) {
   const doc = await InboundEmail.findOne({ _id: oid(id), ...scopeFilter(s), deletedAt: null }).select('provider providerMessageId').lean();
   if (!doc) throw new SecretariatError('not_found', 'E-mail introuvable.');
   if (doc.provider !== access.provider) throw new SecretariatError('no_mailbox', ERRORS.no_mailbox); // la messagerie a changé depuis la lecture
-  const text = await connect(s, access.provider, (accessToken, http) => PROVIDERS[access.provider].readBody({ http, accessToken, id: doc.providerMessageId }));
-  return { text };
+  const P = PROVIDERS[access.provider];
+  const out = await connect(s, access.provider, async (accessToken, http) => (P.readBodyFull
+    ? P.readBodyFull({ http, accessToken, id: doc.providerMessageId })
+    : { text: await P.readBody({ http, accessToken, id: doc.providerMessageId }) }));
+  return out.html ? { text: out.text, html: out.html } : { text: out.text };
 }
 
 const plainBody = (body) => (body && typeof body === 'object' && !Array.isArray(body) ? body : {});
