@@ -1,0 +1,835 @@
+{
+ "generatedFrom": "scripts/buildKnowledgeBase.mjs",
+ "chunks": [
+  {
+   "title": "HARX REP application screen texts - sidebar",
+   "heading": "sidebar (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"sidebar\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nsidebar.dashboard: Dashboard\nsidebar.profile: Profile\nsidebar.marketplace: Gigs\nsidebar.gigsInfo: GIGS are the missions posted by the COMPANY\nsidebar.calls: Calls\nsidebar.training: HARX Academy\nsidebar.workspace: Workspace\nsidebar.leads: Leads\nsidebar.callHistory: Call History\nsidebar.copilot: COCKPIT\nsidebar.sessionPlanning: Session Planning\nsidebar.operations: Operations\nsidebar.wallet: Wallet & Payouts\nsidebar.logout: Logout\nsidebar.activeGuide: Active Guide\nsidebar.interactiveStep: Interactive Step\nsidebar.sectionMain: Main\nsidebar.sectionTraining: HARX Academy"
+  },
+  {
+   "title": "HARX REP application screen texts - sidebar",
+   "heading": "sidebar (2)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"sidebar\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nsidebar.sectionPlanning: Planning"
+  },
+  {
+   "title": "HARX REP application screen texts - onboardingGuide",
+   "heading": "onboardingGuide (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"onboardingGuide\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nonboardingGuide.title: Finish your onboarding\nonboardingGuide.description: The dashboard, wallet, and planning unlock once your profile is created and your onboarding is complete.\nonboardingGuide.cta: Continue onboarding\nonboardingGuide.tooltip: Complete all four phases (sign-up, profile, assessments, and subscription) to unlock every feature."
+  },
+  {
+   "title": "HARX REP application screen texts - topbar",
+   "heading": "topbar (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"topbar\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ntopbar.changeLanguage: Change Language\ntopbar.userRole: HARX Rep\ntopbar.defaultUser: User\ntopbar.myWallet: My wallet\ntopbar.planning: Planning\ntopbar.sessions: Planning\ntopbar.sessionPlanning: Planning\ntopbar.callCenterAgent: Call center agent"
+  },
+  {
+   "title": "HARX REP application screen texts - dashboard",
+   "heading": "dashboard (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"dashboard\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ndashboard.stats.repsScore: REPS Score\ndashboard.stats.onboarding: Onboarding\ndashboard.stats.gigsEnrolled: Gigs Enrolled\ndashboard.stats.callsPassed: Calls Passed\ndashboard.stats.current: Current\ndashboard.stats.progress: Progress\ndashboard.stats.active: Active\ndashboard.stats.total: Total\ndashboard.performance.title: Performance Activity\ndashboard.performance.subtitle: Your daily call volume\ndashboard.performance.chartLabel: Calls\ndashboard.expertise.title: Expertise Analysis\ndashboard.expertise.professionalism: Professionalism\ndashboard.expertise.effectiveness: Effectiveness\ndashboard.expertise.customerFocus: Customer Focus\ndashboard.expertise.overallMatch: Overall Match\ndashboard.home.greeting: Hello, {{name}} 👋\ndashboard.home.subtitle: Real-time tracking of your sales performance indicators"
+  },
+  {
+   "title": "HARX REP application screen texts - dashboard",
+   "heading": "dashboard (2)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"dashboard\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ndashboard.home.gigLabel: Gig:\ndashboard.home.periodLabel: Period:\ndashboard.home.allGigs: All Gigs\ndashboard.home.filterByGig: Filter by gig\ndashboard.home.filterByPeriod: Filter by period\ndashboard.home.sections.operations: Operations\ndashboard.home.sections.finance: Finance\ndashboard.home.sections.callHistory: History\ndashboard.home.goLive.eyebrow: Now's the time\ndashboard.home.goLive.title: Go live\ndashboard.home.goLive.subtitle: Your leads are waiting — every call can pay\ndashboard.home.goLive.cta: Start earning\ndashboard.home.defaultUser: User\ndashboard.home.periods.today: Today\ndashboard.home.periods.week: This week\ndashboard.home.periods.month: This month\ndashboard.home.periods.quarter: This quarter\ndashboard.home.periods.year: This year"
+  },
+  {
+   "title": "HARX REP application screen texts - dashboard",
+   "heading": "dashboard (3)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"dashboard\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ndashboard.home.periodStart.today: Start of day\ndashboard.home.periodStart.week: Start of week\ndashboard.home.periodStart.month: Start of month\ndashboard.home.periodStart.quarter: Start of quarter\ndashboard.home.periodStart.year: Start of year\ndashboard.home.periodStart.all: Opening balance\ndashboard.home.periodStartHint.today: Already in the wallet this morning\ndashboard.home.periodStartHint.week: Already in the wallet Monday morning\ndashboard.home.periodStartHint.month: Already in the wallet on the 1st of the month\ndashboard.home.periodStartHint.quarter: Already in the wallet at the start of the quarter\ndashboard.home.periodStartHint.year: Already in the wallet on January 1st\ndashboard.home.periodStartHint.all: Before new earnings in this period\ndashboard.home.pipeline.availableBalance: Available balance\ndashboard.home.pipeline.readyToWithdraw: Ready to withdraw\ndashboard.home.pipeline.validatedEarnings: Validated earnings\ndashboard.home.pipeline.retraction: Cooling-off\ndashboard.home.pipeline.clientValidation: Client validation\ndashboard.home.pipeline.periodTotal: Period total"
+  },
+  {
+   "title": "HARX REP application screen texts - dashboard",
+   "heading": "dashboard (4)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"dashboard\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ndashboard.home.pipeline.noSales: No sales\ndashboard.home.pipeline.nothingPending: Nothing pending\ndashboard.home.pipeline.pendingCount: {{count}} pending\ndashboard.home.pipeline.salesRetraction_one: {{count}} sale · 14 days\ndashboard.home.pipeline.salesRetraction_other: {{count}} sales · 14 days\ndashboard.home.pipeline.calls_one: {{count}} call\ndashboard.home.pipeline.calls_other: {{count}} calls\ndashboard.home.pipeline.sales_one: {{count}} sale\ndashboard.home.pipeline.sales_other: {{count}} sales\ndashboard.home.pipeline.ariaValidated: View validated commissions\ndashboard.home.pipeline.ariaRetraction: View sales in cooling-off period\ndashboard.home.pipeline.ariaClientValidation: View commissions pending company validation\ndashboard.home.historyButton: View history\ndashboard.home.transactions.title: Transactions\ndashboard.home.transactions.subtitle: Your commissions & payouts\ndashboard.home.transactions.filterEarned: Earned\ndashboard.home.transactions.filterRetraction: Cooling-off\ndashboard.home.transactions.filterPaid: Paid out"
+  },
+  {
+   "title": "HARX REP application screen texts - dashboard",
+   "heading": "dashboard (5)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"dashboard\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ndashboard.home.transactions.filterRefused: Refused\ndashboard.home.transactions.empty: No transactions\ndashboard.home.transactions.emptyFilter: No results for this filter\ndashboard.home.transactions.statusEarned: Earned\ndashboard.home.transactions.statusPaid: Paid out\ndashboard.home.transactions.statusRetraction: Cooling-off\ndashboard.home.transactions.statusRefused: Refused\ndashboard.home.transactions.typeCallValidated: Validated call\ndashboard.home.transactions.typeSale: Sale\ndashboard.home.transactions.typeBonus: Bonus\ndashboard.home.transactions.ariaView: View transaction {{type}}\ndashboard.home.callsSection.title: Calls\ndashboard.home.callsSection.subtitle: History & AI validation\ndashboard.home.callsSection.subtitlePending: Pending company validation\ndashboard.home.callsSection.filterValid: Validated\ndashboard.home.callsSection.filterInvalid: Not validated\ndashboard.home.callsSection.filterPending: Pending sales\ndashboard.home.callsSection.empty: No calls"
+  },
+  {
+   "title": "HARX REP application screen texts - dashboard",
+   "heading": "dashboard (6)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"dashboard\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ndashboard.home.callsSection.emptyPending: None pending client\ndashboard.home.callsSection.emptyPendingDetail: No commissions pending company validation\ndashboard.home.callsSection.emptyFilter: No results for this filter\ndashboard.home.callsSection.unknownContact: Unknown contact\ndashboard.home.callsSection.validated: Validated\ndashboard.home.callsSection.notValidated: Not validated\ndashboard.home.callsSection.pendingSale: Pending sale\ndashboard.home.callsSection.retractionBadge: Cooling-off · +{{amount}}€\ndashboard.home.callsSection.count_one: {{count}} call\ndashboard.home.callsSection.count_other: {{count}} calls\ndashboard.home.callsSection.ariaView: View call {{contact}}\ndashboard.home.reservations.title: My Reservations\ndashboard.home.reservations.subtitle: Planned slots and hours worked\ndashboard.home.reservations.count_one: {{count}} reservation · {{period}}\ndashboard.home.reservations.count_other: {{count}} reservations · {{period}}\ndashboard.home.reservations.countPeriodAll: all time\ndashboard.home.reservations.total: Total\ndashboard.home.reservations.sessions: Slots"
+  },
+  {
+   "title": "HARX REP application screen texts - dashboard",
+   "heading": "dashboard (7)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"dashboard\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ndashboard.home.reservations.upcoming: Upcoming\ndashboard.home.reservations.scheduled: Scheduled\ndashboard.home.reservations.completed: Completed\ndashboard.home.reservations.honored: Honored\ndashboard.home.reservations.missed: Missed\ndashboard.home.reservations.missedDetail: {{cancelled}} canc. · {{noShow}} no-show\ndashboard.home.reservations.hoursWorked: Hours worked\ndashboard.home.reservations.hoursScheduled: / {{hours}}h scheduled\ndashboard.home.reservations.attendance: Attendance\ndashboard.home.reservations.attendanceRate: Attendance rate\ndashboard.home.reservations.upcomingSessions: Upcoming slots\ndashboard.home.reservations.book: Book\ndashboard.home.goals.title: My Goals\ndashboard.home.goals.subtitle: Hours, transactions and bonus for the period\ndashboard.home.goals.callsTitle: Validated calls\ndashboard.home.goals.callsLabel: Validated calls in this period\ndashboard.home.goals.sessionsTitle: Slots\ndashboard.home.goals.sessionsLabel: Hours"
+  },
+  {
+   "title": "HARX REP application screen texts - dashboard",
+   "heading": "dashboard (8)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"dashboard\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ndashboard.home.goals.bonusTitle: Bonus\ndashboard.home.goals.periodWeek: Week\ndashboard.home.goals.periodMonth: Month\ndashboard.home.goals.periodQuarter: Quarter\ndashboard.home.goals.periodYear: Year\ndashboard.home.goals.howtoTitle: How it works\ndashboard.home.goals.howtoBody: Enter the call and transaction targets you set for yourself — the simulator automatically calculates your potential earnings if you hit those targets.\ndashboard.home.goals.howtoHint: Enter your targets · auto-save and auto-calculate · the simulator updates on the right\ndashboard.home.goals.step1Title: Goals\ndashboard.home.goals.step1Body: On the left: enter calls, transactions and earnings — saved and calculated immediately.\ndashboard.home.goals.step2Title: Simulator\ndashboard.home.goals.step2Body: On the right: potential earnings recalculate as soon as you change a number.\ndashboard.home.goals.step3Title: Gig hours\ndashboard.home.goals.step3Body: Above: meet the gig’s minimum hours to stay compliant.\ndashboard.home.goals.goalsColHint: Edit targets directly — auto-save and auto-calculate. These are your personal goals, not the gig’s.\ndashboard.home.goals.simulatorHint: Select a gig, enter calls and transactions — potential earnings update right away. Transactions cannot exceed calls.\ndashboard.home.goals.simulatorTitle: Simulator\ndashboard.home.goals.simulatorResult: Potential earnings"
+  },
+  {
+   "title": "HARX REP application screen texts - dashboard",
+   "heading": "dashboard (9)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"dashboard\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ndashboard.home.goals.transactionsTitle: Transactions\ndashboard.home.goals.earningsTitle: My earnings goal\ndashboard.home.goals.hoursMinLabel: GIG · minimum hours\ndashboard.home.goals.myGoalsLabel: My goals\ndashboard.home.gigGoal.title: Bonus goal\ndashboard.home.gigGoal.bonusUnlock: Bonus to unlock\ndashboard.home.gigGoal.selectGig: Select a Gig to see the bonus\ndashboard.home.gigGoal.validatedCalls: validated calls\ndashboard.home.gigGoal.achieved: Goal reached — bonus credited\ndashboard.home.gigGoal.remaining: Only {{count}} more validated calls to unlock your bonus.\ndashboard.home.gigGoal.bonusReward: +{{amount}} € bonus to unlock\ndashboard.home.transactionModal.title: Transaction details\ndashboard.home.transactionModal.typeBonus: Bonus\ndashboard.home.transactionModal.typeSale: Sale\ndashboard.home.transactionModal.typeCommission: Commission\ndashboard.home.transactionModal.close: Close\ndashboard.home.transactionModal.repAmount: Rep amount\ndashboard.home.transactionModal.status: Status"
+  },
+  {
+   "title": "HARX REP application screen texts - dashboard",
+   "heading": "dashboard (10)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"dashboard\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ndashboard.home.transactionModal.statusRetraction: Cooling-off (14 days)\ndashboard.home.transactionModal.statusEarned: Earned\ndashboard.home.transactionModal.statusPaid: Paid out\ndashboard.home.transactionModal.statusRefused: Refused\ndashboard.home.transactionModal.date: Date\ndashboard.home.transactionModal.retractionNote: Commission in legal cooling-off period (14 days). It will be credited to your balance after this period."
+  },
+  {
+   "title": "HARX REP application screen texts - calls",
+   "heading": "calls (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"calls\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ncalls.title: My Calls\ncalls.subtitle: Review your performance and interaction details\ncalls.recordsTitle: Call Records\ncalls.leadFilter: Calls for this prospect\ncalls.showAll: All calls\ncalls.fraudDetected: Fraud detected\ncalls.fraudClear: No fraud\ncalls.coaching.excellentShort: Briefing: replay this call and use it as inspiration.\ncalls.coaching.criticalShort: Briefing: replay this call so you do not repeat the mistakes.\ncalls.coaching.excellent: Excellent call — replay it and use it as inspiration. This briefing can be shared (anonymized) with other REPs on the gig if the company chooses.\ncalls.coaching.critical: Call to rework — replay it to spot the mistakes and avoid them. Coaching briefing, shareable anonymized on the gig if the company chooses.\ncalls.refresh: Refresh\ncalls.noCalls: No calls found\ncalls.noCallsDetail: Start making calls from your workspace to see your history and AI performance insights here.\ncalls.transcript: Transcript\ncalls.aiInsights: AI Insights\ncalls.executiveSummary: Call Summary\ncalls.globalAudit: Quality analysis · Call centre"
+  },
+  {
+   "title": "HARX REP application screen texts - calls",
+   "heading": "calls (2)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"calls\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ncalls.detailedAnalysis: Detailed Analysis\ncalls.closeDetails: Close Details\ncalls.calibration.title: Score calibration\ncalls.calibration.subtitle: Confirm whether the AI score looks right, or flag the gap with an explanation.\ncalls.calibration.thumbsUp: Agree\ncalls.calibration.thumbsDown: Disagree\ncalls.calibration.explanationLabel: Gap explanation\ncalls.calibration.explanationPlaceholder: e.g. the summary invents a conversation while I only said Hello…\ncalls.calibration.explanationRequired: Please add an explanation when you disagree.\ncalls.calibration.submit: Save calibration\ncalls.calibration.saving: Saving…\ncalls.calibration.saved: Calibration saved\ncalls.calibration.saveError: Could not save calibration\ncalls.calibration.recorded: Calibrated\ncalls.calibration.tooShortTitle: No AI analysis\ncalls.calibration.scoreTooltipHint: Hover the score to see the AI rationale\ncalls.scoreTooltip.overall: Overall score {{score}}% based only on recorded evidence.\ncalls.scoreTooltip.duration: Call duration: {{seconds}}s."
+  },
+  {
+   "title": "HARX REP application screen texts - calls",
+   "heading": "calls (3)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"calls\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ncalls.scoreTooltip.rubrics: Rubrics: {{list}}\ncalls.scoreTooltip.noInvent: The AI must not invent facts that are absent from the transcript.\ncalls.metrics.fluency: Agent Fluency\ncalls.metrics.sentiment: Sentiment Analysis\ncalls.metrics.fraud: Fraud Detection\ncalls.metrics.coherence: Script Coherence\ncalls.metrics.argumentation: Argumentation Quality\ncalls.metrics.adherence: Script Adherence\ncalls.metrics.transaction: Transaction Analysis"
+  },
+  {
+   "title": "HARX REP application screen texts - workspace",
+   "heading": "workspace (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"workspace\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nworkspace.title: Workspace\nworkspace.activeGig: Active gig\nworkspace.allMyGigs: All my gigs\nworkspace.tabLeads: Leads\nworkspace.tabCallHistory: Call history\nworkspace.tabCockpit: COCKPIT\nworkspace.leadsTitle: Leads\nworkspace.call: Call\nworkspace.details: Details\nworkspace.filter: Filter\nworkspace.filterCalled: Called\nworkspace.filterRdv: Appt\nworkspace.filterDue: Due now\nworkspace.dueNow: Call back now\nworkspace.dueNowHint: {{count}} lead(s) with a due appointment or callback\nworkspace.followUpAt: Appointment / callback slot\nworkspace.filterSigned: Signed\nworkspace.noPhone: No phone"
+  },
+  {
+   "title": "HARX REP application screen texts - workspace",
+   "heading": "workspace (2)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"workspace\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nworkspace.noEmail: No email\nworkspace.alreadySigned: Already signed\nworkspace.busy: Busy\nworkspace.checkingPermissions: Checking call permissions…\nworkspace.cockpitLocked: COCKPIT locked\nworkspace.cannotPlaceCalls: You cannot place calls right now.\nworkspace.activeReservedWindow: Active reserved window: {{window}}\nworkspace.prospectBusy: Lead busy\nworkspace.backToLeads: Back to leads\nworkspace.noLeadSelected: No lead selected\nworkspace.selectLeadHint: Please select a lead from the Leads tab to start a call.\nworkspace.prospectProfile.title: PROSPECT PROFILE\nworkspace.prospectProfile.openCall: Review call\nworkspace.prospectProfile.loading: Loading…\nworkspace.prospectProfile.noLead: No prospect\nworkspace.prospectProfile.unknown: Prospect\nworkspace.prospectProfile.consultHint: Click to review\nworkspace.prospectProfile.prepareHint: Review the profile sheet and history to prepare the call."
+  },
+  {
+   "title": "HARX REP application screen texts - workspace",
+   "heading": "workspace (3)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"workspace\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nworkspace.prospectProfile.sheet: Prospect sheet\nworkspace.prospectProfile.history: Call history\nworkspace.prospectProfile.loadingHistory: Loading history…\nworkspace.prospectProfile.noHistory: No previous calls for this prospect.\nworkspace.prospectProfile.email: Email\nworkspace.prospectProfile.phone: Phone\nworkspace.prospectProfile.company: Company\nworkspace.prospectProfile.gig: Project\nworkspace.prospectProfile.stage: Stage\nworkspace.prospectProfile.notes: Notes\nworkspace.viewSignedDetails: View signed deal details\nworkspace.leadLockedByOther: This lead is open in another agent's cockpit\nworkspace.savingCall.title: Saving the call…\nworkspace.savingCall.subtitle: Hang on a few seconds — we're finalising the recording and preparing the AI analysis.\nworkspace.savingCall.hint: Please don't close this page.\nworkspace.fiche: Profile\nworkspace.viewCall: View call\nworkspace.viewProfile: View prospect profile"
+  },
+  {
+   "title": "HARX REP application screen texts - workspace",
+   "heading": "workspace (4)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"workspace\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nworkspace.viewCallHistory: Call history\nworkspace.dateFrom: From\nworkspace.clearFilters: Clear filters\nworkspace.dispFilterAll: All statuses\nworkspace.dispFilterNone: No status\nworkspace.dispositionTitle: Call status\nworkspace.changeDisposition: Edit\nworkspace.dispositionExclNote: From “Callback appointment” onward, this prospect is exclusively assigned to you.\nworkspace.dispositionConfirmNote: Your choice is sent to the company for confirmation. The effective status changes only after validation.\nworkspace.dispositionPendingShort: Pending\nworkspace.dispositionPendingHint: Waiting for company confirmation.\nworkspace.dispGroupStart: Start\nworkspace.dispGroupCalled: Called\nworkspace.dispGroupArgued: Argued call\nworkspace.profileAddedOn: Added on\nworkspace.addedOnLabel: Added:\nworkspace.newThisWeekHint: Added in the last 7 days\nworkspace.profileContact: Contact"
+  },
+  {
+   "title": "HARX REP application screen texts - workspace",
+   "heading": "workspace (5)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"workspace\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nworkspace.profilePhone: Phone\nworkspace.profileEmail: Email\nworkspace.profileAddress: Address\nworkspace.profileDob: Date of birth\nworkspace.profilePipeline: Pipeline\nworkspace.profileDisposition: Call status\nworkspace.disp.to_call: To call\nworkspace.disp.called_unreachable: Called – Unreachable\nworkspace.disp.called_voicemail: Called – Voicemail\nworkspace.disp.called_wrong_number: Called – Wrong number\nworkspace.disp.called_callback: Called – Requested callback\nworkspace.disp.called_rdv: Called – Callback appointment\nworkspace.disp.not_argumented: Not argumented\nworkspace.disp.argued_rdv: Argumented Call – Appointment / thinking time\nworkspace.disp.argued_declined: Argumented Call – Transaction Declined\nworkspace.disp.argued_done: Argumented Call – Transaction Completed\nworkspace.dispShort.to_call: To call\nworkspace.dispShort.called_unreachable: Unreachable"
+  },
+  {
+   "title": "HARX REP application screen texts - workspace",
+   "heading": "workspace (6)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"workspace\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nworkspace.dispShort.called_voicemail: Voicemail\nworkspace.dispShort.called_wrong_number: Wrong number\nworkspace.dispShort.called_callback: Wants a callback\nworkspace.dispShort.called_rdv: Callback appointment\nworkspace.dispShort.not_argumented: Not argumented\nworkspace.dispShort.argued_rdv: Appointment / reflection\nworkspace.dispShort.argued_declined: Transaction Declined\nworkspace.dispShort.argued_done: Transaction Completed"
+  },
+  {
+   "title": "HARX REP application screen texts - sessionPlanning",
+   "heading": "sessionPlanning (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"sessionPlanning\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nsessionPlanning.title: Planning\nsessionPlanning.titleOf: Planning of {{gig}}\nsessionPlanning.eyebrow: Planning\nsessionPlanning.subtitle: Manage and book your call slots with ease.\nsessionPlanning.selectedGig: Selected gig\nsessionPlanning.enrolledGig: Enrolled gig\nsessionPlanning.chooseGig: Choose a gig…\nsessionPlanning.selectGigHint: Select a gig\nsessionPlanning.engagementDaily: Daily engagement\nsessionPlanning.engagementWeekly: Weekly engagement\nsessionPlanning.engagementMonthly: Monthly engagement\nsessionPlanning.reserved: Reserved\nsessionPlanning.activeGigs: Active gigs\nsessionPlanning.attendanceScoring: Attendance\nsessionPlanning.attendancePending: Pending\nsessionPlanning.attendanceNoShow: no-show(s)\nsessionPlanning.attendanceHint: Past reserved slots vs real telephony activity during the slot (calls / attempts).\nsessionPlanning.lateAttendance: Late attendance"
+  },
+  {
+   "title": "HARX REP application screen texts - sessionPlanning",
+   "heading": "sessionPlanning (2)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"sessionPlanning\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nsessionPlanning.earlyCheckOut: Early check-out\nsessionPlanning.lastMinuteCancel: Last Minute Cancellation Rate\nsessionPlanning.periodWeek: Week\nsessionPlanning.periodMonth: Month\nsessionPlanning.periodQuarter: Quarter\nsessionPlanning.periodYear: Year\nsessionPlanning.ofRequired: {{planned}} / {{required}} h\nsessionPlanning.calendar: Calendar\nsessionPlanning.calendarHint: 14-day overview\nsessionPlanning.legendReserved: Reserved\nsessionPlanning.legendAvailable: Available\nsessionPlanning.tzHint: Times shown in your timezone ({{tz}})\nsessionPlanning.overlapTitle: Slot already reserved on “{{gig}}”\nsessionPlanning.overlapMessage: You already reserved this slot on “{{gig}}”. Click SWITCH to cancel that reservation and take it here.\nsessionPlanning.overlapFullMessage: You already reserved this slot on “{{gig}}”. Click SWITCH to open that GIG, cancel, and free the slot.\nsessionPlanning.overlapUnknownGig: Unknown GIG\nsessionPlanning.cancelOtherGig: Cancel on “{{gig}}”\nsessionPlanning.switchHere: Switch"
+  },
+  {
+   "title": "HARX REP application screen texts - sessionPlanning",
+   "heading": "sessionPlanning (3)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"sessionPlanning\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nsessionPlanning.switching: Switching…\nsessionPlanning.switchSuccess: Reservation switched to this GIG.\nsessionPlanning.cancelOtherSuccess: Reservation cancelled on “{{gig}}”. You can now reserve here.\nsessionPlanning.tzGig: Destination"
+  },
+  {
+   "title": "HARX REP application screen texts - operations",
+   "heading": "operations (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"operations\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\noperations.title: Operations Panel\noperations.emergencyShutdown: Emergency Shutdown"
+  },
+  {
+   "title": "HARX REP application screen texts - companyProfile",
+   "heading": "companyProfile (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"companyProfile\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ncompanyProfile.back: Back\ncompanyProfile.backToMarketplace: Back to marketplace\ncompanyProfile.loading: Loading profile…\ncompanyProfile.notFoundTitle: Company not found\ncompanyProfile.notFoundDesc: Open this page from a gig details page or the marketplace, or check that the URL is correct.\ncompanyProfile.loadError: Could not load this profile. Check the link, or open the company from a gig page or the marketplace.\ncompanyProfile.contact: Contact\ncompanyProfile.noContact: No contact information published.\ncompanyProfile.viewOnMap: View on map\ncompanyProfile.onlinePresence: Online presence\ncompanyProfile.noSocial: No social links provided.\ncompanyProfile.overview: Overview\ncompanyProfile.noOverview: No description available for this company.\ncompanyProfile.mission: Our mission"
+  },
+  {
+   "title": "HARX REP application screen texts - gigDetails",
+   "heading": "gigDetails (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"gigDetails\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ngigDetails.backToMarketplace: Back to Marketplace\ngigDetails.notFoundTitle: Gig Not Found\ngigDetails.notFoundDesc: The requested gig could not be found or has been archived.\ngigDetails.invitedBadge: Invited\ngigDetails.viewCompanyProfile: View company profile\ngigDetails.unknown: Unknown\ngigDetails.start: Start\ngigDetails.pendingReview: Pending Review\ngigDetails.youreInvited: You're invited\ngigDetails.accept: Accept\ngigDetails.decline: Decline\ngigDetails.applyNow: Apply Now\ngigDetails.applying: Applying…\ngigDetails.jobDescription: Description\ngigDetails.commissionDetails: Commission & details\ngigDetails.perCall: / call\ngigDetails.perTransaction: / transaction\ngigDetails.bonus: BONUS"
+  },
+  {
+   "title": "HARX REP application screen texts - gigDetails",
+   "heading": "gigDetails (2)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"gigDetails\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ngigDetails.bonusPerTransaction: per transaction\ngigDetails.requiredSkills: Required Skills\ngigDetails.technicalSkills: Technical Skills\ngigDetails.professionalSkills: Professional Skills\ngigDetails.softSkills: Soft Skills\ngigDetails.languages: Languages\ngigDetails.skill: Skill\ngigDetails.level: Level {{level}}\ngigDetails.language: Language\ngigDetails.industries: Industries\ngigDetails.industry: Industry\ngigDetails.workingAcrossIndustries: Working across {{count}} different industries\ngigDetails.keyActivities: Key Activities\ngigDetails.activity: Activity\ngigDetails.leadTypes: Lead Types\ngigDetails.conversion: {{rate}}% conversion\ngigDetails.leadSources: Lead Sources:\ngigDetails.teamStructure: Team Structure"
+  },
+  {
+   "title": "HARX REP application screen texts - gigDetails",
+   "heading": "gigDetails (3)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"gigDetails\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ngigDetails.teamSize: Team Size:\ngigDetails.territories: Territories:\ngigDetails.yearsExp: {{years}} years exp.\ngigDetails.availability: Availability\ngigDetails.minimumHours: Minimum Hours:\ngigDetails.daily: Daily:\ngigDetails.weekly: Weekly:\ngigDetails.monthly: Monthly:\ngigDetails.schedule: Schedule:\ngigDetails.flexibility: Flexibility:\ngigDetails.flexibilityOptions.Remote Work Available: Remote work available\ngigDetails.flexibilityOptions.Flexible Hours: Flexible hours\ngigDetails.flexibilityOptions.Weekend Rotation: Weekend rotation\ngigDetails.flexibilityOptions.Night Shift Available: Night shift available\ngigDetails.flexibilityOptions.Split Shifts: Split shifts\ngigDetails.flexibilityOptions.Part-Time Options: Part-time options\ngigDetails.flexibilityOptions.Compressed Work Week: Compressed work week\ngigDetails.flexibilityOptions.Shift Swapping Allowed: Shift swapping allowed"
+  },
+  {
+   "title": "HARX REP application screen texts - gigDetails",
+   "heading": "gigDetails (4)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"gigDetails\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ngigDetails.documentation: Documentation & Resources\ngigDetails.productDocs: Product Documentation:\ngigDetails.processDocs: Process Documentation:\ngigDetails.trainingMaterials: Training Materials:\ngigDetails.mustBeLoggedIn: You must be logged in to apply\ngigDetails.gigIdMissing: Gig ID not found\ngigDetails.alreadyPendingRefresh: This gig is already pending. Refreshing status…\ngigDetails.statusAlreadyPending: Status updated: This gig is already pending\ngigDetails.statusNowEnrolled: Status updated: You are now enrolled in this gig\ngigDetails.applicationSent: Enrollment request sent successfully\ngigDetails.applicationError: Error during application\ngigDetails.invitationNotFound: Invitation not found. Please refresh the page.\ngigDetails.mustBeLoggedInInvite: You must be logged in to respond to the invitation\ngigDetails.invitationAccepted: Invitation accepted! You are now enrolled in this gig.\ngigDetails.acceptError: Error while accepting\ngigDetails.invitationDeclined: Invitation declined.\ngigDetails.declineError: Error while declining\ngigDetails.days.Monday: Monday"
+  },
+  {
+   "title": "HARX REP application screen texts - gigDetails",
+   "heading": "gigDetails (5)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"gigDetails\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ngigDetails.days.Tuesday: Tuesday\ngigDetails.days.Wednesday: Wednesday\ngigDetails.days.Thursday: Thursday\ngigDetails.days.Friday: Friday\ngigDetails.days.Saturday: Saturday\ngigDetails.days.Sunday: Sunday"
+  },
+  {
+   "title": "HARX REP application screen texts - gigsMarketplace",
+   "heading": "gigsMarketplace (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"gigsMarketplace\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ngigsMarketplace.title: MARKETPLACE\ngigsMarketplace.subtitle1: Discover premium projects worldwide that match your unique skills and professional aspirations.\ngigsMarketplace.subtitle2: Take control of your journey, find your next exclusive mission, and start earning today.\ngigsMarketplace.tabs.available: Available\ngigsMarketplace.tabs.enrolled: Enrolled\ngigsMarketplace.tabs.favorite: Favorite\ngigsMarketplace.tabs.invited: Invited\ngigsMarketplace.tabs.requested: Requested\ngigsMarketplace.hoursPerWeek: {{hours}}h/wk\ngigsMarketplace.hoursNA: N/A h/wk\ngigsMarketplace.industries: Industries:\ngigsMarketplace.activities: Activities:\ngigsMarketplace.showLess: Show less\ngigsMarketplace.more: +{{count}} more\ngigsMarketplace.less: Less\ngigsMarketplace.details: Details\ngigsMarketplace.detailsUpper: DETAILS\ngigsMarketplace.viewDetails: Details"
+  },
+  {
+   "title": "HARX REP application screen texts - gigsMarketplace",
+   "heading": "gigsMarketplace (2)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"gigsMarketplace\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ngigsMarketplace.startSession: Start\ngigsMarketplace.applyNow: Apply Now\ngigsMarketplace.applying: Applying…\ngigsMarketplace.enrolledBadge: Enrolled\ngigsMarketplace.invitedBadge: Invited\ngigsMarketplace.declinedBadge: Declined\ngigsMarketplace.pendingBadge: Pending\ngigsMarketplace.accept: Accept\ngigsMarketplace.reject: Decline\ngigsMarketplace.remote: Remote\ngigsMarketplace.noFavoritesYet: No Favorites Yet\ngigsMarketplace.favoritesEmptyDesc: Love a gig? Click the heart icon to save it here for later.\ngigsMarketplace.enrolledEmptyTitle: Ready to Start?\ngigsMarketplace.enrolledEmptyDesc: Accept an invitation or apply to a gig to see your active projects here.\ngigsMarketplace.invitesEmptyTitle: No Invitations Yet\ngigsMarketplace.invitesEmptyDesc: Keep your profile updated! When companies love your skills, invitations will appear here.\ngigsMarketplace.browseAvailable: Browse Available Gigs\ngigsMarketplace.taxonomy.Insurance: Insurance"
+  },
+  {
+   "title": "HARX REP application screen texts - gigsMarketplace",
+   "heading": "gigsMarketplace (3)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"gigsMarketplace\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ngigsMarketplace.taxonomy.Customer Relations & Support: Customer Relations & Support\ngigsMarketplace.taxonomy.Prospecting & Acquisition: Prospecting & Acquisition\ngigsMarketplace.taxonomy.Advisory & Pre-sales: Advisory & Pre-sales\ngigsMarketplace.taxonomy.FOLLOW-UP CALLS: Follow-up calls\ngigsMarketplace.taxonomy.Follow-up Calls: Follow-up calls\ngigsMarketplace.taxonomy.Collections: Collections"
+  },
+  {
+   "title": "HARX REP application screen texts - profile",
+   "heading": "profile (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profile\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofile.page.viewTitle: My profile\nprofile.page.editTitle: Edit profile\nprofile.page.viewDescription: View your HARX representative profile.\nprofile.page.editDescription: Edit your HARX representative profile.\nprofile.page.loadError: Failed to load profile\nprofile.page.error: Error: {{message}}\nprofile.page.noData: No profile data available\nprofile.page.addSkillError: Could not add {{type}} skill: {{message}}\nprofile.tabs.profile.title: REP PROFILE\nprofile.tabs.profile.subtitle: Manage your professional persona and core identification properties.\nprofile.tabs.skills.title: Expertise & Competencies\nprofile.tabs.skills.subtitle: Highlight your technical strengths and soft skills for placement opportunities.\nprofile.tabs.experience.title: Professional Milestones\nprofile.tabs.experience.subtitle: Detail your career history and previous representative successes.\nprofile.tabs.languages.title: Linguistic Profile\nprofile.tabs.languages.subtitle: Showcase your language proficiency and communication capabilities.\nprofile.tabs.onboarding.title: Evolution Progress\nprofile.tabs.onboarding.subtitle: Track your journey through the representation onboarding phases."
+  },
+  {
+   "title": "HARX REP application screen texts - profile",
+   "heading": "profile (2)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profile\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofile.tabs.specialization.title: Industry Verticals\nprofile.tabs.specialization.subtitle: Review your specific sector focus and professional domain expertise.\nprofile.tabs.availability.title: Availability & Schedule\nprofile.tabs.availability.subtitle: Manage your working hours and timezone\nprofile.nav.profile: Profile\nprofile.nav.experience: Experience\nprofile.nav.languages: Languages\nprofile.nav.skills: Skills\nprofile.nav.specialization: Specialization\nprofile.nav.availability: Availability\nprofile.nav.actionRequired: Action required on this tab\nprofile.nav.languageWarning: Language levels not verified. Record video/audio in the Languages tab — AI verifies your level.\nprofile.nav.specializationWarning: Missing industries/activities. Record a video in the Experience tab to detect them.\nprofile.common.cancel: Cancel\nprofile.common.close: Close\nprofile.common.save: Save\nprofile.common.saving: Saving...\nprofile.common.edit: Edit"
+  },
+  {
+   "title": "HARX REP application screen texts - profile",
+   "heading": "profile (3)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profile\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofile.common.delete: Delete\nprofile.common.deleteItem: Delete item\nprofile.common.notSpecified: Not specified\nprofile.common.notConfigured: Not configured\nprofile.common.unknown: Unknown\nprofile.common.clear: Clear\nprofile.header.backTo: Back to {{destination}}\nprofile.header.assessment: {{category}}: {{skill}} Assessment\nprofile.header.profilePhotoAlt: Profile\nprofile.header.viewPhoto: View Photo\nprofile.header.changePhoto: Change photo\nprofile.header.photoSourceTitle: Profile photo\nprofile.header.chooseFromDevice: Choose from device\nprofile.header.takePhoto: Take a photo\nprofile.header.capturePhoto: Capture\nprofile.header.cameraPreview: Camera preview\nprofile.header.cameraDenied: Camera access denied. Allow the camera or upload a photo.\nprofile.header.cameraUnavailable: Camera unavailable on this device."
+  },
+  {
+   "title": "HARX REP application screen texts - profile",
+   "heading": "profile (4)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profile\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofile.header.editPublicProperties: Edit Public Properties\nprofile.header.currentCountry: Current Country\nprofile.header.searchCountry: Search country...\nprofile.header.noCountries: No countries found.\nprofile.header.locationMismatch: Location mismatch\nprofile.header.directContact: Direct Contact\nprofile.header.phoneLine: Phone Line\nprofile.header.scoreOverall: REP Score Overall\nprofile.header.growthPlan: Growth Plan\nprofile.header.choosePlan: Choose a plan\nprofile.header.choosePlanCta: Choose a plan\nprofile.header.defaultPlan: Standard Representative\nprofile.header.defaultRole: Representative\nprofile.header.published: Published\nprofile.header.publishReady: You have completed your onboarding\nprofile.header.publishReadyDescription: Publish your profile to access the missions marketplace and let COMPANIES see your profile.\nprofile.header.publishing: Publishing...\nprofile.header.publish: Publish"
+  },
+  {
+   "title": "HARX REP application screen texts - profile",
+   "heading": "profile (5)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profile\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofile.header.finalStep: Final step: publish your profile\nprofile.header.finalStepDescription: Publish your profile to access the missions marketplace and let COMPANIES see your profile.\nprofile.header.browseMissions: Browse gigs\nprofile.header.phase2Complete: Phase 2 completed\nprofile.header.phase2CompleteDescription: Review your information in the tabs below. When you are done, press “Continue Onboarding” to choose your plan, then publish your profile.\nprofile.header.continueOnboarding: Continue Onboarding\nprofile.header.completePhase2: Complete Phase 2 to continue\nprofile.header.completePhase2Description: Upload your profile photo to complete Phase 2.\nprofile.header.selectPlan: Choose your plan\nprofile.header.cropPhoto: Crop Profile Photo\nprofile.header.cropAlt: Crop\nprofile.header.savePhoto: Save Photo\nprofile.errors.publish: Failed to publish profile.\nprofile.errors.update: Update failed. Please try again.\nprofile.errors.authToken: Authentication token missing.\nprofile.errors.uploadVideo: Failed to upload video.\nprofile.errors.uploadPhoto: Failed to upload cropped photo.\nprofile.errors.camera: Unable to access camera/microphone."
+  },
+  {
+   "title": "HARX REP application screen texts - profile",
+   "heading": "profile (6)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profile\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofile.overview.about: Profile Summary\nprofile.overview.editAbout: Edit profile summary\nprofile.overview.emptySummary: No professional summary provided\nprofile.overview.regenerate: Generate with AI\nprofile.overview.generating: Generating…\nprofile.overview.generateFailed: Could not generate the summary. Please try again.\nprofile.overview.notableCompanies: Notable Companies Worked For\nprofile.overview.emptyCompanies: No notable companies specified\nprofile.overview.companyPlaceholder: Type company name and press Enter...\nprofile.experience.summary: Summary\nprofile.experience.years: Years\nprofile.experience.professionalExperience: Professional Experience\nprofile.experience.workHistory: Work History\nprofile.experience.present: Present\nprofile.experience.keyResponsibilities: Key Responsibilities\nprofile.experience.viewAnalysis: View AI Analysis\nprofile.experience.recordAnalysis: Record & Analyze with AI\nprofile.experience.empty: No experience history listed yet"
+  },
+  {
+   "title": "HARX REP application screen texts - profile",
+   "heading": "profile (7)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profile\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofile.experience.rolePlaceholder: Role / title\nprofile.experience.companyPlaceholder: Company\nprofile.experience.descriptionPlaceholder: Short description (optional) and press Enter to save\nprofile.experience.edit: Edit experience\nprofile.experience.delete: Delete experience\nprofile.skills.technical: Technical\nprofile.skills.professional: Professional\nprofile.skills.soft: Soft Skills\nprofile.skills.search: Search and add {{type}} skill...\nprofile.skills.noneAvailable: No more skills available for this section.\nprofile.skills.delete: Delete this skill\nprofile.skills.deleteNamed: Delete {{name}}\nprofile.skills.proposals: Suggested from your videos\nprofile.skills.proposalsHint: {{count}} skill suggestion(s) from your experience videos — confirm to add them to your profile, or remove them. Mission matching mainly uses your industries and activities.\nprofile.skills.confirmProposal: Confirm this skill\nprofile.skills.confirmProposalNamed: Confirm {{name}}\nprofile.skills.dismissProposal: Remove this suggestion\nprofile.skills.dismissProposalNamed: Remove suggestion {{name}}"
+  },
+  {
+   "title": "HARX REP application screen texts - profile",
+   "heading": "profile (8)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profile\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofile.languages.title: Language Proficiency\nprofile.languages.count: {{total}} language · {{verified}} verified\nprofile.languages.count_plural: {{total}} languages · {{verified}} verified\nprofile.languages.language: Language\nprofile.languages.level: Level\nprofile.languages.select: Select a language…\nprofile.languages.unknown: Unknown Language\nprofile.languages.verified: Verified\nprofile.languages.cvEstimate: CV estimate\nprofile.languages.reverify: Re-verify level\nprofile.languages.toVerify: To verify\nprofile.languages.unverifiedCount: {{count}} language not verified\nprofile.languages.unverifiedCount_plural: {{count}} languages not verified\nprofile.languages.recordNotice: Record a short video here — AI verifies you speak this language and validates your level.\nprofile.languages.allVerified: All your languages are verified ({{verified}}/{{total}})\nprofile.languages.allVerifiedHelp: Your levels have been validated by AI. Nothing else to do here.\nprofile.languages.record: Record\nprofile.languages.fluency: Fluency"
+  },
+  {
+   "title": "HARX REP application screen texts - profile",
+   "heading": "profile (9)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profile\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofile.languages.proficiency: Proficiency\nprofile.languages.completeness: Comp.\nprofile.languages.cvHelp: Estimated from your CV — record a video to validate.\nprofile.languages.experienceSource: Level detected from your experience video.\nprofile.languages.levelChanged: Level changed (verified: {{verified}}). Record a video to validate {{current}}.\nprofile.languages.levelUnverified: Level not verified — record here to start AI verification.\nprofile.languages.viewExperienceAnalysis: View experience video & analysis\nprofile.languages.viewAnalysis: View video & analysis\nprofile.languages.recordTooltip: Record and let AI verify this language\nprofile.languages.recordVideo: Record video\nprofile.languages.deleteLanguage: Delete language\nprofile.languages.empty: No languages added yet\nprofile.languages.emptyHelp: Add a language or import your CV to get started.\nprofile.languages.addLanguage: Add a language\nprofile.languages.levels.A1: A1 - Beginner\nprofile.languages.levels.A2: A2 - Elementary\nprofile.languages.levels.B1: B1 - Intermediate\nprofile.languages.levels.B2: B2 - Upper Intermediate"
+  },
+  {
+   "title": "HARX REP application screen texts - profile",
+   "heading": "profile (10)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profile\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofile.languages.levels.C1: C1 - Advanced\nprofile.languages.levels.C2: C2 - Proficient\nprofile.specialization.industries: Primary Industries\nprofile.specialization.activities: Professional Activities\nprofile.specialization.detected: Detected from your videos\nprofile.specialization.noIndustryDetected: No industry detected\nprofile.specialization.noActivityDetected: No activity detected\nprofile.specialization.industryHint: Record a video in the Experience tab to automatically detect your industries.\nprofile.specialization.activityHint: Record a video in the Experience tab to automatically detect your activities.\nprofile.specialization.noIndustries: No industries specified\nprofile.specialization.noActivities: No activities specified\nprofile.specialization.searchIndustry: Search and add industry...\nprofile.specialization.searchActivity: Search and add activity...\nprofile.specialization.noMoreIndustries: No more industries available.\nprofile.specialization.noMoreActivities: No more activities available.\nprofile.availability.verificationNotices: Verification Notices\nprofile.availability.locationMismatch: Location Mismatch\nprofile.availability.locationMismatchText: Account registered from {{registered}}, but your profile specifies {{selected}}."
+  },
+  {
+   "title": "HARX REP application screen texts - profile",
+   "heading": "profile (11)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profile\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofile.availability.timezoneSynchronization: Timezone Synchronization\nprofile.availability.timezoneMismatchText: Your working timezone ({{timezone}}) belongs to {{timezoneCountry}}, while your profile country is {{profileCountry}}.\nprofile.availability.verifying: Verifying location data...\nprofile.availability.title: Availability & Schedule\nprofile.availability.selectedTimezone: Selected Timezone\nprofile.availability.selectTimezone: Select timezone...\nprofile.availability.searchTimezone: Search timezone or city...\nprofile.availability.suggested: Suggested for you\nprofile.availability.detected: Detected\nprofile.availability.allTimezones: All timezones\nprofile.availability.noTimezone: No timezone matches \"{{search}}\"\nprofile.availability.useMine: Use my timezone · {{timezone}}\nprofile.availability.weeklySchedule: Weekly Schedule\nprofile.availability.onboardingProgress: Onboarding Progress\nprofile.availability.phase: Phase {{number}}\nprofile.availability.stepsVerified: Steps successfully verified\nprofile.availability.requiresInformation: Requires additional information\nprofile.availability.statuses.pending: Pending"
+  },
+  {
+   "title": "HARX REP application screen texts - profile",
+   "heading": "profile (12)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profile\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofile.availability.statuses.in_progress: In progress\nprofile.availability.statuses.completed: Completed\nprofile.availability.statuses.blocked: Blocked\nprofile.availability.days.Monday: Monday\nprofile.availability.days.Tuesday: Tuesday\nprofile.availability.days.Wednesday: Wednesday\nprofile.availability.days.Thursday: Thursday\nprofile.availability.days.Friday: Friday\nprofile.availability.days.Saturday: Saturday\nprofile.availability.days.Sunday: Sunday"
+  },
+  {
+   "title": "HARX REP application screen texts - wallet",
+   "heading": "wallet (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"wallet\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nwallet.title: Wallet & Earnings\nwallet.downloadStatement: Download Statement\nwallet.withdrawFunds: Withdraw Funds\nwallet.availableBalance: Available Balance\nwallet.pendingEarnings: Pending Earnings\nwallet.lifetimeEarnings: Lifetime Earnings\nwallet.transactionHistory: Transaction History"
+  },
+  {
+   "title": "HARX REP application screen texts - workspaceGuard",
+   "heading": "workspaceGuard (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"workspaceGuard\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nworkspaceGuard.selectGigTitle: Select a Gig\nworkspaceGuard.selectGigDesc: Please select a specific Gig from the dropdown menu above to load your Leads, verify call eligibility, slots, and training progress.\nworkspaceGuard.trainingRequiredTitle: Training Required\nworkspaceGuard.trainingRequiredDesc: You must complete 100% of your training modules (including the call script) for this Gig before placing calls.\nworkspaceGuard.trainingButton: Train Now\nworkspaceGuard.sessionRequiredTitle: Reservation Required\nworkspaceGuard.sessionRequiredDesc: You must have a scheduled active slot reserved to start placing calls.\nworkspaceGuard.sessionButton: Reserve Slot\nworkspaceGuard.telephonyTestTitle: Telephony test mode\nworkspaceGuard.telephonyTestDesc: Training and reservation checks are bypassed for testing. Gig enrollment is still required.\nworkspaceGuard.connectionErrorTitle: Connection Error\nworkspaceGuard.connectionErrorDesc: Unable to validate call conditions. Please check your network or refresh the page to try again.\nworkspaceGuard.refreshButton: Refresh\nworkspaceGuard.modalTitle: COCKPIT Access Locked\nworkspaceGuard.modalSubtitle: Please fulfill all required eligibility conditions to start placing calls.\nworkspaceGuard.checkGigTitle: Project Enrollment\nworkspaceGuard.checkGigDesc: Be officially enrolled and assigned to the selected gig.\nworkspaceGuard.checkTrainingTitle: Trainings Completed (100%)"
+  },
+  {
+   "title": "HARX REP application screen texts - workspaceGuard",
+   "heading": "workspaceGuard (2)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"workspaceGuard\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nworkspaceGuard.checkTrainingDesc: Complete all required training sessions, including the call script study (100%).\nworkspaceGuard.checkSessionTitle: Active Reservation Slot\nworkspaceGuard.checkSessionDesc: Plan and reserve a time slot for the gig in the schedule.\nworkspaceGuard.understandButton: Understood, I'll complete my steps\nworkspaceGuard.recentLeads: Recent Leads\nworkspaceGuard.searchLeads: Search leads...\nworkspaceGuard.noSearchResults: No leads match your search."
+  },
+  {
+   "title": "HARX REP application screen texts - trainingAllGigsGuard",
+   "heading": "trainingAllGigsGuard (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"trainingAllGigsGuard\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ntrainingAllGigsGuard.modalTitle: Project Selection Required\ntrainingAllGigsGuard.modalSubtitle: Choose the project to open in the COCKPIT, or continue to the workspace and select it there.\ntrainingAllGigsGuard.selectLabel: Project\ntrainingAllGigsGuard.selectPlaceholder: Select a project…\ntrainingAllGigsGuard.loadingGigs: Loading projects…\ntrainingAllGigsGuard.noGigs: No enrolled projects yet. Apply via the marketplace first.\ntrainingAllGigsGuard.openCockpitButton: Open COCKPIT\ntrainingAllGigsGuard.chooseInWorkspace: Choose in workspace\ntrainingAllGigsGuard.understandButton: Understood"
+  },
+  {
+   "title": "HARX REP application screen texts - cvGuide",
+   "heading": "cvGuide (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"cvGuide\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ncvGuide.mascotte: Hi! I'm your HARX assistant. Upload your CV and I'll create a standout profile in seconds."
+  },
+  {
+   "title": "HARX REP application screen texts - brand",
+   "heading": "brand (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"brand\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nbrand.inspireGrowth: We inspire growth"
+  },
+  {
+   "title": "HARX REP application screen texts - profileImport",
+   "heading": "profileImport (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profileImport\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofileImport.step1: Step 1 · Create your profile\nprofileImport.title1: Turn your CV into a\nprofileImport.title2: standout profile\nprofileImport.subtitle: Upload your CV and let our AI build your professional story, extract your skills and languages — all in a few seconds.\nprofileImport.importBtn: Import my CV\nprofileImport.feat1Title: Instant analysis\nprofileImport.feat1Desc: Your CV is parsed in seconds.\nprofileImport.feat2Title: AI-powered\nprofileImport.feat2Desc: Smart summary & skill matching.\nprofileImport.feat3Title: Private & secure\nprofileImport.feat3Desc: Your data stays protected.\nprofileImport.step1Label: Upload your CV\nprofileImport.step2Label: Complete your profile\nprofileImport.step3Label: Choose your plan\nprofileImport.poweredBy: Powered by\nprofileImport.loadingProfile: Loading your profile…\nprofileImport.loadingHint: This only takes a moment.\nprofileImport.preparingStory: Preparing your professional story…"
+  },
+  {
+   "title": "HARX REP application screen texts - profileImport",
+   "heading": "profileImport (2)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profileImport\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofileImport.capabilities.telephony: Telephony\nprofileImport.capabilities.payments: Payments\nprofileImport.capabilities.transactions: Transactions\nprofileImport.meta.importTitle: CV import\nprofileImport.meta.importDescription: Import your CV to create your HARX representative profile.\nprofileImport.meta.editorTitle: Profile editor\nprofileImport.meta.editorDescription: Refine your HARX representative profile."
+  },
+  {
+   "title": "HARX REP application screen texts - profileImportDialog",
+   "heading": "profileImportDialog (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profileImportDialog\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofileImportDialog.title: Import your professional profile\nprofileImportDialog.subtitle: PDF, DOC or DOCX — up to 5MB\nprofileImportDialog.howItWorks: How it works\nprofileImportDialog.hideHowItWorks: Hide how it works\nprofileImportDialog.guidanceDesc: We'll guide you through creating your professional profile. Here's what to expect:\nprofileImportDialog.step1Title: Choose Your CV Format\nprofileImportDialog.step1Desc: We support PDF, DOC, and DOCX files. Make sure your CV is up-to-date and includes your key achievements.\nprofileImportDialog.step2Title: Review Content\nprofileImportDialog.step2Desc: We'll extract the important information from your CV. You can review and edit before proceeding.\nprofileImportDialog.step3Title: AI Enhancement\nprofileImportDialog.step3Desc: Our AI will analyze your CV to create a compelling professional summary and highlight your key skills.\nprofileImportDialog.dropCV: Drop your CV here\nprofileImportDialog.browseFiles: or click to browse your files\nprofileImportDialog.supports: Supports PDF, DOC, DOCX (max 5MB)\nprofileImportDialog.success: CV successfully uploaded!\nprofileImportDialog.uploadDifferent: Click to upload a different file\nprofileImportDialog.errorTitle: Error\nprofileImportDialog.stepNof3: Step {{currentStep}} of 3"
+  },
+  {
+   "title": "HARX REP application screen texts - profileImportDialog",
+   "heading": "profileImportDialog (2)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profileImportDialog\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofileImportDialog.preparing: Preparing...\nprofileImportDialog.analyzing: Analyzing CV...\nprofileImportDialog.extracting: Extracting information...\nprofileImportDialog.generating: Generating summary...\nprofileImportDialog.cancelClose: Cancel & close\nprofileImportDialog.cancel: Cancel\nprofileImportDialog.processing: Processing...\nprofileImportDialog.generateSummary: Generate Summary\nprofileImportDialog.close: Close CV import\nprofileImportDialog.errors.fileTooLarge: The file must be smaller than 5 MB.\nprofileImportDialog.errors.unsupportedFormat: Only PDF, DOC and DOCX files are accepted.\nprofileImportDialog.errors.noText: No text could be extracted from this file.\nprofileImportDialog.errors.readFailed: Could not read this file. It may be damaged or use an unsupported format.\nprofileImportDialog.errors.noContent: Please provide content to process.\nprofileImportDialog.errors.languagesRequired: A Languages section is required to generate your profile. Make sure your CV lists the languages you speak.\nprofileImportDialog.errors.languagesUnmatched: None of the languages could be matched. Make sure your CV lists commonly recognized languages.\nprofileImportDialog.errors.summaryFailed: Could not generate the professional summary.\nprofileImportDialog.errors.parseFailed: Could not analyze your CV. Please try again or use a different file."
+  },
+  {
+   "title": "HARX REP application screen texts - profileImportDialog",
+   "heading": "profileImportDialog (3)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profileImportDialog\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofileImportDialog.analysis.starting: Starting CV analysis…\nprofileImportDialog.analysis.basicInfo: Basic information extracted\nprofileImportDialog.analysis.experience: Work experience analyzed\nprofileImportDialog.analysis.matchingLanguages: Matching languages…\nprofileImportDialog.analysis.skills: Skills categorized and languages matched\nprofileImportDialog.analysis.achievements: Achievements extracted\nprofileImportDialog.analysis.availability: Availability preferences analyzed\nprofileImportDialog.analysis.summary: Generating professional summary\nprofileImportDialog.analysis.complete: Analysis complete!\nprofileImportDialog.analysis.error: Error: {{message}}"
+  },
+  {
+   "title": "HARX REP application screen texts - profileImportReview",
+   "heading": "profileImportReview (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profileImportReview\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofileImportReview.stepBadge: Step 2 · Complete your profile\nprofileImportReview.pageTitle: Your professional story\nprofileImportReview.pageSubtitle: Review the info extracted from your CV, add photo, videos and availability, then continue onboarding.\nprofileImportReview.confirmContinue: Continue Onboarding\nprofileImportReview.continueToProfile: Continue Onboarding\nprofileImportReview.everythingGood: All set? Continue to choose your plan — your profile will be published automatically.\nprofileImportReview.edit: Edit\nprofileImportReview.save: Save\nprofileImportReview.saving: Saving…\nprofileImportReview.cancel: Cancel\nprofileImportReview.undo: Undo\nprofileImportReview.autoSaving: Saving…\nprofileImportReview.autoSaved: Saved\nprofileImportReview.autoSaveError: Save failed\nprofileImportReview.remove: Remove\nprofileImportReview.present: Present\nprofileImportReview.unknown: Unknown\nprofileImportReview.other: Other"
+  },
+  {
+   "title": "HARX REP application screen texts - profileImportReview",
+   "heading": "profileImportReview (2)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profileImportReview\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofileImportReview.notSpecified: Not specified\nprofileImportReview.personalInfo: Personal information\nprofileImportReview.name: Name\nprofileImportReview.country: Country\nprofileImportReview.email: Email\nprofileImportReview.phone: Phone\nprofileImportReview.experienceLabel: Experience\nprofileImportReview.languages: Languages\nprofileImportReview.professionalExperience: Professional experience\nprofileImportReview.addExperience: Add experience\nprofileImportReview.workingHours: Working hours & availability\nprofileImportReview.professionalSummary: Professional summary\nprofileImportReview.summarySubtitle: AI-generated from your CV — edit or regenerate anytime.\nprofileImportReview.regenerate: Regenerate\nprofileImportReview.generating: Generating…\nprofileImportReview.notableCompanies: Notable companies\nprofileImportReview.noSummary: No summary yet. Click Edit, then Regenerate to create one from your CV.\nprofileImportReview.summaryPlaceholder: Edit your professional summary…"
+  },
+  {
+   "title": "HARX REP application screen texts - profileImportReview",
+   "heading": "profileImportReview (3)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profileImportReview\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofileImportReview.warnVideoTitle: A video is required for each experience\nprofileImportReview.warnAddExp: Add at least one experience, then record a video for it.\nprofileImportReview.reviewHintTitle: Review the extracted information\nprofileImportReview.reviewHintBody: Check every section (identity, experience, languages…). Correct or complete anything inaccurate before continuing.\nprofileImportReview.warnPhotoTitle: A profile photo is required\nprofileImportReview.warnPhotoBody: Add a photo or take one now. You cannot finish this step without a profile photo.\nprofileImportReview.addPhoto: Add a photo\nprofileImportReview.takePhoto: Take a photo\nprofileImportReview.capturePhoto: Capture\nprofileImportReview.photoUploading: Uploading photo…\nprofileImportReview.photoUploadError: Could not upload the photo. Please try again.\nprofileImportReview.photoAuthError: Session expired. Sign in again to add a photo.\nprofileImportReview.photoCameraError: Could not access the camera. Allow access or upload a photo instead.\nprofileImportReview.missingVideos_one: {{count}} of {{total}} experiences still needs a video. Use “Record & Analyze with AI” for each experience below. You cannot continue until every video is recorded.\nprofileImportReview.missingVideos_other: {{count}} of {{total}} experiences still need a video. Use “Record & Analyze with AI” for each experience below. You cannot continue until every video is recorded.\nprofileImportReview.warnBottom: Record a video for every experience above to unlock “Continue Onboarding”.\nprofileImportReview.warnBottomAvail: Set your working schedule above to unlock “Continue Onboarding”.\nprofileImportReview.warnBottomPhoto: Add a profile photo above to unlock “Continue Onboarding”."
+  },
+  {
+   "title": "HARX REP application screen texts - profileImportReview",
+   "heading": "profileImportReview (4)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profileImportReview\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofileImportReview.recordAnalyze: Record & Analyze with AI\nprofileImportReview.viewAnalysis: View AI analysis\nprofileImportReview.expVideoMissing: Video required — record a video for this experience to continue.\nprofileImportReview.expVideoDone: Video recorded\nprofileImportReview.availMissing: Availability not set — click Edit to add your working schedule.\nprofileImportReview.savedSuccess: Saved successfully!\nprofileImportReview.saveError: Error saving. Please try again.\nprofileImportReview.loadingProfile: Loading your profile…\nprofileImportReview.locationNotice: Location notice\nprofileImportReview.locationMismatchPrefix: Your profile shows\nprofileImportReview.locationMismatchMiddle: but your first login was from\nprofileImportReview.locationMismatchHint: 💡 If this seems incorrect, update your country selection above.\nprofileImportReview.timezoneMismatch: Your time zone is set to {{timezoneCountry}}, but your country is {{profileCountry}}. This is fine if you work across time zones.\nprofileImportReview.namePlaceholder: Enter your name\nprofileImportReview.countryPlaceholder: Search for your country…\nprofileImportReview.emailPlaceholder: Enter your email\nprofileImportReview.phonePlaceholder: Enter your phone number\nprofileImportReview.languagePlaceholder: Search for a language…"
+  },
+  {
+   "title": "HARX REP application screen texts - profileImportReview",
+   "heading": "profileImportReview (5)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profileImportReview\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofileImportReview.clearSelection: Clear selection\nprofileImportReview.removeLanguage: Remove language\nprofileImportReview.noCountriesMatch: No countries match “{{search}}”.\nprofileImportReview.searchCountriesHint: Start typing to search for countries.\nprofileImportReview.noLanguagesMatch: No languages match “{{search}}”.\nprofileImportReview.searchLanguagesHint: Start typing to search for languages.\nprofileImportReview.proficiencyTitle: Language proficiency levels\nprofileImportReview.yearsExperience_one: {{count}} year of experience\nprofileImportReview.yearsExperience_other: {{count}} years of experience\nprofileImportReview.technicalSkills: Technical skills\nprofileImportReview.professionalSkills: Professional skills\nprofileImportReview.softSkills: Soft skills\nprofileImportReview.industries: Industries\nprofileImportReview.activities: Activities\nprofileImportReview.skillFallback: Skill {{number}}\nprofileImportReview.selectSkills: Select {{type}}…\nprofileImportReview.selectedSuffix: (Selected)\nprofileImportReview.selectIndustries: Select industries…"
+  },
+  {
+   "title": "HARX REP application screen texts - profileImportReview",
+   "heading": "profileImportReview (6)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profileImportReview\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofileImportReview.noIndustries: No industries available\nprofileImportReview.selectActivities: Select activities…\nprofileImportReview.noActivities: No activities available\nprofileImportReview.addPlaceholder: Add {{type}}\nprofileImportReview.editExperience: Edit experience\nprofileImportReview.removeExperience: Remove experience\nprofileImportReview.validation.languageRequired: At least one language is required.\nprofileImportReview.validation.nameRequired: Name is required.\nprofileImportReview.validation.countryRequired: Country is required.\nprofileImportReview.validation.industryRequired: At least one industry is required.\nprofileImportReview.validation.companyRequired: At least one notable company is required.\nprofileImportReview.validation.emailRequired: Email is required.\nprofileImportReview.validation.emailInvalid: Enter a valid email address.\nprofileImportReview.validation.phoneRequired: Phone number is required.\nprofileImportReview.validation.phoneInvalid: Enter a valid phone number.\nprofileImportReview.validation.fieldRequired: {{field}} is required.\nprofileImportReview.validation.selectLanguage: Select a language.\nprofileImportReview.validation.languageSelected: This language is already selected."
+  },
+  {
+   "title": "HARX REP application screen texts - profileImportReview",
+   "heading": "profileImportReview (7)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profileImportReview\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofileImportReview.validation.startDateInvalid: The start date is invalid.\nprofileImportReview.validation.endDateInvalid: The end date is invalid.\nprofileImportReview.errors.addItem: Could not add {{type}}: {{message}}\nprofileImportReview.errors.removeItem: Could not remove {{type}}: {{message}}\nprofileImportReview.errors.addExperience: Could not add the experience: {{message}}\nprofileImportReview.toasts.timezoneDetected: Time zone detected automatically: {{timezone}}. You can change it if needed.\nprofileImportReview.toasts.timezoneUpdated: Time zone updated to {{timezone}} based on your country. You can change it if needed.\nprofileImportReview.toasts.timezoneSet: Time zone automatically set to {{timezone}} based on your country. You can change it if needed.\nprofileImportReview.toasts.selectCountryFirst: Select a country first to get time-zone suggestions.\nprofileImportReview.toasts.summaryRegenerated: Professional summary regenerated and saved automatically.\nprofileImportReview.toasts.summaryRegenerateFailed: Could not regenerate the summary. Please try again.\nprofileImportReview.toasts.fixValidation: Fix the validation errors before saving.\nprofileImportReview.toasts.profileSaved: Profile saved successfully!\nprofileImportReview.toasts.profileSaveFailed: Could not save the profile. Please try again.\nprofileImportReview.experienceForm.jobTitle: Job title\nprofileImportReview.experienceForm.jobTitlePlaceholder: e.g. Software Engineer\nprofileImportReview.experienceForm.company: Company\nprofileImportReview.experienceForm.companyPlaceholder: e.g. Tech Corp"
+  },
+  {
+   "title": "HARX REP application screen texts - profileImportReview",
+   "heading": "profileImportReview (8)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profileImportReview\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofileImportReview.experienceForm.startDate: Start date\nprofileImportReview.experienceForm.endDate: End date\nprofileImportReview.experienceForm.present: Present\nprofileImportReview.experienceForm.responsibilities: Responsibilities\nprofileImportReview.experienceForm.responsibilityPlaceholder: Add a responsibility\nprofileImportReview.experienceForm.removeResponsibility: Remove responsibility\nprofileImportReview.experienceForm.addResponsibility: Add responsibility\nprofileImportReview.experienceForm.cancel: Cancel\nprofileImportReview.experienceForm.addExperience: Add experience\nprofileImportReview.experienceForm.saveChanges: Save changes\nprofileImportReview.proficiency.A1.label: A1 - Beginner\nprofileImportReview.proficiency.A1.description: Can understand and use basic phrases and introduce themselves.\nprofileImportReview.proficiency.A2.label: A2 - Elementary\nprofileImportReview.proficiency.A2.description: Can communicate in simple, routine situations.\nprofileImportReview.proficiency.B1.label: B1 - Intermediate\nprofileImportReview.proficiency.B1.description: Can handle most travel situations and describe experiences.\nprofileImportReview.proficiency.B2.label: B2 - Upper intermediate\nprofileImportReview.proficiency.B2.description: Can interact fluently with native speakers and produce clear text."
+  },
+  {
+   "title": "HARX REP application screen texts - profileImportReview",
+   "heading": "profileImportReview (9)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profileImportReview\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofileImportReview.proficiency.C1.label: C1 - Advanced\nprofileImportReview.proficiency.C1.description: Can use the language flexibly and produce clear, well-structured text.\nprofileImportReview.proficiency.C2.label: C2 - Mastery\nprofileImportReview.proficiency.C2.description: Can understand virtually everything and express themselves spontaneously.\nprofileImportReview.availability.defaultHours: Default working hours\nprofileImportReview.availability.applySelectedDays: Apply to selected days\nprofileImportReview.availability.workingDays: Working days\nprofileImportReview.availability.start: Start\nprofileImportReview.availability.timezone: Time zone\nprofileImportReview.availability.timezonePlaceholder: Search for your time zone…\nprofileImportReview.availability.noTimezoneMatch: No time zones match “{{search}}”.\nprofileImportReview.availability.searchTimezoneHint: Start typing to search for time zones.\nprofileImportReview.availability.suggestTimezoneTooltip: Suggest a time zone based on your selected country\nprofileImportReview.availability.suggestFromCountry: Suggest from country\nprofileImportReview.availability.timezoneNotice: Time-zone notice\nprofileImportReview.availability.flexibility: Schedule flexibility\nprofileImportReview.availability.schedule: Working schedule\nprofileImportReview.availability.days.Monday: Monday"
+  },
+  {
+   "title": "HARX REP application screen texts - profileImportReview",
+   "heading": "profileImportReview (10)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"profileImportReview\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nprofileImportReview.availability.days.Tuesday: Tuesday\nprofileImportReview.availability.days.Wednesday: Wednesday\nprofileImportReview.availability.days.Thursday: Thursday\nprofileImportReview.availability.days.Friday: Friday\nprofileImportReview.availability.days.Saturday: Saturday\nprofileImportReview.availability.days.Sunday: Sunday\nprofileImportReview.availability.options.Remote Work Available: Remote work available\nprofileImportReview.availability.options.Flexible Hours: Flexible hours\nprofileImportReview.availability.options.Weekend Rotation: Weekend rotation\nprofileImportReview.availability.options.Night Shift Available: Night shift available\nprofileImportReview.availability.options.Split Shifts: Split shifts\nprofileImportReview.availability.options.Part-Time Options: Part-time options\nprofileImportReview.availability.options.Compressed Work Week: Compressed work week\nprofileImportReview.availability.options.Shift Swapping Allowed: Shift swapping allowed"
+  },
+  {
+   "title": "HARX REP application screen texts - repOnboarding",
+   "heading": "repOnboarding (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"repOnboarding\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nrepOnboarding.title: REPS Onboarding\nrepOnboarding.subtitle: Complete required actions to unlock next phases\nrepOnboarding.refreshProgress: Refresh Progress\nrepOnboarding.syncing: Syncing...\nrepOnboarding.yourProgress: Your Progress\nrepOnboarding.phasesCompleted: Phases Completed\nrepOnboarding.requiredUnlock: Required actions unlock phases\nrepOnboarding.optionalImprove: Optional actions improve your profile\nrepOnboarding.phaseLabel: Phase {{number}} · {{description}}\nrepOnboarding.requiredActions: Required Actions\nrepOnboarding.mustComplete: Must Complete\nrepOnboarding.optionalActions: Optional Actions\nrepOnboarding.retry: Retry\nrepOnboarding.completePreviousFirst: Complete required actions in the previous phase first\nrepOnboarding.unlockPhase: Complete the required actions in Phase {{number}} to unlock this phase.\nrepOnboarding.statuses.completed: Completed\nrepOnboarding.statuses.comingSoon: Coming Soon\nrepOnboarding.statuses.locked: Locked"
+  },
+  {
+   "title": "HARX REP application screen texts - repOnboarding",
+   "heading": "repOnboarding (2)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"repOnboarding\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nrepOnboarding.actionsUi.continue: Continue\nrepOnboarding.actionsUi.startStep: Start Step\nrepOnboarding.errors.loadProgress: Failed to load your progress. Please try again later.\nrepOnboarding.errors.updatePhase: Failed to update phase status. Please try again later.\nrepOnboarding.comingSoon.title: Marketplace Coming Soon!\nrepOnboarding.comingSoon.description: We're working hard to bring you an amazing marketplace experience. This feature will soon offer exciting opportunities to browse and apply for gigs.\nrepOnboarding.comingSoon.updates: Stay tuned for updates!\nrepOnboarding.comingSoon.confirm: Got it, thanks!\nrepOnboarding.phases.signup.name: Sign Up & Verification\nrepOnboarding.phases.signup.description: Complete your account setup and verify your identity\nrepOnboarding.phases.profile.name: Profile Creation\nrepOnboarding.phases.profile.description: Build your professional profile\nrepOnboarding.phases.subscription.name: Subscription Plan\nrepOnboarding.phases.subscription.description: Choose your membership level\nrepOnboarding.phases.marketplace.name: Marketplace Access\nrepOnboarding.phases.marketplace.description: Browse and apply for gigs\nrepOnboarding.phases.operations.name: Operations Launch\nrepOnboarding.phases.operations.description: Start your first gig"
+  },
+  {
+   "title": "HARX REP application screen texts - repOnboarding",
+   "heading": "repOnboarding (3)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"repOnboarding\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nrepOnboarding.phases.support.name: Support & Training\nrepOnboarding.phases.support.description: Access resources and the community\nrepOnboarding.phases.quality.name: Quality Control\nrepOnboarding.phases.quality.description: Monitor your performance\nrepOnboarding.phases.career.name: Career Growth\nrepOnboarding.phases.career.description: Advance your REPS career\nrepOnboarding.phases.wallet.name: Wallet & Payments\nrepOnboarding.phases.wallet.description: Manage your earnings\nrepOnboarding.actions.createAccount: Create your REPS account with email\nrepOnboarding.actions.verifyEmail: Verify your email address\nrepOnboarding.actions.confirmLocation: Confirm your location based on your IP address\nrepOnboarding.actions.verifyIdentity: Complete identity verification\nrepOnboarding.actions.enableTwoFactor: Set up two-factor authentication\nrepOnboarding.actions.addExperience: Add your work experience\nrepOnboarding.actions.recordExperienceVideo: Record a video for each experience\nrepOnboarding.actions.uploadPhoto: Upload a professional photo\nrepOnboarding.actions.completeBio: Complete your bio\nrepOnboarding.actions.setAvailability: Set your availability hours"
+  },
+  {
+   "title": "HARX REP application screen texts - repOnboarding",
+   "heading": "repOnboarding (4)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"repOnboarding\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nrepOnboarding.actions.activateSubscription: Activate your subscription\nrepOnboarding.actions.applyToGig: Apply or enroll in a gig\nrepOnboarding.actions.reviewOpportunities: Review available opportunities\nrepOnboarding.actions.setGigPreferences: Set up gig preferences\nrepOnboarding.actions.reviewTasks: Review assigned tasks\nrepOnboarding.actions.setupCommunication: Set up communication tools\nrepOnboarding.actions.completeBriefing: Complete your first client briefing\nrepOnboarding.actions.scheduleFirstSession: Schedule your first session\nrepOnboarding.actions.reviewMetrics: Review performance metrics\nrepOnboarding.actions.joinCommunity: Join the REPS community\nrepOnboarding.actions.completeTraining: Complete onboarding training\nrepOnboarding.actions.accessSupport: Access support resources\nrepOnboarding.actions.connectMentor: Connect with a mentor\nrepOnboarding.actions.scheduleCheckIn: Schedule your first check-in\nrepOnboarding.actions.reviewQuality: Review quality guidelines\nrepOnboarding.actions.setupTracking: Set up performance tracking\nrepOnboarding.actions.completeQualityChecklist: Complete the quality checklist\nrepOnboarding.actions.scheduleQualityReview: Schedule a quality review"
+  },
+  {
+   "title": "HARX REP application screen texts - repOnboarding",
+   "heading": "repOnboarding (5)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"repOnboarding\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nrepOnboarding.actions.setPerformanceGoals: Set performance goals\nrepOnboarding.actions.reviewCareerPaths: Review career paths\nrepOnboarding.actions.setCareerGoals: Set career goals\nrepOnboarding.actions.joinSpecialization: Join a specialization track\nrepOnboarding.actions.completeAdvancedTraining: Complete advanced training\nrepOnboarding.actions.planCertification: Plan your certification path\nrepOnboarding.actions.setupPayment: Set up your payment account\nrepOnboarding.actions.configurePayouts: Configure payout preferences\nrepOnboarding.actions.reviewPaymentSchedule: Review the payment schedule\nrepOnboarding.actions.setEarningsGoals: Set earnings goals\nrepOnboarding.actions.enablePaymentNotifications: Enable payment notifications\nrepOnboarding.nextStep.label: Next step\nrepOnboarding.nextStep.defaultTitle: Continue your onboarding\nrepOnboarding.nextStep.defaultHint: Move on to the next step\nrepOnboarding.nextStep.close: Close"
+  },
+  {
+   "title": "HARX REP application screen texts - trainingPage",
+   "heading": "trainingPage (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"trainingPage\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ntrainingPage.title: HARX Academy\ntrainingPage.subtitle: Trainings linked to gigs you are enrolled in, plus journeys your company assigned to you directly.\ntrainingPage.myGigsAndPaths: My gigs & paths\ntrainingPage.enrolledGigLabel: Enrolled gig (Marketplace)\ntrainingPage.allEnrolledGigs: All enrolled gigs\ntrainingPage.noEnrolledGigs: No enrolled gigs\ntrainingPage.showingFor: Showing trainings for:\ntrainingPage.noEnrolledGigsHint: No enrolled gigs from the matching API — check the Marketplace or your connection.\ntrainingPage.tabTrainings: Trainings\ntrainingPage.tabCertifications: Certifications\ntrainingPage.tabUseCases: Use cases\ntrainingPage.useCasesKicker: Briefing / Coaching\ntrainingPage.useCasesTitle: Use cases to study\ntrainingPage.useCasesIntro: Excellent and poor calls become briefings for continuous improvement. Prospect phone, email and name are anonymized. The company can share these cases with other REPs on the same gig.\ntrainingPage.useCasesLoading: Loading use cases…\ntrainingPage.useCasesEmptyTitle: No use cases yet\ntrainingPage.useCasesEmptyDesc: Very strong calls (≥ 85%) and calls to rework (≤ 35%) appear here, excluding short or non-commercial calls.\ntrainingPage.useCasesExcellent: Model to follow"
+  },
+  {
+   "title": "HARX REP application screen texts - trainingPage",
+   "heading": "trainingPage (2)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"trainingPage\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ntrainingPage.useCasesCritical: Mistakes to avoid\ntrainingPage.useCasesExcellentHint: Replay this call and use it as inspiration for your next briefs.\ntrainingPage.useCasesCriticalHint: Replay this call to spot the mistakes and avoid them next time.\ntrainingPage.useCasesReplay: Replay\ntrainingPage.progressGig: Progress (gig trainings)\ntrainingPage.loadingForGig: Loading trainings for this gig…\ntrainingPage.loading: Loading trainings…\ntrainingPage.emptyAllTitle: No trainings found for your enrolled gigs.\ntrainingPage.emptyAllDesc: Enrolling in a gig does not create a training by itself: the company must publish a training for that gig (status active, rehearsal, or completed). The list can stay empty even if the Marketplace shows “Enrolled”.\ntrainingPage.emptyGigTitle: No trainings for this gig yet.\ntrainingPage.emptyGigOk: The training service responded successfully but has no published journeys for this gig. Your org may still be preparing content, the journey may still be in draft, or the journey may be linked to a different gig id than the one in the Marketplace. All journeys linked to this gig are shown, including draft/not published.\ntrainingPage.emptyGigNotFound: The training API returned 404 for GET /training_journeys/gig/:gigId. Deploy the latest training backend or verify API routing and the base URL in VITE_TRAINING_*.\ntrainingPage.emptyGigError: Could not reach the training API for this gig (network error, CORS, or missing auth). Check your connection, sign in again, and confirm VITE_TRAINING_* points at the training service.\ntrainingPage.emptyGigRetry: Select the gig again or refresh the page. If this persists, verify the training API URL and that you are signed in.\ntrainingPage.progress: Progress\ntrainingPage.continue: Continue\ntrainingPage.script: Script\ntrainingPage.certificate: Certificate"
+  },
+  {
+   "title": "HARX REP application screen texts - trainingPage",
+   "heading": "trainingPage (3)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"trainingPage\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\ntrainingPage.bravoTitle: Well done!\ntrainingPage.bravoSubtitle: You have completed this training.\ntrainingPage.bravoDesc: All sections and quizzes are validated. View your certificate.\ntrainingPage.noCertificationsTitle: No certifications yet\ntrainingPage.noCertificationsDesc: Complete a training at 100% to unlock your certificate. Your certifications will appear here.\ntrainingPage.seeMyTrainings: See my trainings\ntrainingPage.certificationsIntro: Trainings completed at 100%. View your certificates.\ntrainingPage.validated: Validated · 100%\ntrainingPage.fallbackTitle: Training\ntrainingPage.backToList: Back to list\ntrainingPage.viewCertificate: View certificate"
+  },
+  {
+   "title": "HARX REP application screen texts - auth",
+   "heading": "auth (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"auth\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nauth.verifying: Verifying authentication..."
+  },
+  {
+   "title": "HARX REP application screen texts - subscriptionFlow",
+   "heading": "subscriptionFlow (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"subscriptionFlow\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nsubscriptionFlow.backToOnboarding: Back to onboarding\nsubscriptionFlow.choosePlan: Choose your plan\nsubscriptionFlow.yourPlan: Your plan\nsubscriptionFlow.currentPlan: Current plan\nsubscriptionFlow.subscribe: Subscribe\nsubscriptionFlow.startTrial: Start trial\nsubscriptionFlow.freeTrial: 7 days free trial\nsubscriptionFlow.perMonth: / month\nsubscriptionFlow.loadingPlans: Loading plans…\nsubscriptionFlow.noPlans: No plans available right now.\nsubscriptionFlow.secureCheckout: Secure checkout\nsubscriptionFlow.initializingStripe: Initializing Stripe…\nsubscriptionFlow.finalizing: Finalizing your subscription…\nsubscriptionFlow.subscriptionActive: Subscription active\nsubscriptionFlow.subscribedTo: You are subscribed to {{name}}.\nsubscriptionFlow.continueOnboarding: Continue Onboarding\nsubscriptionFlow.planActivated: Plan “{{name}}” activated\nsubscriptionFlow.planActiveBanner: Your plan “{{name}}” is active. Publish your profile to access the marketplace."
+  },
+  {
+   "title": "HARX REP application screen texts - subscriptionFlow",
+   "heading": "subscriptionFlow (2)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"subscriptionFlow\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nsubscriptionFlow.planJustActivated: “{{name}}” is now your active plan.\nsubscriptionFlow.onboardingCompletePublish: You have completed your onboarding. Publish your profile to access the missions marketplace and let COMPANIES see your profile.\nsubscriptionFlow.autoPublishHint: As soon as you choose a plan, your profile is published automatically and the marketplace opens.\nsubscriptionFlow.publishAfterPlanHint: After choosing a plan, you can publish your profile and leave optional feedback before opening the marketplace.\nsubscriptionFlow.publish: Publish\nsubscriptionFlow.publishSuccess: Profile published — welcome to the marketplace!\nsubscriptionFlow.updating: Updating…"
+  },
+  {
+   "title": "HARX REP application screen texts - onboardingSatisfaction",
+   "heading": "onboardingSatisfaction (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"onboardingSatisfaction\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nonboardingSatisfaction.title: How was your onboarding?\nonboardingSatisfaction.subtitle: Feedback is optional. Rate and comment if you like — or skip.\nonboardingSatisfaction.scoreOptional: Optional rating\nonboardingSatisfaction.starAria: Rate {{n}} out of 5\nonboardingSatisfaction.commentLabel: Comment (optional)\nonboardingSatisfaction.commentPlaceholder: Tell us what you liked or what we can improve…\nonboardingSatisfaction.skip: Skip\nonboardingSatisfaction.submit: Send\nonboardingSatisfaction.close: Close"
+  },
+  {
+   "title": "HARX REP application screen texts - repPlans",
+   "heading": "repPlans (1)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"repPlans\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nrepPlans.takeAChance.name: TAKE A CHANCE\nrepPlans.takeAChance.description: Completely free. Prove you can earn. No commitment. If you like it and hit €30, upgrade to unlock more.\nrepPlans.takeAChance.features.0: Earn up to €30/month\nrepPlans.takeAChance.features.1: Dashboard: Real-time wallet balance; Basic analytics\nrepPlans.takeAChance.features.2: 3 gigs only\nrepPlans.takeAChance.features.3: Slot Booking: First-Come, First-Served\nrepPlans.takeAChance.features.4: Call History: Cannot listen to recordings, see AI scores, or read transcripts\nrepPlans.takeAChance.features.5: Support by email — 24 hours\nrepPlans.payTheBills.name: PAY THE BILLS\nrepPlans.payTheBills.description: Now I'm making real money.\nrepPlans.payTheBills.features.0: Earn up to €200/month\nrepPlans.payTheBills.features.1: Dashboard: Advanced analytics\nrepPlans.payTheBills.features.2: 10 gigs\nrepPlans.payTheBills.features.3: Slot Booking: Priority on waiting list\nrepPlans.payTheBills.features.4: Call History: Listen to recordings, see AI scores, and read transcripts\nrepPlans.payTheBills.features.5: Support by email or chat\nrepPlans.payTheBills.features.6: 7 days free trial\nrepPlans.moneyMustBeFunny.name: MONEY MUST BE FUNNY"
+  },
+  {
+   "title": "HARX REP application screen texts - repPlans",
+   "heading": "repPlans (2)",
+   "product": "taas",
+   "audience": "rep",
+   "sources": [
+    "v25_reporchestrator_front/src/i18n/locales/en.json"
+   ],
+   "text": "Real user-interface texts of the \"repPlans\" area of the HARX REP application (labels, guides, hints, error toasts). Use them to describe screens and steps exactly as the user sees them.\nrepPlans.moneyMustBeFunny.description: Bills paid. Fun money time.\nrepPlans.moneyMustBeFunny.features.0: Earn up to €500/month\nrepPlans.moneyMustBeFunny.features.1: Dashboard: Advanced analytics\nrepPlans.moneyMustBeFunny.features.2: 100 gigs\nrepPlans.moneyMustBeFunny.features.3: Slot Booking: Priority\nrepPlans.moneyMustBeFunny.features.4: Call History: Listen to recordings, see AI scores, read transcripts\nrepPlans.moneyMustBeFunny.features.5: Support by Phone, email or chat\nrepPlans.moneyMustBeFunny.features.6: 7 days free trial\nrepPlans.richMansWorld.name: IN THE RICH MAN’S WORLD\nrepPlans.richMansWorld.description: I'm elite. No limits.\nrepPlans.richMansWorld.features.0: Unlimited Monthly Earning\nrepPlans.richMansWorld.features.1: Priority Access to Premium Gigs\nrepPlans.richMansWorld.features.2: Priority to book slots\nrepPlans.richMansWorld.features.3: All AI-powered features for free\nrepPlans.richMansWorld.features.4: No extra fees for wallet management\nrepPlans.richMansWorld.features.5: Support by Phone, email or chat\nrepPlans.richMansWorld.features.6: 7 days free trial"
+  }
+ ]
+}

@@ -1,0 +1,15 @@
+{
+ "generatedFrom": "scripts/buildKnowledgeBase.mjs",
+ "chunks": [
+  {
+   "title": "Team permissions catalogue (company application)",
+   "heading": "Permission groups and actions",
+   "product": "taas",
+   "audience": "company",
+   "sources": [
+    "v25_comporchestrator_front/src/constants/companyPermissions.ts"
+   ],
+   "text": "Company team members are given permissions per group; a permission is \"<group>.<action>\". Groups and actions:\n- Gigs [gigs]: view (Voir), create (Créer), edit (Modifier), delete (Supprimer), activate (Activer / pause)\n- Prospects [leads]: view (Voir), import (Importer), create (Créer), edit (Modifier), archive (Archiver), export (Exporter)\n- Téléphonie [telephony]: view (Voir), search (Rechercher), buy (Acheter), assign (Affecter), terminate (Résilier), test (Appel test)\n- Scripts [scripts]: view (Voir), create (Créer), edit (Modifier), delete (Supprimer)\n- Base de connaissances [knowledge]: view (Voir), create (Ajouter), edit (Modifier), delete (Supprimer)\n- Matching / REPs [matching]: view (Voir), invite (Inviter), decide (Accepter / refuser)\n- Formation [training]: view (Voir), create (Créer), edit (Modifier), delete (Supprimer)\n- Appels [calls]: view (Voir), listen (Écouter), validate (Valider), export (Exporter)\n- Tableau de bord [dashboard]: view (Voir)\n- Agents [agents]: view (Voir), create (Créer), edit (Modifier), remove (Retirer)\n- Planification [planning]: view (Voir), create (Créer), edit (Modifier), delete (Supprimer)\n- E-mails [emails]: view (Voir), create (Créer), send (Envoyer)\n- Assistant vocal [voice]: view (Voir), edit (Configurer)\n- Activation des gigs [activation]: view (Voir), edit (Modifier)\n- Qualité [quality]: view (Voir), review (Contrôler)\n- Opérations [operations]: view (Voir)\n- Analytique [analytics]: view (Voir)\n- Portefeuille [wallet]: view (Voir), deposit (Déposer), withdraw (Retirer)\n- Abonnement [subscription]: view (Voir), change (Changer de plan)\n- Tokens et facturation [billing]: view (Voir), buy (Acheter)\n- Équipe [members]: view (Voir), invite (Inviter), edit (Modifier les droits), remove (Retirer)\n- Réglages [settings]: view (Voir), edit (Modifier)\n\nPresets excerpt:\nPRESET_IDS = ['admin', 'operator', 'readonly'] as const;\nexport type PresetId = (typeof PRESET_IDS)[number] | 'custom' | 'owner';\n\nconst OPERATOR = [\n  'gigs.view', 'gigs.create', 'gigs.edit', 'gigs.activate',\n  'leads.view', 'leads.import', 'leads.create', 'leads.edit',\n  'telephony.view', 'telephony.search', 'telephony.assign', 'telephony.test',\n  'scripts.view', 'scripts.create', 'scripts.edit',\n  'knowledge.view', 'knowledge.create', 'knowledge.edit',\n  'matching.view',\n  'training.view',\n  'calls.view', 'calls.listen', 'calls.validate',\n  'billing.view',\n  'settings.view',\n];\n\nexport function allPermissionKeys(): string[] {\n  return PERMISSION_GROUPS.flatMap((group) => group.actions.map((action) => `${group.id}.${action.id}`));\n}\n\nexport function emptyPermissions(): PermissionMap {\n  return Object.fromEntries(allPermissionKeys().map((key) => [key, false]));\n}\n\nexport function permis"
+  }
+ ]
+}
