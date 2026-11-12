@@ -99,6 +99,7 @@ assert.match(send({ subject: 'a\nBcc: x@y.fr' }).error, /une seule ligne/);
 assert.match(send({ subject: ' ' }).error, /objet/);
 assert.match(send({ body: 'x'.repeat(5001) }).error, /5000/);
 assert.match(send({ template: 'inconnu' }).error, /Modèle/);
+for (const t of ['callback_confirmation', 'appointment_confirmation', 'appointment_cancellation', 'free']) assert.equal(send({ template: t }).value?.template, t, `modèle ${t} accepté (ceux proposés par l’application)`);
 assert.match(send({ followUpId: 'zz' }).error, /invalide/);
 assert.match(send({ attachIcs: true }).error, /rendez-vous/);
 assert.equal(send({ followUpId: '64b0000000000000000000a1', attachIcs: true }).value.attachIcs, true);
