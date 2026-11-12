@@ -222,7 +222,7 @@ export const followUpController = {
       const access = await context(req, res);
       if (!access) return;
       // Titulaire et responsables créent tout ; une secrétaire réserve seulement des rendez-vous (pour elle ou une personne de l'annuaire).
-      if (!canManage(access) && !(access.role === 'agent' && req.body?.model === 'appointment')) return fail(res, 403, NOT_ALLOWED);
+      if (!canManage(access) && !(access.role === 'agent' && ['appointment', 'transfer'].includes(req.body?.model))) return fail(res, 403, NOT_ALLOWED);
       const checked = validateCreate(req.body, access);
       if (checked.error) return fail(res, 400, checked.error);
       const v = checked.value;
