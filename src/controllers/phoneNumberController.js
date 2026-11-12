@@ -1617,11 +1617,11 @@ class PhoneNumberController {
       const gatherAction = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/test-call-gather`;
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say language="fr-FR" voice="Polly.Lea">Bonjour, ceci est un appel de test depuis la plateforme Harx. Appuyez sur la touche 1 pour confirmer que vous avez bien reçu cet appel.</Say>
+  <Say language="fr-FR" voice="Polly.Lea-Generative">Bonjour, ceci est un appel de test depuis la plateforme Harx. Appuyez sur la touche 1 pour confirmer que vous avez bien reçu cet appel.</Say>
   <Gather numDigits="1" timeout="20" action="${gatherAction}" method="POST">
-    <Say language="fr-FR" voice="Polly.Lea">Je répète : appuyez sur 1 maintenant pour confirmer.</Say>
+    <Say language="fr-FR" voice="Polly.Lea-Generative">Je répète : appuyez sur 1 maintenant pour confirmer.</Say>
   </Gather>
-  <Say language="fr-FR" voice="Polly.Lea">Aucune confirmation reçue. Au revoir.</Say>
+  <Say language="fr-FR" voice="Polly.Lea-Generative">Aucune confirmation reçue. Au revoir.</Say>
   <Hangup/>
 </Response>`;
       res.type('text/xml').status(200).send(twiml);
@@ -1862,7 +1862,7 @@ class PhoneNumberController {
           { $set: { 'metadata.inboundTest': { testedAt: new Date(received.receivedAt).toISOString(), from, callSid } } }
         );
         console.log(`✅ Test d'appel entrant reçu sur ${to} depuis ${from}`);
-        return reply('<Say language="fr-FR" voice="Polly.Lea">Test d\'appel entrant réussi. Votre ligne reçoit bien les appels. Au revoir.</Say><Hangup/>');
+        return reply('<Say language="fr-FR" voice="Polly.Lea-Generative">Test d\'appel entrant réussi. Votre ligne reçoit bien les appels. Au revoir.</Say><Hangup/>');
       }
       // Appel réel : on fait sonner les conseillers disponibles de l'entreprise propriétaire de la ligne.
       const line = to
@@ -2208,12 +2208,12 @@ class PhoneNumberController {
       const twiml = confirmed
         ? `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say language="fr-FR" voice="Polly.Lea">Merci. Confirmation reçue. Votre ligne fonctionne correctement. Au revoir.</Say>
+  <Say language="fr-FR" voice="Polly.Lea-Generative">Merci. Confirmation reçue. Votre ligne fonctionne correctement. Au revoir.</Say>
   <Hangup/>
 </Response>`
         : `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say language="fr-FR" voice="Polly.Lea">Confirmation invalide. Au revoir.</Say>
+  <Say language="fr-FR" voice="Polly.Lea-Generative">Confirmation invalide. Au revoir.</Say>
   <Hangup/>
 </Response>`;
       res.type('text/xml').status(200).send(twiml);

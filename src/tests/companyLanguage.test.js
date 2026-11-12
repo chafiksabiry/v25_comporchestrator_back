@@ -53,11 +53,11 @@ test('langue déduite du numéro de la ligne', () => {
 });
 
 test('voix de <Say> par langue, féminine ou masculine', () => {
-  assert.deepEqual(L.sayVoice('fr'), { language: 'fr-FR', voice: 'Polly.Lea' });
-  assert.deepEqual(L.sayVoice('fr', false), { language: 'fr-FR', voice: 'Polly.Mathieu' });
-  assert.deepEqual(L.sayVoice('en'), { language: 'en-US', voice: 'Polly.Joanna' });
-  assert.deepEqual(L.sayVoice('en', false), { language: 'en-US', voice: 'Polly.Matthew' });
-  assert.deepEqual(L.sayVoice('es', false), { language: 'es-ES', voice: 'Polly.Enrique' });
+  assert.deepEqual(L.sayVoice('fr'), { language: 'fr-FR', voice: 'Polly.Lea-Generative' });
+  assert.deepEqual(L.sayVoice('fr', false), { language: 'fr-FR', voice: 'Polly.Remi-Neural' });
+  assert.deepEqual(L.sayVoice('en'), { language: 'en-US', voice: 'Polly.Joanna-Generative' });
+  assert.deepEqual(L.sayVoice('en', false), { language: 'en-US', voice: 'Polly.Matthew-Generative' });
+  assert.deepEqual(L.sayVoice('es', false), { language: 'es-ES', voice: 'Polly.Sergio-Generative' });
   assert.equal(L.sayVoice('ar', false).voice, 'Polly.Zeina');
   assert.deepEqual(L.sayVoice('xx'), L.sayVoice('fr'));
 });
@@ -69,12 +69,12 @@ test('phrases : chaque langue a les mêmes clés que le français', () => {
 test('accueil, répondeur, repli : français inchangé par défaut, langue de la société sinon', () => {
   const base = { settings: null, baseUrl: 'https://x.test', companyId: 'c1', identities: [], resultUrl: 'https://x.test/r' };
   const fr = flow.buildInboundTwiml(base);
-  assert.match(fr, /<Say language="fr-FR" voice="Polly.Lea">Aucun conseiller n&apos;est disponible/);
+  assert.match(fr, /<Say language="fr-FR" voice="Polly.Lea-Generative">Aucun conseiller n&apos;est disponible/);
   const en = flow.buildInboundTwiml({ ...base, language: 'en' });
-  assert.match(en, /<Say language="en-US" voice="Polly.Joanna">No advisor is available at the moment/);
+  assert.match(en, /<Say language="en-US" voice="Polly.Joanna-Generative">No advisor is available at the moment/);
   assert.doesNotMatch(en, /Aucun|conseiller/);
   const solo = flow.buildInboundTwiml({ ...base, language: 'es', solo: true });
-  assert.match(solo, /<Say language="es-ES" voice="Polly.Lucia">No estoy disponible/);
+  assert.match(solo, /<Say language="es-ES" voice="Polly.Lucia-Generative">No estoy disponible/);
   const noVm = flow.buildInboundTwiml({ ...base, settings: { voicemailEnabled: false }, language: 'ar' });
   assert.match(noVm, /<Say language="arb" voice="Polly.Zeina">.*<\/Say><Hangup\/>/);
 });
@@ -82,7 +82,7 @@ test('accueil, répondeur, repli : français inchangé par défaut, langue de la
 test('texte d’accueil de l’entreprise : voix de la langue, masculine selon le réglage ; audio validé inchangé', () => {
   const settings = { greetingText: 'Welcome to Acme.', voice: 'onyx', voicemailEnabled: false };
   const en = flow.buildInboundTwiml({ settings, baseUrl: 'https://x.test', companyId: 'c1', identities: [], resultUrl: 'r', language: 'en' });
-  assert.match(en, /<Say language="en-US" voice="Polly.Matthew">Welcome to Acme.<\/Say>/);
+  assert.match(en, /<Say language="en-US" voice="Polly.Matthew-Generative">Welcome to Acme.<\/Say>/);
   const validated = flow.buildInboundTwiml({ settings: { ...settings, greetingValidated: true, greetingAudioVersion: 'abc123' }, baseUrl: 'https://x.test', companyId: 'c1', identities: [], resultUrl: 'r', language: 'en' });
   assert.match(validated, /<Play>https:\/\/x.test\/api\/inbound-settings\/audio\/c1\/greeting\/abc123.mp3<\/Play>/);
 });
@@ -100,20 +100,20 @@ test('transfert : annonce et indisponibilité dans la langue de la société, fr
   assert.equal(transfer.announceText('Sam Lee', 'en'), 'Putting you through to Sam Lee, please hold.');
   assert.equal(transfer.unavailableText('Sam Lee', 'es'), 'Sam Lee no puede atenderle en este momento.');
   const twiml = transfer.buildTransferTwiml({ name: 'Sam Lee', number: '+442071234567', resultUrl: 'https://x.test/t', language: 'en' });
-  assert.match(twiml, /<Say language="en-US" voice="Polly.Joanna">Putting you through to Sam Lee, please hold.<\/Say><Dial/);
+  assert.match(twiml, /<Say language="en-US" voice="Polly.Joanna-Generative">Putting you through to Sam Lee, please hold.<\/Say><Dial/);
   const msg = transfer.buildTransferMessageTwiml({ name: 'Sam Lee', settings: { voicemailEnabled: false }, baseUrl: 'b', companyId: 'c1', language: 'en' });
   assert.match(msg, /Sam Lee is not available to take your call/);
   assert.match(msg, /No advisor was able to answer/);
   const fr = transfer.buildTransferTwiml({ name: 'Sam', number: '+33612345678', resultUrl: 'r' });
-  assert.match(fr, /<Say language="fr-FR" voice="Polly.Lea">Je vous passe Sam/);
+  assert.match(fr, /<Say language="fr-FR" voice="Polly.Lea-Generative">Je vous passe Sam/);
 });
 
 test('appelant bloqué : refus poli dans la langue de la société', async () => {
   const load = async () => ({ blockedNumbers: [{ phone: '+33611111111' }] });
   const fr = await blockedCallBody('64b0000000000000000000c1', '+33611111111', { load, env: {} });
-  assert.match(fr, /Polly.Lea">Nous ne pouvons pas donner suite à votre appel/);
+  assert.match(fr, /Polly.Lea-Generative">Nous ne pouvons pas donner suite à votre appel/);
   const en = await blockedCallBody('64b0000000000000000000c1', '+33611111111', { load, env: {}, language: 'en' });
-  assert.match(en, /language="en-US" voice="Polly.Joanna">We are unable to take your call. Goodbye./);
+  assert.match(en, /language="en-US" voice="Polly.Joanna-Generative">We are unable to take your call. Goodbye./);
 });
 
 test('annonce d’enregistrement : la langue de l’interlocuteur prime, sinon celle de la société, sinon le français', () => {
@@ -131,7 +131,7 @@ test('annonce d’enregistrement : la langue de l’interlocuteur prime, sinon c
 test('menu vocal : phrase générique dans la langue de la société ; langue de file inchangée', () => {
   const q = { name: 'Billing', menuKey: '2', languages: [], prompt: '' };
   assert.equal(menuLine(q).text, 'Pour Billing, tapez 2.');
-  assert.deepEqual(menuLine(q, 'en'), { language: 'en-US', voice: 'Polly.Joanna', text: 'For Billing, press 2.' });
+  assert.deepEqual(menuLine(q, 'en'), { language: 'en-US', voice: 'Polly.Joanna-Generative', text: 'For Billing, press 2.' });
   assert.equal(menuLine({ ...q, languages: ['es'] }, 'en').text, 'Para español, pulse 2.');
   assert.equal(menuLine({ ...q, prompt: 'Welcome' }, 'en').language, 'en-US', 'texte sans langue : voix de la société');
   assert.equal(menuLine({ ...q, prompt: 'Hola', promptLanguage: 'es' }, 'en').language, 'es-ES');
@@ -192,13 +192,13 @@ test('chaque indicatif de la table de langue donne le même pays que e164Country
 });
 
 test('voix Polly des nouvelles langues (noms valides pour <Say> Twilio)', () => {
-  assert.deepEqual(L.sayVoice('de'), { language: 'de-DE', voice: 'Polly.Vicki' });
-  assert.deepEqual(L.sayVoice('de', false), { language: 'de-DE', voice: 'Polly.Daniel-Neural' });
-  assert.deepEqual(L.sayVoice('it'), { language: 'it-IT', voice: 'Polly.Bianca' });
+  assert.deepEqual(L.sayVoice('de'), { language: 'de-DE', voice: 'Polly.Vicki-Generative' });
+  assert.deepEqual(L.sayVoice('de', false), { language: 'de-DE', voice: 'Polly.Daniel-Generative' });
+  assert.deepEqual(L.sayVoice('it'), { language: 'it-IT', voice: 'Polly.Bianca-Generative' });
   assert.deepEqual(L.sayVoice('it', false), { language: 'it-IT', voice: 'Polly.Adriano-Neural' });
   assert.deepEqual(L.sayVoice('nl'), { language: 'nl-NL', voice: 'Polly.Laura-Neural' });
   assert.deepEqual(L.sayVoice('nl', false), { language: 'nl-NL', voice: 'Polly.Ruben' });
-  assert.deepEqual(L.sayVoice('pt'), { language: 'pt-PT', voice: 'Polly.Ines' });
+  assert.deepEqual(L.sayVoice('pt'), { language: 'pt-PT', voice: 'Polly.Ines-Neural' });
   assert.deepEqual(L.sayVoice('pt', false), { language: 'pt-PT', voice: 'Polly.Cristiano' });
 });
 
@@ -217,7 +217,7 @@ test('ligne +49 : TwiML en allemand, voix et code de langue Polly corrects, aucu
     buildMenuBody({ queues: [{ name: 'Billing', menuKey: '1', languages: [], prompt: '' }, { name: 'Sales', menuKey: '2', languages: [], prompt: '' }], baseUrl: 'https://x.test', language }),
     rec.consentTwiml(rec.consentLanguageFor('+4915112345678', language)),
   ].join('\n');
-  assert.match(out, /<Say language="de-DE" voice="Polly.Vicki">Im Moment ist kein Berater verfügbar/);
+  assert.match(out, /<Say language="de-DE" voice="Polly.Vicki-Generative">Im Moment ist kein Berater verfügbar/);
   assert.match(out, /Ich bin im Moment nicht erreichbar/);
   assert.match(out, /Vielen Dank, Ihre Nachricht wurde aufgezeichnet/);
   assert.match(out, /Ich verbinde Sie mit Sam Lee, bitte bleiben Sie in der Leitung/);
@@ -232,9 +232,9 @@ test('ligne +49 : TwiML en allemand, voix et code de langue Polly corrects, aucu
 
 test('italien, néerlandais, portugais : phrase du répondeur, voix et annonce d’enregistrement', () => {
   const expected = {
-    it: [/language="it-IT" voice="Polly.Bianca">Al momento nessun consulente è disponibile/, /Questa chiamata può essere registrata/],
+    it: [/language="it-IT" voice="Polly.Bianca-Generative">Al momento nessun consulente è disponibile/, /Questa chiamata può essere registrata/],
     nl: [/language="nl-NL" voice="Polly.Laura-Neural">Er is op dit moment geen adviseur beschikbaar/, /Dit gesprek kan worden opgenomen/],
-    pt: [/language="pt-PT" voice="Polly.Ines">Neste momento não há nenhum consultor disponível/, /Esta chamada pode ser gravada/],
+    pt: [/language="pt-PT" voice="Polly.Ines-Neural">Neste momento não há nenhum consultor disponível/, /Esta chamada pode ser gravada/],
   };
   for (const [lang, [say, consent]] of Object.entries(expected)) {
     const language = L.languageForPhone(NUMBERS[lang]);
@@ -247,7 +247,7 @@ test('italien, néerlandais, portugais : phrase du répondeur, voix et annonce d
 test('texte d’accueil de l’entreprise : jamais traduit, seule la voix suit la ligne ; audio validé inchangé', () => {
   const settings = { greetingText: 'Bienvenue chez Acme.', voice: 'onyx', voicemailEnabled: false };
   const out = flow.buildInboundTwiml({ settings, baseUrl: 'https://x.test', companyId: 'c1', identities: [], resultUrl: 'r', language: 'de' });
-  assert.match(out, /<Say language="de-DE" voice="Polly.Daniel-Neural">Bienvenue chez Acme.<\/Say>/, 'texte du client conservé tel quel');
+  assert.match(out, /<Say language="de-DE" voice="Polly.Daniel-Generative">Bienvenue chez Acme.<\/Say>/, 'texte du client conservé tel quel');
   const validated = flow.buildInboundTwiml({ settings: { ...settings, greetingValidated: true, greetingAudioVersion: 'abc123' }, baseUrl: 'https://x.test', companyId: 'c1', identities: [], resultUrl: 'r', language: 'de' });
   assert.match(validated, /<Play>https:\/\/x.test\/api\/inbound-settings\/audio\/c1\/greeting\/abc123.mp3<\/Play>/);
 });
@@ -264,6 +264,6 @@ test('annonce d’enregistrement : langue de l’interlocuteur prioritaire, repl
   assert.equal(rec.consentLanguageFor('+306912345678'), 'fr');
   assert.deepEqual(rec.CONSENT_LANGUAGES.sort(), ['ar', 'de', 'en', 'es', 'fr', 'it', 'nl', 'pt']);
   const plan = rec.buildRecordingPlan({ record: true, companyId: '64b0000000000000000000c1', callSid: `CA${'a'.repeat(32)}`, baseUrl: 'https://x.test', language: 'de' });
-  assert.match(plan.say, /Polly.Vicki/);
+  assert.match(plan.say, /Polly.Vicki-Generative/);
   assert.match(plan.announceUrl, /\?l=de$/);
 });

@@ -80,19 +80,19 @@ export const normalizeCompanyLanguage = (value) => {
 };
 
 /**
- * Voix Amazon Polly (via <Say>) par langue du produit, voix féminine / masculine. Le polly arabe n'a qu'une voix (Zeina) : elle sert aux deux.
+ * Voix Amazon Polly (via <Say>) par langue du produit, en version « Generative » (la plus naturelle) quand Twilio la propose, sinon « Neural » (les voix standard sonnent robotisées), voix féminine / masculine. Le polly arabe n'a qu'une voix (Zeina) : elle sert aux deux.
  * Noms et codes de langue contrôlés contre les types du SDK Twilio (VoiceResponse.d.ts) : « Polly.Ines » s'écrit sans accent, et Daniel,
  * Adriano et Laura n'existent que sous leur forme neuronale (« -Neural »). Jamais écoutées en vrai appel (même réserve que routingLanguages.js).
  */
 const SAY_VOICES = Object.freeze({
-  fr: { language: 'fr-FR', female: 'Polly.Lea', male: 'Polly.Mathieu' },
-  en: { language: 'en-US', female: 'Polly.Joanna', male: 'Polly.Matthew' },
-  es: { language: 'es-ES', female: 'Polly.Lucia', male: 'Polly.Enrique' },
+  fr: { language: 'fr-FR', female: 'Polly.Lea-Generative', male: 'Polly.Remi-Neural' },
+  en: { language: 'en-US', female: 'Polly.Joanna-Generative', male: 'Polly.Matthew-Generative' },
+  es: { language: 'es-ES', female: 'Polly.Lucia-Generative', male: 'Polly.Sergio-Generative' },
   ar: { language: 'arb', female: 'Polly.Zeina', male: 'Polly.Zeina' },
-  de: { language: 'de-DE', female: 'Polly.Vicki', male: 'Polly.Daniel-Neural' },
-  it: { language: 'it-IT', female: 'Polly.Bianca', male: 'Polly.Adriano-Neural' },
+  de: { language: 'de-DE', female: 'Polly.Vicki-Generative', male: 'Polly.Daniel-Generative' },
+  it: { language: 'it-IT', female: 'Polly.Bianca-Generative', male: 'Polly.Adriano-Neural' },
   nl: { language: 'nl-NL', female: 'Polly.Laura-Neural', male: 'Polly.Ruben' },
-  pt: { language: 'pt-PT', female: 'Polly.Ines', male: 'Polly.Cristiano' },
+  pt: { language: 'pt-PT', female: 'Polly.Ines-Neural', male: 'Polly.Cristiano' },
 });
 
 /** Attributs `language` et `voice` d'un <Say> dans la langue de la société (français si langue inconnue). */
