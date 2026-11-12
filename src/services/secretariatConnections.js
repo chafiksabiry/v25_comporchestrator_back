@@ -99,6 +99,11 @@ const stateSecret = () => {
 export function startAuthorization({ companyId, userId, provider, returnTo, shared, read = false, write = false }, env = process.env) {
   const cfg = providerConfig(provider, env);
   if (!cfg) throw new SecretariatError('unavailable', messages.unavailable(provider));
+  // Scopes Gmail RESTREINTS (gmail.readonly, gmail.modify) : tant que Google ne les a pas validés pour l'application (évaluation de sécurité), ils ne
+  // sont jamais demandés. GOOGLE_RESTRICTED_SCOPES=true les réactive. Les autorisations déjà accordées restent valables.
+  if (provider === 'google' && (read || write) && String(env.GOOGLE_RESTRICTED_SCOPES || '').toLowerCase() !== 'true') {
+    throw new SecretariatError('invalid_request', 'La lecture et la gestion des e-mails reçus ne sont pas encore disponibles avec Google.');
+  }
   // `read` : demande EN PLUS le scope (optionnel) de lecture de la boîte de réception (e-mails entrants). Les scopes obtenus sont lus au callback.
   if (read && !PROVIDERS[provider].readScope) throw new SecretariatError('invalid_request', 'La lecture des e-mails n’est pas disponible pour ce fournisseur.');
   if (write && !PROVIDERS[provider].writeScope) throw new SecretariatError('invalid_request', 'La gestion de la messagerie n’est pas disponible pour ce fournisseur.');
