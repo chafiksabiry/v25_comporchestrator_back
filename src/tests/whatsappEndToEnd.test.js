@@ -175,7 +175,7 @@ try {
     assert.equal((await fetch(`${base}/link-token`, { method: 'POST' })).status, 401);
     const la = await (await fetch(`${base}/link-token`, { method: 'POST', headers: { Authorization: `Bearer ${tokenA}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'Bonjour HARX' }) })).json();
     assert.match(la.code, /^HARX-[A-Z2-9]{8}$/);
-    assert.ok(la.url.startsWith('https://wa.me/212637446431?text='));
+    assert.ok(la.url.startsWith('https://wa.me/212711311388?text='));
     assert.ok(decodeURIComponent(la.url).includes(la.code));
     const lb = await (await fetch(`${base}/link-token`, { method: 'POST', headers: { Authorization: `Bearer ${tokenB}` } })).json();
 
@@ -333,8 +333,8 @@ try {
   // ===== 18. Route publique de configuration et contrôle d'accès admin =====
   {
     const c = await (await fetch(`${base}/config`)).json();
-    assert.equal(c.number, '212637446431');
-    assert.equal(c.url, 'https://wa.me/212637446431');
+    assert.equal(c.number, '212711311388');
+    assert.equal(c.url, 'https://wa.me/212711311388');
     const st = await (await fetch(`${base}/admin/status`, { headers: { 'x-admin-key': 'ADMIN' } })).json();
     assert.deepEqual(st.missingConfig, []);
     assert.ok(st.knowledgeChunks > 500);

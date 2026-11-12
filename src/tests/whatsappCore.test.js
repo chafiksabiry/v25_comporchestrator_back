@@ -151,10 +151,10 @@ import { metaPayload } from './whatsappHarness.js';
 // ---- Configuration ----
 {
   const cfg = getWhatsAppConfig({});
-  assert.equal(cfg.supportNumber, '212637446431');
+  assert.equal(cfg.supportNumber, '212711311388');
   assert.equal(cfg.model, 'claude-opus-5-5');
   assert.deepEqual(missingConfig(cfg).sort(), ['ANTHROPIC_API_KEY', 'JWT_SECRET', 'WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_APP_SECRET', 'WHATSAPP_PHONE_NUMBER_ID', 'WHATSAPP_VERIFY_TOKEN']);
-  assert.equal(getWhatsAppConfig({ WHATSAPP_SUPPORT_NUMBER: '+212 637-446431' }).supportNumber, '212637446431');
+  assert.equal(getWhatsAppConfig({ WHATSAPP_SUPPORT_NUMBER: '+212 711-311388' }).supportNumber, '212711311388');
 }
 
 // ---- Client WhatsApp : erreurs ----

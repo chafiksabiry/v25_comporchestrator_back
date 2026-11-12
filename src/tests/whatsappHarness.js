@@ -123,7 +123,7 @@ export function metaPayload(messages, { phoneNumberId = 'PNID123' } = {}) {
         field: 'messages',
         value: {
           messaging_product: 'whatsapp',
-          metadata: { display_phone_number: '212637446431', phone_number_id: phoneNumberId },
+          metadata: { display_phone_number: '212711311388', phone_number_id: phoneNumberId },
           contacts: messages.map((m) => ({ profile: { name: m.name || 'Test User' }, wa_id: m.from })),
           messages: messages.map((m) => ({ from: m.from, id: m.id, timestamp: String(Math.floor(Date.now() / 1000)), type: m.type || 'text', ...(m.type && m.type !== 'text' ? { [m.type]: m.media || { id: 'media1' } } : { text: { body: m.text } }) })),
         },

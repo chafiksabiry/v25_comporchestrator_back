@@ -17,7 +17,7 @@ Utilisateur ─ WhatsApp ─▶ Meta Cloud API ──webhook signé──▶ POS
         ▼
  contrôle de langue de la réponse (régénération si mauvaise langue) → format WhatsApp → découpage → Graph API
 ```
-Site : le bouton flottant (hôte `v25_process_connections`) ouvre `wa.me/212637446431`. Connecté, il appelle `POST /api/whatsapp/link-token` (JWT) et ajoute un code à usage unique `HARX-XXXXXXXX` au message ; ce code, reçu sur WhatsApp, lie le numéro au compte. Sans lien : mode visiteur (aucune donnée de compte).
+Site : le bouton flottant (hôte `v25_process_connections`) ouvre `wa.me/212711311388`. Connecté, il appelle `POST /api/whatsapp/link-token` (JWT) et ajoute un code à usage unique `HARX-XXXXXXXX` au message ; ce code, reçu sur WhatsApp, lie le numéro au compte. Sans lien : mode visiteur (aucune donnée de compte).
 
 Code : `src/whatsapp/` (config, language, agent, tools, identity, knowledgeBase `knowledge/`, stores Mongo/mémoire, routes), contenu : `src/whatsapp/kb/` (17 rubriques rédigées + `generated/`), outils : `scripts/`.
 
@@ -34,11 +34,11 @@ Webhook signé (HMAC, temps constant) ; jetons/clés uniquement en variables d'e
 | `JWT_SECRET`, `REGISTRATION_BACKEND_URL` | déjà utilisés par l'orchestrateur |
 | `WHATSAPP_ADMIN_API_KEY` | active `/api/whatsapp/admin/*` (tickets, réponse humaine) |
 | `WHATSAPP_SUPPORT_NOTIFY_WEBHOOK_URL`, `SUPPORT_EMAIL` | notification des escalades (webhook type Slack) / adresse citée aux utilisateurs |
-| `WHATSAPP_SUPPORT_NUMBER` (défaut 212637446431), `WHATSAPP_RATE_LIMIT_PER_MINUTE` (10), `WHATSAPP_RATE_LIMIT_PER_DAY` (200), `WHATSAPP_CLAUDE_REFUSAL_FALLBACK` (0) | réglages |
+| `WHATSAPP_SUPPORT_NUMBER` (défaut 212711311388), `WHATSAPP_RATE_LIMIT_PER_MINUTE` (10), `WHATSAPP_RATE_LIMIT_PER_DAY` (200), `WHATSAPP_CLAUDE_REFUSAL_FALLBACK` (0) | réglages |
 Site : `VITE_API_URL_ORCHESTRATOR`, `VITE_WHATSAPP_SUPPORT_NUMBER`.
 
 ## À faire côté Meta (impossible depuis le code)
-1. Compte Meta Business vérifié ; app « Business » avec le produit WhatsApp ; enregistrer **+212 637 446 431** sur la Cloud API (un numéro enregistré sur la Cloud API ne peut plus être utilisé dans l'application WhatsApp classique).
+1. Compte Meta Business vérifié ; app « Business » avec le produit WhatsApp ; enregistrer **+212 711 311 388** sur la Cloud API (un numéro enregistré sur la Cloud API ne peut plus être utilisé dans l'application WhatsApp classique).
 2. Webhook : URL `https://<orchestrateur>/api/whatsapp/webhook`, jeton = `WHATSAPP_VERIFY_TOKEN`, champ `messages` abonné.
 3. Fenêtre de 24 h : l'assistant répond librement dans les 24 h suivant le dernier message de l'utilisateur ; au-delà, Meta exige un modèle (template) approuvé — non couvert ici.
 

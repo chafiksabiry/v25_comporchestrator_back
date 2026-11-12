@@ -13,7 +13,7 @@ export function getWhatsAppConfig(env = process.env) {
   return {
     enabled: bool(env.WHATSAPP_ENABLED, true),
     /** Numéro de support affiché sur le site (E.164 sans « + »). */
-    supportNumber: String(env.WHATSAPP_SUPPORT_NUMBER || '212637446431').replace(/\D/g, ''),
+    supportNumber: String(env.WHATSAPP_SUPPORT_NUMBER || '212711311388').replace(/\D/g, ''),
     // --- WhatsApp Cloud API (Meta) ---
     graphVersion: env.WHATSAPP_GRAPH_VERSION || 'v21.0',
     graphBaseUrl: (env.WHATSAPP_GRAPH_BASE_URL || 'https://graph.facebook.com').replace(/\/+$/, ''),
