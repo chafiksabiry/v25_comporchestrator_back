@@ -11,6 +11,7 @@ import { SecretariatError } from '../services/secretariatProviders/common.js';
 import { loadEmailIdentity } from '../services/secretariatTools.js';
 import { composeSignature, listAccounts, requireAccount, sendFromAccount } from '../services/secretariatSharedAccounts.js';
 import { buildPayload, checkRate, limits, validateSend } from '../services/emailService.js';
+import { cancelAppointmentAfterEmail } from './followUpController.js';
 
 const fail = (res, status, message, code) => res.status(status).json({ success: false, error: code || message, message, ...(code ? { code } : {}) });
 /** 409 : aucune messagerie utilisable. `code` pour le portail, `error` identique (comme les autres refus de ce contrôleur). */
@@ -117,7 +118,15 @@ async function sendFromShared(req, res, access, accountId) {
     return fail(res, e.code === 'unavailable' ? 503 : 502, refused, 'email_provider_refused');
   }
   const log = await EmailLog.create({ ...base, status: 'sent' });
+  await cancelLinkedAppointment(v, access, companyId);
   res.status(201).json({ success: true, data: view(log) });
+}
+
+/** « Annulation de rendez-vous » envoyée : le rendez-vous lié est annulé (et retiré de l'agenda connecté). */
+async function cancelLinkedAppointment(v, access, companyId) {
+  if (v.template !== 'appointment_cancellation' || !v.followUpId) return;
+  const item = await FollowUpItem.findOne({ _id: v.followUpId, companyId });
+  if (item && canSeeItem(access, item)) await cancelAppointmentAfterEmail(item, access);
 }
 
 export const emailController = {
@@ -216,6 +225,7 @@ export const emailController = {
         return e.code === 'provider_error' ? fail(res, 502, UNAVAILABLE, 'email_provider_unavailable') : fail(res, e.code === 'unavailable' ? 503 : 502, REFUSED, 'email_provider_refused');
       }
       const log = await EmailLog.create({ ...base, status: 'sent' });
+      await cancelLinkedAppointment(v, access, companyId);
       res.status(201).json({ success: true, data: view(log) });
     } catch (error) {
       console.error('emails send:', error.message);

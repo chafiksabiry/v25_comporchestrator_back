@@ -97,6 +97,25 @@ async function syncExternal(item, { wasStatus, keys, videoChanged, access }) {
   await item.save();
 }
 
+/**
+ * Un e-mail « annulation de rendez-vous » envoyé pour un rendez-vous l'annule : le rendez-vous passe en « annulé » et disparaît de l'agenda
+ * connecté (même répercussion que l'annulation à la main). Ne lève jamais : l'e-mail est déjà parti, l'annulation ne doit pas le contredire.
+ */
+export async function cancelAppointmentAfterEmail(item, access) {
+  try {
+    if (!item || item.model !== 'appointment' || item.status === 'canceled') return;
+    const wasStatus = item.status;
+    item.status = 'canceled';
+    item.sequence = (item.sequence || 0) + 1;
+    item.closedAt = new Date();
+    item.closedById = access.userId;
+    await item.save();
+    await syncExternal(item, { wasStatus, keys: ['status'], videoChanged: false, access });
+  } catch (e) {
+    console.error('cancelAppointmentAfterEmail:', e.message);
+  }
+}
+
 /** Droits de l'appelant + sa société. Répond lui-même et renvoie null en cas de refus. */
 async function context(req, res) {
   let access;
