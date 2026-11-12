@@ -108,6 +108,11 @@ assert.equal(qs(u.href).scope, 'offline_access openid email User.Read Mail.Send 
 assert.equal(new URL(S.startAuthorization({ ...ucompany, provider: 'microsoft' }, { ...FULL, MICROSOFT_TENANT_ID: 'contoso.onmicrosoft.com' })).pathname, '/contoso.onmicrosoft.com/oauth2/v2.0/authorize');
 u = new URL(S.startAuthorization({ ...ucompany, provider: 'zoom' }, FULL));
 assert.equal(`${u.origin}${u.pathname}`, 'https://zoom.us/oauth/authorize'); assert.equal(qs(u.href).scope, undefined);
+// Scopes Gmail restreints (lecture, gestion) : jamais demandés tant que GOOGLE_RESTRICTED_SCOPES n'est pas activé ; le consentement de base reste possible.
+assert.throws(() => S.startAuthorization({ ...ucompany, provider: 'google', read: true }, FULL), (e) => e instanceof SecretariatError && e.code === 'invalid_request' && /pas encore disponibles/.test(e.message), 'lecture Gmail refusée par défaut');
+assert.throws(() => S.startAuthorization({ ...ucompany, provider: 'google', write: true }, FULL), (e) => e instanceof SecretariatError && e.code === 'invalid_request', 'gestion Gmail refusée par défaut');
+assert.ok(new URL(S.startAuthorization({ ...ucompany, provider: 'google' }, FULL)).searchParams.get('scope').includes('gmail.send'), 'le consentement de base reste possible');
+assert.ok(new URL(S.startAuthorization({ ...ucompany, provider: 'google', read: true }, { ...FULL, GOOGLE_RESTRICTED_SCOPES: 'true' })).searchParams.get('scope').includes('gmail.readonly'), 'réactivable par GOOGLE_RESTRICTED_SCOPES');
 assert.throws(() => S.startAuthorization({ ...ucompany, provider: 'google' }, {}), (e) => e instanceof SecretariatError && e.code === 'unavailable' && /pas encore configurée côté HARX/.test(e.message));
 
 const stateOf = (href) => qs(href).state;
