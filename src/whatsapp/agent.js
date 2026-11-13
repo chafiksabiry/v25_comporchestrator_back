@@ -197,12 +197,14 @@ export function createAgent({ store, claude, whatsapp, kb, tools, cfg, logger = 
           field: c?.field,
           phoneNumberId: c?.value?.metadata?.phone_number_id || null,
           messageTypes: (c?.value?.messages || []).map((m) => m?.type),
+          // Noms de champs seulement (jamais les valeurs) : aide à comprendre pourquoi un message est écarté.
+          messageShapes: (c?.value?.messages || []).map((m) => ({ hasId: Boolean(m?.id), hasFrom: Boolean(m?.from), keys: Object.keys(m || {}) })),
           statuses: (c?.value?.statuses || []).map((st) => st?.status),
         }));
         const rawMessages = events.reduce((n, ev) => n + ev.messageTypes.length, 0);
         logger.info(`[whatsapp] webhook received: expectedPhoneNumberId=${cfg.phoneNumberId || '(none)'} kept=${messages.length} events=${JSON.stringify(events)}`);
         if (rawMessages > 0 && messages.length === 0) {
-          logger.warn('[whatsapp] inbound message(s) IGNORED: their phone_number_id differs from WHATSAPP_PHONE_NUMBER_ID');
+          logger.warn('[whatsapp] inbound message(s) NOT RETAINED (see messageShapes: missing id/from, or phone_number_id differs from WHATSAPP_PHONE_NUMBER_ID)');
         }
       } catch { /* diagnostic best-effort */ }
       for (const s of statuses) {
