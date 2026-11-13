@@ -222,6 +222,14 @@ export function createAgent({ store, claude, whatsapp, kb, tools, cfg, logger = 
           messageShapes: (c?.value?.messages || []).map((m) => ({ hasId: Boolean(m?.id), hasFrom: Boolean(m?.from), keys: Object.keys(m || {}) })),
           statuses: (c?.value?.statuses || []).map((st) => st?.status),
         }));
+        // Événements de compte (nom d'affichage, qualité, statut) : on journalise uniquement la décision et le motif.
+        const accountEvents = (body?.entry || []).flatMap((e) => e?.changes || [])
+          .filter((c) => c?.field && c.field !== 'messages')
+          .map((c) => {
+            const v = c.value || {};
+            return { field: c.field, event: v.event || null, decision: v.decision || null, requestedName: v.requested_verified_name || v.display_name || null, rejectionReason: v.rejection_reason || null, currentLimit: v.current_limit || null };
+          });
+        if (accountEvents.length) logger.info(`[whatsapp] account event: ${JSON.stringify(accountEvents)}`);
         const rawMessages = events.reduce((n, ev) => n + ev.messageTypes.length, 0);
         logger.info(`[whatsapp] webhook received: expectedPhoneNumberId=${cfg.phoneNumberId || '(none)'} kept=${messages.length} events=${JSON.stringify(events)}`);
         if (rawMessages > 0 && messages.length === 0) {
