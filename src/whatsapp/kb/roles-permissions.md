@@ -23,4 +23,4 @@ Gigs (view, create, edit, delete, activate/pause), Leads/Prospects (view, import
 - "You do not have access to this company" (403): the logged-in user is not the owner, an invited member, or call-center staff of that company. Check they are logged in with the right account and that the invitation was accepted.
 - A button is missing or disabled: the member lacks the corresponding permission; the owner can change it in the team page.
 - Team management endpoints: list members, invite, re-invite, update, remove, list/create/update/delete roles, presence.
-- Nomad Solo: inviting a member or agent is refused ("Nomad Solo is designed for one user"); upgrade to another offer.
+- Nomad Solo: inviting a member or agent is refused (the message says in French: "Nomad Solo : un seul utilisateur, aucun siège en plus."); upgrade to another offer.
