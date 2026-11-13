@@ -26,7 +26,7 @@ The activation screen blocks activation and shows "This gig cannot be activated 
 3. REP onboarding (e-learning/training for reps),
 4. Call script,
 5. Session planning (slots).
-The Knowledge base step is recommended but optional. Bulk activation also refuses gigs with incomplete setup ("Complete all setup steps for the selected gigs before activating").
+The Knowledge base step is recommended but optional. NOT confirmed in the code: that an active subscription is a hard prerequisite of the activation button (onboarding lists "Subscription Plan" as step 11 before "Gig Activation" as step 12, and the plan limits how many gigs can be active); never state that a subscription is mandatory unless the user's screen says so. Bulk activation also refuses gigs with incomplete setup ("Complete all setup steps for the selected gigs before activating").
 
 ## Limits
 The number of active gigs and active REPs allowed comes from the subscription plan ("ACTIVE GIGS", "ACTIVE REPS" limits). Reaching the limit opens an "active gig limit" dialog; pause or archive another gig, or change plan (topic subscription-plans-limits). On the planning grid, the plan also caps the number of active REPs ("The <plan> plan allows N active REP on the planning grid").

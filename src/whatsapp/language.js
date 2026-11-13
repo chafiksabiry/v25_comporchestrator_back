@@ -187,6 +187,8 @@ export function checkReplyLanguage(userDetection, replyText) {
   if (replyLetters < 12) return ok('reply_too_short');
 
   const u = userDetection;
+  // Mot mêlant lettres latines et arabes (ex. « daخlin ») : défaut de génération, à régénérer.
+  if (/[A-Za-z]+[\u0600-\u06FF]|[\u0600-\u06FF]+[A-Za-z]/.test(String(replyText))) return bad('mixed_scripts_inside_a_word');
   // Une réponse en arabe/Darija contient souvent beaucoup de termes produit latins (GIG, Dashboard, Reserved Slots...) :
   // elle est « en écriture arabe » dès qu'elle contient plusieurs mots arabes en proportion notable.
   const arWords = (String(replyText).match(/\p{Script=Arabic}+/gu) || []).length;

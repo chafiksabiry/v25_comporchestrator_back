@@ -147,3 +147,15 @@ console.log('whatsappLanguage OK');
   assert.equal(resolveLanguage(detectLanguage('bghit n3ref'), prev).language, 'ary');
 }
 console.log('whatsappLanguage (ambiguous words) OK');
+
+// ---------- Alphabets mêlés dans un même mot : régénération ----------
+{
+  const user = detectLanguage('salam, bghit n3rf wach kayn chi forfait Starter w ch7al kayswa le prix');
+  const bad = checkReplyLanguage(user, 'Salam! Kayn forfait STARTER f catalogue, les tokens daخlin f had l forfait ma mnchourinch daba, donc ma n9derch nأكد lik.');
+  assert.equal(bad.ok, false);
+  assert.equal(bad.reason, 'mixed_scripts_inside_a_word');
+  assert.equal(checkReplyLanguage(user, 'Salam! Kayn forfait STARTER f catalogue, w les tokens ma mnchourinch daba, donc ma n9derch nconfirmi lik chi r9m.').ok, true);
+  // Arabe avec termes produit latins séparés par des espaces : toujours valide
+  assert.equal(checkReplyLanguage(detectLanguage('واش ممكن تشرح ليا كيفاش نفعل الجيڭ ديالي؟'), 'خاصك تكمل الخطوات ديال Telephony و Upload contacts و Call script قبل ما تفعل GIG.').ok, true);
+}
+console.log('whatsappLanguage (mixed scripts) OK');
