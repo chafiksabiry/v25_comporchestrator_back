@@ -43,7 +43,12 @@ export function parseWebhookPayload(body, { expectedPhoneNumberId = '' } = {}) {
           timestamp: m.timestamp ? new Date(Number(m.timestamp) * 1000) : new Date(),
           type: kind,
           text: String(text || '').trim(),
-          supported: ['text', 'button', 'interactive'].includes(m.type) || (['image', 'video', 'document'].includes(m.type) && Boolean(text)),
+          // Les images sont analysées (même sans légende) ; vidéos et documents seulement s'ils ont une légende.
+          supported: ['text', 'button', 'interactive'].includes(m.type)
+            || (m.type === 'image' && Boolean(m.image?.id))
+            || (['image', 'video', 'document'].includes(m.type) && Boolean(text)),
+          mediaId: ['image', 'video', 'document', 'audio'].includes(m.type) ? String(m[m.type]?.id || '') : '',
+          mimeType: ['image', 'video', 'document', 'audio'].includes(m.type) ? String(m[m.type]?.mime_type || '') : '',
           phoneNumberId,
         });
       }

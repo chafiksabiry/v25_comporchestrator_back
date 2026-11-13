@@ -26,6 +26,11 @@ export function splitForWhatsApp(text, limit = MAX_WA_TEXT) {
 /** Vrai si l'identifiant est un numéro de téléphone (chiffres) ; sinon c'est un BSUID (« US.1349… »). */
 export const isPhoneNumberId = (id) => /^\d{6,20}$/.test(String(id));
 
+/** Types d'image que l'API Claude sait lire. */
+export const IMAGE_MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+/** Taille maximale d'image envoyée à Claude (limite de l'API : 5 Mo). */
+export const MAX_IMAGE_BYTES = 4.5 * 1024 * 1024;
+
 export class WhatsAppSendError extends Error {
   constructor(message, { status = 0, code = null, retryable = false, body = null } = {}) {
     super(message);
@@ -92,6 +97,31 @@ export function createWhatsAppClient({ config = getWhatsAppConfig(), fetchImpl =
         if (id) ids.push(id);
       }
       return ids;
+    },
+    /**
+     * Télécharge une image reçue (2 appels : métadonnées, puis fichier) et la renvoie prête pour l'API Claude.
+     * @returns {Promise<{ mediaType: string, data: string, bytes: number }>} données en base64
+     */
+    async downloadImage(mediaId) {
+      if (!config.accessToken) throw new WhatsAppSendError('WhatsApp access token missing', { retryable: false });
+      const headers = { Authorization: `Bearer ${config.accessToken}` };
+      const fetchWithTimeout = async (u) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 20000);
+        try { return await fetchImpl(u, { headers, signal: controller.signal }); } finally { clearTimeout(timer); }
+      };
+      const metaRes = await fetchWithTimeout(`${config.graphBaseUrl}/${config.graphVersion}/${encodeURIComponent(mediaId)}`);
+      if (!metaRes.ok) throw new WhatsAppSendError(`WhatsApp media lookup ${metaRes.status}`, { status: metaRes.status });
+      const meta = await metaRes.json();
+      const mediaType = String(meta.mime_type || '').toLowerCase().split(';')[0];
+      if (!IMAGE_MEDIA_TYPES.includes(mediaType)) throw new WhatsAppSendError(`unsupported image type ${mediaType || 'unknown'}`);
+      if (Number(meta.file_size) > MAX_IMAGE_BYTES) throw new WhatsAppSendError('image too large');
+      if (!meta.url) throw new WhatsAppSendError('media url missing');
+      const fileRes = await fetchWithTimeout(meta.url);
+      if (!fileRes.ok) throw new WhatsAppSendError(`WhatsApp media download ${fileRes.status}`, { status: fileRes.status });
+      const buf = Buffer.from(await fileRes.arrayBuffer());
+      if (buf.length > MAX_IMAGE_BYTES) throw new WhatsAppSendError('image too large');
+      return { mediaType, data: buf.toString('base64'), bytes: buf.length };
     },
     /** Marque le message comme lu et affiche « en train d'écrire… » (échec sans gravité). */
     async markReadAndType(messageId) {

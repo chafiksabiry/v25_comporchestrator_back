@@ -96,7 +96,9 @@ export function createAgent({ store, claude, whatsapp, kb, tools, cfg, logger = 
 
     // --- Messages non lisibles (audio, image sans légende...) ---
     if (!msg.supported) {
-      events.push(`The user sent a ${msg.type} message, which you cannot read or listen to. Politely ask them to write their question as text.`);
+      events.push(msg.type === 'video'
+        ? 'The user sent a video, which you cannot watch. Politely ask them to send a screenshot of the problem or to describe it in text.'
+        : `The user sent a ${msg.type} message, which you cannot read or listen to. Politely ask them to write their question as text.`);
     }
     const storedText = userText || `[${msg.type} message]`;
     await store.appendMessage(waId, { role: 'user', text: storedText, wamid: msg.id, ts: msg.timestamp });
@@ -114,9 +116,28 @@ export function createAgent({ store, claude, whatsapp, kb, tools, cfg, logger = 
       return { reply: text, language: hint, rateLimited: true, toolCalls: [] };
     }
 
+    // --- Image : téléchargée chez Meta et jointe au message courant (jamais stockée) ---
+    let image = null;
+    if (msg.type === 'image' && msg.mediaId && whatsapp.downloadImage) {
+      try {
+        image = await whatsapp.downloadImage(msg.mediaId);
+        events.push('The user attached an image; it is included in their message. Use it to help with their HARX question (for example a screenshot of an error). If it is unreadable or unrelated to HARX, say so politely. Never identify people in a photo.');
+      } catch (e) {
+        logger.warn('[whatsapp-agent] image download failed:', e.message);
+        events.push('The user sent an image but it could not be opened (unsupported format, too large or unavailable). Politely ask them to send it again as a PNG/JPEG screenshot or to describe the problem in text.');
+      }
+    }
+
     // --- Contexte envoyé à Claude ---
     conv = await store.getConversation(waId);
     const msgs = toApiMessages((conv.messages || []).slice(-cfg.historyWindow));
+    if (image && msgs.length && msgs[msgs.length - 1].role === 'user') {
+      const last = msgs[msgs.length - 1];
+      last.content = [
+        { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.data } },
+        { type: 'text', text: String(last.content) },
+      ];
+    }
     const system = [
       { type: 'text', text: staticPrompt, cache_control: { type: 'ephemeral' } },
       { type: 'text', text: buildDynamicPrompt({ now: startedAt, languageHint: hint, previousLanguage: previousLang, linked: Boolean(conv.linkedUserId), notes: conv.notes || [], handoff: conv.handoff, userName: conv.profileName, events }) },
