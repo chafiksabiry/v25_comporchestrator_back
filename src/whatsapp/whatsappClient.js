@@ -23,6 +23,9 @@ export function splitForWhatsApp(text, limit = MAX_WA_TEXT) {
   return parts.filter(Boolean);
 }
 
+/** Vrai si l'identifiant est un numéro de téléphone (chiffres) ; sinon c'est un BSUID (« US.1349… »). */
+export const isPhoneNumberId = (id) => /^\d{6,20}$/.test(String(id));
+
 export class WhatsAppSendError extends Error {
   constructor(message, { status = 0, code = null, retryable = false, body = null } = {}) {
     super(message);
@@ -82,7 +85,9 @@ export function createWhatsAppClient({ config = getWhatsAppConfig(), fetchImpl =
     async sendText(to, text) {
       const ids = [];
       for (const chunk of splitForWhatsApp(text)) {
-        const json = await post({ messaging_product: 'whatsapp', recipient_type: 'individual', to: String(to), type: 'text', text: { preview_url: false, body: chunk } });
+        // Numéro -> `to` ; BSUID (utilisateur avec nom d'utilisateur, sans numéro partagé) -> `recipient`.
+        const target = isPhoneNumberId(to) ? { to: String(to) } : { recipient: String(to) };
+        const json = await post({ messaging_product: 'whatsapp', recipient_type: 'individual', ...target, type: 'text', text: { preview_url: false, body: chunk } });
         const id = json?.messages?.[0]?.id;
         if (id) ids.push(id);
       }

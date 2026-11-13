@@ -14,10 +14,19 @@ export function parseWebhookPayload(body, { expectedPhoneNumberId = '' } = {}) {
       const phoneNumberId = value.metadata?.phone_number_id || '';
       // Ignore les événements d'un autre numéro de l'application (le même webhook peut en servir plusieurs).
       if (expectedPhoneNumberId && phoneNumberId && phoneNumberId !== expectedPhoneNumberId) continue;
-      const names = new Map((value.contacts || []).map((c) => [String(c.wa_id), c.profile?.name || '']));
+      // Nom du contact, retrouvé par numéro (wa_id) ou, à défaut, par identifiant BSUID (user_id).
+      const names = new Map();
+      for (const c of value.contacts || []) {
+        const name = c.profile?.name || '';
+        if (c.wa_id) names.set(String(c.wa_id), name);
+        if (c.user_id) names.set(String(c.user_id), name);
+      }
 
       for (const m of value.messages || []) {
-        if (!m?.id || !m?.from) continue;
+        // Depuis le déploiement des noms d'utilisateur WhatsApp, `from` (numéro) peut manquer : l'expéditeur est alors
+        // identifié par `from_user_id` (BSUID, ex. « US.13491208655302741918 »).
+        const sender = String(m?.from || m?.from_user_id || '');
+        if (!m?.id || !sender) continue;
         let text = '';
         let kind = m.type || 'unknown';
         if (m.type === 'text') text = m.text?.body || '';
@@ -29,8 +38,8 @@ export function parseWebhookPayload(body, { expectedPhoneNumberId = '' } = {}) {
         }
         messages.push({
           id: m.id,
-          from: String(m.from),
-          name: names.get(String(m.from)) || '',
+          from: sender,
+          name: names.get(sender) || '',
           timestamp: m.timestamp ? new Date(Number(m.timestamp) * 1000) : new Date(),
           type: kind,
           text: String(text || '').trim(),
