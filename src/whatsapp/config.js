@@ -33,6 +33,12 @@ export function getWhatsAppConfig(env = process.env) {
     maxToolRounds: int(env.WHATSAPP_MAX_TOOL_ROUNDS, 6),
     /** Repli serveur en cas de refus de sécurité (beta) : désactivé par défaut tant que non validé sur votre compte. */
     refusalFallback: bool(env.WHATSAPP_CLAUDE_REFUSAL_FALLBACK, false),
+    /**
+     * Mode « Claude répond » : le service ne génère aucune réponse (aucun appel à l'API Anthropic) et journalise chaque
+     * message reçu (`[whatsapp-inbox]`, texte compris) pour qu'un opérateur (ou une session Claude Code) y réponde.
+     * Désactivé par défaut. Le texte des messages apparaît dans les logs : à n'activer qu'en connaissance de cause (RGPD).
+     */
+    humanMode: bool(env.WHATSAPP_HUMAN_MODE, false),
     // --- Conversations ---
     historyWindow: int(env.WHATSAPP_HISTORY_WINDOW, 24),
     maxInboundChars: int(env.WHATSAPP_MAX_INBOUND_CHARS, 2000),

@@ -242,6 +242,13 @@ export function createAgent({ store, claude, whatsapp, kb, tools, cfg, logger = 
       const done = Promise.all(messages.map(async (m) => {
         try {
           if (!(await store.claimMessage(m.id))) return { id: m.id, duplicate: true };
+          if (cfg.humanMode) {
+            // Mode « Claude répond » : aucun appel à l'API Anthropic ; le message est journalisé pour traitement par un humain / une session Claude Code.
+            const entry = { id: m.id, from: m.from, name: m.name || '', type: m.type, text: String(m.text || '').slice(0, cfg.maxInboundChars), mediaId: m.mediaId || undefined, ts: (m.timestamp instanceof Date ? m.timestamp : new Date()).toISOString() };
+            logger.info(`[whatsapp-inbox] ${JSON.stringify(entry)}`);
+            await store.appendMessage(m.from, { role: 'user', text: entry.text || `[${m.type} message]`, wamid: m.id, ts: m.timestamp }).catch(() => {});
+            return { id: m.id, humanMode: true };
+          }
           whatsapp.markReadAndType(m.id).catch(() => {});
           const result = await serialize(m.from, () => processMessage(m));
           return { id: m.id, ...result };
