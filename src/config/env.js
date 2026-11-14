@@ -40,6 +40,9 @@ export const config = {
   // trial ends. Distinct from PHONE_LINE_SETUP_FEE_CENTS (one-shot, paid at
   // acquisition for non-trial lines).
   stripePricePhoneLine: process.env.STRIPE_PRICE_PHONE_LINE || 'price_phone_line_placeholder',
+  // Abonnement mensuel par ligne (offres Call Centre) : produit « Ligne téléphonique — Abonnement mensuel » ; à défaut,
+  // déduit du prix STRIPE_PRICE_PHONE_LINE ci-dessus.
+  stripeProductPhoneLine: process.env.STRIPE_PRODUCT_PHONE_LINE || '',
   phoneLineMonthlyPriceCents: parseInt(process.env.PHONE_LINE_MONTHLY_PRICE_CENTS || '999', 10),
   // Royaume-Uni : dossier réglementaire Twilio « United Kingdom: Local - Business » (approuvé) et son adresse. Tant que ces deux
   // variables sont vides, la recherche de numéros +44 répond « dossier requis » (rien n'est vendu sans dossier approuvé).

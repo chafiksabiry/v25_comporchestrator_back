@@ -1,22 +1,11 @@
 import { PhoneNumber } from '../models/PhoneNumber.js';
-import { Subscription } from '../models/Subscription.js';
 import { stripeService } from './stripeService.js';
 import { phoneNumberService } from './phoneNumberService.js';
 import { config } from '../config/env.js';
+import { resolveCompanyStripeCustomerId, SUSPENSION_GRACE_MS } from './phoneLineSubscription.js';
 
-// PAY-19 (décidé le 11/10): en cas d'échec de paiement, ligne suspendue un
-// mois puis résiliée avant le cycle de facturation suivant.
-const SUSPENSION_GRACE_MS = 30 * 24 * 60 * 60 * 1000;
-
-/** The company's existing Stripe customer id, from its plan subscription (if any). */
-async function resolveCompanyStripeCustomerId(companyId) {
-  const sub = await Subscription.findOne({
-    companyId: String(companyId),
-    provider: 'stripe',
-    stripeCustomerId: { $exists: true, $nin: [null, '', 'paypal'] },
-  }).sort({ updatedAt: -1 }).lean();
-  return sub?.stripeCustomerId || null;
-}
+// PAY-19 (décidé le 11/10): en cas d'échec de paiement, ligne suspendue un mois puis résiliée avant le cycle de
+// facturation suivant (SUSPENSION_GRACE_MS, resolveCompanyStripeCustomerId : phoneLineSubscription.js).
 
 function markPaymentFailed(line, reason) {
   const now = new Date();
@@ -103,7 +92,8 @@ export async function billExpiredTrialLines() {
  * PAY-19: lines still unpaid 1 month after being suspended are terminated —
  * the number is released at the provider before what would have been their
  * next billing cycle. Reuses the same release path as the manual
- * `deleteNumber` route (phoneNumberService.deletePhoneNumber).
+ * `deleteNumber` route (phoneNumberService.deletePhoneNumber), which also cancels
+ * the Stripe subscription of a monthly line (idempotent).
  */
 export async function terminateSuspendedLines() {
   const now = new Date();

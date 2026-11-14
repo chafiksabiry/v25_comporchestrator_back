@@ -124,6 +124,19 @@ const phoneNumberSchema = new mongoose.Schema({
     type: String,
     sparse: true
   },
+  // Abonnement mensuel par ligne (offres Call Centre) : 'monthly' pour les lignes achetées avec un abonnement Stripe propre
+  // (stripeSubscriptionId). Absent sur toutes les lignes historiques, qui ne sont jamais touchées par ce mécanisme.
+  billingModel: {
+    type: String,
+    enum: ['monthly'],
+    default: undefined
+  },
+  // Posé quand NOUS résilions l'abonnement de la ligne (suppression, fin de grâce) : le webhook Stripe qui suit
+  // n'y voit pas un impayé.
+  subscriptionCanceledAt: {
+    type: Date,
+    default: null
+  },
   paymentFailedAt: {
     type: Date,
     default: null

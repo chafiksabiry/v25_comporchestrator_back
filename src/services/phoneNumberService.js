@@ -2,6 +2,7 @@ import { buildLocalSearchOptions } from './numberSearchOptions.js';
 import { addressSidFromAssignments, isRejectedRange, rememberRejectedRange } from './rejectedNumberRanges.js';
 import { countryOfE164 } from '../utils/e164Country.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
+import { cancelLineSubscription } from './phoneLineSubscription.js';
 import { config } from '../config/env.js';
 import telnyx from 'telnyx';
 import twilio from 'twilio';
@@ -134,14 +135,24 @@ class PhoneNumberService {
             voice: false,
             sms: false,
             mms: false
-          }
+          },
+          // Lignes à abonnement mensuel uniquement : prix payé, devise, paiement et marqueur. Les autres lignes Telnyx
+          // gardent exactement leur enregistrement actuel.
+          ...(options.billingModel === 'monthly'
+            ? {
+                billingModel: 'monthly',
+                price: typeof options.price === 'number' ? options.price : 0,
+                currency: typeof options.currency === 'string' && options.currency ? options.currency.toUpperCase() : 'EUR',
+                ...(options.paymentRef ? { paymentRef: options.paymentRef } : {}),
+              }
+            : {})
         };
 
         const newPhoneNumber = new PhoneNumber(phoneNumberData);
         await newPhoneNumber.save();
 
-        // 4. Retourner la réponse Telnyx
-        return response.data;
+        // 4. Retourner la réponse Telnyx (ligne mensuelle : avec l'id de la ligne HARX, pour son abonnement)
+        return options.billingModel === 'monthly' ? { ...response.data, _id: newPhoneNumber._id } : response.data;
       } else {
         throw new Error(`Unsupported provider: ${resolvedProvider}`);
       }
@@ -631,7 +642,7 @@ class PhoneNumberService {
     return { owned: true, claimable: free.length > 0, number: n };
   }
 
-  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId, { bundleSid, addressSid, type, price, currency, paymentRef, isTrial, trialExpiresAt } = {}) {
+  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId, { bundleSid, addressSid, type, price, currency, paymentRef, isTrial, trialExpiresAt, billingModel } = {}) {
     if (!companyId) {
       throw new Error('companyId is required to purchase a phone number');
     }
@@ -774,6 +785,8 @@ class PhoneNumberService {
       // PAY-19: a trial line enters the post-trial billing lifecycle;
       // a paid-up-front line has no recurring charge to track here.
       billingStatus: isTrial ? 'trial' : 'n/a',
+      // Abonnement mensuel par ligne : marqueur posé à la création ; l'abonnement Stripe est créé juste après l'achat.
+      ...(billingModel === 'monthly' ? { billingModel: 'monthly' } : {}),
       metadata: {
         type: type, // Save the original type (local, national, mobile)
         ...(isTrial ? { trial: { granted: true, expiresAt: trialExpiresAt } } : {})
@@ -919,6 +932,17 @@ class PhoneNumberService {
         err.cause = providerErr;
         throw err;
       }
+    }
+
+    // Ligne à abonnement mensuel : l'abonnement Stripe est résilié (idempotent) AVANT de supprimer la ligne. Si Stripe échoue,
+    // la ligne reste : une nouvelle tentative (numéro déjà libéré chez l'opérateur, toléré ci-dessus) reprend ici.
+    try {
+      await cancelLineSubscription(doc);
+    } catch (stripeErr) {
+      const err = new Error(`Échec de la résiliation de l'abonnement de la ligne: ${stripeErr.message}`);
+      err.status = 502;
+      err.cause = stripeErr;
+      throw err;
     }
 
     await PhoneNumber.deleteOne({ _id: doc._id });

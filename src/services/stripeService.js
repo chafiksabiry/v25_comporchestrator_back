@@ -96,6 +96,50 @@ function paymentIntentFromSession(session) {
   return pi;
 }
 
+/** Paramètres Stripe de l'abonnement d'une ligne (voir createPhoneLineSubscription). Fonction pure, testée sans Stripe. */
+function buildPhoneLineSubscriptionParams({ customerId, productId, amountCents, currency, firstCycleAt, metadata = {} }) {
+  return {
+    customer: customerId,
+    items: [{
+      price_data: {
+        currency: String(currency || 'eur').toLowerCase(),
+        product: productId,
+        unit_amount: amountCents,
+        recurring: { interval: 'month' },
+      },
+    }],
+    trial_end: Math.floor(new Date(firstCycleAt).getTime() / 1000),
+    proration_behavior: 'none',
+    trial_settings: { end_behavior: { missing_payment_method: 'cancel' } },
+    collection_method: 'charge_automatically',
+    payment_behavior: 'error_if_incomplete',
+    metadata,
+  };
+}
+
+let phoneLineProductIdCache = null;
+
+/** Produit Stripe de la ligne : STRIPE_PRODUCT_PHONE_LINE, sinon le produit du prix STRIPE_PRICE_PHONE_LINE existant. */
+async function resolvePhoneLineProductId() {
+  if (config.stripeProductPhoneLine) return config.stripeProductPhoneLine;
+  if (phoneLineProductIdCache) return phoneLineProductIdCache;
+  const priceId = config.stripePricePhoneLine;
+  if (!priceId || priceId === 'price_phone_line_placeholder') {
+    const err = new Error('Produit Stripe de la ligne introuvable : définissez STRIPE_PRODUCT_PHONE_LINE ou STRIPE_PRICE_PHONE_LINE.');
+    err.code = 'STRIPE_PHONE_LINE_PRODUCT_MISSING';
+    throw err;
+  }
+  const price = await getStripe().prices.retrieve(priceId);
+  const productId = typeof price.product === 'string' ? price.product : price.product?.id;
+  if (!productId) {
+    const err = new Error(`Le prix Stripe ${priceId} n'a pas de produit.`);
+    err.code = 'STRIPE_PHONE_LINE_PRODUCT_MISSING';
+    throw err;
+  }
+  phoneLineProductIdCache = productId;
+  return productId;
+}
+
 async function captureCheckoutSession(sessionId) {
   const session = await retrieveSession(sessionId);
   const pi = paymentIntentFromSession(session);
@@ -665,6 +709,27 @@ export const stripeService = {
       payment_behavior: 'error_if_incomplete',
       metadata,
     });
+  },
+
+  /**
+   * Abonnement mensuel d'UNE ligne (offres Call Centre) : prix EN LIGNE (price_data) sur le produit existant « Ligne
+   * téléphonique — Abonnement mensuel » (aucun prix Stripe à créer), montant et devise fixés à l'achat, premier cycle
+   * décalé à `firstCycleAt` (le 1er mois est déjà payé à l'achat) sans prorata. `error_if_incomplete` : Stripe lève si
+   * le client ne peut pas être débité plus tard ; la clé d'idempotence évite tout doublon en cas de nouvel essai.
+   */
+  createPhoneLineSubscription: async ({ customerId, amountCents, currency, firstCycleAt, metadata = {}, idempotencyKey }) => {
+    const productId = await resolvePhoneLineProductId();
+    return getStripe().subscriptions.create(
+      buildPhoneLineSubscriptionParams({ customerId, productId, amountCents, currency, firstCycleAt, metadata }),
+      idempotencyKey ? { idempotencyKey } : undefined
+    );
+  },
+
+  buildPhoneLineSubscriptionParams,
+
+  /** Résilie l'abonnement d'une ligne tout de suite. `prorate` / `invoiceNow` false : ni prorata ni facture finale. */
+  cancelPhoneLineSubscription: async (subscriptionId, { prorate = false, invoiceNow = false } = {}) => {
+    return getStripe().subscriptions.cancel(subscriptionId, { prorate, invoice_now: invoiceNow });
   },
 
   getStripeMode,

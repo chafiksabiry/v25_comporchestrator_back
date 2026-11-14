@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { loadCompanyPlanLimits } from './planLimits.js';
 
 const DEFAULT_MINUTE_PACKS = [
   { minutes: 150, priceCents: 1000, label: 'Standard' },
@@ -126,10 +127,28 @@ export async function computeTokensPurchaseCents(tokens) {
   return Math.max(1, Math.round(qty * pricing.tokensCustomRateCents));
 }
 
-export async function getPhoneLinePricing() {
+/**
+ * Prix d'une ligne. Sans `companyId` (ou hors offre Call Centre portant `phone_line_price_cents`) : prix par défaut
+ * (PHONE_LINE_SETUP_FEE_CENTS, 999), inchangé. Offre Call Centre dont le produit Stripe porte `phone_line_price_cents` :
+ * ce prix (premier mois payé à l'achat), puis abonnement mensuel du même montant (`monthly: true`).
+ * `opts.limits` : forfait déjà chargé par l'appelant (évite une seconde lecture). Ne lève jamais à cause du forfait.
+ */
+export async function getPhoneLinePricing(companyId, { limits } = {}) {
   const pricing = await getPlatformPricing();
+  let planLimits = limits;
+  if (planLimits === undefined && companyId && mongoose.Types.ObjectId.isValid(String(companyId))) {
+    try {
+      planLimits = await loadCompanyPlanLimits(companyId);
+    } catch (error) {
+      console.warn('[platformPricing] plan limits unreadable, default line price:', error.message);
+      planLimits = null;
+    }
+  }
+  const monthlyCents = planLimits?.product === 'callcenter' ? planLimits.phoneLinePriceCents : null;
+  const monthly = Number.isInteger(monthlyCents) && monthlyCents > 0;
   return {
-    setupFeeCents: pricing.phoneLineSetupFeeCents,
+    setupFeeCents: monthly ? monthlyCents : pricing.phoneLineSetupFeeCents,
+    monthly,
     currency: pricing.phoneLineCurrency,
     trialDays: pricing.phoneLineTrialDays,
     trialDurationMs: pricing.phoneLineTrialDays * 24 * 60 * 60 * 1000,

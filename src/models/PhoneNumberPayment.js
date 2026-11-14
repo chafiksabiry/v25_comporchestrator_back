@@ -77,6 +77,15 @@ const phoneNumberPaymentSchema = new mongoose.Schema({
   failureReason: {
     type: String,
     required: false
+  },
+  /**
+   * 'monthly' : paiement du 1er mois d'une ligne à abonnement mensuel (offres Call Centre). Prix figé à l'initialisation ;
+   * l'achat du numéro crée ensuite l'abonnement Stripe de la ligne. Absent = achat unique historique.
+   */
+  lineBilling: {
+    type: String,
+    enum: ['monthly'],
+    default: undefined
   }
 }, { timestamps: true });
 
