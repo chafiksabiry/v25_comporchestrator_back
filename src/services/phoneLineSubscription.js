@@ -163,6 +163,22 @@ export async function startMonthlyLineSubscription({ line, amountCents, currency
   return { subscriptionId: subscription.id, alreadyStarted: false };
 }
 
+/**
+ * État du paiement du premier mois : 'captured' | 'refunded' | 'refund_pending' | 'authorized' | 'canceled' | 'unknown'. Stripe fait foi pour un
+ * paiement Stripe ; un statut remboursé chez nous (refunded, ou refund_pending = remboursement à reprendre) l'emporte toujours (jamais de ligne active pour
+ * un client remboursé). PayPal : état lu dans notre base seulement. Lève si Stripe est illisible (l'appelant ne tranche pas).
+ */
+export async function getLinePaymentState(payment) {
+  if (payment.status === 'refunded') return 'refunded';
+  if (payment.status === 'refund_pending') return 'refund_pending'; // remboursement encore dû : jamais de ligne active, remboursement à reprendre
+  if (payment.provider === 'stripe' && payment.providerRef) {
+    const state = await stripeService.getCheckoutPaymentState(payment.providerRef);
+    if (state === 'unknown') throw new Error('Stripe payment state unknown');
+    return state;
+  }
+  return payment.status === 'succeeded' ? 'captured' : payment.status === 'authorized' ? 'authorized' : 'unknown';
+}
+
 /** Premier mois encaissé : la ligne devient active. Idempotent. */
 export async function activateMonthlyLine(line) {
   if (line.billingStatus === 'active') return line;
@@ -175,6 +191,8 @@ export async function activateMonthlyLine(line) {
  * La libération d'une ligne a échoué (opérateur ou Stripe) : trace durable sur la ligne (statut `release_failed`, repris par
  * reconcilePendingMonthlyLines) et log structuré pour l'alerte.
  */
+// TODO(quota) : une ligne `release_failed` compte encore dans le quota de lignes de l'entreprise (countDocuments) tant que sa
+// libération n'a pas abouti ; à exclure du décompte si cela gêne un client.
 export async function markLineReleaseFailed(line, reason) {
   console.error(JSON.stringify({
     event: 'phone_line_release_failed',
@@ -274,6 +292,7 @@ export async function markLineSubscriptionFailed(subscriptionId, { metadata = nu
 
 /** L'abonnement Stripe est-il vivant (active / trialing) ? Introuvable = mort ; toute autre erreur Stripe remonte (Stripe rejouera). */
 async function isSubscriptionAlive(subscriptionId) {
+  if (!subscriptionId) return false; // pas d'id enregistré : pas d'abonnement vivant (jamais d'appel Stripe sans id)
   try {
     const sub = await stripeService.getSubscription(subscriptionId);
     return ACTIVE_OFFER_STATUSES.includes(sub?.status);

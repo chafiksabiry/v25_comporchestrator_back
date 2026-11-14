@@ -13,7 +13,7 @@ import mongoose from 'mongoose';
 import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { getPhoneLinePricing } from '../services/platformPricingService.js';
-import { activateMonthlyLine, assertMonthlyLineBillable, BILLING_MODEL_MONTHLY, markLineReleaseFailed, startMonthlyLineSubscription } from '../services/phoneLineSubscription.js';
+import { activateMonthlyLine, assertMonthlyLineBillable, BILLING_MODEL_MONTHLY, getLinePaymentState, markLineReleaseFailed, startMonthlyLineSubscription } from '../services/phoneLineSubscription.js';
 import { isFrenchCountry, resolvePhoneProvider } from '../utils/phoneProvider.js';
 import { isLineIncluded, isLineTrialAllowed, loadCompanyPlanLimits, localNumberLimitPayload } from '../services/planLimits.js';
 import { availableIdentities, isAvailable, markAvailable, markUnavailable, presenceSummary, voiceIdentity } from '../services/voicePresenceService.js';
@@ -134,12 +134,17 @@ async function captureAuthorizedLinePayment(payment) {
 
 async function releaseLineAuthorization(payment, reason) {
   if (!payment || payment.status !== 'authorized') return { released: false };
-  try {
-    if (payment.provider === 'stripe' && payment.providerRef) {
-      await stripeService.cancelCheckoutAuthorization(payment.providerRef);
+  if (payment.provider === 'stripe' && payment.providerRef) {
+    let intent;
+    try {
+      intent = await stripeService.cancelCheckoutAuthorization(payment.providerRef);
+    } catch (err) {
+      // Autorisation non annulée : le paiement n'est PAS marqué « failed » (il reste « authorized », repris par la réconciliation).
+      console.warn('[telephony] could not release card authorization:', err.message);
+      return { released: false, provider: payment.provider };
     }
-  } catch (err) {
-    console.warn('[telephony] could not release card authorization:', err.message);
+    // Déjà encaissé (capture dont la réponse s'est perdue) : rien n'a été annulé, à rembourser par l'appelant.
+    if (intent?.status === 'succeeded') return { released: false, captured: true, provider: payment.provider };
   }
   payment.status = 'failed';
   payment.failureReason = reason || 'number_purchase_failed';
@@ -438,7 +443,7 @@ class PhoneNumberController {
         // Abonnement créé, puis capture, puis ligne activée. Tout échec défait l'ensemble (ligne supprimée, abonnement annulé,
         // autorisation libérée ou paiement remboursé) : jamais d'abonnement actif sans premier mois encaissé.
         const outcome = await this.completeMonthlyLinePurchase(newNumber, payment, companyId);
-        if (outcome.error) return this.rejectMonthlyLine(res, payment, outcome.error, { releaseFailed: outcome.releaseFailed });
+        if (outcome.error) return this.rejectMonthlyLine(res, payment, outcome.error, { releaseFailed: outcome.releaseFailed, pending: outcome.pending });
       } else if (!isTrial && payment?.status === 'authorized') {
         await captureAuthorizedLinePayment(payment);
       }
@@ -656,7 +661,7 @@ class PhoneNumberController {
         // Abonnement créé, puis capture, puis ligne activée. Tout échec défait l'ensemble (ligne supprimée, abonnement annulé,
         // autorisation libérée ou paiement remboursé) : jamais d'abonnement actif sans premier mois encaissé.
         const outcome = await this.completeMonthlyLinePurchase(newNumber, payment, companyId);
-        if (outcome.error) return this.rejectMonthlyLine(res, payment, outcome.error, { releaseFailed: outcome.releaseFailed });
+        if (outcome.error) return this.rejectMonthlyLine(res, payment, outcome.error, { releaseFailed: outcome.releaseFailed, pending: outcome.pending });
       } else if (!isTrial && payment?.status === 'authorized') {
         await captureAuthorizedLinePayment(payment);
       }
@@ -843,8 +848,23 @@ class PhoneNumberController {
       try {
         await captureAuthorizedLinePayment(payment);
       } catch (captureErr) {
-        console.error('❌ Line payment capture failed after subscription, rolling back:', captureErr.message);
-        return fail(Object.assign(new Error("Le paiement n'a pas pu être encaissé."), { code: 'LINE_PAYMENT_CAPTURE_FAILED', cause: captureErr }));
+        // Capture ambiguë (réponse perdue après encaissement) : on relit l'état réel chez Stripe avant de défaire quoi que ce soit.
+        console.error('❌ Line payment capture failed after subscription, reading the real payment state:', captureErr.message);
+        let state = null;
+        try {
+          state = await getLinePaymentState(payment);
+        } catch (stateErr) {
+          console.error('❌ Payment state unreadable after capture error:', stateErr.message);
+        }
+        if (state === 'captured') {
+          payment.status = 'succeeded';
+          await payment.save();
+        } else if (state === null) {
+          // Inconnu : rien n'est défait ni remboursé ; la ligne reste « pending », la réconciliation tranchera.
+          return { error: Object.assign(new Error("L'état de votre paiement est en cours de vérification : ne relancez pas l'achat. La ligne sera activée, ou le paiement remboursé automatiquement, sous quelques minutes."), { code: 'LINE_PAYMENT_CAPTURE_UNKNOWN' }), pending: true };
+        } else {
+          return fail(Object.assign(new Error("Le paiement n'a pas pu être encaissé."), { code: 'LINE_PAYMENT_CAPTURE_FAILED', cause: captureErr }));
+        }
       }
     }
     await activateMonthlyLine(line);
@@ -852,17 +872,33 @@ class PhoneNumberController {
   }
 
   /** Achat de ligne refusé car son abonnement mensuel ou son encaissement est impossible : rien n'est encaissé ou tout est remboursé. */
-  async rejectMonthlyLine(res, payment, error, { releaseFailed = false } = {}) {
+  async rejectMonthlyLine(res, payment, error, { releaseFailed = false, pending = false } = {}) {
     const code = String(error?.code || 'LINE_SUBSCRIPTION_FAILED');
+    if (pending) {
+      return res.status(409).json({ error: 'Line payment pending verification', code, pending: true, message: error.message });
+    }
     const reason = code.startsWith('LINE_SUBSCRIPTION_') ? `line_subscription_${code.slice('LINE_SUBSCRIPTION_'.length).toLowerCase()}` : code.toLowerCase();
     let released = false;
     let refunded = false;
+    let authorizationPending = false;
     if (payment?.status === 'authorized') {
-      released = Boolean((await releaseLineAuthorization(payment, reason)).released);
+      const outcome = await releaseLineAuthorization(payment, reason);
+      released = Boolean(outcome.released);
+      if (outcome.captured) {
+        // Stripe avait déjà encaissé : on rembourse (jamais « failed » sur un paiement encaissé).
+        payment.status = 'succeeded';
+        await payment.save();
+        refunded = Boolean((await this.refundFailedLinePayment(payment._id, reason)).refunded);
+      } else {
+        authorizationPending = !released;
+      }
     } else if (payment?._id) {
       refunded = Boolean((await this.refundFailedLinePayment(payment._id, reason)).refunded);
     }
-    const money = released ? "Aucun paiement n'a été encaissé." : refunded ? 'Votre paiement a été remboursé.' : 'Contactez le support si le paiement a été débité.';
+    const money = released ? "Aucun paiement n'a été encaissé."
+      : refunded ? 'Votre paiement a été remboursé.'
+        : authorizationPending ? "Aucun paiement n'a été encaissé ; l'autorisation bancaire sera libérée automatiquement sous peu."
+          : 'Contactez le support si le paiement a été débité.';
     const note = releaseFailed
       ? " Le numéro n'a pas pu être libéré automatiquement chez l'opérateur : notre équipe a été alertée et s'en occupe, vous n'avez rien à faire."
       : '';
@@ -1391,7 +1427,7 @@ class PhoneNumberController {
       );
       if (isMonthly) {
         const outcome = await this.completeMonthlyLinePurchase(newNumber, payment, String(payment.companyId));
-        if (outcome.error) return this.rejectMonthlyLine(res, payment, outcome.error, { releaseFailed: outcome.releaseFailed });
+        if (outcome.error) return this.rejectMonthlyLine(res, payment, outcome.error, { releaseFailed: outcome.releaseFailed, pending: outcome.pending });
       }
 
       try {

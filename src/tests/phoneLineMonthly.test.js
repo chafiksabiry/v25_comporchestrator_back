@@ -58,6 +58,10 @@ let subQueries; // requêtes Subscription.findOne (filtre du client Stripe)
 let saveError; // line.save() échoue pour les lignes créées ensuite
 let releaseFails; // la libération du numéro échoue
 let errorLogs;
+let sessionState; // providerRef -> état Stripe du paiement ('captured' | 'authorized' | 'refunded' | 'canceled')
+let refundError; // le remboursement Stripe échoue
+let cancelAuthError; // l'annulation d'autorisation échoue
+let cancelAuthResult; // PaymentIntent renvoyé par l'annulation
 
 function mockRes() {
   return { statusCode: 200, body: undefined, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; }, send(b) { this.body = b; return this; } };
@@ -116,6 +120,10 @@ beforeEach(() => {
   saveError = false;
   releaseFails = false;
   errorLogs = [];
+  sessionState = {};
+  refundError = null;
+  cancelAuthError = null;
+  cancelAuthResult = undefined;
   console.error = (...a) => { errorLogs.push(a.map(String).join(' ')); };
 
   global.fetch = async () => ({ ok: true, json: async () => ({ success: true, data: { company: { profile: { country } } } }) });
@@ -138,12 +146,14 @@ beforeEach(() => {
     ? { payment_status: 'paid', payment_intent: { status: 'succeeded' } }
     : { payment_status: 'unpaid', payment_intent: { status: 'requires_capture' } });
   stripeService.getSubscription = async (id) => {
+    if (!id) throw new Error('Invalid subscription id: must be a non-empty string');
     if (subStatus === 'missing') throw Object.assign(new Error('No such subscription'), { code: 'resource_missing' });
     return { id, status: subStatus };
   };
   stripeService.findPhoneLineSubscriptionIds = async (lineId) => { calls.push(['stripe.findSubs', lineId]); return foundSubIds; };
-  stripeService.cancelCheckoutAuthorization = async (ref) => { calls.push(['stripe.releaseAuth', ref]); };
-  stripeService.refundCheckoutSession = async (ref, o) => { calls.push(['stripe.refund', ref, o?.reason]); };
+  stripeService.cancelCheckoutAuthorization = async (ref) => { calls.push(['stripe.releaseAuth', ref]); if (cancelAuthError) throw cancelAuthError; return cancelAuthResult; };
+  stripeService.refundCheckoutSession = async (ref, o) => { calls.push(['stripe.refund', ref, o?.reason]); if (refundError) throw refundError; };
+  stripeService.getCheckoutPaymentState = async (ref) => sessionState[ref] || (sessionCaptured[ref] ? 'captured' : 'authorized');
   paypalService.isConfigured = () => true;
   paypalService.getMode = () => 'sandbox';
   paypalService.createOrder = async () => ({ id: 'ORDER1', approveUrl: 'https://paypal.test/approve' });
@@ -160,8 +170,19 @@ beforeEach(() => {
   PhoneNumber.findById = async (id) => lines[id] || null;
   PhoneNumber.findOne = async (q) => {
     if (q?.stripeSubscriptionId) return Object.values(lines).find((l) => l.stripeSubscriptionId === q.stripeSubscriptionId && (!q.billingModel || l.billingModel === q.billingModel)) || null;
+    if (q?.paymentRef) return Object.values(lines).find((l) => String(l.paymentRef) === String(q.paymentRef)) || null;
     if (q?._id) return lines[q._id] || null;
     return null;
+  };
+  const LOCK_TTL = 5 * 60 * 1000;
+  PhoneNumber.findOneAndUpdate = async (q, u) => {
+    const l = lines[q._id];
+    if (!l) return null;
+    if (u?.$set?.reconcileClaimedAt) {
+      if (l.reconcileClaimedAt && l.reconcileClaimedAt > new Date(Date.now() - LOCK_TTL)) return null;
+      l.reconcileClaimedAt = u.$set.reconcileClaimedAt;
+    }
+    return l;
   };
   PhoneNumber.updateOne = async () => ({});
   PhoneNumber.deleteOne = async ({ _id }) => { calls.push(['line.deleteOne', _id]); delete lines[_id]; };
@@ -178,8 +199,18 @@ beforeEach(() => {
       if (p.purchaseClaimedAt) return null; // déjà réservé : un seul achat par paiement
       p.purchaseClaimedAt = u.$set.purchaseClaimedAt;
     }
+    if (u?.$set?.reconcileClaimedAt) {
+      if (p.reconcileClaimedAt && p.reconcileClaimedAt > new Date(Date.now() - LOCK_TTL)) return null;
+      p.reconcileClaimedAt = u.$set.reconcileClaimedAt;
+    }
     return p;
   };
+  PhoneNumberPayment.find = async (q = {}) => Object.values(payments).filter((p) => (
+    (!q.lineBilling || p.lineBilling === q.lineBilling)
+    && (!q.status?.$in || q.status.$in.includes(p.status))
+    && (!q.purchaseClaimedAt?.$lte || (p.purchaseClaimedAt && p.purchaseClaimedAt <= q.purchaseClaimedAt.$lte))
+    && (q.phoneNumberRef !== null || !p.phoneNumberRef)
+  ));
   PhoneNumberPayment.findByIdAndDelete = async (id) => { calls.push(['payment.delete', String(id)]); };
 
   phoneNumberService.assertTelnyxCanOrderNumber = async () => {};
@@ -771,7 +802,7 @@ test('[B2] réconciliation : ligne pending récente (< 15 min) ou état Stripe i
   paymentDoc({ _id: PAY_ID, status: 'authorized' });
   const recent = makeLine({ billingModel: 'monthly', billingStatus: 'pending', paymentRef: PAY_ID });
   const old = makeLine({ billingModel: 'monthly', billingStatus: 'pending', paymentRef: PAY_ID, createdAt: OLD });
-  stripeService.retrieveSession = async () => { throw new Error('stripe unreachable'); };
+  stripeService.getCheckoutPaymentState = async () => { throw new Error('stripe unreachable'); };
   const r = await reconcilePendingMonthlyLines();
   assert.ok(lines[recent._id] && lines[old._id], 'rien n\'est supprimé sur une lecture Stripe impossible');
   assert.equal(r.resumed + r.released, 0);
@@ -985,4 +1016,172 @@ test('[B5] checkout/config : même refus 409 PHONE_LINE_PRICE_NOT_CONFIGURED que
     assert.equal(ok.body.pricing.amountCents, cents);
     assert.deepEqual(Object.keys(ok.body.pricing).sort(), ['amountCents', 'currency', 'trialDays']);
   }
+});
+
+// ═════════════ Relecture CTO du head 1e9124c : I1, I2, mineurs a à f ═════════════
+const claimedOld = () => new Date(Date.now() - 20 * 60 * 1000);
+const transientErr = () => Object.assign(new Error('network'), { type: 'StripeConnectionError' });
+const definitiveErr = () => Object.assign(new Error('charge is invalid'), { type: 'StripeInvalidRequestError', code: 'charge_disputed' });
+
+// ── I1 : capture ambiguë ──
+test('[I1] capture en erreur mais Stripe a bien capturé : on continue (paiement succeeded, ligne activée), rien n\'est supprimé', async () => {
+  const pay = paymentDoc({ _id: PAY_ID });
+  sessionCaptured[pay.providerRef] = true;
+  captureError = new Error('response lost');
+  const res = mockRes();
+  await phoneNumberController.purchaseTwilioNumber(buy(), res);
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  const line = Object.values(lines)[0];
+  assert.equal(line.billingStatus, 'active');
+  assert.equal(payments[PAY_ID].status, 'succeeded');
+  assert.ok(!names().includes('line.deleteOne') && !names().includes('stripe.cancelSub') && !names().includes('stripe.releaseAuth'));
+});
+
+test('[I1] capture en erreur et état Stripe illisible : rien n\'est défait ni marqué failed/refunded, réponse « en vérification »', async () => {
+  paymentDoc({ _id: PAY_ID });
+  captureError = new Error('timeout');
+  stripeService.getCheckoutPaymentState = async () => { throw new Error('stripe unreachable'); };
+  const res = mockRes();
+  await phoneNumberController.purchaseTwilioNumber(buy(), res);
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.body.code, 'LINE_PAYMENT_CAPTURE_UNKNOWN');
+  assert.ok(!names().includes('line.deleteOne') && !names().includes('stripe.releaseAuth') && !names().includes('stripe.refund'));
+  assert.equal(payments[PAY_ID].status, 'authorized');
+  assert.equal(Object.values(lines)[0].billingStatus, 'pending', 'la réconciliation tranchera');
+});
+
+test('[I1] annulation d\'autorisation qui échoue : le paiement n\'est PAS marqué failed (il reste authorized, repris par le balayage)', async () => {
+  paymentDoc({ _id: PAY_ID });
+  captureError = new Error('declined');
+  cancelAuthError = transientErr();
+  const res = mockRes();
+  await phoneNumberController.purchaseTwilioNumber(buy(), res);
+  assert.equal(res.statusCode, 402);
+  assert.equal(res.body.released, false);
+  assert.equal(payments[PAY_ID].status, 'authorized');
+});
+
+test('[I1] l\'annulation d\'autorisation découvre un PaymentIntent déjà « succeeded » : remboursement, paiement refunded, jamais failed', async () => {
+  paymentDoc({ _id: PAY_ID });
+  captureError = new Error('declined');
+  cancelAuthResult = { id: 'pi_1', status: 'succeeded' };
+  const res = mockRes();
+  await phoneNumberController.purchaseTwilioNumber(buy(), res);
+  assert.ok(names().includes('stripe.refund'));
+  assert.equal(payments[PAY_ID].status, 'refunded');
+  assert.equal(res.body.refunded, true);
+});
+
+// ── I2 : réconciliation, remboursement d'abord ──
+test('[I2] abonnement impossible + remboursement en erreur transitoire : la ligne N\'est PAS libérée, paiement intact, nouvel essai au passage suivant', async () => {
+  const pay = paymentDoc({ _id: PAY_ID, status: 'succeeded', purchaseClaimedAt: claimedOld() });
+  sessionCaptured[pay.providerRef] = true;
+  createSubError = new Error('no card');
+  refundError = transientErr();
+  const line = makeLine({ billingModel: 'monthly', billingStatus: 'pending', paymentRef: PAY_ID, createdAt: OLD });
+  let r = await reconcilePendingMonthlyLines();
+  assert.ok(lines[line._id], 'ligne conservée');
+  assert.equal(payments[PAY_ID].status, 'succeeded');
+  assert.equal(r.skipped, 1);
+  assert.ok(!names().includes('twilio.release'));
+  // passage suivant : le remboursement réussit, alors seulement la ligne est libérée
+  refundError = null;
+  line.reconcileClaimedAt = null;
+  r = await reconcilePendingMonthlyLines();
+  assert.equal(payments[PAY_ID].status, 'refunded');
+  assert.ok(!lines[line._id]);
+  assert.ok(names().indexOf('stripe.refund') < names().lastIndexOf('twilio.release'));
+});
+
+test('[I2] remboursement en erreur définitive : paiement « refund_pending », ligne conservée, alerte structurée', async () => {
+  const pay = paymentDoc({ _id: PAY_ID, status: 'succeeded', purchaseClaimedAt: claimedOld() });
+  sessionCaptured[pay.providerRef] = true;
+  createSubError = new Error('no card');
+  refundError = definitiveErr();
+  const line = makeLine({ billingModel: 'monthly', billingStatus: 'pending', paymentRef: PAY_ID, createdAt: OLD });
+  await reconcilePendingMonthlyLines();
+  assert.equal(payments[PAY_ID].status, 'refund_pending');
+  assert.ok(lines[line._id]);
+  assert.ok(errorLogs.some((l) => l.includes('phone_line_refund_failed')));
+});
+
+test('[I2] paiement non encaissé : l\'annulation d\'autorisation est retentée tant qu\'elle échoue (ligne conservée), puis ligne libérée', async () => {
+  paymentDoc({ _id: PAY_ID, status: 'authorized', purchaseClaimedAt: claimedOld() });
+  cancelAuthError = transientErr();
+  const line = makeLine({ billingModel: 'monthly', billingStatus: 'pending', stripeSubscriptionId: 'sub_line_1', paymentRef: PAY_ID, createdAt: OLD });
+  await reconcilePendingMonthlyLines();
+  assert.ok(lines[line._id], 'ligne conservée tant que l\'autorisation n\'est pas annulée');
+  assert.equal(payments[PAY_ID].status, 'authorized');
+  cancelAuthError = null;
+  line.reconcileClaimedAt = null;
+  await reconcilePendingMonthlyLines();
+  assert.ok(!lines[line._id]);
+  assert.equal(payments[PAY_ID].status, 'failed');
+});
+
+// ── (a) balayage des réservations ──
+test('[a] réservation > 15 min sans ligne ni phoneNumberRef : encaissé -> remboursé ; autorisation intacte -> réservation levée ; récente ou avec ligne -> intouchée', async () => {
+  const paid = paymentDoc({ _id: '64b0000000000000000000c1', status: 'succeeded', purchaseClaimedAt: claimedOld(), providerRef: 'cs_paid' });
+  sessionCaptured.cs_paid = true;
+  paymentDoc({ _id: '64b0000000000000000000c2', status: 'authorized', purchaseClaimedAt: claimedOld(), providerRef: 'cs_auth' });
+  paymentDoc({ _id: '64b0000000000000000000c3', status: 'authorized', purchaseClaimedAt: new Date(), providerRef: 'cs_recent' });
+  paymentDoc({ _id: '64b0000000000000000000c4', status: 'authorized', purchaseClaimedAt: claimedOld(), providerRef: 'cs_withline' });
+  makeLine({ billingModel: 'monthly', billingStatus: 'active', paymentRef: '64b0000000000000000000c4' });
+  const r = await reconcilePendingMonthlyLines();
+  assert.equal(payments['64b0000000000000000000c1'].status, 'refunded');
+  assert.equal(payments['64b0000000000000000000c2'].purchaseClaimedAt, null, 'réservation levée : le client peut réessayer');
+  assert.ok(payments['64b0000000000000000000c3'].purchaseClaimedAt, 'récente : intouchée');
+  assert.ok(payments['64b0000000000000000000c4'].purchaseClaimedAt, 'une ligne existe : traitée par le flux des lignes');
+  assert.equal(r.claimsSwept, 2);
+  assert.ok(paid);
+});
+
+// ── (b) verrou, (c) réservation ancienne ──
+test('[b] verrou de réconciliation : deux passages simultanés ne traitent la ligne qu\'une fois', async () => {
+  paymentDoc({ _id: PAY_ID, status: 'authorized', purchaseClaimedAt: claimedOld() });
+  makeLine({ billingModel: 'monthly', billingStatus: 'pending', stripeSubscriptionId: 'sub_line_1', paymentRef: PAY_ID, createdAt: OLD });
+  await Promise.all([reconcilePendingMonthlyLines(), reconcilePendingMonthlyLines()]);
+  assert.equal(calls.filter((c) => c[0] === 'twilio.release').length, 1);
+  assert.equal(calls.filter((c) => c[0] === 'stripe.cancelSub').length, 1);
+});
+
+test('[c] une ligne dont la RÉSERVATION du paiement est récente n\'est jamais libérée, même si la ligne est ancienne', async () => {
+  paymentDoc({ _id: PAY_ID, status: 'authorized', purchaseClaimedAt: new Date() });
+  const line = makeLine({ billingModel: 'monthly', billingStatus: 'pending', paymentRef: PAY_ID, createdAt: OLD });
+  await reconcilePendingMonthlyLines();
+  assert.ok(lines[line._id]);
+  assert.ok(!names().includes('twilio.release'));
+});
+
+// ── (d) abonnement sans id ──
+test('[d] invoice.paid sur une ligne sans id d\'abonnement : traitée comme « pas vivant » (nouvel abonnement), jamais d\'erreur qui fait boucler le webhook', async () => {
+  const line = makeLine({ billingModel: 'monthly', billingStatus: 'suspended', stripeSubscriptionId: null, suspendedAt: new Date(), terminatesAt: new Date(Date.now() + DAY), price: 24.99, currency: 'EUR' });
+  const r = await sub.reactivateLineSubscription(null, { metadata: { kind: 'phone_line_recurring', phoneNumberId: line._id } });
+  assert.equal(r.handled, true);
+  assert.ok(names().includes('stripe.createSub'));
+  assert.equal(line.billingStatus, 'active');
+});
+
+// ── (e) client remboursé ──
+test('[e] paiement remboursé (Stripe dit « paid » mais remboursé, ou statut refunded/refund_pending chez nous) : la ligne n\'est PAS réactivée, elle est libérée', async () => {
+  for (const [dbStatus, state] of [['succeeded', 'refunded'], ['refunded', 'captured'], ['refund_pending', 'captured']]) {
+    calls = []; lines = {}; payments = {};
+    const pay = paymentDoc({ _id: PAY_ID, status: dbStatus, purchaseClaimedAt: claimedOld(), providerRef: `cs_${dbStatus}` });
+    sessionState[pay.providerRef] = state;
+    sessionCaptured[pay.providerRef] = true; // l'ancienne lecture (payment_status « paid ») croirait à un paiement valable
+    const line = makeLine({ billingModel: 'monthly', billingStatus: 'pending', stripeSubscriptionId: 'sub_line_1', paymentRef: PAY_ID, createdAt: OLD });
+    await reconcilePendingMonthlyLines();
+    assert.ok(!lines[line._id], `${dbStatus}/${state} : ligne libérée`);
+    assert.ok(!calls.some((c) => c[0] === 'line.save' && c[2] === 'active'), 'jamais réactivée');
+  }
+});
+
+// ── (f) PayPal ──
+test('[f] PayPal : la réconciliation ne gère que Stripe, une ligne pending PayPal est laissée en l\'état (documenté), sans appel Stripe', async () => {
+  paymentDoc({ _id: PAY_ID, provider: 'paypal', providerRef: 'ORDER1', status: 'succeeded', purchaseClaimedAt: claimedOld() });
+  const line = makeLine({ billingModel: 'monthly', billingStatus: 'pending', paymentRef: PAY_ID, createdAt: OLD });
+  const r = await reconcilePendingMonthlyLines();
+  assert.ok(lines[line._id]);
+  assert.equal(r.skipped, 1);
+  assert.ok(!names().some((n) => n.startsWith('stripe.') || n === 'twilio.release'));
 });

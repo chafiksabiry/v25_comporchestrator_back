@@ -10,6 +10,7 @@ import { stripeService } from './stripeService.js';
 export async function syncPlanMetadataFromStripe() {
   if (!stripeService.isConfigured()) return { synced: 0, skipped: true };
   try {
+    // TODO : getPublicPlans lit prices.list limité à 100 prix actifs ; à paginer si le catalogue dépasse ce nombre.
     const prices = await stripeService.getPublicPlans();
     let synced = 0;
     for (const price of prices || []) {

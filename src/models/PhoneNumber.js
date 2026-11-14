@@ -139,6 +139,11 @@ const phoneNumberSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  // Verrou court de la réconciliation (reconcilePendingMonthlyLines) : un seul passage à la fois sur cette ligne.
+  reconcileClaimedAt: {
+    type: Date,
+    default: null
+  },
   paymentFailedAt: {
     type: Date,
     default: null

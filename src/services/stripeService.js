@@ -160,6 +160,21 @@ async function captureCheckoutSession(sessionId) {
   return getStripe().paymentIntents.capture(intent.id);
 }
 
+/**
+ * État réel d'un paiement Checkout : 'captured' (encaissé), 'refunded' (encaissé puis remboursé), 'authorized' (autorisé, pas
+ * encaissé), 'canceled', ou 'unknown'. `payment_status = paid` seul ne suffit pas : il reste vrai après un remboursement.
+ */
+async function getCheckoutPaymentState(sessionId) {
+  const session = await getStripe().checkout.sessions.retrieve(sessionId, { expand: ['payment_intent.latest_charge'] });
+  const pi = session?.payment_intent;
+  if (!pi || typeof pi !== 'object') return session?.payment_status === 'paid' ? 'captured' : 'unknown';
+  const charge = pi.latest_charge && typeof pi.latest_charge === 'object' ? pi.latest_charge : null;
+  if (pi.status === 'succeeded') return charge && (charge.refunded || Number(charge.amount_refunded) > 0) ? 'refunded' : 'captured';
+  if (pi.status === 'requires_capture') return 'authorized';
+  if (pi.status === 'canceled') return 'canceled';
+  return 'unknown';
+}
+
 async function cancelCheckoutAuthorization(sessionId) {
   const session = await retrieveSession(sessionId);
   const pi = paymentIntentFromSession(session);
@@ -527,6 +542,7 @@ export const stripeService = {
   retrieveSession,
   captureCheckoutSession,
   cancelCheckoutAuthorization,
+  getCheckoutPaymentState,
   refundCheckoutSession,
   createCheckoutSession: async (userId, priceId, successUrl, cancelUrl, metadata = {}, promotionCodeId = null, currency = null) => {
     try {
