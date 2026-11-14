@@ -2,7 +2,7 @@ import express from 'express';
 import { phoneNumberController } from '../controllers/phoneNumberController.js';
 import { voicemailController } from '../controllers/voicemailController.js';
 import { authenticate } from '../middleware/auth.js';
-import { guard, companyFrom, ofNumber, ofPayment } from '../middleware/phoneScope.js';
+import { guard, companyFrom, companyFromIfPresent, ofNumber, ofPayment } from '../middleware/phoneScope.js';
 
 // Access control: `authenticate` = valid login; `guard(...)` = login + the caller belongs to the targeted company.
 // Left open on purpose: provider webhooks, and the two routes the REP copilot calls (gig check, configure-voice).
@@ -26,7 +26,8 @@ router.post('/purchase/twilio', ...guard(companyFrom('companyId')), phoneNumberC
 router.get('/trial/eligibility/:companyId', ...guard(companyFrom('companyId')), phoneNumberController.getTrialEligibility.bind(phoneNumberController));
 
 // Stripe / PayPal checkout for a phone line (NOT linked to WalletCompany)
-router.get('/checkout/config', authenticate, phoneNumberController.getCheckoutConfig.bind(phoneNumberController));
+// `?companyId=` (the company's own offer price and currency) must be the caller's own company.
+router.get('/checkout/config', ...guard(companyFromIfPresent), phoneNumberController.getCheckoutConfig.bind(phoneNumberController));
 router.post('/checkout/init', ...guard(companyFrom('companyId')), phoneNumberController.initLineCheckout.bind(phoneNumberController));
 router.post('/checkout/confirm', ...guard(ofPayment), phoneNumberController.confirmLineCheckout.bind(phoneNumberController));
 

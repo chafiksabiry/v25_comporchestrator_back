@@ -1,6 +1,7 @@
 import { Subscription } from '../models/Subscription.js';
 import { stripeService } from './stripeService.js';
 import { CALLCENTER_TIER_LINES, callcenterTierFromMetadata } from './callcenterTier.js';
+import { phoneLinePriceCentsFromMetadata } from './phoneLineSubscription.js';
 
 function numberOrNull(value) {
   const n = Number(value);
@@ -37,6 +38,8 @@ export async function loadCompanyPlanLimits(companyId) {
     product: productEntry ? String(productEntry[1] ?? '').trim().toLowerCase() || null : null,
     /** Palier Call Centre canonique (metadata `callcenter_tier`), null sinon. */
     callcenterTier: callcenterTierFromMetadata(metadata),
+    /** Prix mensuel d'une ligne supplémentaire (metadata `phone_line_price_cents`, centimes) ; null = prix par défaut. */
+    phoneLinePriceCents: phoneLinePriceCentsFromMetadata(metadata),
     maxGigs: numberOrNull(fromMeta.maxGigs) ?? numberOrNull(plan.maxGigs),
     maxReps: numberOrNull(fromMeta.maxReps) ?? numberOrNull(plan.maxReps),
     communicationMinutes: numberOrNull(fromMeta.communicationMinutes) ?? numberOrNull(plan.communicationMinutes),

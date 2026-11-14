@@ -115,14 +115,34 @@ const phoneNumberSchema = new mongoose.Schema({
   //                       provisioned but is given up to 1 month to recover
   //   'terminated'      — still unpaid after 1 month, number released before
   //                       what would have been the next billing cycle
+  // Abonnement mensuel par ligne : 'pending' = acheté mais premier mois pas encore encaissé (repris ou libéré par la
+  // réconciliation au-delà de 15 min) ; 'release_failed' = libération du numéro impossible, à reprendre.
   billingStatus: {
     type: String,
-    enum: ['n/a', 'trial', 'active', 'payment_failed', 'suspended', 'terminated'],
+    enum: ['n/a', 'trial', 'pending', 'active', 'payment_failed', 'suspended', 'terminated', 'release_failed'],
     default: 'n/a'
   },
   stripeSubscriptionId: {
     type: String,
     sparse: true
+  },
+  // Abonnement mensuel par ligne (offres Call Centre) : 'monthly' pour les lignes achetées avec un abonnement Stripe propre
+  // (stripeSubscriptionId). Absent sur toutes les lignes historiques, qui ne sont jamais touchées par ce mécanisme.
+  billingModel: {
+    type: String,
+    enum: ['monthly'],
+    default: undefined
+  },
+  // Posé quand NOUS résilions l'abonnement de la ligne (suppression, fin de grâce) : le webhook Stripe qui suit
+  // n'y voit pas un impayé.
+  subscriptionCanceledAt: {
+    type: Date,
+    default: null
+  },
+  // Verrou court de la réconciliation (reconcilePendingMonthlyLines) : un seul passage à la fois sur cette ligne.
+  reconcileClaimedAt: {
+    type: Date,
+    default: null
   },
   paymentFailedAt: {
     type: Date,

@@ -14,6 +14,7 @@ import {
 } from '../services/subscriptionFulfillment.js';
 import { fulfillStripeCheckoutSessionPayment } from '../services/paymentFulfillment.js';
 import { config } from '../config/env.js';
+import { handlePhoneLineInvoiceEvent, handlePhoneLineSubscriptionDeleted } from '../services/phoneLineSubscription.js';
 import { currencyForCountry, normalizeCurrency, pickCurrency, priceAmounts } from '../services/currency.js';
 
 function numberOrNull(value) {
@@ -666,6 +667,12 @@ export const subscriptionController = {
         case 'customer.subscription.deleted':
           await handleSubscriptionDeleted(event.data.object);
           break;
+        case 'invoice.payment_failed':
+        case 'invoice.paid':
+        case 'invoice.payment_succeeded':
+          // Abonnement mensuel d'une ligne : impayé -> suspension ; régularisation -> réactivation. Autres factures ignorées.
+          await handlePhoneLineInvoiceEvent(event.type, event.data.object);
+          break;
         case 'product.updated':
           await handleProductUpdated(event.data.object);
           break;
@@ -729,6 +736,10 @@ async function handleSubscriptionUpdated(subscription) {
 }
 
 async function handleSubscriptionDeleted(subscription) {
+  // Abonnement mensuel d'une ligne (pas un abonnement d'offre) : résilié sans que nous l'ayons demandé -> impayé.
+  const lineResult = await handlePhoneLineSubscriptionDeleted(subscription);
+  if (lineResult.reason !== 'no_line') return;
+
   await Subscription.findOneAndUpdate(
     { stripeSubscriptionId: subscription.id },
     { status: 'canceled' }
