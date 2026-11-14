@@ -23,6 +23,9 @@ export const companyFrom = (...sources) => async (req) => {
   return ids;
 };
 
+/** Like companyFrom('companyId'), but a request without companyId has nothing to check (public default values). */
+export const companyFromIfPresent = async (req) => (pick(req, 'companyId') ? companyFrom('companyId')(req) : []);
+
 /** Company of the line designated by id / phoneNumber (params, body or query). No line found: nothing to check. */
 export const ofNumber = async (req) => {
   const id = pick(req, 'id');

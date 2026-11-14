@@ -33,7 +33,8 @@ import { startMessageReminders } from './src/services/messageReminders.js';
 import { scanLowResources } from './src/services/companyNotificationService.js';
 import { clearExpiredRetractions } from './src/services/retractionService.js';
 import { resolveExpiredPendingReviews, flagWeeklyAiAudits } from './src/controllers/escrowController.js';
-import { billExpiredTrialLines, terminateSuspendedLines } from './src/services/phoneLineBillingService.js';
+import { billExpiredTrialLines, reconcilePendingMonthlyLines, terminateSuspendedLines } from './src/services/phoneLineBillingService.js';
+import { syncPlanMetadataFromStripe } from './src/services/planMetadataSync.js';
 
 const app = express();
 
@@ -215,6 +216,19 @@ setInterval(() => {
     console.warn('[phone-line-termination-cron]', err.message);
   });
 }, RETRACTION_CRON_MS);
+
+// Abonnement mensuel par ligne : reprend ou libère les lignes restées « pending » (crash entre commande du numéro et capture)
+// et retente les libérations en échec.
+setInterval(() => {
+  reconcilePendingMonthlyLines().catch((err) => {
+    console.warn('[phone-line-reconcile-cron]', err.message);
+  });
+}, 10 * 60 * 1000);
+
+// Métadonnées des produits Stripe (dont phone_line_price_cents) -> forfaits : au démarrage puis toutes les 6 h, en plus du
+// webhook product.updated, pour qu'un webhook manqué ne laisse pas un prix de ligne périmé.
+setTimeout(() => { syncPlanMetadataFromStripe(); }, 30 * 1000);
+setInterval(() => { syncPlanMetadataFromStripe(); }, 6 * 60 * 60 * 1000);
 
 // Warn companies whose wallet / minutes / tokens run short (the first check runs a minute after boot).
 const runLowResourceScan = () =>

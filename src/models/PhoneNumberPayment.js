@@ -64,7 +64,7 @@ const phoneNumberPaymentSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'authorized', 'succeeded', 'failed', 'refunded'],
+    enum: ['pending', 'authorized', 'succeeded', 'failed', 'refunded', 'refund_pending'],
     default: 'pending',
     index: true
   },
@@ -77,6 +77,25 @@ const phoneNumberPaymentSchema = new mongoose.Schema({
   failureReason: {
     type: String,
     required: false
+  },
+  /**
+   * 'monthly' : paiement du 1er mois d'une ligne à abonnement mensuel (offres Call Centre). Prix figé à l'initialisation ;
+   * l'achat du numéro crée ensuite l'abonnement Stripe de la ligne. Absent = achat unique historique.
+   */
+  lineBilling: {
+    type: String,
+    enum: ['monthly'],
+    default: undefined
+  },
+  /** Réservé atomiquement par le premier achat qui l'utilise (abonnement mensuel) : un paiement n'achète jamais deux lignes. */
+  purchaseClaimedAt: {
+    type: Date,
+    default: null
+  },
+  /** Verrou court de la réconciliation (un seul passage à la fois sur ce paiement). */
+  reconcileClaimedAt: {
+    type: Date,
+    default: null
   }
 }, { timestamps: true });
 
