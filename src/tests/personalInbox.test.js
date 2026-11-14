@@ -118,14 +118,15 @@ InboundEmail.findOneAndUpdate = (f, upd) => {
 };
 FollowUpItem.exists = async (f) => (followUps.some((x) => match(x, f)) ? { _id: f._id } : null);
 
-const READ_G = ['openid', 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/calendar.events', READ_SCOPE.google];
-const SEND_G = READ_G.slice(0, 3);
+// La messagerie personnelle testée ici est Microsoft 365 : Google ne propose plus JAMAIS la lecture (scopes restreints retirés, voir googleNoRead.test.js).
 const SEND_M = ['offline_access', 'openid', 'email', 'User.Read', 'Mail.Send', 'Calendars.ReadWrite', 'OnlineMeetings.ReadWrite'];
+const READ_M = [...SEND_M, 'Mail.Read'];
+const READ_G = READ_M; const SEND_G = SEND_M; // noms conservés pour les scénarios ci-dessous
 const ctxOf = (companyId, id) => `secretariat-shared:${companyId}:${id}`;
 const seedMine = (over = {}) => {
   const id = over._id || ACC_SOPHIE;
   const row = {
-    _id: id, companyId: C1, provider: 'google', label: 'Ma messagerie', ownerName: 'Sophie Martin', accountEmail: 'sophie@cabinet.test', scopes: SEND_G, status: 'connected',
+    _id: id, companyId: C1, provider: 'microsoft', label: 'Ma messagerie', ownerName: 'Sophie Martin', accountEmail: 'sophie@cabinet.test', scopes: SEND_G, status: 'connected',
     permissions: { send: true, calendar: true }, connectedAt: new Date('2026-11-01T10:00:00Z'), connectedBy: 'sophie', personalUserId: 'sophie', inbound: { readEnabled: false, lastSyncAt: null }, ...over,
   };
   row.credentialsEnc = encryptJson({ accessToken: 'ACCESS_SOPHIE', refreshToken: 'REFRESH_SOPHIE', expiresAt: Date.now() + 3600_000 }, { context: ctxOf(row.companyId, id), key: loadKey() });
@@ -133,9 +134,9 @@ const seedMine = (over = {}) => {
   return row;
 };
 const seedCompany = () => {
-  toolsDocs.push({ companyId: C1, email: { provider: 'google' }, inbound: { enabled: true, secretaries: true, mailboxActions: false, lastSyncAt: null } });
-  conns.push({ companyId: C1, provider: 'google', accountEmail: 'centre@gmail.test', status: 'connected', scopes: READ_G, connectedAt: new Date(), connectedBy: 'owner1',
-    credentialsEnc: encryptJson({ accessToken: 'ACCESS_COMPANY', refreshToken: 'REFRESH_COMPANY', expiresAt: Date.now() + 3600_000 }, { context: `secretariat:${C1}:google`, key: loadKey() }) });
+  toolsDocs.push({ companyId: C1, email: { provider: 'microsoft' }, inbound: { enabled: true, secretaries: true, mailboxActions: false, lastSyncAt: null } });
+  conns.push({ companyId: C1, provider: 'microsoft', accountEmail: 'centre@gmail.test', status: 'connected', scopes: READ_G, connectedAt: new Date(), connectedBy: 'owner1',
+    credentialsEnc: encryptJson({ accessToken: 'ACCESS_COMPANY', refreshToken: 'REFRESH_COMPANY', expiresAt: Date.now() + 3600_000 }, { context: `secretariat:${C1}:microsoft`, key: loadKey() }) });
 };
 const reset = () => { accounts.length = 0; conns.length = 0; toolsDocs.length = 0; inbox.length = 0; seq = 0; I.resetRefreshThrottle(); httpCalls.length = 0; handlers = []; };
 
@@ -150,19 +151,15 @@ S.setConnectionsHttp(async (r) => {
 });
 const providerCalls = () => httpCalls.filter((c) => /gmail\.googleapis|graph\.microsoft/.test(c.url));
 const writeCalls = () => providerCalls().filter((c) => c.method !== 'GET');
-const b64 = (s) => Buffer.from(s, 'utf8').toString('base64url');
 const tokenOf = (r) => String(r.headers.Authorization || '').replace('Bearer ', '');
-/** Gmail simulé : la boîte lue dépend du JETON (celui de la secrétaire ou celui de l'entreprise). */
+/** Graph simulé : la boîte lue dépend du JETON (celui de la secrétaire ou celui de l'entreprise). */
 const gmail = () => {
   const boxes = { ACCESS_SOPHIE: ['p1', 'p2'], ACCESS_COMPANY: ['c1', 'c2'] };
-  on('GET', /gmail\/v1\/users\/me\/messages\?/, (r) => ({ status: 200, json: { messages: (boxes[tokenOf(r)] || []).map((id) => ({ id })) } }));
-  on('GET', /messages\/([pc]\d)\?format=metadata/, (r) => {
-    const id = r.url.match(/messages\/([pc]\d)\?/)[1];
-    if (!(boxes[tokenOf(r)] || []).includes(id)) return { status: 404, json: null };
+  on('GET', /graph\.microsoft\.com\/v1\.0\/me\/mailFolders\/inbox\/messages\?/, (r) => ({ status: 200, json: { value: (boxes[tokenOf(r)] || []).map((id) => {
     const perso = id.startsWith('p');
-    return { status: 200, json: { id, internalDate: String(Date.parse('2026-11-10T09:00:00Z') + Number(id[1]) * 60000), snippet: perso ? `extrait perso ${id}` : `extrait entreprise ${id}`, payload: { headers: [{ name: 'From', value: perso ? 'Amie <amie@exemple.fr>' : 'Client <client@exemple.fr>' }, { name: 'Subject', value: perso ? `${SUBJECT_SECRET} ${id}` : `Sujet entreprise ${id}` }] } } };
-  });
-  on('GET', /messages\/p1\?format=full/, () => ({ status: 200, json: { payload: { mimeType: 'text/plain', body: { data: b64(BODY_SECRET) } } } }));
+    return { id, subject: perso ? `${SUBJECT_SECRET} ${id}` : `Sujet entreprise ${id}`, from: { emailAddress: { name: perso ? 'Amie' : 'Client', address: perso ? 'amie@exemple.fr' : 'client@exemple.fr' } }, receivedDateTime: new Date(Date.parse('2026-11-10T09:00:00Z') + Number(id[1]) * 60000).toISOString(), bodyPreview: perso ? `extrait perso ${id}` : `extrait entreprise ${id}` };
+  }) } }));
+  on('GET', /graph\.microsoft\.com\/v1\.0\/me\/messages\/p1\?/, () => ({ status: 200, json: { body: { contentType: 'text', content: BODY_SECRET } } }));
 };
 
 // ---------- serveur
@@ -201,8 +198,8 @@ const callback = async (provider, state) => {
   return res.headers.get('location');
 };
 const oauth = (email, scope) => {
-  on('POST', /oauth2\.googleapis\.com\/token/, () => ({ status: 200, json: { access_token: 'ACCESS_SOPHIE', refresh_token: 'REFRESH_SOPHIE', expires_in: 3599, scope: scope.join(' ') } }));
-  on('GET', /openidconnect\.googleapis\.com\/v1\/userinfo/, () => ({ status: 200, json: { email } }));
+  on('POST', /oauth2\/v2\.0\/token/, () => ({ status: 200, json: { access_token: 'ACCESS_SOPHIE', refresh_token: 'REFRESH_SOPHIE', expires_in: 3599, scope: scope.join(' ') } }));
+  on('GET', /graph\.microsoft\.com\/v1\.0\/me\?/, () => ({ status: 200, json: { mail: email } }));
 };
 const readState = (provider, shared, userId = 'sophie') => S.startAuthorization({ companyId: C1, userId, provider, returnTo: 'profile', read: true, shared });
 const sophieDocs = () => inbox.filter((d) => d.ownerUserId === 'sophie');
@@ -214,18 +211,18 @@ try {
   let r = await req('POST', `${mine()}/enable`, { user: 'sophie', body: { userId: 'paul', accountId: ACC_PAUL, companyId: C2, write: true } });
   assert.equal(r.status, 200);
   const q = qs(r.body.data.url);
-  assert.equal(q.scope, `openid email ${SEND_G.slice(1).join(' ')} ${READ_SCOPE.google}`, 'envoi + agenda + lecture seule');
-  assert.ok(!q.scope.includes(WRITE_SCOPE.google) && !/gmail\.modify/.test(q.scope), 'aucun périmètre d’écriture');
-  assert.deepEqual(S.readState(q.state, 'google'), { companyId: C1, userId: 'sophie', provider: 'google', returnTo: 'profile', shared: { label: 'Ma messagerie', ownerName: 'Sophie Martin', send: true, calendar: true, personal: true, read: true } }, 'personal + read, identité = session');
+  assert.equal(q.scope, `${SEND_M.join(' ')} Mail.Read`, 'envoi + agenda + lecture seule');
+  assert.ok(!q.scope.includes(WRITE_SCOPE.microsoft), 'aucun périmètre d’écriture');
+  assert.deepEqual(S.readState(q.state, 'microsoft'), { companyId: C1, userId: 'sophie', provider: 'microsoft', returnTo: 'profile', shared: { label: 'Ma messagerie', ownerName: 'Sophie Martin', send: true, calendar: true, personal: true, read: true } }, 'personal + read, identité = session');
   seedMine({ _id: ACC_MS, provider: 'microsoft', accountEmail: 'sophie@contoso.test', scopes: SEND_M });
   r = await req('POST', `${mine(ACC_MS)}/enable`, { user: 'sophie' });
   assert.equal(r.status, 200); assert.match(qs(r.body.data.url).scope, / Mail\.Read$/); assert.ok(!/Mail\.ReadWrite\b(?!.*Calendars)/.test(qs(r.body.data.url).scope.replace('Calendars.ReadWrite', '').replace('OnlineMeetings.ReadWrite', '')), 'pas de Mail.ReadWrite');
   accounts.splice(1, 1);
   // l'état signé : `read` seulement pour une messagerie personnelle, booléen strict
-  const forge = (shared) => jwt.sign({ purpose: 'secretariat-oauth', companyId: C1, userId: 'sophie', provider: 'google', returnTo: 'profile', shared }, process.env.JWT_SECRET, { expiresIn: 600 });
-  assert.equal(S.readState(forge({ personal: true, read: 'oui' }), 'google'), null);
-  assert.equal(S.readState(forge({ label: 'Équipe', ownerName: '', send: true, calendar: true, read: true }), 'google'), null, 'un compte partagé ne lit jamais une boîte');
-  assert.equal(S.readState(forge({ personal: true }), 'google').shared.read, undefined);
+  const forge = (shared) => jwt.sign({ purpose: 'secretariat-oauth', companyId: C1, userId: 'sophie', provider: 'microsoft', returnTo: 'profile', shared }, process.env.JWT_SECRET, { expiresIn: 600 });
+  assert.equal(S.readState(forge({ personal: true, read: 'oui' }), 'microsoft'), null);
+  assert.equal(S.readState(forge({ label: 'Équipe', ownerName: '', send: true, calendar: true, read: true }), 'microsoft'), null, 'un compte partagé ne lit jamais une boîte');
+  assert.equal(S.readState(forge({ personal: true }), 'microsoft').shared.read, undefined);
   // accès à la route d'activation : secrétaire propriétaire seulement
   for (const [user, status] of [['owner1', 404], ['member1', 404], ['paul', 404], ['other1', 403], ['otherAgent', 403]]) assert.equal((await req('POST', `${mine()}/enable`, { user })).status, status, `enable refusé à ${user}`);
   assert.equal((await req('POST', `${mine()}/enable`)).status, 401);
@@ -235,26 +232,26 @@ try {
   // retour OAuth : même adresse + scope accordé = lecture activée ; autre adresse = wrong_account ; scope refusé = missing_permissions
   reset(); seedMine();
   oauth('autre@cabinet.test', READ_G);
-  assert.equal(await callback('google', qs(readState('google', { personal: true, ownerName: '', read: true })).state), 'https://portal.test/telephony/app/profile?error=wrong_account');
+  assert.equal(await callback('microsoft', qs(readState('microsoft', { personal: true, ownerName: '', read: true })).state), 'https://portal.test/telephony/app/profile?error=wrong_account');
   assert.equal(accounts[0].inbound.readEnabled, false, 'adresse différente : rien n’est activé'); assert.equal(accounts[0].accountEmail, 'sophie@cabinet.test');
   oauth('sophie@cabinet.test', SEND_G);
-  assert.equal(await callback('google', qs(readState('google', { personal: true, ownerName: '', read: true })).state), 'https://portal.test/telephony/app/profile?error=missing_permissions');
+  assert.equal(await callback('microsoft', qs(readState('microsoft', { personal: true, ownerName: '', read: true })).state), 'https://portal.test/telephony/app/profile?error=missing_permissions');
   assert.equal(accounts[0].inbound.readEnabled, false, 'lecture refusée au consentement : rien n’est activé'); assert.deepEqual(accounts[0].scopes, SEND_G, 'comptes et scopes d’envoi intacts');
   oauth('Sophie@Cabinet.test', READ_G);
-  assert.equal(await callback('google', qs(readState('google', { personal: true, ownerName: '', read: true })).state), 'https://portal.test/telephony/app/profile?connected=google&personal=1&read=1');
-  assert.equal(accounts[0].inbound.readEnabled, true); assert.ok(accounts[0].scopes.includes(READ_SCOPE.google)); assert.ok(!hasWriteScope('google', accounts[0].scopes), 'aucune écriture');
+  assert.equal(await callback('microsoft', qs(readState('microsoft', { personal: true, ownerName: '', read: true })).state), 'https://portal.test/telephony/app/profile?connected=microsoft&personal=1&read=1');
+  assert.equal(accounts[0].inbound.readEnabled, true); assert.ok(accounts[0].scopes.includes(READ_SCOPE.microsoft)); assert.ok(!hasWriteScope('microsoft', accounts[0].scopes), 'aucune écriture');
   assert.equal(accounts.length, 1, 'même compte, pas de doublon');
   // un consentement de lecture sans messagerie déjà connectée est refusé
   reset(); oauth('sophie@cabinet.test', READ_G);
-  assert.equal(await callback('google', qs(readState('google', { personal: true, ownerName: '', read: true })).state), 'https://portal.test/telephony/app/profile?error=invalid_request'); assert.equal(accounts.length, 0);
+  assert.equal(await callback('microsoft', qs(readState('microsoft', { personal: true, ownerName: '', read: true })).state), 'https://portal.test/telephony/app/profile?error=invalid_request'); assert.equal(accounts.length, 0);
   // une reconnexion simple (sans lecture) conserve la lecture si le jeton garde le scope, la retire (et purge) sinon
   reset(); seedMine({ scopes: READ_G, inbound: { readEnabled: true, lastSyncAt: null } }); gmail();
-  r = await req('POST', '/accounts/' + C1 + '/mine/google/start', { user: 'sophie' });
-  assert.match(qs(r.body.data.url).scope, /gmail\.readonly$/, 'la reconnexion redemande la lecture déjà activée');
-  assert.equal(S.readState(qs(r.body.data.url).state, 'google').shared.read, true);
+  r = await req('POST', '/accounts/' + C1 + '/mine/microsoft/start', { user: 'sophie' });
+  assert.match(qs(r.body.data.url).scope, /Mail\.Read$/, 'la reconnexion redemande la lecture déjà activée');
+  assert.equal(S.readState(qs(r.body.data.url).state, 'microsoft').shared.read, true);
   inbox.push({ _id: 'e1', companyId: C1, ownerUserId: 'sophie', accountId: ACC_SOPHIE, providerMessageId: 'p1', deletedAt: null, archivedAt: null, status: 'new', receivedAt: new Date(), fetchedAt: new Date() });
   oauth('sophie@cabinet.test', SEND_G);
-  assert.equal(await callback('google', qs(S.startAuthorization({ companyId: C1, userId: 'sophie', provider: 'google', returnTo: 'profile', shared: { personal: true, ownerName: '' } })).state), 'https://portal.test/telephony/app/profile?connected=google&personal=1');
+  assert.equal(await callback('microsoft', qs(S.startAuthorization({ companyId: C1, userId: 'sophie', provider: 'microsoft', returnTo: 'profile', shared: { personal: true, ownerName: '' } })).state), 'https://portal.test/telephony/app/profile?connected=microsoft&personal=1');
   assert.equal(accounts[0].inbound.readEnabled, false); assert.equal(sophieDocs().length, 0, 'scope de lecture perdu : plus rien n’est conservé');
   reset(); seedMine({ _id: ACC_SOPHIE }); // ---- (le nouvel état ci-dessous repart d'une base propre)
 
@@ -284,7 +281,7 @@ try {
   assert.ok(first.fetchedAt instanceof Date, 'fetchedAt posé : expiration TTL 30 jours');
   r = await req('GET', `${mine()}/emails/${first._id}/body`, { user: 'sophie' });
   assert.equal(r.status, 200); assert.equal(r.body.data.text, BODY_SECRET);
-  assert.ok(providerCalls().some((c) => /format=full/.test(c.url) && tokenOf(c) === 'ACCESS_SOPHIE'));
+  assert.ok(providerCalls().some((c) => /me\/messages\/p1\?/.test(c.url) && tokenOf(c) === 'ACCESS_SOPHIE'));
   assert.ok(!JSON.stringify(inbox).includes(BODY_SECRET), 'le corps n’est jamais stocké');
   assert.ok(!JSON.stringify(accounts).includes(BODY_SECRET));
   for (const d of sophieDocs()) assert.deepEqual(Object.keys(d).filter((k) => !['_id', 'companyId', 'ownerUserId', 'accountId', 'providerMessageId', 'provider', 'fromName', 'fromEmail', 'subject', 'receivedAt', 'snippet', 'status', 'followUpIds', 'fetchedAt'].includes(k)), [], 'métadonnées seulement');
@@ -394,26 +391,25 @@ try {
   assert.equal(providerCalls().length, 0, 'plus aucune lecture après l’arrêt');
   // arrêt PENDANT une lecture en cours : rien n'est conservé
   setPath(accounts[0], 'inbound.readEnabled', true); setPath(accounts[0], 'inbound.lastSyncAt', null); I.resetRefreshThrottle();
-  on('GET', /gmail\/v1\/users\/me\/messages\?/, async () => { setPath(accounts[0], 'inbound.readEnabled', false); return { status: 200, json: { messages: [{ id: 'p1' }] } }; });
+  on('GET', /graph\.microsoft\.com\/v1\.0\/me\/mailFolders\/inbox\/messages\?/, async () => { setPath(accounts[0], 'inbound.readEnabled', false); return { status: 200, json: { value: [{ id: 'p1', subject: 's', receivedDateTime: '2026-11-10T09:00:00Z' }] } }; });
   r = await req('POST', `${mine()}/refresh`, { user: 'sophie' }); assert.equal(r.status, 409); assert.equal(sophieDocs().length, 0, 'aucun résidu après un arrêt pendant la lecture');
-  // le scope seul ne suffit pas : lecture arrêtée = jamais relue même si le jeton garde gmail.readonly
-  assert.ok(accounts[0].scopes.includes(READ_SCOPE.google));
+  // le scope seul ne suffit pas : lecture arrêtée = jamais relue même si le jeton garde Mail.Read
+  assert.ok(accounts[0].scopes.includes(READ_SCOPE.microsoft));
 
   // ---------- 7. déconnexion de la messagerie : e-mails stockés purgés avant les jetons
   reset(); seedMine({ scopes: READ_G, inbound: { readEnabled: true, lastSyncAt: null } }); seedCompany(); gmail();
-  on('POST', /oauth2\.googleapis\.com\/revoke/, () => ({ status: 200, json: {} }));
   await req('POST', `${mine()}/refresh`, { user: 'sophie' }); await req('POST', `/inbound-emails/${C1}/refresh`, { user: 'owner1' });
   assert.equal((await req('DELETE', `/accounts/${C1}/mine/${ACC_SOPHIE}`, { user: 'owner1' })).status, 403); assert.equal(sophieDocs().length, 2);
   assert.equal((await req('DELETE', `/accounts/${C1}/mine/${ACC_SOPHIE}`, { user: 'paul' })).status, 404); assert.equal(sophieDocs().length, 2);
   r = await req('DELETE', `/accounts/${C1}/mine/${ACC_SOPHIE}`, { user: 'sophie' });
   assert.equal(r.status, 200); assert.equal(accounts.length, 0); assert.equal(sophieDocs().length, 0, 'déconnexion : e-mails stockés purgés'); assert.equal(companyDocs().length, 2);
-  assert.equal(httpCalls.filter((c) => /revoke/.test(c.url)).length, 1, 'révocation chez le fournisseur au mieux');
+  assert.equal(httpCalls.filter((c) => /revoke/.test(c.url)).length, 0, 'Microsoft : pas de point de révocation utilisateur, jetons supprimés de notre côté (rien à appeler)');
   assert.equal((await req('GET', `${mine()}/emails`, { user: 'sophie' })).status, 404, 'plus de messagerie : introuvable');
   // déconnexion de la messagerie de l'ENTREPRISE : n'efface pas les e-mails personnels
   reset(); seedMine({ scopes: READ_G, inbound: { readEnabled: true, lastSyncAt: null } }); seedCompany(); gmail();
   await req('POST', `${mine()}/refresh`, { user: 'sophie' });
   const origDelete = SecretariatConnection.deleteOne; SecretariatConnection.deleteOne = async (f) => { const i = conns.findIndex((x) => match(x, f)); if (i >= 0) conns.splice(i, 1); return {}; };
-  await S.disconnect(C1, 'google'); SecretariatConnection.deleteOne = origDelete;
+  await S.disconnect(C1, 'microsoft'); SecretariatConnection.deleteOne = origDelete;
   assert.equal(sophieDocs().length, 2, 'déconnecter la messagerie de l’entreprise ne touche pas aux e-mails personnels');
 
   // ---------- 8. messagerie à reconnecter : signalée clairement, aucun repli sur un autre compte
@@ -428,17 +424,16 @@ try {
   r = await req('GET', `/accounts/${C1}/mine/inbound`, { user: 'sophie' }); assert.deepEqual([r.body.data.accounts[0].needsReauth, r.body.data.accounts[0].canRead], [true, false]);
   // jeton refusé (401) par le fournisseur pendant la lecture : needs_reauth, jamais de repli
   accounts[0].status = 'connected'; httpCalls.length = 0; I.resetRefreshThrottle(); setPath(accounts[0], 'inbound.lastSyncAt', null);
-  handlers = []; on('GET', /gmail\/v1\/users\/me\/messages\?/, () => ({ status: 401, json: null })); on('POST', /oauth2\.googleapis\.com\/token/, () => ({ status: 400, json: { error: 'invalid_grant' } }));
+  handlers = []; on('GET', /graph\.microsoft\.com\/v1\.0\/me\/mailFolders\/inbox\/messages\?/, () => ({ status: 401, json: null })); on('POST', /oauth2\/v2\.0\/token/, () => ({ status: 400, json: { error: 'invalid_grant' } }));
   r = await req('POST', `${mine()}/refresh`, { user: 'sophie' }); assert.equal(r.status, 409); assert.equal(r.body.code, 'needs_reauth'); assert.equal(accounts[0].status, 'needs_reauth');
   assert.ok(providerCalls().every((c) => tokenOf(c) !== 'ACCESS_COMPANY'));
   // panne du fournisseur : message sûr
-  accounts[0].status = 'connected'; I.resetRefreshThrottle(); setPath(accounts[0], 'inbound.lastSyncAt', null); handlers = []; on('GET', /gmail\/v1\/users\/me\/messages\?/, () => ({ status: 503, json: { error: 'DETAIL_INTERNE' } }));
+  accounts[0].status = 'connected'; I.resetRefreshThrottle(); setPath(accounts[0], 'inbound.lastSyncAt', null); handlers = []; on('GET', /graph\.microsoft\.com\/v1\.0\/me\/mailFolders\/inbox\/messages\?/, () => ({ status: 503, json: { error: 'DETAIL_INTERNE' } }));
   r = await req('POST', `${mine()}/refresh`, { user: 'sophie' }); assert.equal(r.status, 502); assert.equal(r.body.code, 'provider_error'); assert.ok(!r.text.includes('DETAIL_INTERNE'));
 
   // ---------- 9. volume : au plus une page par lecture
   reset(); seedMine({ scopes: READ_G, inbound: { readEnabled: true, lastSyncAt: null } });
-  on('GET', /gmail\/v1\/users\/me\/messages\?/, () => ({ status: 200, json: { messages: Array.from({ length: 60 }, (_, i) => ({ id: `p${i}` })) } }));
-  on('GET', /messages\/p\d+\?format=metadata/, (rq) => ({ status: 200, json: { id: rq.url.match(/messages\/(p\d+)\?/)[1], internalDate: String(Date.now()), snippet: 's', payload: { headers: [{ name: 'Subject', value: 's' }] } } }));
+  on('GET', /graph\.microsoft\.com\/v1\.0\/me\/mailFolders\/inbox\/messages\?/, () => ({ status: 200, json: { value: Array.from({ length: 60 }, (_, i) => ({ id: `p${i}`, subject: 's', receivedDateTime: '2026-11-10T09:00:00Z' })) } }));
   r = await req('POST', `${mine()}/refresh`, { user: 'sophie' }); assert.equal(r.status, 200); assert.ok(sophieDocs().length <= I.PAGE_SIZE && r.body.data.items.length <= I.PAGE_SIZE);
 
   // ---------- 10. aucun jeton, aucun contenu dans les journaux ni les réponses des routes de l'entreprise

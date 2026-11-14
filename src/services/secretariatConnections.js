@@ -7,7 +7,7 @@ import { config } from '../config/env.js';
 import { decryptJson, encryptJson, integrationsEnabled, loadKey } from '../integrations/crypto.js';
 import { defaultHttp } from '../integrations/http.js';
 import { oauthStatus } from '../integrations/oauth.js';
-import { call, hasReadScope, hasWriteScope, isProviderId, PROVIDER_IDS, PROVIDER_LABEL, SecretariatError } from './secretariatProviders/common.js';
+import { call, GOOGLE_MAILBOX_ACCESS_REFUSED, hasReadScope, hasWriteScope, isProviderId, PROVIDER_IDS, PROVIDER_LABEL, SecretariatError } from './secretariatProviders/common.js';
 import { purgeInboundEmails, purgePersonalInbox } from './inboundEmailStore.js';
 import { PROVIDERS } from './secretariatProviders/index.js';
 import { isValidTenant, tenantOf } from './secretariatProviders/microsoft.js';
@@ -99,6 +99,8 @@ const stateSecret = () => {
 export function startAuthorization({ companyId, userId, provider, returnTo, shared, read = false, write = false }, env = process.env) {
   const cfg = providerConfig(provider, env);
   if (!cfg) throw new SecretariatError('unavailable', messages.unavailable(provider));
+  // GOOGLE : refus inconditionnel de la lecture et de l'écriture de la boîte (aucun scope restreint n'est jamais demandé), quel que soit l'appelant.
+  if (provider === 'google' && (read || write)) throw new SecretariatError('invalid_request', GOOGLE_MAILBOX_ACCESS_REFUSED);
   // `read` : demande EN PLUS le scope (optionnel) de lecture de la boîte de réception (e-mails entrants). Les scopes obtenus sont lus au callback.
   if (read && !PROVIDERS[provider].readScope) throw new SecretariatError('invalid_request', 'La lecture des e-mails n’est pas disponible pour ce fournisseur.');
   if (write && !PROVIDERS[provider].writeScope) throw new SecretariatError('invalid_request', 'La gestion de la messagerie n’est pas disponible pour ce fournisseur.');
@@ -126,6 +128,7 @@ export function readState(state, provider) {
     if (sh.personal !== undefined && sh.personal !== true) return null;
     // `read` (consentement de LECTURE de sa boîte de réception) n'existe que pour la messagerie personnelle ; jamais d'écriture.
     if (sh.read !== undefined && (sh.read !== true || sh.personal !== true)) return null;
+    if (sh.read !== undefined && provider === 'google') return null; // Google : jamais de consentement de lecture
     if (sh.personal === true) {
       if (sh.accountId !== undefined) return null;
       return { ...base, shared: { label: PERSONAL_LABEL, ownerName: trim(sh.ownerName).slice(0, SHARED_LABEL_MAX), send: true, calendar: true, personal: true, ...(sh.read === true ? { read: true } : {}) } };
@@ -453,6 +456,22 @@ export async function disconnect(companyId, provider, { http = httpImpl, env = p
   await releaseEmailProvider(companyId, provider);
   await releaseAgendaAndVisio(companyId, provider);
   return true;
+}
+
+/**
+ * Révoque au mieux, chez le fournisseur, le jeton d'une connexion d'entreprise (`kind: 'connection'`) ou d'un compte partagé / personnel
+ * (`kind: 'shared'`) SANS le supprimer. Lève en cas d'échec (l'appelant décide). Sert à la migration « Google sans lecture ».
+ */
+export async function revokeStoredGrant(kind, doc, { http = httpImpl, env = process.env } = {}) {
+  const provider = doc.provider;
+  const cfg = providerConfig(provider, env);
+  const P = PROVIDERS[provider];
+  const ctx = kind === 'shared' ? sharedContext(doc.companyId, doc._id) : context(doc.companyId, provider);
+  const Model = kind === 'shared' ? SecretariatSharedAccount : SecretariatConnection;
+  const full = await Model.findOne({ _id: doc._id }).select('+credentialsEnc');
+  if (!full?.credentialsEnc) throw new Error('credentials missing');
+  const credentials = decryptJson(full.credentialsEnc, { context: ctx, key: loadKey(env) });
+  await P.revoke({ http, credentials, auth: cfg ? P.clientAuth(cfg) : { form: {}, headers: {} } });
 }
 
 /** Supprime un compte PARTAGÉ : révocation chez le fournisseur au mieux, puis suppression des jetons. Les réglages de la société ne bougent pas. */

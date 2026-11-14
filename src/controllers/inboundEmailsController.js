@@ -6,7 +6,7 @@ import { loadUserName } from '../services/followUpDirectory.js';
 import SecretariatSharedAccount from '../models/SecretariatSharedAccount.js';
 import { isAvailable, messages, startAuthorization } from '../services/secretariatConnections.js';
 import { loadTools, mergedTools } from '../services/secretariatTools.js';
-import { SecretariatError } from '../services/secretariatProviders/common.js';
+import { GOOGLE_MAILBOX_ACCESS_REFUSED, SecretariatError } from '../services/secretariatProviders/common.js';
 
 const NOT_ALLOWED = 'Seuls le titulaire, les membres autorisés à gérer les appels et, si l’entreprise l’a autorisé, les secrétaires peuvent consulter les e-mails entrants.';
 const fail = (res, status, code, message) => res.status(status).json({ success: false, code, error: message, message });
@@ -24,10 +24,10 @@ async function mayRead(req, companyId) {
   return inbound.enabled === true && inbound.secretaries === true;
 }
 
-/** 409 : inbound_disabled | no_mailbox | read_scope_missing | write_scope_missing | needs_reauth ; 502 provider_error ; jamais le détail du fournisseur, ni un contenu de message. */
+/** 409 : inbound_disabled | no_mailbox | read_scope_missing | read_unavailable (messagerie Google) | write_scope_missing | needs_reauth ; 502 provider_error ; jamais le détail du fournisseur, ni un contenu de message. */
 function sendError(res, error, what) {
   if (error instanceof SecretariatError) {
-    if (['inbound_disabled', 'no_mailbox', 'read_scope_missing', 'write_scope_missing', 'needs_reauth'].includes(error.code)) return fail(res, 409, error.code, error.message);
+    if (['inbound_disabled', 'no_mailbox', 'read_scope_missing', 'read_unavailable', 'write_scope_missing', 'needs_reauth'].includes(error.code)) return fail(res, 409, error.code, error.message);
     if (['not_connected', 'unavailable'].includes(error.code)) return fail(res, 409, 'no_mailbox', 'Aucune messagerie n’est connectée. Connectez-la dans Paramétrage > Outils.');
     if (error.code === 'provider_refused') return fail(res, 409, 'read_scope_missing', 'Le fournisseur a refusé la lecture : l’autorisation de lecture est absente ou révoquée.');
     if (error.code === 'invalid_request') return fail(res, 400, 'invalid_request', error.message);
@@ -129,7 +129,7 @@ export const mineInboundController = {
       const rows = await SecretariatSharedAccount.find({ companyId: new mongoose.Types.ObjectId(me.companyId), personalUserId: me.userId }).select('provider accountEmail status scopes inbound').sort({ provider: 1 }).lean();
       res.json({ success: true, data: { accounts: rows.map((d) => ({
         id: String(d._id), provider: d.provider, email: d.accountEmail, status: d.status === 'needs_reauth' ? 'needs_reauth' : 'connected', needsReauth: d.status === 'needs_reauth',
-        readEnabled: d.inbound?.readEnabled === true, canRead: d.status !== 'needs_reauth' && mineReadEnabled(d),
+        readEnabled: d.provider !== 'google' && d.inbound?.readEnabled === true, canRead: d.status !== 'needs_reauth' && mineReadEnabled(d),
         lastSyncAt: d.inbound?.lastSyncAt ? new Date(d.inbound.lastSyncAt).toISOString() : null,
       })) } });
     } catch (error) { sendMineError(res, error, 'mine state'); }
@@ -137,6 +137,7 @@ export const mineInboundController = {
   /** Démarre le consentement de LECTURE (gmail.readonly / Mail.Read, aucun scope d'écriture) pour CE compte : l'adresse doit rester la même (wrong_account au retour sinon). */
   enable: mineGuard(async (scope, req, res) => {
     const acc = await loadMine(scope);
+    if (acc.provider === 'google') return fail(res, 409, 'read_unavailable', GOOGLE_MAILBOX_ACCESS_REFUSED); // aucun consentement de lecture Gmail ne démarre jamais
     if (!isAvailable(acc.provider)) return fail(res, 409, 'unavailable', messages.unavailable(acc.provider));
     const ownerName = String((await loadUserName(scope.userId)) || '').replace(/[\u0000-\u001F\u007F<>"\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
     const url = startAuthorization({ companyId: scope.companyId, userId: scope.userId, provider: acc.provider, returnTo: 'profile', read: true, shared: { personal: true, ownerName, read: true } });

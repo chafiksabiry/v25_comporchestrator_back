@@ -35,6 +35,7 @@ import { clearExpiredRetractions } from './src/services/retractionService.js';
 import { resolveExpiredPendingReviews, flagWeeklyAiAudits } from './src/controllers/escrowController.js';
 import { billExpiredTrialLines, reconcilePendingMonthlyLines, terminateSuspendedLines } from './src/services/phoneLineBillingService.js';
 import { syncPlanMetadataFromStripe } from './src/services/planMetadataSync.js';
+import { neutralizeGoogleInbox } from './src/services/googleInboxMigration.js';
 
 const app = express();
 
@@ -47,6 +48,8 @@ mongoose.connect(config.mongodbUri, {
   useUnifiedTopology: true,
 }).then(() => {
   console.log('✅ Connected to MongoDB');
+  // Google ne demande plus jamais la lecture de la boîte : lecture coupée et e-mails Google purgés pour les comptes déjà autorisés (idempotent, journalisé).
+  neutralizeGoogleInbox();
 }).catch((error) => {
   console.error('❌ MongoDB connection error:', error);
   process.exit(1); // Exit if we can't connect to database
