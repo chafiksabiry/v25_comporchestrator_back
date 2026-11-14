@@ -965,3 +965,24 @@ test('[B8] résiliation par le portail client (abonnement supprimé sans notre d
   assert.equal(line.billingStatus, 'suspended');
   assert.ok(Math.abs(line.terminatesAt.getTime() - (before + 30 * DAY)) < 5000);
 });
+
+test('[B5] checkout/config : même refus 409 PHONE_LINE_PRICE_NOT_CONFIGURED que checkout/init (pas de prix trompeur), sans champ de succès ajouté', async () => {
+  planMetadata = { harx_product: 'callcenter', callcenter_tier: 'multi_clients' }; // pas de phone_line_price_cents
+  const cfg = mockRes();
+  await phoneNumberController.getCheckoutConfig(lineReq({}, { companyId: COMPANY }), cfg);
+  const init = mockRes();
+  await phoneNumberController.initLineCheckout(lineReq({ phoneNumber: '+33612345678', companyId: COMPANY, provider: 'stripe' }), init);
+  assert.equal(cfg.statusCode, 409);
+  assert.deepEqual(cfg.body, init.body, 'strictement le même refus');
+  assert.equal(cfg.body.code, 'PHONE_LINE_PRICE_NOT_CONFIGURED');
+  assert.equal(cfg.body.pricing, undefined);
+  // offre valable, Nomad, TaaS, sans entreprise : réponse de succès inchangée
+  for (const [meta, query, cents] of [[offerMeta('accueil'), { companyId: COMPANY }, 1499], [{ harx_product: 'callcenter', callcenter_tier: 'nomad_solo' }, { companyId: COMPANY }, 999], [{ stripe_plan: 'taas' }, { companyId: COMPANY }, 999], [{ harx_product: 'callcenter', callcenter_tier: 'multi_clients' }, {}, 999]]) {
+    planMetadata = meta;
+    const ok = mockRes();
+    await phoneNumberController.getCheckoutConfig(lineReq({}, query), ok);
+    assert.equal(ok.statusCode, 200);
+    assert.equal(ok.body.pricing.amountCents, cents);
+    assert.deepEqual(Object.keys(ok.body.pricing).sort(), ['amountCents', 'currency', 'trialDays']);
+  }
+});

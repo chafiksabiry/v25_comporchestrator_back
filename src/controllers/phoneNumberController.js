@@ -147,6 +147,13 @@ async function releaseLineAuthorization(payment, reason) {
   return { released: true, provider: payment.provider };
 }
 
+/** Refus (409) commun à checkout/init et checkout/config : offre Call Centre sans prix de ligne valable. */
+const PHONE_LINE_PRICE_NOT_CONFIGURED_BODY = {
+  error: 'Phone line price not configured',
+  code: 'PHONE_LINE_PRICE_NOT_CONFIGURED',
+  message: "Le prix d'une ligne supplémentaire n'est pas configuré pour votre offre : l'achat est impossible pour le moment. Aucun paiement n'a été pris. Contactez le support."
+};
+
 const sessionPublicView = (session, callId) => ({
   callId,
   status: session?.status || 'connecting',
@@ -991,11 +998,7 @@ class PhoneNumberController {
       const linePricing = await getPhoneLinePricing(companyId, { limits: planLimits });
       if (linePricing.unavailable) {
         // Offre Call Centre sans prix de ligne valable : refus clair, jamais de repli silencieux sur 9,99 sans abonnement.
-        return res.status(409).json({
-          error: 'Phone line price not configured',
-          code: 'PHONE_LINE_PRICE_NOT_CONFIGURED',
-          message: "Le prix d'une ligne supplémentaire n'est pas configuré pour votre offre : l'achat est impossible pour le moment. Aucun paiement n'a été pris. Contactez le support."
-        });
+        return res.status(409).json(PHONE_LINE_PRICE_NOT_CONFIGURED_BODY);
       }
       if (linePricing.monthly) {
         // Refus avant tout paiement si les renouvellements ne pourront pas être prélevés.
@@ -1249,6 +1252,7 @@ class PhoneNumberController {
       // `?companyId=` : prix de la ligne de l'offre de l'entreprise (même champ `pricing.amountCents`) et devise de son pays
       // (mêmes montants) ; sans lui, prix et devise de base.
       const linePricing = await getPhoneLinePricing(req.query?.companyId);
+      if (linePricing.unavailable) return res.status(409).json(PHONE_LINE_PRICE_NOT_CONFIGURED_BODY);
       // `?companyId=` : devise du pays de l'entreprise (mêmes montants) ; sans lui, la devise de base (EUR).
       const currency = req.query?.companyId ? await purchaseCurrency(req, req.query.companyId) : String(linePricing.currency || 'EUR').toUpperCase();
       res.json({
