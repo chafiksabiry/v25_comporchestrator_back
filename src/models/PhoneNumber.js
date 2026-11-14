@@ -115,9 +115,11 @@ const phoneNumberSchema = new mongoose.Schema({
   //                       provisioned but is given up to 1 month to recover
   //   'terminated'      — still unpaid after 1 month, number released before
   //                       what would have been the next billing cycle
+  // Abonnement mensuel par ligne : 'pending' = acheté mais premier mois pas encore encaissé (repris ou libéré par la
+  // réconciliation au-delà de 15 min) ; 'release_failed' = libération du numéro impossible, à reprendre.
   billingStatus: {
     type: String,
-    enum: ['n/a', 'trial', 'active', 'payment_failed', 'suspended', 'terminated'],
+    enum: ['n/a', 'trial', 'pending', 'active', 'payment_failed', 'suspended', 'terminated', 'release_failed'],
     default: 'n/a'
   },
   stripeSubscriptionId: {

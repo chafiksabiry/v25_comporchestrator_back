@@ -727,6 +727,14 @@ export const stripeService = {
 
   buildPhoneLineSubscriptionParams,
 
+  /** Abonnements de ligne portant metadata.phoneNumberId = lineId (retrouver un orphelin dont l'id n'a pas été enregistré). */
+  findPhoneLineSubscriptionIds: async (lineId) => {
+    const safe = String(lineId).replace(/[^a-zA-Z0-9]/g, '');
+    // La recherche Stripe n'accepte pas de mélanger AND et OR : filtre sur la métadonnée, statuts triés ici.
+    const res = await getStripe().subscriptions.search({ query: `metadata['phoneNumberId']:'${safe}'`, limit: 10 });
+    return (res?.data || []).filter((x) => ['active', 'trialing', 'past_due', 'unpaid', 'incomplete'].includes(x.status)).map((x) => x.id);
+  },
+
   /** Résilie l'abonnement d'une ligne tout de suite. `prorate` / `invoiceNow` false : ni prorata ni facture finale. */
   cancelPhoneLineSubscription: async (subscriptionId, { prorate = false, invoiceNow = false } = {}) => {
     return getStripe().subscriptions.cancel(subscriptionId, { prorate, invoice_now: invoiceNow });

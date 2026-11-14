@@ -2,7 +2,16 @@ import { PhoneNumber } from '../models/PhoneNumber.js';
 import { stripeService } from './stripeService.js';
 import { phoneNumberService } from './phoneNumberService.js';
 import { config } from '../config/env.js';
-import { resolveCompanyStripeCustomerId, SUSPENSION_GRACE_MS } from './phoneLineSubscription.js';
+import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
+import { paypalService } from './paypalService.js';
+import {
+  activateMonthlyLine,
+  markLineReleaseFailed,
+  PENDING_LINE_MAX_AGE_MS,
+  resolveCompanyStripeCustomerId,
+  startMonthlyLineSubscription,
+  SUSPENSION_GRACE_MS,
+} from './phoneLineSubscription.js';
 
 // PAY-19 (décidé le 11/10): en cas d'échec de paiement, ligne suspendue un mois puis résiliée avant le cycle de
 // facturation suivant (SUSPENSION_GRACE_MS, resolveCompanyStripeCustomerId : phoneLineSubscription.js).
@@ -113,4 +122,96 @@ export async function terminateSuspendedLines() {
   }
 
   return { terminated, total: overdue.length };
+}
+
+/** Le premier mois de cette ligne est-il réellement encaissé ? Stripe fait foi (notre base peut être en retard après un crash). */
+async function isPaymentCaptured(payment) {
+  if (payment.provider === 'stripe' && payment.providerRef) {
+    const session = await stripeService.retrieveSession(payment.providerRef);
+    const pi = session?.payment_intent;
+    return session?.payment_status === 'paid' || (pi && typeof pi === 'object' && pi.status === 'succeeded');
+  }
+  return payment.status === 'succeeded';
+}
+
+async function releaseLine(line) {
+  try {
+    await phoneNumberService.deletePhoneNumber({ id: line._id, companyId: line.companyId });
+    return true;
+  } catch (err) {
+    await markLineReleaseFailed(line, err.message);
+    return false;
+  }
+}
+
+/**
+ * Abonnement mensuel par ligne : reprend ou libère les lignes restées « pending » plus de 15 minutes (crash entre la commande du
+ * numéro et la capture), et retente la libération des lignes `release_failed`.
+ *  - premier mois encaissé -> abonnement créé si besoin, ligne activée ;
+ *    abonnement impossible -> ligne libérée et paiement remboursé ;
+ *  - premier mois NON encaissé -> ligne libérée (abonnement annulé), autorisation libérée.
+ * Un état Stripe illisible laisse la ligne intacte jusqu'au prochain passage (on ne libère jamais dans le doute).
+ */
+export async function reconcilePendingMonthlyLines({ now = new Date(), minAgeMs = PENDING_LINE_MAX_AGE_MS } = {}) {
+  const result = { total: 0, resumed: 0, released: 0, refunded: 0, skipped: 0, releaseRetried: 0 };
+  const pending = await PhoneNumber.find({
+    billingModel: 'monthly',
+    billingStatus: 'pending',
+    createdAt: { $lte: new Date(now.getTime() - minAgeMs) },
+  });
+  result.total = pending.length;
+
+  for (const line of pending) {
+    try {
+      const payment = line.paymentRef ? await PhoneNumberPayment.findById(line.paymentRef) : null;
+      const captured = payment ? await isPaymentCaptured(payment) : false;
+
+      if (captured) {
+        try {
+          if (!line.stripeSubscriptionId) {
+            await startMonthlyLineSubscription({ line, amountCents: payment.amount, currency: payment.currency });
+          }
+          await activateMonthlyLine(line);
+          payment.status = 'succeeded';
+          payment.phoneNumberRef = line._id;
+          await payment.save();
+          result.resumed += 1;
+          continue;
+        } catch (resumeErr) {
+          console.error(`[phoneLineBilling] cannot resume pending line ${line.phoneNumber}: ${resumeErr.message}`);
+          await releaseLine(line);
+          if (payment.provider === 'stripe') await stripeService.refundCheckoutSession(payment.providerRef, { reason: 'line_subscription_reconcile' });
+          else if (payment.provider === 'paypal') await paypalService.refundOrder(payment.providerRef, { reason: 'line_subscription_reconcile' });
+          payment.status = 'refunded';
+          payment.failureReason = 'line_subscription_reconcile';
+          await payment.save();
+          result.refunded += 1;
+          continue;
+        }
+      }
+
+      await releaseLine(line);
+      if (payment && payment.status === 'authorized') {
+        if (payment.provider === 'stripe' && payment.providerRef) await stripeService.cancelCheckoutAuthorization(payment.providerRef);
+        payment.status = 'failed';
+        payment.failureReason = 'line_pending_not_captured';
+        await payment.save();
+      }
+      result.released += 1;
+    } catch (err) {
+      result.skipped += 1;
+      console.warn(`[phoneLineBilling] pending line ${line.phoneNumber} left for the next run: ${err.message}`);
+    }
+  }
+
+  const failedReleases = await PhoneNumber.find({ billingModel: 'monthly', billingStatus: 'release_failed' });
+  for (const line of failedReleases) {
+    try {
+      await phoneNumberService.deletePhoneNumber({ id: line._id, companyId: line.companyId });
+      result.releaseRetried += 1;
+    } catch (err) {
+      console.warn(`[phoneLineBilling] release still failing for ${line.phoneNumber}: ${err.message}`);
+    }
+  }
+  return result;
 }

@@ -31,6 +31,17 @@ export const CANCEL_LINE_SUBSCRIPTION_INVOICE_NOW = false;
 export const REACTIVATE_LINE_ON_REGULARIZATION = true;
 /** Mois de grâce après suspension (PAY-19 : un mois puis résiliation). */
 export const SUSPENSION_GRACE_MS = 30 * 24 * 60 * 60 * 1000;
+/**
+ * Résiliation de l'abonnement d'une ligne par le portail client Stripe (ou fin des relances Stripe) : Stripe envoie
+ * customer.subscription.deleted sans que nous l'ayons demandé. Comportement DOCUMENTÉ et voulu : la ligne est traitée
+ * comme un impayé, suspendue avec la même grâce de 30 jours, puis résiliée par terminateSuspendedLines. Pour résilier tout de
+ * suite une ligne, le client passe par la suppression de la ligne (deletePhoneNumber), pas par le portail.
+ */
+export const PORTAL_CANCELLATION_GRACE_MS = SUSPENSION_GRACE_MS;
+/** Statuts de l'abonnement d'offre dont le client Stripe porte les renouvellements des lignes. */
+export const ACTIVE_OFFER_STATUSES = ['active', 'trialing'];
+/** Une ligne mensuelle « pending » depuis plus longtemps que cela est reprise ou libérée par la réconciliation. */
+export const PENDING_LINE_MAX_AGE_MS = 15 * 60 * 1000;
 
 /** Prix mensuel d'une ligne (centimes entiers > 0) lu dans des métadonnées de produit ; null si absent ou invalide. */
 export function phoneLinePriceCentsFromMetadata(metadata) {
@@ -65,12 +76,17 @@ function codedError(code, message, cause) {
   return err;
 }
 
-/** Client Stripe existant de l'entreprise (celui de son abonnement d'offre), s'il y en a un. */
-export async function resolveCompanyStripeCustomerId(companyId) {
+/**
+ * Client Stripe existant de l'entreprise (celui de son abonnement d'offre), s'il y en a un.
+ * `activeOnly` : seulement l'abonnement d'offre ACTIF (renouvellements des lignes mensuelles) ; sans cela, comportement
+ * historique (facturation TaaS post-essai) inchangé.
+ */
+export async function resolveCompanyStripeCustomerId(companyId, { activeOnly = false } = {}) {
   const sub = await Subscription.findOne({
     companyId: String(companyId),
     provider: 'stripe',
     stripeCustomerId: { $exists: true, $nin: [null, '', 'paypal'] },
+    ...(activeOnly ? { status: { $in: ACTIVE_OFFER_STATUSES } } : {}),
   }).sort({ updatedAt: -1 }).lean();
   return sub?.stripeCustomerId || null;
 }
@@ -83,11 +99,11 @@ export async function assertMonthlyLineBillable(companyId) {
   if (!stripeService.isConfigured()) {
     throw codedError('LINE_SUBSCRIPTION_UNAVAILABLE', "L'abonnement mensuel de la ligne est indisponible pour le moment.");
   }
-  const customerId = await resolveCompanyStripeCustomerId(companyId);
+  const customerId = await resolveCompanyStripeCustomerId(companyId, { activeOnly: true });
   if (!customerId) {
     throw codedError(
       'LINE_SUBSCRIPTION_NO_CUSTOMER',
-      "Aucun moyen de paiement n'est enregistré sur votre abonnement : ajoutez-en un pour souscrire une ligne supplémentaire."
+      "Aucun abonnement d'offre actif avec un moyen de paiement n'est enregistré : ajoutez-en un pour souscrire une ligne supplémentaire."
     );
   }
   if (!(await stripeService.hasUsablePaymentMethod(customerId))) {
@@ -104,7 +120,7 @@ export async function assertMonthlyLineBillable(companyId) {
  * Idempotent : une ligne qui a déjà son abonnement n'en reçoit pas un second. Lève une erreur codée si la création échoue.
  * @param {{line: object, amountCents: number, currency: string, now?: Date}} args
  */
-export async function startMonthlyLineSubscription({ line, amountCents, currency, now = new Date() }) {
+export async function startMonthlyLineSubscription({ line, amountCents, currency, now = new Date(), idempotencyKey }) {
   if (line.stripeSubscriptionId) return { subscriptionId: line.stripeSubscriptionId, alreadyStarted: true };
   const customerId = await assertMonthlyLineBillable(line.companyId);
   const firstCycleAt = addMonths(now, FIRST_CYCLE_OFFSET_MONTHS);
@@ -115,7 +131,7 @@ export async function startMonthlyLineSubscription({ line, amountCents, currency
       amountCents,
       currency,
       firstCycleAt,
-      idempotencyKey: `phone-line-sub-${line._id}`,
+      idempotencyKey: idempotencyKey || `phone-line-sub-${line._id}`,
       metadata: {
         kind: PHONE_LINE_SUBSCRIPTION_KIND,
         phoneNumberId: String(line._id),
@@ -126,13 +142,55 @@ export async function startMonthlyLineSubscription({ line, amountCents, currency
     throw codedError('LINE_SUBSCRIPTION_FAILED', `Création de l'abonnement de la ligne impossible : ${err.message}`, err);
   }
   line.billingModel = BILLING_MODEL_MONTHLY;
-  line.billingStatus = 'active';
+  // Reste « pending » : la ligne n'est active qu'une fois le premier mois encaissé (activateMonthlyLine).
+  if (!line.billingStatus || line.billingStatus === 'n/a') line.billingStatus = 'pending';
   line.stripeSubscriptionId = subscription.id;
   line.paymentFailedAt = null;
   line.suspendedAt = null;
   line.terminatesAt = null;
-  await line.save();
+  try {
+    await line.save();
+  } catch (saveErr) {
+    // L'id n'a pas pu être écrit : on annule l'abonnement qu'on vient de créer plutôt que de laisser un orphelin facturable.
+    line.stripeSubscriptionId = null;
+    try {
+      await stripeService.cancelPhoneLineSubscription(subscription.id, { prorate: CANCEL_LINE_SUBSCRIPTION_PRORATE, invoiceNow: CANCEL_LINE_SUBSCRIPTION_INVOICE_NOW });
+    } catch (cancelErr) {
+      console.error(JSON.stringify({ event: 'phone_line_orphan_subscription', lineId: String(line._id), subscriptionId: subscription.id, reason: cancelErr.message }));
+    }
+    throw codedError('LINE_SUBSCRIPTION_FAILED', `Enregistrement de l'abonnement de la ligne impossible : ${saveErr.message}`, saveErr);
+  }
   return { subscriptionId: subscription.id, alreadyStarted: false };
+}
+
+/** Premier mois encaissé : la ligne devient active. Idempotent. */
+export async function activateMonthlyLine(line) {
+  if (line.billingStatus === 'active') return line;
+  line.billingStatus = 'active';
+  await line.save();
+  return line;
+}
+
+/**
+ * La libération d'une ligne a échoué (opérateur ou Stripe) : trace durable sur la ligne (statut `release_failed`, repris par
+ * reconcilePendingMonthlyLines) et log structuré pour l'alerte.
+ */
+export async function markLineReleaseFailed(line, reason) {
+  console.error(JSON.stringify({
+    event: 'phone_line_release_failed',
+    lineId: String(line._id),
+    companyId: String(line.companyId),
+    phoneNumber: line.phoneNumber,
+    subscriptionId: line.stripeSubscriptionId || null,
+    reason: String(reason || 'unknown'),
+  }));
+  line.billingStatus = 'release_failed';
+  try {
+    await line.save();
+  } catch (saveErr) {
+    console.error(JSON.stringify({ event: 'phone_line_release_failed_unsaved', lineId: String(line._id), reason: saveErr.message }));
+  }
+  return line;
 }
 
 /**
@@ -141,24 +199,33 @@ export async function startMonthlyLineSubscription({ line, amountCents, currency
  * Lève si Stripe échoue pour une autre raison : l'appelant ne doit alors pas supprimer la ligne.
  */
 export async function cancelLineSubscription(line) {
-  if (!line || line.billingModel !== BILLING_MODEL_MONTHLY || !line.stripeSubscriptionId) {
-    return { canceled: false, skipped: true };
-  }
+  if (!line || line.billingModel !== BILLING_MODEL_MONTHLY) return { canceled: false, skipped: true };
   // Posé AVANT l'appel : le webhook customer.subscription.deleted qui suit ne doit pas traiter cette résiliation comme un impayé.
   if (!line.subscriptionCanceledAt) {
     line.subscriptionCanceledAt = new Date();
     await line.save();
   }
-  try {
-    await stripeService.cancelPhoneLineSubscription(line.stripeSubscriptionId, {
-      prorate: CANCEL_LINE_SUBSCRIPTION_PRORATE,
-      invoiceNow: CANCEL_LINE_SUBSCRIPTION_INVOICE_NOW,
-    });
-  } catch (err) {
-    const alreadyGone = err?.code === 'resource_missing' || err?.statusCode === 404 || /no such subscription/i.test(String(err?.message));
-    if (!alreadyGone) throw err;
+  let ids = line.stripeSubscriptionId ? [line.stripeSubscriptionId] : [];
+  if (!ids.length && stripeService.isConfigured()) {
+    // Id non enregistré (crash, échec d'écriture) : on retrouve l'éventuel abonnement orphelin par metadata.phoneNumberId.
+    try {
+      ids = await stripeService.findPhoneLineSubscriptionIds(String(line._id));
+    } catch (searchErr) {
+      console.warn(`[phoneLine] recherche d'abonnement orphelin impossible (${line._id}): ${searchErr.message}`);
+    }
   }
-  return { canceled: true, skipped: false };
+  for (const id of ids) {
+    try {
+      await stripeService.cancelPhoneLineSubscription(id, {
+        prorate: CANCEL_LINE_SUBSCRIPTION_PRORATE,
+        invoiceNow: CANCEL_LINE_SUBSCRIPTION_INVOICE_NOW,
+      });
+    } catch (err) {
+      const alreadyGone = err?.code === 'resource_missing' || err?.statusCode === 404 || /no such subscription/i.test(String(err?.message));
+      if (!alreadyGone) throw err;
+    }
+  }
+  return { canceled: ids.length > 0, skipped: false };
 }
 
 /** Ligne portant cet abonnement Stripe, ou à défaut celle désignée par la métadonnée `phoneNumberId`. */
@@ -205,14 +272,45 @@ export async function markLineSubscriptionFailed(subscriptionId, { metadata = nu
   return { handled: true, lineId: String(line._id) };
 }
 
-/** Paiement régularisé pendant le mois de grâce : la ligne est réactivée (REACTIVATE_LINE_ON_REGULARIZATION). Idempotent. */
-export async function reactivateLineSubscription(subscriptionId, { metadata = null } = {}) {
+/** L'abonnement Stripe est-il vivant (active / trialing) ? Introuvable = mort ; toute autre erreur Stripe remonte (Stripe rejouera). */
+async function isSubscriptionAlive(subscriptionId) {
+  try {
+    const sub = await stripeService.getSubscription(subscriptionId);
+    return ACTIVE_OFFER_STATUSES.includes(sub?.status);
+  } catch (err) {
+    if (err?.code === 'resource_missing' || err?.statusCode === 404 || /no such subscription/i.test(String(err?.message))) return false;
+    throw err;
+  }
+}
+
+/**
+ * Paiement régularisé pendant le mois de grâce : la ligne est réactivée (REACTIVATE_LINE_ON_REGULARIZATION), mais SEULEMENT si
+ * son abonnement Stripe est vivant. Sinon (annulé entre-temps) un nouvel abonnement est créé, et la ligne n'est réactivée
+ * que s'il l'est. Idempotent.
+ */
+export async function reactivateLineSubscription(subscriptionId, { metadata = null, now = new Date() } = {}) {
   if (!REACTIVATE_LINE_ON_REGULARIZATION) return { handled: false, reason: 'disabled' };
   const line = await findLineBySubscription(subscriptionId, metadata);
   if (!line) return { handled: false, reason: 'no_line' };
   if (line.subscriptionCanceledAt) return { handled: false, reason: 'canceled_by_us' };
   if (!['suspended', 'payment_failed'].includes(line.billingStatus)) {
     return { handled: false, reason: 'not_suspended', lineId: String(line._id) };
+  }
+  if (!(await isSubscriptionAlive(line.stripeSubscriptionId))) {
+    const cents = Math.round(Number(line.price) * 100);
+    if (!(cents > 0)) {
+      console.error(JSON.stringify({ event: 'phone_line_reactivation_no_price', lineId: String(line._id) }));
+      return { handled: false, reason: 'no_price', lineId: String(line._id) };
+    }
+    const oldId = line.stripeSubscriptionId;
+    line.stripeSubscriptionId = null;
+    try {
+      await startMonthlyLineSubscription({ line, amountCents: cents, currency: line.currency || 'EUR', now, idempotencyKey: `phone-line-sub-${line._id}-after-${oldId}` });
+    } catch (err) {
+      line.stripeSubscriptionId = oldId;
+      console.error(JSON.stringify({ event: 'phone_line_reactivation_resubscribe_failed', lineId: String(line._id), reason: err.message }));
+      return { handled: false, reason: 'resubscribe_failed', lineId: String(line._id) };
+    }
   }
   line.billingStatus = 'active';
   line.paymentFailedAt = null;

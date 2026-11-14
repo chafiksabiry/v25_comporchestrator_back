@@ -128,8 +128,9 @@ export async function computeTokensPurchaseCents(tokens) {
 }
 
 /**
- * Prix d'une ligne. Sans `companyId` (ou hors offre Call Centre portant `phone_line_price_cents`) : prix par défaut
- * (PHONE_LINE_SETUP_FEE_CENTS, 999), inchangé. Offre Call Centre dont le produit Stripe porte `phone_line_price_cents` :
+ * Prix d'une ligne. Sans `companyId`, pour Nomad, TaaS et autres : prix par défaut
+ * (PHONE_LINE_SETUP_FEE_CENTS, 999), inchangé. Offre Call Centre autre que Nomad sans `phone_line_price_cents` valable :
+ * `unavailable: true`. Offre Call Centre dont le produit Stripe porte `phone_line_price_cents` :
  * ce prix (premier mois payé à l'achat), puis abonnement mensuel du même montant (`monthly: true`).
  * `opts.limits` : forfait déjà chargé par l'appelant (évite une seconde lecture). Ne lève jamais à cause du forfait.
  */
@@ -146,9 +147,13 @@ export async function getPhoneLinePricing(companyId, { limits } = {}) {
   }
   const monthlyCents = planLimits?.product === 'callcenter' ? planLimits.phoneLinePriceCents : null;
   const monthly = Number.isInteger(monthlyCents) && monthlyCents > 0;
+  // Offre Call Centre (hors Nomad, limité à une ligne incluse) sans prix de ligne valable : pas de repli silencieux à 999 sans
+  // abonnement, l'achat est refusé (initLineCheckout, code PHONE_LINE_PRICE_NOT_CONFIGURED).
+  const unavailable = planLimits?.product === 'callcenter' && planLimits.callcenterTier !== 'nomad_solo' && !monthly;
   return {
     setupFeeCents: monthly ? monthlyCents : pricing.phoneLineSetupFeeCents,
     monthly,
+    unavailable,
     currency: pricing.phoneLineCurrency,
     trialDays: pricing.phoneLineTrialDays,
     trialDurationMs: pricing.phoneLineTrialDays * 24 * 60 * 60 * 1000,

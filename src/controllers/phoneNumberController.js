@@ -13,7 +13,7 @@ import mongoose from 'mongoose';
 import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { getPhoneLinePricing } from '../services/platformPricingService.js';
-import { assertMonthlyLineBillable, BILLING_MODEL_MONTHLY, startMonthlyLineSubscription } from '../services/phoneLineSubscription.js';
+import { activateMonthlyLine, assertMonthlyLineBillable, BILLING_MODEL_MONTHLY, markLineReleaseFailed, startMonthlyLineSubscription } from '../services/phoneLineSubscription.js';
 import { isFrenchCountry, resolvePhoneProvider } from '../utils/phoneProvider.js';
 import { isLineIncluded, isLineTrialAllowed, loadCompanyPlanLimits, localNumberLimitPayload } from '../services/planLimits.js';
 import { availableIdentities, isAvailable, markAvailable, markUnavailable, presenceSummary, voiceIdentity } from '../services/voicePresenceService.js';
@@ -379,6 +379,13 @@ class PhoneNumberController {
             message: 'The payment was not authorized for this exact phone number.'
           });
         }
+        // Le paiement doit appartenir à l'entreprise qui achète : jamais le paiement (ni la capture) d'une autre entreprise.
+        if (String(payment.companyId) !== String(companyId)) {
+          return res.status(403).json({
+            error: 'Payment / company mismatch',
+            message: "Ce paiement n'appartient pas à cette entreprise."
+          });
+        }
         // Abonnement mensuel par ligne : le prix a été figé à l'initialisation du paiement. On s'assure AVANT de commander le
         // numéro que les renouvellements pourront être prélevés ; sinon achat refusé, autorisation libérée / paiement remboursé.
         isMonthly = payment.lineBilling === BILLING_MODEL_MONTHLY;
@@ -387,6 +394,10 @@ class PhoneNumberController {
             await assertMonthlyLineBillable(companyId);
           } catch (billableErr) {
             return this.rejectMonthlyLine(res, payment, billableErr);
+          }
+          // Un paiement n'achète qu'une ligne : réservation atomique (rejeu ou double envoi -> 409).
+          if (!(await this.claimLinePayment(payment))) {
+            return res.status(409).json({ error: 'Payment already in use', code: 'PAYMENT_ALREADY_USED', message: 'Ce paiement est déjà utilisé pour un achat en cours ou terminé.' });
           }
         }
       } else if (isIncluded) {
@@ -417,11 +428,11 @@ class PhoneNumberController {
       );
       numberPurchased = true;
       if (isMonthly) {
-        // Abonnement de la ligne créé AVANT la capture : s'il échoue, le numéro est libéré et le paiement n'est pas encaissé.
-        const subscriptionFailure = await this.startMonthlyLineOrRollback(newNumber, payment, companyId);
-        if (subscriptionFailure) return this.rejectMonthlyLine(res, payment, subscriptionFailure);
-      }
-      if (!isTrial && payment?.status === 'authorized') {
+        // Abonnement créé, puis capture, puis ligne activée. Tout échec défait l'ensemble (ligne supprimée, abonnement annulé,
+        // autorisation libérée ou paiement remboursé) : jamais d'abonnement actif sans premier mois encaissé.
+        const outcome = await this.completeMonthlyLinePurchase(newNumber, payment, companyId);
+        if (outcome.error) return this.rejectMonthlyLine(res, payment, outcome.error, { releaseFailed: outcome.releaseFailed });
+      } else if (!isTrial && payment?.status === 'authorized') {
         await captureAuthorizedLinePayment(payment);
       }
 
@@ -585,6 +596,13 @@ class PhoneNumberController {
             message: 'The payment was not authorized for this exact phone number.'
           });
         }
+        // Le paiement doit appartenir à l'entreprise qui achète : jamais le paiement (ni la capture) d'une autre entreprise.
+        if (String(payment.companyId) !== String(companyId)) {
+          return res.status(403).json({
+            error: 'Payment / company mismatch',
+            message: "Ce paiement n'appartient pas à cette entreprise."
+          });
+        }
         // Abonnement mensuel par ligne : le prix a été figé à l'initialisation du paiement. On s'assure AVANT de commander le
         // numéro que les renouvellements pourront être prélevés ; sinon achat refusé, autorisation libérée / paiement remboursé.
         isMonthly = payment.lineBilling === BILLING_MODEL_MONTHLY;
@@ -593,6 +611,10 @@ class PhoneNumberController {
             await assertMonthlyLineBillable(companyId);
           } catch (billableErr) {
             return this.rejectMonthlyLine(res, payment, billableErr);
+          }
+          // Un paiement n'achète qu'une ligne : réservation atomique (rejeu ou double envoi -> 409).
+          if (!(await this.claimLinePayment(payment))) {
+            return res.status(409).json({ error: 'Payment already in use', code: 'PAYMENT_ALREADY_USED', message: 'Ce paiement est déjà utilisé pour un achat en cours ou terminé.' });
           }
         }
       } else if (isIncluded) {
@@ -624,11 +646,11 @@ class PhoneNumberController {
       );
       numberPurchased = true;
       if (isMonthly) {
-        // Abonnement de la ligne créé AVANT la capture : s'il échoue, le numéro est libéré et le paiement n'est pas encaissé.
-        const subscriptionFailure = await this.startMonthlyLineOrRollback(newNumber, payment, companyId);
-        if (subscriptionFailure) return this.rejectMonthlyLine(res, payment, subscriptionFailure);
-      }
-      if (!isTrial && payment?.status === 'authorized') {
+        // Abonnement créé, puis capture, puis ligne activée. Tout échec défait l'ensemble (ligne supprimée, abonnement annulé,
+        // autorisation libérée ou paiement remboursé) : jamais d'abonnement actif sans premier mois encaissé.
+        const outcome = await this.completeMonthlyLinePurchase(newNumber, payment, companyId);
+        if (outcome.error) return this.rejectMonthlyLine(res, payment, outcome.error, { releaseFailed: outcome.releaseFailed });
+      } else if (!isTrial && payment?.status === 'authorized') {
         await captureAuthorizedLinePayment(payment);
       }
       console.log("newNumber", newNumber);
@@ -764,39 +786,68 @@ class PhoneNumberController {
     });
   }
 
+  /** Réserve atomiquement un paiement pour un achat de ligne mensuelle ; false si déjà réservé (rejeu, double envoi). */
+  async claimLinePayment(payment) {
+    const claimed = await PhoneNumberPayment.findOneAndUpdate(
+      { _id: payment._id, purchaseClaimedAt: null },
+      { $set: { purchaseClaimedAt: new Date() } },
+      { new: true }
+    );
+    return Boolean(claimed);
+  }
+
   /**
-   * Crée l'abonnement mensuel de la ligne qui vient d'être achetée. Renvoie null en cas de succès ; sinon libère le numéro
-   * (la ligne n'est pas livrée sans abonnement) et renvoie l'erreur codée.
+   * Défait l'achat d'une ligne mensuelle : suppression de la ligne (libère le numéro et annule son abonnement Stripe). Si la
+   * libération échoue, la ligne passe en `release_failed` (trace durable, reprise par la réconciliation) et on le signale.
    */
-  async startMonthlyLineOrRollback(newNumber, payment, companyId) {
+  async rollbackMonthlyLine(newNumber, companyId, cause) {
     try {
-      if (!newNumber?._id) {
-        const err = new Error('Ligne introuvable pour créer son abonnement.');
-        err.code = 'LINE_SUBSCRIPTION_FAILED';
-        throw err;
-      }
-      const line = typeof newNumber.save === 'function' ? newNumber : await PhoneNumber.findById(newNumber._id);
-      if (!line) {
-        const err = new Error('Ligne introuvable pour créer son abonnement.');
-        err.code = 'LINE_SUBSCRIPTION_FAILED';
-        throw err;
-      }
-      await startMonthlyLineSubscription({ line, amountCents: payment.amount, currency: payment.currency });
-      return null;
-    } catch (err) {
-      console.error('❌ Monthly line subscription failed, releasing the number:', err.message);
+      await phoneNumberService.deletePhoneNumber({ id: newNumber?._id, companyId });
+      return { releaseFailed: false };
+    } catch (releaseErr) {
       try {
-        await phoneNumberService.deletePhoneNumber({ id: newNumber?._id, companyId });
-      } catch (releaseErr) {
-        console.error(`❌ CRITICAL: line ${newNumber?.phoneNumber || newNumber?._id} has no subscription and could not be released:`, releaseErr.message);
+        const line = newNumber?._id ? await PhoneNumber.findById(newNumber._id) : null;
+        if (line) await markLineReleaseFailed(line, `${cause?.code || 'rollback'}: ${releaseErr.message}`);
+        else console.error(JSON.stringify({ event: 'phone_line_release_failed', lineId: String(newNumber?._id || ''), reason: releaseErr.message }));
+      } catch (markErr) {
+        console.error(JSON.stringify({ event: 'phone_line_release_failed_unmarked', lineId: String(newNumber?._id || ''), reason: markErr.message }));
       }
-      return err.code ? err : Object.assign(err, { code: 'LINE_SUBSCRIPTION_FAILED' });
+      return { releaseFailed: true };
     }
   }
 
-  /** Achat de ligne refusé car son abonnement mensuel n'est pas possible : rien n'est encaissé (autorisation libérée) ou tout est remboursé. */
-  async rejectMonthlyLine(res, payment, error) {
-    const reason = `line_subscription_${String(error?.code || 'failed').replace(/^LINE_SUBSCRIPTION_/, '').toLowerCase()}`;
+  /**
+   * Suite de l'achat d'une ligne mensuelle déjà commandée : abonnement (ligne « pending »), capture du premier mois, puis ligne
+   * active. Renvoie `{ line }` en cas de succès, sinon `{ error, releaseFailed }` après avoir défait l'achat.
+   */
+  async completeMonthlyLinePurchase(newNumber, payment, companyId) {
+    const fail = async (error) => ({ error, ...(await this.rollbackMonthlyLine(newNumber, companyId, error)) });
+    let line;
+    try {
+      if (!newNumber?._id) throw Object.assign(new Error('Ligne introuvable pour créer son abonnement.'), { code: 'LINE_SUBSCRIPTION_FAILED' });
+      line = typeof newNumber.save === 'function' ? newNumber : await PhoneNumber.findById(newNumber._id);
+      if (!line) throw Object.assign(new Error('Ligne introuvable pour créer son abonnement.'), { code: 'LINE_SUBSCRIPTION_FAILED' });
+      await startMonthlyLineSubscription({ line, amountCents: payment.amount, currency: payment.currency });
+    } catch (err) {
+      console.error('❌ Monthly line subscription failed, releasing the number:', err.message);
+      return fail(err.code ? err : Object.assign(err, { code: 'LINE_SUBSCRIPTION_FAILED' }));
+    }
+    if (payment.status === 'authorized') {
+      try {
+        await captureAuthorizedLinePayment(payment);
+      } catch (captureErr) {
+        console.error('❌ Line payment capture failed after subscription, rolling back:', captureErr.message);
+        return fail(Object.assign(new Error("Le paiement n'a pas pu être encaissé."), { code: 'LINE_PAYMENT_CAPTURE_FAILED', cause: captureErr }));
+      }
+    }
+    await activateMonthlyLine(line);
+    return { line };
+  }
+
+  /** Achat de ligne refusé car son abonnement mensuel ou son encaissement est impossible : rien n'est encaissé ou tout est remboursé. */
+  async rejectMonthlyLine(res, payment, error, { releaseFailed = false } = {}) {
+    const code = String(error?.code || 'LINE_SUBSCRIPTION_FAILED');
+    const reason = code.startsWith('LINE_SUBSCRIPTION_') ? `line_subscription_${code.slice('LINE_SUBSCRIPTION_'.length).toLowerCase()}` : code.toLowerCase();
     let released = false;
     let refunded = false;
     if (payment?.status === 'authorized') {
@@ -804,14 +855,17 @@ class PhoneNumberController {
     } else if (payment?._id) {
       refunded = Boolean((await this.refundFailedLinePayment(payment._id, reason)).refunded);
     }
+    const money = released ? "Aucun paiement n'a été encaissé." : refunded ? 'Votre paiement a été remboursé.' : 'Contactez le support si le paiement a été débité.';
+    const note = releaseFailed
+      ? " Le numéro n'a pas pu être libéré automatiquement chez l'opérateur : notre équipe a été alertée et s'en occupe, vous n'avez rien à faire."
+      : '';
     return res.status(402).json({
       error: 'Line subscription unavailable',
-      code: error?.code || 'LINE_SUBSCRIPTION_FAILED',
+      code,
       refunded,
       released,
-      message: `${error?.message || "L'abonnement mensuel de la ligne est impossible."} ${
-        released ? "Aucun paiement n'a été encaissé." : refunded ? 'Votre paiement a été remboursé.' : 'Contactez le support si le paiement a été débité.'
-      }`
+      ...(releaseFailed ? { releaseFailed: true } : {}),
+      message: `${error?.message || "L'abonnement mensuel de la ligne est impossible."} ${money}${note}`
     });
   }
 
@@ -935,6 +989,14 @@ class PhoneNumberController {
       // Prix de la ligne de l'offre (premier mois payé ici, puis abonnement mensuel du même montant pour les offres Call Centre
       // qui portent `phone_line_price_cents`) ; prix par défaut sinon.
       const linePricing = await getPhoneLinePricing(companyId, { limits: planLimits });
+      if (linePricing.unavailable) {
+        // Offre Call Centre sans prix de ligne valable : refus clair, jamais de repli silencieux sur 9,99 sans abonnement.
+        return res.status(409).json({
+          error: 'Phone line price not configured',
+          code: 'PHONE_LINE_PRICE_NOT_CONFIGURED',
+          message: "Le prix d'une ligne supplémentaire n'est pas configuré pour votre offre : l'achat est impossible pour le moment. Aucun paiement n'a été pris. Contactez le support."
+        });
+      }
       if (linePricing.monthly) {
         // Refus avant tout paiement si les renouvellements ne pourront pas être prélevés.
         try {
@@ -1305,6 +1367,9 @@ class PhoneNumberController {
         } catch (billableErr) {
           return this.rejectMonthlyLine(res, payment, billableErr);
         }
+        if (!(await this.claimLinePayment(payment))) {
+          return res.status(409).json({ error: 'Payment already in use', code: 'PAYMENT_ALREADY_USED', message: 'Ce paiement est déjà utilisé pour un achat en cours ou terminé.' });
+        }
       }
       const newNumber = await phoneNumberService.purchaseTwilioNumber(
         payment.phoneNumber,
@@ -1321,8 +1386,8 @@ class PhoneNumberController {
         }
       );
       if (isMonthly) {
-        const subscriptionFailure = await this.startMonthlyLineOrRollback(newNumber, payment, String(payment.companyId));
-        if (subscriptionFailure) return this.rejectMonthlyLine(res, payment, subscriptionFailure);
+        const outcome = await this.completeMonthlyLinePurchase(newNumber, payment, String(payment.companyId));
+        if (outcome.error) return this.rejectMonthlyLine(res, payment, outcome.error, { releaseFailed: outcome.releaseFailed });
       }
 
       try {

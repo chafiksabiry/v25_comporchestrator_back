@@ -86,6 +86,11 @@ const phoneNumberPaymentSchema = new mongoose.Schema({
     type: String,
     enum: ['monthly'],
     default: undefined
+  },
+  /** Réservé atomiquement par le premier achat qui l'utilise (abonnement mensuel) : un paiement n'achète jamais deux lignes. */
+  purchaseClaimedAt: {
+    type: Date,
+    default: null
   }
 }, { timestamps: true });
 

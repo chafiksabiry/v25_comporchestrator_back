@@ -141,6 +141,7 @@ class PhoneNumberService {
           ...(options.billingModel === 'monthly'
             ? {
                 billingModel: 'monthly',
+                billingStatus: 'pending',
                 price: typeof options.price === 'number' ? options.price : 0,
                 currency: typeof options.currency === 'string' && options.currency ? options.currency.toUpperCase() : 'EUR',
                 ...(options.paymentRef ? { paymentRef: options.paymentRef } : {}),
@@ -784,7 +785,7 @@ class PhoneNumberService {
       ...(trialExpiresAt ? { trialExpiresAt } : {}),
       // PAY-19: a trial line enters the post-trial billing lifecycle;
       // a paid-up-front line has no recurring charge to track here.
-      billingStatus: isTrial ? 'trial' : 'n/a',
+      billingStatus: isTrial ? 'trial' : billingModel === 'monthly' ? 'pending' : 'n/a',
       // Abonnement mensuel par ligne : marqueur posé à la création ; l'abonnement Stripe est créé juste après l'achat.
       ...(billingModel === 'monthly' ? { billingModel: 'monthly' } : {}),
       metadata: {
