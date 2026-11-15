@@ -1,6 +1,6 @@
 import { phoneNumberService } from '../services/phoneNumberService.js';
 import { callerAccess, ScopeError, scopeToCompany } from '../middleware/companyScope.js';
-import { AssignmentError, LINE_NOT_ASSIGNED, LINE_NOT_ASSIGNED_MESSAGE, agentLineStatus, enforcementSettings, agentCapacity, assertAgentCanHaveLine, assertReleasable, assignAgent, assignmentFields, offerKind, oldestOf, resolvePurchaseAssignment, unassignAgent, withCenterLock } from '../services/lineAssignment.js';
+import { AssignmentError, LINE_NOT_ASSIGNED, LINE_NOT_ASSIGNED_MESSAGE, agentLineStatus, enforcementSettings, lineStatusView, agentCapacity, assertAgentCanHaveLine, assertReleasable, assignAgent, assignmentFields, offerKind, oldestOf, resolvePurchaseAssignment, unassignAgent, withCenterLock } from '../services/lineAssignment.js';
 import { listLinesFor } from '../services/phoneNumberList.js';
 import { checkNumberCountry } from '../services/numberCountry.js';
 import { purchaseCurrency } from '../services/purchaseCurrency.js';
@@ -2141,7 +2141,7 @@ class PhoneNumberController {
 
   /** Réponse de refus « agent sans ligne ». */
   lineNotAssigned(res, status = 403) {
-    return res.status(status).json({ success: false, error: LINE_NOT_ASSIGNED, code: LINE_NOT_ASSIGNED, message: LINE_NOT_ASSIGNED_MESSAGE });
+    return res.status(status).json({ success: false, error: LINE_NOT_ASSIGNED, code: LINE_NOT_ASSIGNED, message: LINE_NOT_ASSIGNED_MESSAGE, lineStatus: { required: true, hasLine: false, notice: null } });
   }
 
   /** Blocage d'un agent sans ligne dans CE centre (offres à agents, règle active). Renvoie le statut ; `blocked` = refuser. */
@@ -2173,14 +2173,16 @@ class PhoneNumberController {
           if (!secretaryOutboundAllowed(settings)) return res.status(403).json({ success: false, error: 'secretary_outbound_disabled', message: SECRETARY_OUTBOUND_BLOCKED });
         }
         // Offres à agents : un agent sans ligne affectée n'appelle pas (règle datée, voir enforcementSettings).
-        if (secretary && (await this.agentLineGate({ companyId, userId })).blocked) return this.lineNotAssigned(res);
+        const gate = secretary ? await this.agentLineGate({ companyId, userId }) : null;
+        if (gate?.blocked) return this.lineNotAssigned(res);
         const appSid = await ensureOutboundApp(client, `https://${req.get('host')}${OUTBOUND_WEBHOOK_PATH}`);
         const outboundToken = await createVoiceToken({ client, accountSid: config.twilioAccountSid, identity, outgoingApplicationSid: appSid, pushCredentialSid });
         const ticket = signOutboundTicket({ secret: config.twilioAuthToken, companyId, identity, secretary });
-        return res.json({ success: true, data: { token: outboundToken, identity, expiresIn: VOICE_TOKEN_TTL_S, params: { CompanyId: companyId, Ticket: ticket } } });
+        return res.json({ success: true, data: { token: outboundToken, identity, expiresIn: VOICE_TOKEN_TTL_S, params: { CompanyId: companyId, Ticket: ticket }, ...(gate?.applicable ? { lineStatus: lineStatusView(gate) } : {}) } });
       }
       // Jeton entrant : un agent sans ligne n'est pas joignable. Aucun contrôle (ni appel au service d'inscription) tant que la règle n'est pas configurée.
       const rule = enforcementSettings();
+      let lineStatus = null;
       if (rule.from !== null || rule.ruleStarts !== null) {
         const access = await callerAccess(req);
         if (access.role === 'agent') {
@@ -2189,10 +2191,11 @@ class PhoneNumberController {
           // Agent de plusieurs centres : refusé seulement s'il est bloqué dans TOUS ceux où la règle s'applique.
           const applicable = gates.filter((g) => g.applicable);
           if (applicable.length && applicable.every((g) => g.blocked)) return this.lineNotAssigned(res);
+          if (applicable.length) lineStatus = lineStatusView(applicable.find((g) => !g.blocked) || applicable[0]);
         }
       }
       const token = await createVoiceToken({ client, accountSid: config.twilioAccountSid, identity, pushCredentialSid });
-      res.json({ success: true, data: { token, identity, expiresIn: VOICE_TOKEN_TTL_S, ...(pushCredentialSid ? { push: true } : {}) } });
+      res.json({ success: true, data: { token, identity, expiresIn: VOICE_TOKEN_TTL_S, ...(pushCredentialSid ? { push: true } : {}), ...(lineStatus ? { lineStatus } : {}) } });
     } catch (error) {
       console.error('Error in voiceToken:', error.message);
       res.status(500).json({ error: 'Failed to create voice token', message: 'Téléphone du navigateur indisponible pour le moment.' });
@@ -2260,7 +2263,7 @@ class PhoneNumberController {
         const gate = await agentLineStatus({ companyId, userId: identity.replace(/^cc-/, ''), limits, db: mongoose.connection.db });
         const own = gate.line;
         const usable = own && own.provider === 'twilio' && own.twilioId && own.status === 'active' && own.billingStatus !== 'suspended';
-        if (gate.blocked || (own && !usable && gate.enforced)) return send(refusal(LINE_NOT_ASSIGNED_MESSAGE));
+        if (gate.blocked || (own && !usable && gate.enforced)) return send(refusal(LINE_NOT_ASSIGNED_MESSAGE, { language: 'en-US', voice: 'Polly.Joanna' }));
         if (usable) callerLine = own;
       }
       const decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording });
