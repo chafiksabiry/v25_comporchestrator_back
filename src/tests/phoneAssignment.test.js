@@ -887,3 +887,66 @@ test('3e-1 libération : échec opérateur / abonnement -> `reason` additif (cod
   const r = await release('owner', l._id, true);
   assert.equal(r.body.reason, undefined, 'pas de reason sans code de service');
 });
+
+// ───────── lot 3e-1 (achat / paiement) : codes stables et moneyStatus ADDITIFS ; error / message d'origine inchangés ─────────
+const FR_PAYMENT_REQUIRED = "Approuvez d'abord la carte ou PayPal. Le montant n'est encaissé qu'après l'achat du numéro.";
+
+test('3e-1 achat : paiement absent -> 402 PAYMENT_REQUIRED ; paiement d\'une autre entreprise -> 403 PAYMENT_COMPANY_MISMATCH ; textes inchangés', async () => {
+  addLine();
+  paidPayment({ status: 'pending' });
+  let res = mockRes();
+  await phoneNumberController.purchaseTwilioNumber(buy('owner'), res);
+  assert.equal(res.statusCode, 402);
+  assert.deepEqual(res.body, { error: 'Payment required', code: 'PAYMENT_REQUIRED', message: FR_PAYMENT_REQUIRED });
+  paidPayment({ companyId: C2 });
+  res = mockRes();
+  await phoneNumberController.purchaseTwilioNumber(buy('owner'), res);
+  assert.equal(res.statusCode, 403);
+  assert.deepEqual(res.body, { error: 'Payment / company mismatch', code: 'PAYMENT_COMPANY_MISMATCH', message: "Ce paiement n'appartient pas à cette entreprise." });
+});
+
+test('3e-1 achat refusé à cause de l\'affectation : moneyStatus not_charged (autorisation libérée) ou refunded (déjà encaissé)', async () => {
+  addLine(); addLine({ assignedRole: 'agent', assignedAgentId: AG1 });
+  paidPayment({ status: 'authorized' });
+  let res = mockRes();
+  await phoneNumberController.purchaseTwilioNumber(buy('owner', { assignedAgentId: AG1 }), res);
+  assert.equal(res.body.moneyStatus, 'not_charged'); assert.equal(res.body.released, true);
+  assert.match(res.body.message, /Aucun paiement n'a été encaissé\.$/, 'message inchangé');
+  calls = []; paidPayment({ status: 'succeeded' });
+  res = mockRes();
+  await phoneNumberController.purchaseTwilioNumber(buy('owner', { assignedAgentId: AG1 }), res);
+  assert.equal(res.body.moneyStatus, 'refunded'); assert.equal(res.body.refunded, true);
+  assert.match(res.body.message, /Votre paiement a été remboursé\.$/);
+});
+
+test('3e-1 échec de commande du numéro : code stable + moneyStatus pour chaque cause, message inchangé', async () => {
+  const cases = [
+    [{ message: 'x', code: 21404 }, 400, 'PROVIDER_TRIAL_LIMIT'],
+    [{ message: 'correct regulation type', code: 21649 }, 400, 'NUMBER_REJECTED_BY_PROVIDER'],
+    [{ message: 'number already exists' }, 409, 'NUMBER_ALREADY_EXISTS'],
+    [{ message: 'this number is no longer available' }, 410, 'NUMBER_NO_LONGER_AVAILABLE'],
+    [{ message: 'invalid phone number' }, 400, 'INVALID_NUMBER_REQUEST'],
+    [{ message: 'boom' }, 500, 'NUMBER_PROVISION_FAILED'],
+  ];
+  for (const [err, status, code] of cases) {
+    calls = []; lines = {}; seq = 0; addLine(); paidPayment({ status: 'succeeded' });
+    phoneNumberService.purchaseTwilioNumber = async () => { throw Object.assign(new Error(err.message), err.code ? { code: err.code } : {}); };
+    const res = mockRes();
+    await phoneNumberController.purchaseTwilioNumber(buy('owner'), res);
+    assert.equal(res.statusCode, status, code);
+    assert.equal(res.body.code, code);
+    assert.equal(res.body.moneyStatus, 'refunded', code);
+    assert.match(res.body.message, /Votre paiement a été remboursé automatiquement/, `${code} : message inchangé`);
+  }
+});
+
+test('3e-1 checkout : Stripe non configuré -> code STRIPE_NOT_CONFIGURED, texte inchangé', async () => {
+  setup('taas'); addLine();
+  const prev = stripeService.isConfigured; stripeService.isConfigured = () => false;
+  try {
+    const res = mockRes();
+    await phoneNumberController.initLineCheckout(reqAs('owner', { phoneNumber: '+33612345678', companyId: C1, provider: 'stripe' }), res);
+    assert.equal(res.statusCode, 503);
+    assert.deepEqual([res.body.error, res.body.code, res.body.message], ['Stripe not configured', 'STRIPE_NOT_CONFIGURED', 'Définissez STRIPE_SECRET_KEY sur le serveur.']);
+  } finally { stripeService.isConfigured = prev; }
+});
