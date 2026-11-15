@@ -1,4 +1,5 @@
 import { PhoneNumber } from '../models/PhoneNumber.js';
+import { enforcementFor, offerKind } from './lineAssignment.js';
 
 /**
  * Appels actifs par ligne (offre Accueil, lignes partagées) : capacité = UN appel actif par ligne, entrant ou sortant.
@@ -75,3 +76,32 @@ export async function takeFirstFreeLine({ lineIds, ...rest }) {
 
 /** Au moins une de ces lignes est-elle libre ? (lecture seule, sans prise : contrôle de confort avant un appel sortant) */
 export const hasFreeLine = (lines, now = Date.now()) => lines.some((l) => !isLeaseLive(l, now));
+
+/** Code et message (anglais, stables) quand toutes les lignes de l'Accueil sont occupées. */
+export const LINE_BUSY_CODE = 'LINE_BUSY';
+export const LINE_BUSY_MESSAGE = 'All lines are busy. Please try again in a moment.';
+
+/**
+ * Le contrôle « une ligne = un appel » s'applique-t-il à ce centre ? Offre Accueil ET règle datée active (mêmes réglages que les autres règles de ligne :
+ * LINE_ENFORCEMENT_FROM / LINE_ENFORCEMENT_RULE_STARTS). Inactive ou autre offre : false, rien ne change. Toute panne de lecture : false (jamais de blocage sur incident).
+ */
+export async function lineCallsEnforced({ companyId, limits, db, env = process.env }) {
+  try {
+    if (offerKind(limits) !== 'accueil' || !companyId) return false;
+    return (await enforcementFor({ companyId, db, env })).enforced === true;
+  } catch (error) {
+    console.warn('[line-calls] règle illisible, aucun contrôle :', error?.message || error);
+    return false;
+  }
+}
+
+const ENDED = ['completed', 'failed', 'busy', 'no-answer', 'canceled'];
+/** Fabrique le constat « bail périmé » : l'appel du bail est-il terminé côté Twilio ? Toute erreur : on ne sait pas, donc pas périmé. */
+export const staleCheckFor = (client) => async (lease) => {
+  if (!client?.calls || !lease?.callSid) return false;
+  const call = await client.calls(String(lease.callSid)).fetch();
+  return ENDED.includes(String(call?.status || '').toLowerCase());
+};
+
+/** Webhook de fin d'appel sortant (action du <Dial>) : libère la ligne. */
+export const LINE_CALL_END_PATH = '/api/phone-numbers/webhooks/twilio/line-call-end';

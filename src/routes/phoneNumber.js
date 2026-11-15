@@ -112,6 +112,11 @@ router.post(
   phoneNumberController.handleBrowserOutbound.bind(phoneNumberController)
 );
 router.post(
+  '/webhooks/twilio/line-call-end',
+  express.urlencoded({ extended: false }),
+  phoneNumberController.handleLineCallEnd.bind(phoneNumberController)
+);
+router.post(
   '/webhooks/twilio/inbound-call',
   express.urlencoded({ extended: false }),
   phoneNumberController.handleTwilioInboundCall.bind(phoneNumberController)

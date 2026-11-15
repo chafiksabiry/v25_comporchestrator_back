@@ -2,6 +2,7 @@ import { phoneNumberService } from '../services/phoneNumberService.js';
 import { callerAccess, ScopeError, scopeToCompany } from '../middleware/companyScope.js';
 import { AssignmentError, LINE_NOT_ASSIGNED, LINE_NOT_ASSIGNED_MESSAGE, agentLineStatus, inboundRingFilter, enforcementSettings, lineStatusView, agentCapacity, assertAgentCanHaveLine, assertReleasable, assignAgent, assignmentFields, offerKind, oldestOf, resolvePurchaseAssignment, unassignAgent, withCenterLock } from '../services/lineAssignment.js';
 import { listLinesFor } from '../services/phoneNumberList.js';
+import { LINE_BUSY_CODE, LINE_BUSY_MESSAGE, LINE_CALL_END_PATH, hasFreeLine, lineCallsEnforced, releaseCall, staleCheckFor, takeFirstFreeLine, takeLine } from '../services/lineCalls.js';
 import { checkNumberCountry } from '../services/numberCountry.js';
 import { purchaseCurrency } from '../services/purchaseCurrency.js';
 import { checkCompanyDestination } from '../services/outboundPolicy.js';
@@ -2283,6 +2284,14 @@ class PhoneNumberController {
       }
       const decision = await checkCompanyDestination(companyId, req.body?.to);
       if (!decision.ok) return res.status(422).json({ success: false, error: decision.code, reason: decision.reason, message: decision.message });
+      // Offre Accueil, règle active : toutes les lignes occupées => 409 LINE_BUSY (confort ; le webhook refuse de toute façon). Aucune prise ici.
+      if (enforcementSettings().from !== null || enforcementSettings().ruleStarts !== null) {
+        try {
+          if (await lineCallsEnforced({ companyId, limits: await loadCompanyPlanLimits(companyId), db: mongoose.connection.db }) && !hasFreeLine(await this.twilioLinesOf(companyId))) {
+            return res.status(409).json({ success: false, error: LINE_BUSY_CODE, code: LINE_BUSY_CODE, message: LINE_BUSY_MESSAGE });
+          }
+        } catch (error) { console.warn('[outbound-check] contrôle de ligne ignoré :', error?.message || error); }
+      }
       return res.json({ success: true, data: { to: decision.to } });
     } catch (error) {
       console.error('Error in outboundCheck:', error.message);
@@ -2332,10 +2341,27 @@ class PhoneNumberController {
         if (gate.blocked || (own && !usable && gate.enforced)) return send(refusal(LINE_NOT_ASSIGNED_MESSAGE, { language: 'en-US', voice: 'Polly.Joanna' }));
         if (usable) callerLine = own;
       }
-      const decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording });
+      let decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording });
       if (!decision.ok) {
         console.warn(`[browser-outbound] refusé pour l'entreprise ${companyId} : ${decision.message}`);
         return send(refusal(decision.message));
+      }
+      // Offre Accueil, règle datée active : une ligne = un appel à la fois. L'appel prend la première ligne LIBRE du centre (sinon « ligne occupée ») ;
+      // elle est libérée à la fin de la numérotation (action du <Dial>). Règle inactive ou autre offre : rien de tout cela. Toute panne : l'appel passe comme avant.
+      const sidForLine = String(req.body?.CallSid || '').trim();
+      if (sidForLine && (await lineCallsEnforced({ companyId, limits, db: mongoose.connection.db }))) {
+        try {
+          const pool = await this.twilioLinesOf(companyId);
+          const taken = await takeFirstFreeLine({ lineIds: pool.map((l) => l._id), callSid: sidForLine, direction: 'outbound', isStale: staleCheckFor(phoneNumberService.twilioClient) });
+          if (!taken.ok) {
+            console.warn(`[browser-outbound] ${LINE_BUSY_CODE} pour l'entreprise ${companyId}`);
+            return send(refusal(LINE_BUSY_MESSAGE, { language: 'en-US', voice: 'Polly.Joanna' }));
+          }
+          callerLine = pool.find((l) => String(l._id) === String(taken.lineId));
+          decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, action: `https://${req.get('host')}${LINE_CALL_END_PATH}` });
+        } catch (error) {
+          console.error('[browser-outbound] contrôle de ligne ignoré :', error?.message || error);
+        }
       }
       console.log(`📞 Appel sortant du navigateur (entreprise ${companyId}) vers ${to.slice(0, 6)}… depuis ${callerLine.phoneNumber}${recording ? ' (enregistré)' : ''}`);
       return send(decision.twiml);
@@ -2343,6 +2369,17 @@ class PhoneNumberController {
       console.error('Error in handleBrowserOutbound:', error);
       return send(refusal('Une erreur est survenue.'));
     }
+  }
+
+  /** Lignes Twilio utilisables d'un centre, de la plus ancienne à la plus récente (réserve de lignes partagées de l'Accueil). */
+  async twilioLinesOf(companyId) {
+    return PhoneNumber.find({ companyId, provider: 'twilio', twilioId: { $exists: true, $ne: null }, status: 'active', billingStatus: { $ne: 'suspended' } }).sort({ createdAt: 1 }).lean();
+  }
+
+  /** Fin d'un appel sur une ligne (action du <Dial> sortant) : libère la ligne tenue par cet appel (idempotent) ; la réponse ne change rien à l'appel. */
+  async handleLineCallEnd(req, res) {
+    try { await releaseCall(req.body?.CallSid); } catch (error) { console.error('line-call-end:', error?.message || error); }
+    res.type('text/xml').status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response/>');
   }
 
   /** Signal de présence : le conseiller est (ou n'est plus) prêt à prendre les appels. Branche aussi les lignes de l'entreprise. */
