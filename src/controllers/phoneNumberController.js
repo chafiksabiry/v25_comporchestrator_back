@@ -879,6 +879,10 @@ class PhoneNumberController {
 
   /** Erreur d'affectation (ou d'accès) -> réponse JSON avec un code court. */
   sendAssignmentError(res, error) {
+    // Erreur d'accès (ScopeError) : statut d'origine, `code` 'FORBIDDEN' comme avant ; son identifiant précis (ScopeError.code) est ADDITIF, dans `reason`.
+    if (error instanceof ScopeError) {
+      return res.status(error.status).json({ success: false, error: 'FORBIDDEN', code: 'FORBIDDEN', message: error.message, ...(error.code ? { reason: error.code } : {}) });
+    }
     if (error instanceof AssignmentError || (error?.status && error?.message && !error.code)) {
       const code = error.code || 'FORBIDDEN';
       return res.status(error.status).json({ success: false, error: code, code, message: error.message });
