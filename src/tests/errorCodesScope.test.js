@@ -77,3 +77,13 @@ test('guard : les réponses d\'erreur gardent `error` et gagnent `code` (champ a
   r = await runGuard(guard(companyFrom('companyId')), tokenReq({ body: { companyId: MINE } }));
   assert.equal(r.status, 200);
 });
+
+test('réponses des routes d\'affectation : une ScopeError garde son statut et le code « FORBIDDEN » d\'origine ; son code précis est additif (reason)', async () => {
+  const { phoneNumberController } = await import('../controllers/phoneNumberController.js');
+  const res = { statusCode: 0, body: null, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; } };
+  phoneNumberController.sendAssignmentError(res, new ScopeError(503, 'Company lookup failed', 'COMPANY_LOOKUP_FAILED'));
+  assert.equal(res.statusCode, 503, 'jamais 500');
+  assert.deepEqual(res.body, { success: false, error: 'FORBIDDEN', code: 'FORBIDDEN', message: 'Company lookup failed', reason: 'COMPANY_LOOKUP_FAILED' });
+  phoneNumberController.sendAssignmentError(res, new ScopeError(403, 'Vous n’êtes pas rattaché à cette entreprise.', 'COMPANY_NOT_ALLOWED'));
+  assert.deepEqual([res.statusCode, res.body.code, res.body.reason], [403, 'FORBIDDEN', 'COMPANY_NOT_ALLOWED']);
+});
