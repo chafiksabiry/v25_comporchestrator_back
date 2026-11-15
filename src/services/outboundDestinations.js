@@ -17,6 +17,14 @@ export const MESSAGES = Object.freeze({
   unknown_country: 'Les appels vers ce pays ne sont pas pris en charge.',
 });
 
+/** Messages anglais (additifs) des mêmes refus : `messageEn` ; le français de `MESSAGES` reste dans `message`. */
+export const MESSAGES_EN = Object.freeze({
+  country_not_enabled: 'Calls to this country are not enabled for your company.',
+  premium_rate: 'Premium-rate and value-added numbers cannot be called.',
+  invalid_number: 'Invalid number. Enter it in international format, for example +1 415 555 2671.',
+  unknown_country: 'Calls to this country are not supported.',
+});
+
 /** Libellés additifs (clé ISO 3166-1 alpha-2 + libellé anglais), par indicatif : les clients traduisent d'après `iso`. Le champ `name` (français) est inchangé. */
 export const COUNTRY_LABELS_EN = Object.freeze({
   '+1': { iso: ['US', 'CA'], nameEn: "United States / Canada" }, '+7': { iso: ['RU', 'KZ'], nameEn: "Russia / Kazakhstan" },
@@ -236,10 +244,10 @@ export function effectiveOutboundPrefixes({ saved, companyCountry = '', envPrefi
  */
 export function checkDestination(raw, allowedPrefixes) {
   const to = toStrictE164(raw);
-  if (!to) return { ok: false, code: INVALID_NUMBER, reason: 'invalid_number', message: MESSAGES.invalid_number };
-  if (isPremiumRate(to)) return { ok: false, code: DESTINATION_NOT_ALLOWED, reason: 'premium_rate', message: MESSAGES.premium_rate };
+  if (!to) return { ok: false, code: INVALID_NUMBER, reason: 'invalid_number', message: MESSAGES.invalid_number, messageEn: MESSAGES_EN.invalid_number };
+  if (isPremiumRate(to)) return { ok: false, code: DESTINATION_NOT_ALLOWED, reason: 'premium_rate', message: MESSAGES.premium_rate, messageEn: MESSAGES_EN.premium_rate };
   const country = countryPrefixOf(to);
-  if (!country) return { ok: false, code: DESTINATION_NOT_ALLOWED, reason: 'unknown_country', message: MESSAGES.unknown_country };
-  if (!allowedPrefixes.includes(country)) return { ok: false, code: DESTINATION_NOT_ALLOWED, reason: 'country_not_enabled', message: MESSAGES.country_not_enabled };
+  if (!country) return { ok: false, code: DESTINATION_NOT_ALLOWED, reason: 'unknown_country', message: MESSAGES.unknown_country, messageEn: MESSAGES_EN.unknown_country };
+  if (!allowedPrefixes.includes(country)) return { ok: false, code: DESTINATION_NOT_ALLOWED, reason: 'country_not_enabled', message: MESSAGES.country_not_enabled, messageEn: MESSAGES_EN.country_not_enabled };
   return { ok: true, to };
 }
