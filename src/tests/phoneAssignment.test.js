@@ -106,7 +106,7 @@ beforeEach(() => {
     return { populate: async () => (planMetadata ? { planId: { name: 'Offre', metadata: planMetadata } } : null) };
   };
   PhoneNumber.findOne = (q) => {
-    const rows = Object.values(lines).filter((l) => Object.entries(q).every(([k, v]) => (k === '_id' ? String(l._id) === String(v) : String(l[k] ?? null) === String(v))));
+    const rows = Object.values(lines).filter((l) => Object.entries(q).every(([k, v]) => (k === '_id' ? String(l._id) === String(v) : (v && typeof v === 'object' && Array.isArray(v.$nin) ? !v.$nin.map(String).includes(String(l[k])) : String(l[k] ?? null) === String(v)))));
     let out = rows;
     const c = { sort: (s) => { const [[k, dir]] = Object.entries(s); out = [...out].sort((a, b) => (new Date(a[k]) - new Date(b[k])) * dir); return c; }, select: () => c, lean: async () => out[0] || null, then: (r, j) => Promise.resolve(out[0] || null).then(r, j) };
     return c;
@@ -131,7 +131,7 @@ beforeEach(() => {
     calls.push(['number.purchase', num, options]);
     return addLine({ phoneNumber: num, companyId: company, ...(options.assignedRole ? { assignedRole: options.assignedRole, assignedAgentId: options.assignedAgentId || null, assignedAt: options.assignedAt || null } : {}) });
   };
-  console.log = () => {}; console.warn = () => {}; console.error = () => {};
+  console.log = () => {}; console.warn = () => {}; console.error = process.env.DBG ? (...a) => process.stderr.write(a.map(String).join(' ') + '\n') : () => {};
 });
 
 const names = () => calls.map((c) => c[0]);
@@ -612,4 +612,150 @@ test('agent-capacity : droits (agent 403, autre centre 403, sans companyId 400) 
 
 test('agent-capacity : la route GET est branchée', () => {
   assert.ok(phoneNumberRoutes.stack.some((l) => l.route?.path === '/agent-capacity' && l.route.methods.get));
+});
+
+// ───────── lot 3a : agent sans ligne (jeton, sortant, agentLineStatus) ─────────
+directory[AG1] = { companyId: C1, isOwner: false, isAgent: true }; // l'agent se connecte avec son identifiant
+const PAST = '2026-01-01T00:00:00Z'; const FUTURE = '2099-01-01T00:00:00Z';
+const gateEnv = (extra = {}) => ({ LINE_ENFORCEMENT_FROM: PAST, ...extra });
+const statusOf = (over = {}) => LA.agentLineStatus({ companyId: C1, userId: AG1, limits: { product: 'callcenter', callcenterTier: 'full_scope' }, db: fakeDb, env: gateEnv(), ...over });
+
+test('agentLineStatus : règle inactive sans réglage ; active à partir de D (lu à chaque appel) ; seulement pour les offres à agents', async () => {
+  addLine();
+  assert.equal((await statusOf({ env: {} })).blocked, false);
+  assert.equal((await statusOf({ env: {} })).enforced, false);
+  assert.equal((await statusOf({ env: { LINE_ENFORCEMENT_FROM: 'pas une date' } })).blocked, false);
+  let st = await statusOf();
+  assert.deepEqual([st.applicable, st.enforced, st.blocked, st.line], [true, true, true, null]);
+  assert.equal((await statusOf({ env: { LINE_ENFORCEMENT_FROM: FUTURE } })).blocked, false);
+  assert.equal((await statusOf({ env: { LINE_ENFORCEMENT_FROM: FUTURE } })).notice, new Date(FUTURE).toISOString());
+  assert.equal((await statusOf({ now: Date.parse(FUTURE) + 1, env: { LINE_ENFORCEMENT_FROM: FUTURE } })).blocked, true, 'après D');
+  for (const limits of [{ product: 'callcenter', callcenterTier: 'accueil' }, { product: 'callcenter', callcenterTier: 'nomad_solo' }, null, { product: 'taas' }]) {
+    assert.equal((await statusOf({ limits })).applicable, false);
+    assert.equal((await statusOf({ limits })).blocked, false);
+  }
+});
+
+test('agentLineStatus : la ligne doit être CELLE de l\'agent, dans CE centre, et exploitable', async () => {
+  addLine();
+  addLine({ assignedRole: 'agent', assignedAgentId: AG2 });
+  assert.equal((await statusOf()).blocked, true, 'la ligne d\'un autre agent ne compte pas');
+  addLine({ assignedRole: 'agent', assignedAgentId: AG1, companyId: C2 });
+  assert.equal((await statusOf()).blocked, true, 'sa ligne d\'un autre centre ne compte pas');
+  const mine = addLine({ assignedRole: 'agent', assignedAgentId: AG1, billingStatus: 'terminated' });
+  assert.equal((await statusOf()).blocked, true, 'ligne résiliée');
+  mine.billingStatus = 'active';
+  const st = await statusOf();
+  assert.equal(st.blocked, false); assert.equal(String(st.line._id), String(mine._id));
+});
+
+test('agentLineStatus : centre créé après le déploiement = règle immédiate ; centre existant = préavis jusqu\'à D', async () => {
+  addLine();
+  const env = { LINE_ENFORCEMENT_FROM: FUTURE, LINE_ENFORCEMENT_RULE_STARTS: '2026-06-01T00:00:00Z' };
+  assert.equal((await statusOf({ env, subscriptionCreatedAt: new Date('2026-07-01T00:00:00Z') })).blocked, true, 'nouveau centre');
+  const old = await statusOf({ env, subscriptionCreatedAt: new Date('2026-03-01T00:00:00Z') });
+  assert.equal(old.blocked, false, 'centre existant');
+  assert.equal(old.notice, new Date(FUTURE).toISOString());
+  assert.equal((await statusOf({ env: { LINE_ENFORCEMENT_RULE_STARTS: '2026-06-01T00:00:00Z' }, subscriptionCreatedAt: new Date('2026-07-01T00:00:00Z') })).blocked, true, 'sans D, le nouveau centre est tout de même soumis');
+  assert.equal((await statusOf({ env: { LINE_ENFORCEMENT_RULE_STARTS: '2026-06-01T00:00:00Z' }, subscriptionCreatedAt: new Date('2026-03-01T00:00:00Z') })).blocked, false);
+  // date de création lue dans la base partagée (abonnement actif le plus récent du centre)
+  const origCollection = fakeDb.collection;
+  fakeDb.collection = (name) => (name === 'subscriptions'
+    ? { find: () => ({ sort: () => ({ limit: () => ({ next: async () => ({ _id: 's1', createdAt: new Date('2026-08-01T00:00:00Z') }) }) }) }) }
+    : origCollection(name));
+  try { assert.equal((await statusOf({ env })).blocked, true); } finally { fakeDb.collection = origCollection; }
+});
+
+
+// contrôleur : jeton (sortant et entrant) et webhook sortant
+const { signOutboundTicket } = await import('../services/browserOutbound.js');
+const { InboundSettings } = { InboundSettings: (await import('../models/InboundSettings.js')).default };
+const MinutesCompany = (await import('../models/MinutesCompany.js')).default;
+const { VOICE_TOKEN_TTL_S } = await import('../services/voiceTokenService.js');
+void VOICE_TOKEN_TTL_S;
+
+function voiceStubs() {
+  process.env.TWILIO_OUTBOUND_TWIML_APP_SID = 'AP00000000000000000000000000000000';
+  const VST = mongoose.models.VoiceSigningKey;
+  VST.findOne = () => ({ lean: async () => ({ sid: 'SK00000000000000000000000000000000', secret: 'secret' }) });
+  InboundSettings.findOne = () => ({ select: () => ({ lean: async () => ({}) }) });
+  PhoneNumber.find = () => { const c = { sort: () => c, limit: () => c, select: () => c, lean: async () => [{ phoneNumber: '+33612340001' }] }; return c; };
+  if (MinutesCompany) MinutesCompany.findOne = () => ({ select: () => ({ lean: async () => ({ minutes: 100 }) }) });
+}
+const withRule = async (value, fn) => { const prev = process.env.LINE_ENFORCEMENT_FROM; if (value === undefined) delete process.env.LINE_ENFORCEMENT_FROM; else process.env.LINE_ENFORCEMENT_FROM = value; try { return await fn(); } finally { if (prev === undefined) delete process.env.LINE_ENFORCEMENT_FROM; else process.env.LINE_ENFORCEMENT_FROM = prev; } };
+async function voiceTokenAs(user, body) { const r = mockRes(); const req = reqAs(user, body); req.get = () => 'orch.test'; await phoneNumberController.voiceToken(req, r); return r; }
+
+test('jeton vocal : un agent SANS ligne est refusé (403 line_not_assigned), sortant comme entrant, une fois la règle active', async () => {
+  voiceStubs(); addLine();
+  await withRule(PAST, async () => {
+    let r = await voiceTokenAs(AG1, { outbound: true, companyId: C1 });
+    assert.equal(r.statusCode, 403); assert.equal(r.body.code, 'line_not_assigned'); assert.equal(r.body.error, 'line_not_assigned');
+    r = await voiceTokenAs(AG1, {});
+    assert.equal(r.statusCode, 403); assert.equal(r.body.code, 'line_not_assigned');
+  });
+});
+
+test('jeton vocal : l\'agent AVEC sa ligne, le titulaire, et tout le monde tant que la règle est inactive ou en préavis, reçoivent un jeton', async () => {
+  voiceStubs(); addLine();
+  await withRule(PAST, async () => {
+    addLine({ assignedRole: 'agent', assignedAgentId: AG1 });
+    for (const body of [{ outbound: true, companyId: C1 }, {}]) { const r = await voiceTokenAs(AG1, body); assert.equal(r.statusCode, 200, JSON.stringify(r.body)); assert.ok(r.body.data.token); }
+    for (const body of [{ outbound: true, companyId: C1 }, {}]) assert.equal((await voiceTokenAs('owner', body)).statusCode, 200, 'le titulaire n\'est pas concerné');
+  });
+  lines = {}; seq = 0; addLine();
+  await withRule(FUTURE, async () => { assert.equal((await voiceTokenAs(AG1, { outbound: true, companyId: C1 })).statusCode, 200, 'préavis'); assert.equal((await voiceTokenAs(AG1, {})).statusCode, 200); });
+  await withRule(undefined, async () => { assert.equal((await voiceTokenAs(AG1, { outbound: true, companyId: C1 })).statusCode, 200, 'règle non configurée'); });
+});
+
+test('jeton vocal : la règle ne s\'applique pas aux offres sans agents (Accueil, Nomad) ni aux lignes d\'un autre centre', async () => {
+  voiceStubs(); addLine();
+  await withRule(PAST, async () => {
+    setup('accueil'); assert.equal((await voiceTokenAs(AG1, { outbound: true, companyId: C1 })).statusCode, 200);
+    setup('nomad'); assert.equal((await voiceTokenAs(AG1, {})).statusCode, 200);
+  });
+});
+
+async function browserOutbound(user, { to = '+33612345678', secretary = true, companyId = C1 } = {}) {
+  const identity = `cc-${user}`;
+  const ticket = signOutboundTicket({ secret: process.env.TWILIO_AUTH_TOKEN, companyId, identity, secretary });
+  const sent = { body: '' };
+  const res = { type() { return this; }, status() { return this; }, send(x) { sent.body = x; return this; } };
+  const req = { body: { To: to, From: `client:${identity}`, CompanyId: companyId, Ticket: ticket, CallSid: 'CA1' }, get: () => 'orch.test', headers: {}, query: {} };
+  await phoneNumberController.handleBrowserOutbound(req, res);
+  return sent.body;
+}
+const twilioLine = (fields) => addLine({ provider: 'twilio', twilioId: `PN${seq + 1}`, ...fields });
+
+test('webhook sortant : l\'agent appelle depuis SA ligne (jamais celle du centre) ; sans ligne, refus une fois la règle active', async () => {
+  voiceStubs();
+  const included = twilioLine({ phoneNumber: '+33611110001' });
+  PhoneNumber.findOne = ((orig) => (q) => (q?.provider === 'twilio' && q?.twilioId ? (() => { const c = { sort: () => c, lean: async () => included, then: (r) => Promise.resolve(included).then(r) }; return c; })() : orig(q)))(PhoneNumber.findOne);
+  await withRule(PAST, async () => {
+    let xml = await browserOutbound(AG1);
+    assert.match(xml, /Aucune ligne ne vous est affectée/);
+    assert.ok(!xml.includes('+33611110001'), 'pas de repli sur la ligne du centre');
+    twilioLine({ phoneNumber: '+33622220002', assignedRole: 'agent', assignedAgentId: AG1 });
+    xml = await browserOutbound(AG1);
+    assert.ok(xml.includes('+33622220002'), 'SA ligne comme numéro appelant');
+    assert.ok(!xml.includes('+33611110001'));
+  });
+});
+
+test('webhook sortant : en préavis ou règle inactive, repli sur la ligne du centre ; l\'agent qui a sa ligne l\'utilise déjà ; le titulaire garde le comportement actuel', async () => {
+  voiceStubs();
+  const included = twilioLine({ phoneNumber: '+33611110001' });
+  PhoneNumber.findOne = ((orig) => (q) => (q?.provider === 'twilio' && q?.twilioId && !q.assignedAgentId ? (() => { const c = { sort: () => c, lean: async () => included, then: (r) => Promise.resolve(included).then(r) }; return c; })() : orig(q)))(PhoneNumber.findOne);
+  await withRule(FUTURE, async () => { assert.ok((await browserOutbound(AG1)).includes('+33611110001'), 'préavis : comportement actuel'); });
+  await withRule(undefined, async () => { assert.ok((await browserOutbound(AG1)).includes('+33611110001')); });
+  twilioLine({ phoneNumber: '+33622220002', assignedRole: 'agent', assignedAgentId: AG1 });
+  await withRule(undefined, async () => { assert.ok((await browserOutbound(AG1)).includes('+33622220002'), 'sa ligne est préférée même avant D'); });
+  await withRule(PAST, async () => { assert.ok((await browserOutbound('owner', { secretary: false })).includes('+33611110001'), 'titulaire inchangé'); });
+});
+
+test('outboundCheck : même refus line_not_assigned pour un agent sans ligne', async () => {
+  voiceStubs(); addLine();
+  await withRule(PAST, async () => {
+    const r = mockRes(); await phoneNumberController.outboundCheck(reqAs(AG1, { companyId: C1, to: '+33612345678' }), r);
+    assert.equal(r.statusCode, 403); assert.equal(r.body.code, 'line_not_assigned');
+  });
 });
