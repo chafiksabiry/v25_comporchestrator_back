@@ -1,6 +1,6 @@
 import { phoneNumberService } from '../services/phoneNumberService.js';
 import { callerAccess, ScopeError, scopeToCompany } from '../middleware/companyScope.js';
-import { AssignmentError, agentCapacity, assertAgentCanHaveLine, assertReleasable, assignAgent, assignmentFields, offerKind, oldestOf, resolvePurchaseAssignment, unassignAgent, withCenterLock } from '../services/lineAssignment.js';
+import { AssignmentError, LINE_NOT_ASSIGNED, LINE_NOT_ASSIGNED_MESSAGE, agentLineStatus, enforcementSettings, agentCapacity, assertAgentCanHaveLine, assertReleasable, assignAgent, assignmentFields, offerKind, oldestOf, resolvePurchaseAssignment, unassignAgent, withCenterLock } from '../services/lineAssignment.js';
 import { listLinesFor } from '../services/phoneNumberList.js';
 import { checkNumberCountry } from '../services/numberCountry.js';
 import { purchaseCurrency } from '../services/purchaseCurrency.js';
@@ -2139,6 +2139,16 @@ class PhoneNumberController {
     }
   }
 
+  /** Réponse de refus « agent sans ligne ». */
+  lineNotAssigned(res, status = 403) {
+    return res.status(status).json({ success: false, error: LINE_NOT_ASSIGNED, code: LINE_NOT_ASSIGNED, message: LINE_NOT_ASSIGNED_MESSAGE });
+  }
+
+  /** Blocage d'un agent sans ligne dans CE centre (offres à agents, règle active). Renvoie le statut ; `blocked` = refuser. */
+  async agentLineGate({ companyId, userId, limits }) {
+    return agentLineStatus({ companyId: String(companyId), userId, limits: limits ?? (await loadCompanyPlanLimits(companyId)), db: mongoose.connection.db });
+  }
+
   /** Jeton Twilio Voice pour que le navigateur d'un conseiller du centre reçoive les appels entrants. */
   async voiceToken(req, res) {
     try {
@@ -2162,10 +2172,24 @@ class PhoneNumberController {
           const settings = await InboundSettings.findOne({ companyId }).select('secretaryOutbound').lean();
           if (!secretaryOutboundAllowed(settings)) return res.status(403).json({ success: false, error: 'secretary_outbound_disabled', message: SECRETARY_OUTBOUND_BLOCKED });
         }
+        // Offres à agents : un agent sans ligne affectée n'appelle pas (règle datée, voir enforcementSettings).
+        if (secretary && (await this.agentLineGate({ companyId, userId })).blocked) return this.lineNotAssigned(res);
         const appSid = await ensureOutboundApp(client, `https://${req.get('host')}${OUTBOUND_WEBHOOK_PATH}`);
         const outboundToken = await createVoiceToken({ client, accountSid: config.twilioAccountSid, identity, outgoingApplicationSid: appSid, pushCredentialSid });
         const ticket = signOutboundTicket({ secret: config.twilioAuthToken, companyId, identity, secretary });
         return res.json({ success: true, data: { token: outboundToken, identity, expiresIn: VOICE_TOKEN_TTL_S, params: { CompanyId: companyId, Ticket: ticket } } });
+      }
+      // Jeton entrant : un agent sans ligne n'est pas joignable. Aucun contrôle (ni appel au service d'inscription) tant que la règle n'est pas configurée.
+      const rule = enforcementSettings();
+      if (rule.from !== null || rule.ruleStarts !== null) {
+        const access = await callerAccess(req);
+        if (access.role === 'agent') {
+          const centres = access.companyIds?.length ? access.companyIds : access.companyId ? [access.companyId] : [];
+          const gates = await Promise.all(centres.map((c) => this.agentLineGate({ companyId: c, userId })));
+          // Agent de plusieurs centres : refusé seulement s'il est bloqué dans TOUS ceux où la règle s'applique.
+          const applicable = gates.filter((g) => g.applicable);
+          if (applicable.length && applicable.every((g) => g.blocked)) return this.lineNotAssigned(res);
+        }
       }
       const token = await createVoiceToken({ client, accountSid: config.twilioAccountSid, identity, pushCredentialSid });
       res.json({ success: true, data: { token, identity, expiresIn: VOICE_TOKEN_TTL_S, ...(pushCredentialSid ? { push: true } : {}) } });
@@ -2183,6 +2207,11 @@ class PhoneNumberController {
     try {
       const companyId = String(req.body?.companyId || '');
       if (!mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ success: false, error: 'invalid_company', message: 'Entreprise invalide.' });
+      // Confort : même refus que le jeton / le webhook pour un agent sans ligne.
+      if (enforcementSettings().from !== null || enforcementSettings().ruleStarts !== null) {
+        const access = await callerAccess(req);
+        if (access.role === 'agent' && (await this.agentLineGate({ companyId, userId: access.userId })).blocked) return this.lineNotAssigned(res);
+      }
       const decision = await checkCompanyDestination(companyId, req.body?.to);
       if (!decision.ok) return res.status(422).json({ success: false, error: decision.code, reason: decision.reason, message: decision.message });
       return res.json({ success: true, data: { to: decision.to } });
@@ -2225,12 +2254,21 @@ class PhoneNumberController {
       ]);
       // Enregistrement selon l'offre (liste blanche) ; l'annonce est jouée à la personne appelée quand elle décroche.
       const recording = buildRecordingPlan({ record: shouldRecordPlan(limits), companyId, callSid: String(req.body?.CallSid || ''), baseUrl: `https://${req.get('host')}`, language: consentLanguageFor(to, languageForPhone(line?.phoneNumber)) });
-      const decision = decideOutboundCall({ to, line, subscribed: Boolean(limits), minutes, recording });
+      // Offres à agents : l'agent appelle depuis SA ligne, jamais depuis une autre ligne du centre ; sans ligne, refusé une fois la règle active.
+      let callerLine = line;
+      if (role === 'secretary' && offerKind(limits) === 'agents') {
+        const gate = await agentLineStatus({ companyId, userId: identity.replace(/^cc-/, ''), limits, db: mongoose.connection.db });
+        const own = gate.line;
+        const usable = own && own.provider === 'twilio' && own.twilioId && own.status === 'active' && own.billingStatus !== 'suspended';
+        if (gate.blocked || (own && !usable && gate.enforced)) return send(refusal(LINE_NOT_ASSIGNED_MESSAGE));
+        if (usable) callerLine = own;
+      }
+      const decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording });
       if (!decision.ok) {
         console.warn(`[browser-outbound] refusé pour l'entreprise ${companyId} : ${decision.message}`);
         return send(refusal(decision.message));
       }
-      console.log(`📞 Appel sortant du navigateur (entreprise ${companyId}) vers ${to.slice(0, 6)}… depuis ${line.phoneNumber}${recording ? ' (enregistré)' : ''}`);
+      console.log(`📞 Appel sortant du navigateur (entreprise ${companyId}) vers ${to.slice(0, 6)}… depuis ${callerLine.phoneNumber}${recording ? ' (enregistré)' : ''}`);
       return send(decision.twiml);
     } catch (error) {
       console.error('Error in handleBrowserOutbound:', error);

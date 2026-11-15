@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { PhoneNumber } from '../models/PhoneNumber.js';
+import { loadSeatContext } from './seats.js';
 
 /**
  * Affectation des lignes aux agents (offres Call Centre).
@@ -224,4 +225,43 @@ export async function agentCapacity({ companyId, limits, db }) {
   const agentsWithoutLine = agents.filter((a) => !a.lineId).length + anonymous;
   const assigned = [...byAgent.values()].length;
   return { applicable: true, offer: kind, agents, lines: { total: live.length, assigned, free: free.length, freeIds: free }, agentsWithoutLine, canAddAgentWithoutPurchase: free.length > agentsWithoutLine };
+}
+
+// ───────── Blocage « agent sans ligne » (lot 3a) ─────────
+export const LINE_NOT_ASSIGNED = 'line_not_assigned';
+export const LINE_NOT_ASSIGNED_MESSAGE = "Aucune ligne ne vous est affectée : demandez au titulaire de vous en affecter une.";
+
+const asDate = (v) => { const t = Date.parse(String(v ?? '').trim()); return Number.isFinite(t) ? t : null; };
+
+/**
+ * Réglages de la règle, lus À CHAQUE APPEL (jamais en dur ni mis en cache) :
+ *  - LINE_ENFORCEMENT_FROM (D, date ISO, globale) : à partir de D, tout agent d'un centre à agents doit avoir une ligne ;
+ *  - LINE_ENFORCEMENT_RULE_STARTS (date ISO de déploiement de la règle) : un centre dont l'abonnement est créé à cette date ou après
+ *    est soumis à la règle tout de suite (pas de préavis) ; les centres existants ont jusqu'à D.
+ * Aucune des deux : la règle est inactive (rien ne change).
+ */
+export function enforcementSettings(env = process.env) {
+  return { from: asDate(env.LINE_ENFORCEMENT_FROM), ruleStarts: asDate(env.LINE_ENFORCEMENT_RULE_STARTS) };
+}
+
+/**
+ * L'agent a-t-il sa ligne ? Règle appliquée seulement aux offres à agents (Full Scope, Multi-clients).
+ * Renvoie { applicable, enforced, blocked, notice, line } : `blocked` = règle active ET aucune ligne affectée à CET agent dans CE centre ;
+ * `notice` = D (ISO) tant que le centre est en préavis et que l'agent n'a pas de ligne ; `line` = sa ligne (document) si elle existe.
+ * `subscriptionCreatedAt` peut être fourni ; sinon il est lu dans la base partagée seulement si LINE_ENFORCEMENT_RULE_STARTS est définie.
+ */
+export async function agentLineStatus({ companyId, userId, limits, db, now = Date.now(), env = process.env, subscriptionCreatedAt } = {}) {
+  const none = { applicable: false, enforced: false, blocked: false, notice: null, line: null };
+  if (offerKind(limits) !== 'agents' || !companyId || !userId) return none;
+  const { from, ruleStarts } = enforcementSettings(env);
+  let enforced = from !== null && now >= from;
+  if (!enforced && ruleStarts !== null) {
+    let created = subscriptionCreatedAt;
+    if (created === undefined) created = (await loadSeatContext(db, companyId)).subscription?.createdAt;
+    const t = asDate(created instanceof Date ? created.toISOString() : created);
+    enforced = t !== null && t >= ruleStarts;
+  }
+  const line = await PhoneNumber.findOne({ companyId: String(companyId), assignedAgentId: String(userId), billingStatus: { $nin: UNASSIGNABLE_BILLING } }).lean();
+  const hasLine = Boolean(line);
+  return { applicable: true, enforced, blocked: enforced && !hasLine, notice: !enforced && !hasLine && from !== null ? new Date(from).toISOString() : null, line: line || null };
 }
