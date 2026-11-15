@@ -178,6 +178,7 @@ async function purchaseUnderAssignment({ companyId, assignment, assignCtx, db, r
 const PHONE_LINE_PRICE_NOT_CONFIGURED_BODY = {
   error: 'Phone line price not configured',
   code: 'PHONE_LINE_PRICE_NOT_CONFIGURED',
+  moneyStatus: 'not_charged',
   message: "Le prix d'une ligne supplémentaire n'est pas configuré pour votre offre : l'achat est impossible pour le moment. Aucun paiement n'a été pris. Contactez le support."
 };
 
@@ -404,6 +405,7 @@ class PhoneNumberController {
         if (!payment || payment.phoneNumberRef || !['authorized', 'succeeded'].includes(payment.status)) {
           return res.status(402).json({
             error: 'Payment required',
+            code: 'PAYMENT_REQUIRED',
             message: "Approuvez d'abord la carte ou PayPal. Le montant n'est encaissé qu'après l'achat du numéro."
           });
         }
@@ -419,6 +421,7 @@ class PhoneNumberController {
         if (String(payment.companyId) !== String(companyId)) {
           return res.status(403).json({
             error: 'Payment / company mismatch',
+            code: 'PAYMENT_COMPANY_MISMATCH',
             message: "Ce paiement n'appartient pas à cette entreprise."
           });
         }
@@ -525,6 +528,7 @@ class PhoneNumberController {
           return res.status(402).json({
             refunded: false,
             released: true,
+            moneyStatus: 'not_charged',
             error: 'Number purchase failed',
             code: error?.code || 'NUMBER_PURCHASE_FAILED',
             message: `L'achat du numéro a échoué. Aucun paiement n'a été encaissé. ${error?.message || ''}`.trim()
@@ -644,6 +648,7 @@ class PhoneNumberController {
         if (!payment || payment.phoneNumberRef || !['authorized', 'succeeded'].includes(payment.status)) {
           return res.status(402).json({
             error: 'Payment required',
+            code: 'PAYMENT_REQUIRED',
             message: "Approuvez d'abord la carte ou PayPal. Le montant n'est encaissé qu'après l'achat du numéro."
           });
         }
@@ -659,6 +664,7 @@ class PhoneNumberController {
         if (String(payment.companyId) !== String(companyId)) {
           return res.status(403).json({
             error: 'Payment / company mismatch',
+            code: 'PAYMENT_COMPANY_MISMATCH',
             message: "Ce paiement n'appartient pas à cette entreprise."
           });
         }
@@ -758,6 +764,7 @@ class PhoneNumberController {
           return res.status(402).json({
             refunded: false,
             released: true,
+            moneyStatus: 'not_charged',
             error: 'Number purchase failed',
             code: error?.code || 'NUMBER_PURCHASE_FAILED',
             message: `L'achat du numéro a échoué. Aucun paiement n'a été encaissé. ${error?.message || ''}`.trim()
@@ -806,15 +813,18 @@ class PhoneNumberController {
       : ' Contactez le support si le paiement a été débité.';
 
     const withRefund = (message) => `${message}${refundNote}`;
+    // `moneyStatus` : état de l'argent, pour que les clients composent eux-mêmes la phrase traduite (le message actuel est inchangé).
     const base = {
       refunded,
-      refundProvider: refundInfo?.provider || null
+      refundProvider: refundInfo?.provider || null,
+      moneyStatus: refunded ? 'refunded' : 'contact_support'
     };
 
     if (error?.code === 21649 || String(error?.message || '').includes('correct regulation type')) {
       return res.status(400).json({
         ...base,
         error: 'Regulatory Bundle Required',
+        code: 'NUMBER_REJECTED_BY_PROVIDER',
         message: withRefund(
           'L’opérateur a refusé ce numéro précis. Choisissez-en un autre ; si le refus se répète sur plusieurs numéros, contactez le support.'
         ),
@@ -826,6 +836,7 @@ class PhoneNumberController {
       return res.status(400).json({
         ...base,
         error: 'Twilio Trial Limit Reached',
+        code: 'PROVIDER_TRIAL_LIMIT',
         message: withRefund(
           'Les comptes Twilio trial ne peuvent provisionner qu’un seul numéro. Passez le compte Twilio en production pour en acheter d’autres.'
         )
@@ -847,21 +858,22 @@ class PhoneNumberController {
       });
     }
     if (msg.includes('already exists')) {
-      return res.status(409).json({ ...base, error: 'Conflict', message: withRefund(msg) });
+      return res.status(409).json({ ...base, error: 'Conflict', code: 'NUMBER_ALREADY_EXISTS', message: withRefund(msg) });
     }
     if (msg.includes('Insufficient balance')) {
-      return res.status(402).json({ ...base, error: 'Payment Required', message: withRefund(msg) });
+      return res.status(402).json({ ...base, error: 'Payment Required', code: 'PROVIDER_INSUFFICIENT_BALANCE', message: withRefund(msg) });
     }
     if (msg.includes('no longer available')) {
-      return res.status(410).json({ ...base, error: 'Gone', message: withRefund(msg) });
+      return res.status(410).json({ ...base, error: 'Gone', code: 'NUMBER_NO_LONGER_AVAILABLE', message: withRefund(msg) });
     }
     if (msg.toLowerCase().includes('invalid')) {
-      return res.status(400).json({ ...base, error: 'Bad Request', message: withRefund(msg) });
+      return res.status(400).json({ ...base, error: 'Bad Request', code: 'INVALID_NUMBER_REQUEST', message: withRefund(msg) });
     }
 
     return res.status(500).json({
       ...base,
       error: defaultError,
+      code: 'NUMBER_PROVISION_FAILED',
       message: withRefund(defaultMessage)
     });
   }
@@ -897,7 +909,7 @@ class PhoneNumberController {
     }
     const status = error?.status || 400;
     const money = payment ? (released ? " Aucun paiement n'a été encaissé." : refunded ? ' Votre paiement a été remboursé.' : ' Contactez le support si le paiement a été débité.') : '';
-    return res.status(status).json({ success: false, error: error?.code || 'ASSIGNMENT_REFUSED', code: error?.code || 'ASSIGNMENT_REFUSED', released, refunded, message: `${error?.message || 'Affectation impossible.'}${money}` });
+    return res.status(status).json({ success: false, error: error?.code || 'ASSIGNMENT_REFUSED', code: error?.code || 'ASSIGNMENT_REFUSED', released, refunded, moneyStatus: payment ? (released ? 'not_charged' : refunded ? 'refunded' : 'contact_support') : 'none', message: `${error?.message || 'Affectation impossible.'}${money}` });
   }
 
   /** POST /phone-numbers/assign-agent { companyId, id, agentId } : titulaire seul ; la ligne est affectée à CET agent (une ligne par agent). */
@@ -1084,6 +1096,7 @@ class PhoneNumberController {
       refunded,
       released,
       ...(releaseFailed ? { releaseFailed: true } : {}),
+      moneyStatus: released ? 'not_charged' : refunded ? 'refunded' : authorizationPending ? 'authorization_pending' : 'contact_support',
       message: `${error?.message || "L'abonnement mensuel de la ligne est impossible."} ${money}${note}`
     });
   }
@@ -1210,6 +1223,7 @@ class PhoneNumberController {
             return res.status(402).json({
               error: 'Provider credit insufficient',
               code: 'TELNYX_INSUFFICIENT_CREDIT',
+              moneyStatus: 'not_charged',
               message: "L'achat de numéro est temporairement indisponible. Aucun paiement n'a été pris. Réessayez plus tard ou contactez le support."
             });
           }
@@ -1232,6 +1246,7 @@ class PhoneNumberController {
           return res.status(402).json({
             error: 'Line subscription unavailable',
             code: billableErr.code || 'LINE_SUBSCRIPTION_FAILED',
+            moneyStatus: 'not_charged',
             message: `${billableErr.message} Aucun paiement n'a été pris.`
           });
         }
@@ -1260,6 +1275,7 @@ class PhoneNumberController {
           await PhoneNumberPayment.findByIdAndDelete(payment._id);
           return res.status(503).json({
             error: 'PayPal not configured',
+            code: 'PAYPAL_NOT_CONFIGURED',
             message: 'Définissez PAYPAL_CLIENT_ID et PAYPAL_CLIENT_SECRET sur le serveur.'
           });
         }
@@ -1287,6 +1303,7 @@ class PhoneNumberController {
           await PhoneNumberPayment.findByIdAndDelete(payment._id);
           return res.status(502).json({
             error: 'PayPal order missing approval URL',
+            code: 'PAYPAL_APPROVAL_URL_MISSING',
             message: 'La commande PayPal a été créée sans URL d\'approbation.'
           });
         }
@@ -1299,6 +1316,7 @@ class PhoneNumberController {
           await PhoneNumberPayment.findByIdAndDelete(payment._id);
           return res.status(503).json({
             error: 'Stripe not configured',
+            code: 'STRIPE_NOT_CONFIGURED',
             message: 'Définissez STRIPE_SECRET_KEY sur le serveur.'
           });
         }
@@ -1334,6 +1352,7 @@ class PhoneNumberController {
             await PhoneNumberPayment.findByIdAndDelete(payment._id);
             return res.status(502).json({
               error: 'Stripe checkout URL missing',
+              code: 'STRIPE_CHECKOUT_URL_MISSING',
               message: "Stripe n'a pas renvoyé d'URL de paiement."
             });
           }
@@ -1422,6 +1441,7 @@ class PhoneNumberController {
         } else {
           return res.status(402).json({
             error: 'PayPal not approved',
+            code: 'PAYPAL_NOT_APPROVED',
             message: "Le paiement PayPal n'est pas encore approuvé. Le montant n'est encaissé qu'après l'achat du numéro."
           });
         }
