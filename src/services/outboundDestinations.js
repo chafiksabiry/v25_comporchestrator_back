@@ -161,10 +161,10 @@ export const isPremiumRate = (e164) => PREMIUM_RATE_PREFIXES.some((p) => String(
 
 /** Indicatifs proposés dans les réglages : seulement les pays connus, sans doublon, ordre du catalogue. */
 export function validatePrefixList(list) {
-  if (!Array.isArray(list)) return { ok: false, error: 'La liste des pays autorisés doit être un tableau.' };
+  if (!Array.isArray(list)) return { ok: false, code: 'LIST_NOT_ARRAY', error: 'La liste des pays autorisés doit être un tableau.' };
   const clean = [...new Set(list.map((p) => String(p ?? '').trim()))];
   const unknown = clean.find((p) => !KNOWN.has(p));
-  if (unknown !== undefined) return { ok: false, error: `Indicatif de pays inconnu : « ${unknown} ».` };
+  if (unknown !== undefined) return { ok: false, code: 'UNKNOWN_COUNTRY_PREFIX', params: { prefix: unknown }, error: `Indicatif de pays inconnu : « ${unknown} ».` };
   return { ok: true, value: COUNTRY_CATALOG.map((c) => c.prefix).filter((p) => clean.includes(p)) };
 }
 
