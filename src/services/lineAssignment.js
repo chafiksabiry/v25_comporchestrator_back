@@ -191,3 +191,37 @@ export async function resolvePurchaseAssignment({ companyId, limits, existingCou
   const agent = await assertAgentCanHaveLine({ companyId, agentId: wanted, limits, db });
   return { assignedRole: 'agent', assignedAgentId: agent, assignedAt: new Date() };
 }
+
+/**
+ * Capacité « agents / lignes » d'un centre, en lecture seule (appelée par le service d'inscription ou le front avant d'ajouter un agent).
+ * Offres à agents uniquement (`applicable: false` sinon). Agents = comptes `rep` employés par le centre + invitations d'agent en attente ou acceptées ;
+ * une invitation sans compte (userId absent) compte comme agent sans ligne. Ligne libre = ligne « agent » non affectée, dans un état affectable.
+ * @returns {{applicable: boolean, offer: string, agents: Array, lines: {total: number, assigned: number, free: number, freeIds: string[]}, agentsWithoutLine: number, canAddAgentWithoutPurchase: boolean}}
+ */
+export async function agentCapacity({ companyId, limits, db }) {
+  const kind = offerKind(limits);
+  if (kind !== 'agents') return { applicable: false, offer: kind, agents: [], lines: { total: 0, assigned: 0, free: 0, freeIds: [] }, agentsWithoutLine: 0, canAddAgentWithoutPurchase: false };
+  const company = oid(companyId);
+  const rows = await PhoneNumber.find({ companyId: String(companyId) }).lean();
+  const live = rows.filter((l) => !['terminated', 'release_failed'].includes(String(l.billingStatus)));
+  const oldest = oldestOf(live);
+  const byAgent = new Map();
+  let free = [];
+  for (const line of live) {
+    if (effectiveRole(line, kind, oldest) !== 'agent') continue;
+    if (line.assignedAgentId) byAgent.set(String(line.assignedAgentId), String(line._id));
+    else if (!UNASSIGNABLE_BILLING.includes(String(line.billingStatus))) free.push(String(line._id));
+  }
+  const people = new Map();
+  for (const u of await db.collection('users').find({ employerCompanyId: company, typeUser: 'rep' }).toArray()) people.set(String(u._id), { agentId: String(u._id), status: 'active' });
+  let anonymous = 0;
+  for (const i of await db.collection('agentinvitations').find({ companyId: company }).toArray()) {
+    if (i.kind === 'member' || !['pending', 'accepted'].includes(String(i.status))) continue;
+    if (!i.userId) { anonymous += 1; continue; }
+    if (!people.has(String(i.userId))) people.set(String(i.userId), { agentId: String(i.userId), status: i.status === 'accepted' ? 'active' : 'pending' });
+  }
+  const agents = [...people.values()].map((a) => ({ ...a, lineId: byAgent.get(a.agentId) ?? null }));
+  const agentsWithoutLine = agents.filter((a) => !a.lineId).length + anonymous;
+  const assigned = [...byAgent.values()].length;
+  return { applicable: true, offer: kind, agents, lines: { total: live.length, assigned, free: free.length, freeIds: free }, agentsWithoutLine, canAddAgentWithoutPurchase: free.length > agentsWithoutLine };
+}
