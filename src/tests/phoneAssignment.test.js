@@ -1021,3 +1021,67 @@ test('3e-1 checkout : Stripe non configuré -> code STRIPE_NOT_CONFIGURED, texte
     assert.deepEqual([res.body.error, res.body.code, res.body.message], ['Stripe not configured', 'STRIPE_NOT_CONFIGURED', 'Définissez STRIPE_SECRET_KEY sur le serveur.']);
   } finally { stripeService.isConfigured = prev; }
 });
+
+// ───────── première ligne incluse : checkout/config { included } et checkout/init -> 409 LINE_INCLUDED_NO_PAYMENT ─────────
+const configAs = async (query = { companyId: C1 }) => { const r = mockRes(); await phoneNumberController.getCheckoutConfig({ ...reqAs('owner', {}, query), get: () => 'orch.test' }, r); return r; };
+const initAs = async (extra = {}) => { const r = mockRes(); await phoneNumberController.initLineCheckout(reqAs('owner', { phoneNumber: '+33612345678', companyId: C1, provider: 'stripe', ...extra }), r); return r; };
+
+test('première ligne incluse : checkout/config renvoie included:true et checkout/init refuse (409 LINE_INCLUDED_NO_PAYMENT, aucun paiement créé) pour chaque offre Call Centre à ligne incluse', async () => {
+  for (const offer of ['full_scope', 'multi_clients', 'accueil', 'nomad']) {
+    calls = []; lines = {}; seq = 0; setup(offer);
+    const cfg = await configAs();
+    assert.equal(cfg.statusCode, 200, `${offer} ${JSON.stringify(cfg.body)}`);
+    assert.equal(cfg.body.included, true, offer);
+    const init = await initAs();
+    assert.equal(init.statusCode, 409, offer);
+    assert.deepEqual([init.body.code, init.body.error, init.body.moneyStatus], ['LINE_INCLUDED_NO_PAYMENT', 'Line included', 'not_charged'], offer);
+    assert.match(init.body.message, /^Your first line is included in your plan/);
+    assert.ok(!names().includes('payment.create') && !names().includes('stripe.checkout'), `${offer} : aucun paiement ni session Stripe`);
+  }
+});
+
+test('première ligne incluse : l\'achat direct (sans paymentId) aboutit, puis la DEUXIÈME ligne repasse par le paiement (config included:false, init 201)', async () => {
+  setup('full_scope');
+  const first = mockRes();
+  await phoneNumberController.purchaseTwilioNumber(reqAs('owner', { phoneNumber: '+33612345678', companyId: C1 }), first);
+  assert.equal(first.statusCode, 200, JSON.stringify(first.body));
+  assert.equal(optionsOfPurchase().assignedRole, 'management');
+  // une ligne existe désormais : plus incluse
+  addLine();
+  const cfg = await configAs();
+  assert.equal(cfg.body.included, false);
+  assert.equal(cfg.body.pricing.amountCents, 1999, 'prix de la ligne de l\'offre');
+  const init = await initAs();
+  assert.equal(init.statusCode, 201, JSON.stringify(init.body));
+  assert.ok(names().includes('payment.create'));
+  // sans paiement, la deuxième ligne reste refusée à l'achat
+  paidPayment({ status: 'pending' });
+  const second = mockRes();
+  await phoneNumberController.purchaseTwilioNumber(reqAs('owner', { phoneNumber: '+33612345678', companyId: C1, paymentId: '64e0000000000000000000e2' }), second);
+  assert.equal(second.statusCode, 402);
+  assert.equal(second.body.code, 'PAYMENT_REQUIRED');
+});
+
+test('première ligne incluse : sans offre Call Centre à ligne incluse (TaaS, sans forfait) ou sans entreprise, included:false et checkout/init inchangé', async () => {
+  for (const offer of ['taas', 'aucun']) {
+    calls = []; lines = {}; seq = 0; setup(offer);
+    assert.equal((await configAs()).body.included, false, offer);
+    assert.equal((await initAs()).statusCode, 201, `${offer} : checkout/init inchangé`);
+  }
+  setup('full_scope');
+  const noCompany = await configAs({});
+  assert.equal(noCompany.body.included, false);
+  assert.equal((await configAs({ companyId: 'pas-un-id' })).body.included, false);
+});
+
+test('première ligne incluse : une offre sans prix de ligne configuré ne bloque pas la config (rien à payer), mais bloque toujours dès la 2e ligne', async () => {
+  planMetadata = { harx_product: 'callcenter', callcenter_tier: 'multi_clients' }; // pas de phone_line_price_cents
+  const first = await configAs();
+  assert.equal(first.statusCode, 200);
+  assert.deepEqual([first.body.included, first.body.pricing.amountCents, first.body.pricing.trialDays], [true, null, null]);
+  addLine();
+  const second = await configAs();
+  assert.equal(second.statusCode, 409);
+  assert.equal(second.body.code, 'PHONE_LINE_PRICE_NOT_CONFIGURED');
+  assert.equal(second.body.included, undefined);
+});

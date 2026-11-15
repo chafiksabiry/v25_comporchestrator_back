@@ -1175,6 +1175,10 @@ class PhoneNumberController {
       const planLimits = await loadCompanyPlanLimits(companyId);
       const lineLimit = localNumberLimitPayload(planLimits, existingLines);
       if (lineLimit) return res.status(403).json(lineLimit);
+      // Première ligne comprise dans l'offre : aucun paiement à créer (elle s'achète directement, sans paymentId).
+      if (isLineIncluded(planLimits, existingLines)) {
+        return res.status(409).json({ success: false, error: 'Line included', code: 'LINE_INCLUDED_NO_PAYMENT', moneyStatus: 'not_charged', message: 'Your first line is included in your plan: no payment is needed. Purchase the number directly, without a payment.' });
+      }
 
       // Affectation à l'achat (optionnelle) : le titulaire seul, un agent du centre sans ligne, offre à agents : refus AVANT tout paiement.
       let initAgent = null;
@@ -1497,13 +1501,27 @@ class PhoneNumberController {
     }
   }
 
+  /** La première ligne du centre est-elle comprise dans son offre ? (même règle que l'achat : aucune ligne + offre Call Centre à ligne incluse). */
+  async isFirstLineIncluded(companyId) {
+    if (!companyId || !mongoose.Types.ObjectId.isValid(String(companyId))) return false;
+    try {
+      return isLineIncluded(await loadCompanyPlanLimits(companyId), await PhoneNumber.countDocuments({ companyId }));
+    } catch (error) {
+      console.warn('[phone-numbers] included check failed:', error?.message);
+      return false;
+    }
+  }
+
   /** Public checkout config for the telephony payment modal. */
   async getCheckoutConfig(req, res) {
     try {
       // `?companyId=` : prix de la ligne de l'offre de l'entreprise (même champ `pricing.amountCents`) et devise de son pays
       // (mêmes montants) ; sans lui, prix et devise de base.
       const linePricing = await getPhoneLinePricing(req.query?.companyId);
-      if (linePricing.unavailable) return res.status(409).json(PHONE_LINE_PRICE_NOT_CONFIGURED_BODY);
+      // `included` : la PREMIÈRE ligne du centre est comprise dans son offre (aucune ligne + offre Call Centre à ligne incluse) : rien à payer.
+      // Dans ce cas l'absence de prix configuré ne bloque pas (il n'y a rien à encaisser).
+      const included = await this.isFirstLineIncluded(req.query?.companyId);
+      if (linePricing.unavailable && !included) return res.status(409).json(PHONE_LINE_PRICE_NOT_CONFIGURED_BODY);
       // `?companyId=` : devise du pays de l'entreprise (mêmes montants) ; sans lui, la devise de base (EUR).
       const currency = req.query?.companyId ? await purchaseCurrency(req, req.query.companyId) : String(linePricing.currency || 'EUR').toUpperCase();
       res.json({
@@ -1516,10 +1534,11 @@ class PhoneNumberController {
         stripe: {
           enabled: stripeService.isConfigured()
         },
+        included,
         pricing: {
-          amountCents: linePricing.setupFeeCents,
+          amountCents: linePricing.unavailable ? null : linePricing.setupFeeCents,
           currency,
-          trialDays: linePricing.trialDays,
+          trialDays: linePricing.unavailable ? null : linePricing.trialDays,
         }
       });
     } catch (error) {

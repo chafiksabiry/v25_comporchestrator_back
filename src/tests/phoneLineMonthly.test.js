@@ -341,15 +341,20 @@ test('checkout/init : aucun client Stripe d\'offre -> refus avant paiement (PayP
   assert.ok(!names().includes('payment.create'));
 });
 
-test('Nomad : prix 999 inchangé, aucun marquage mensuel, aucune vérification de carte', async () => {
+test('Nomad : la première ligne est incluse (checkout/init refuse, aucun paiement) ; il n\'y en a pas de deuxième (limite du forfait) : plus de checkout à 999', async () => {
   planMetadata = { harx_product: 'callcenter', callcenter_tier: 'nomad_solo' };
-  existingLines = 0; // première ligne Nomad : incluse, mais le checkout reste calculable ; la 2e est testée plus bas
-  const res = mockRes();
+  existingLines = 0;
+  let res = mockRes();
   await phoneNumberController.initLineCheckout(lineReq({ phoneNumber: '+33612345678', companyId: COMPANY, provider: 'stripe' }), res);
-  assert.equal(res.statusCode, 201);
-  assert.equal(res.body.amount, 999);
-  assert.equal(calls.find((c) => c[0] === 'payment.create')[1].lineBilling, undefined);
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.body.code, 'LINE_INCLUDED_NO_PAYMENT');
+  assert.ok(!calls.some((c) => c[0] === 'payment.create'), 'aucun paiement créé');
   assert.ok(!names().includes('pm.check'));
+  existingLines = 1;
+  res = mockRes();
+  await phoneNumberController.initLineCheckout(lineReq({ phoneNumber: '+33612345678', companyId: COMPANY, provider: 'stripe' }), res);
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.body.code, 'ACTIVE_LOCAL_NUMBER_LIMIT');
 });
 
 test('TaaS : checkout inchangé (999, pas de lineBilling, pas de vérification de carte)', async () => {
