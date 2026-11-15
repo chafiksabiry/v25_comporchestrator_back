@@ -201,7 +201,7 @@ assert.equal(r.code, 200); assert.match(updates[0].twiml, /<Dial/);
 // journal des transferts : isolé par société, sans numéro
 r = await call(ctl.list, { user: 'owner1' });
 assert.equal(r.code, 200); assert.equal(r.body.data.transfers.length, 1);
-assert.deepEqual(Object.keys(r.body.data.transfers[0]).sort(), ['at', 'byName', 'byUserId', 'callId', 'callSid', 'from', 'mode', 'result', 'resultLabel', 'toEntryId', 'toName'].sort());
+assert.deepEqual(Object.keys(r.body.data.transfers[0]).sort(), ['at', 'byName', 'byUserId', 'callId', 'callSid', 'from', 'mode', 'result', 'resultLabel', 'resultLabelEn', 'toEntryId', 'toName'].sort()); // resultLabelEn : champ additif (3e-1)
 assert.equal(r.body.data.transfers[0].byName, 'Léa');
 assert.equal((await call(ctl.list, { user: 'other' })).body.data.transfers.length, 0);
 assert.equal((await call(ctl.list, { user: 'mgrNo' })).code, 403);
