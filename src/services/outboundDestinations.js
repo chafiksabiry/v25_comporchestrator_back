@@ -157,6 +157,54 @@ export function countryPrefixOf(e164) {
   return '';
 }
 
+/**
+ * Indicatifs régionaux (NANP, « +1 ») qui ne sont NI américains NI canadiens : territoires et pays des Caraïbes.
+ * Sans cette distinction, tout « +1 » serait attribué aux États-Unis.
+ */
+const NANP_OTHER = Object.freeze({
+  242: 'BS', 246: 'BB', 264: 'AI', 268: 'AG', 284: 'VG', 340: 'VI', 345: 'KY', 441: 'BM', 473: 'GD', 649: 'TC', 664: 'MS',
+  670: 'MP', 671: 'GU', 684: 'AS', 721: 'SX', 758: 'LC', 767: 'DM', 784: 'VC', 787: 'PR', 809: 'DO', 829: 'DO', 849: 'DO',
+  868: 'TT', 869: 'KN', 876: 'JM', 939: 'PR',
+});
+/** Indicatifs régionaux canadiens (source : Wikipédia, « Telephone numbers in Canada », plan de numérotation par province ; 600 : non géographique canadien). */
+const CANADA_AREA_CODES = new Set([
+  403, 780, 368, 587, 825, 604, 250, 236, 672, 778, 257, 204, 431, 584, 506, 428, 709, 879, 902, 782,
+  416, 613, 519, 705, 807, 905, 226, 249, 289, 343, 382, 365, 437, 548, 647, 683, 742, 753, 942,
+  418, 514, 450, 819, 263, 354, 367, 438, 468, 579, 581, 873, 306, 474, 639, 867, 600,
+]);
+
+/** Pays le plus probable pour un indicatif partagé (« +1 », « +7 », « +262 », « +599 ») d'après le numéro national ; null si indéterminé. */
+function sharedPrefixCountry(prefix, national) {
+  if (prefix === '+1') {
+    const area = Number(national.slice(0, 3));
+    if (national.length < 3) return null;
+    if (CANADA_AREA_CODES.has(area)) return 'CA';
+    return NANP_OTHER[area] || 'US';
+  }
+  if (prefix === '+7') return national[0] === '6' || national[0] === '7' ? 'KZ' : 'RU';
+  if (prefix === '+262') return national.startsWith('269') || national.startsWith('639') ? 'YT' : 'RE';
+  if (prefix === '+599') return national[0] === '9' ? 'CW' : ['3', '4', '7'].includes(national[0]) ? 'BQ' : null;
+  return null;
+}
+
+/**
+ * Indicatif numérique et pays (ISO 3166-1 alpha-2) d'un numéro de ligne E.164 (« + » facultatif), d'après la table des indicatifs.
+ * Indicatif partagé : pays le plus probable d'après le numéro national, sinon null. Numéro invalide, national (sans indicatif) ou indicatif inconnu :
+ * { callingCode: null, countryIso: null }. Un numéro n'est jamais « deviné » français.
+ * @returns {{callingCode: number|null, countryIso: string|null}}
+ */
+export function callingInfoOf(raw) {
+  const none = { callingCode: null, countryIso: null };
+  const s = String(raw ?? '').trim().replace(/[\s().-]/g, '');
+  const e164 = /^\+[1-9]\d{7,14}$/.test(s) ? s : /^[1-9]\d{7,14}$/.test(s) ? `+${s}` : '';
+  if (!e164) return none;
+  const prefix = countryPrefixOf(e164);
+  if (!prefix) return none;
+  const isos = COUNTRY_LABELS_EN[prefix]?.iso || [];
+  const countryIso = isos.length === 1 ? isos[0] : isos.length > 1 ? sharedPrefixCountry(prefix, e164.slice(prefix.length)) : null;
+  return { callingCode: Number(prefix.slice(1)), countryIso: countryIso || null };
+}
+
 export const isPremiumRate = (e164) => PREMIUM_RATE_PREFIXES.some((p) => String(e164).startsWith(p));
 
 /** Indicatifs proposés dans les réglages : seulement les pays connus, sans doublon, ordre du catalogue. */

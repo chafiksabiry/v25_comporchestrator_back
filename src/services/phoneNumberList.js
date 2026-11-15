@@ -4,6 +4,7 @@ import { callerAccess, scopeToCompany } from '../middleware/companyScope.js';
 import { loadCompanyPlanLimits } from './planLimits.js';
 import { assignmentFields, offerKind, oldestOf } from './lineAssignment.js';
 import { busyView } from './lineCalls.js';
+import { callingInfoOf } from './outboundDestinations.js';
 
 /**
  * Liste des lignes (GET /api/phone-numbers) : toujours limitée côté serveur à la société de l'appelant.
@@ -24,6 +25,8 @@ export function agentLineView(line) {
   return {
     id: line._id, _id: line._id, phoneNumber: line.phoneNumber, status: line.status, label: labelOf(line),
     companyId: line.companyId, gigId: line.gigId ?? null,
+    // Indicatif numérique et pays ISO de la ligne (saisie nationale côté application) ; null si inconnu. Additifs.
+    ...callingInfoOf(line.phoneNumber),
   };
 }
 

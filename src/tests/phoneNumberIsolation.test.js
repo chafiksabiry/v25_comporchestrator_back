@@ -61,9 +61,9 @@ const [mine] = await listLinesFor(asUser('ownerA'), { find, limits });
 assert.equal(mine.price, 5); assert.equal(mine.billingStatus, 'active'); assert.equal(mine.provider, 'twilio');
 for (const secret of ['twilioId', 'telnyxId', 'stripeSubscriptionId', 'paymentRef', 'orderId', 'webhookUrl', 'connectionId']) assert.equal(secret in mine, false, secret);
 assert.deepEqual(mine.metadata, { inboundTest: { testedAt: 'x' } });
-// 6. la secrétaire ne reçoit que numéro, statut, libellé (+ identifiants de ligne et de société)
+// 6. la secrétaire ne reçoit que numéro, statut, libellé (+ identifiants de ligne et de société) et l'indicatif / pays de la ligne (callingCode, countryIso : additifs)
 const [seen] = await listLinesFor(asUser('agentA'), { find, limits });
-assert.deepEqual(Object.keys(seen).sort(), ['_id', 'companyId', 'gigId', 'id', 'label', 'phoneNumber', 'status']);
+assert.deepEqual(Object.keys(seen).sort(), ['_id', 'callingCode', 'companyId', 'countryIso', 'gigId', 'id', 'label', 'phoneNumber', 'status']);
 assert.equal(seen.label, 'Accueil');
 for (const f of ['price', 'currency', 'billingStatus', 'provider', 'twilioId', 'metadata', 'isTrial']) assert.equal(f in seen, false, f);
 
