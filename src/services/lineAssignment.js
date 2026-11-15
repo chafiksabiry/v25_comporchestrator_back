@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { loadSeatContext } from './seats.js';
+import { voiceIdentity } from './voicePresenceService.js';
 
 /**
  * Affectation des lignes aux agents (offres Call Centre).
@@ -278,3 +279,38 @@ export async function enforcementFor({ companyId, db, now = Date.now(), env = pr
 
 /** Vue publique du statut d'un agent : { required, hasLine, notice } (required = la règle s'applique déjà ; notice = D en ISO pendant le préavis, sinon null). */
 export const lineStatusView = (status) => ({ required: Boolean(status?.applicable && status.enforced), hasLine: Boolean(status?.line), notice: status?.notice ?? null });
+
+// ───────── Routage entrant (lot 3b) ─────────
+/** Identifiants (chaînes) des agents du centre : comptes `rep` employés + invitations d'agent acceptées. */
+export async function agentIdsOf(db, companyId) {
+  const company = oid(companyId);
+  const ids = new Set();
+  for (const u of await db.collection('users').find({ employerCompanyId: company, typeUser: 'rep' }).toArray()) ids.add(String(u._id));
+  for (const i of await db.collection('agentinvitations').find({ companyId: company }).toArray()) {
+    if (i.kind !== 'member' && String(i.status) === 'accepted' && i.userId) ids.add(String(i.userId));
+  }
+  return ids;
+}
+
+/**
+ * Qui peut recevoir un appel entrant sur CETTE ligne ? null = aucune restriction (comportement actuel : règle inactive, offre sans agents,
+ * ligne sans rôle). Sinon une fonction `(identité) => boolean` appliquée aux conseillers en ligne :
+ *  - ligne d'agent affectée : seulement cet agent ; ligne d'agent libre : personne (l'appel suit le repli habituel : mobile du titulaire, répondeur) ;
+ *  - ligne « management » (ligne incluse du titulaire) : le titulaire et les responsables, jamais les agents.
+ * Même règle datée que le blocage d'usage (voir enforcementFor).
+ */
+export async function inboundRingFilter({ line, limits, db, now = Date.now(), env = process.env, subscriptionCreatedAt } = {}) {
+  if (!line?.companyId || offerKind(limits) !== 'agents') return null;
+  const { enforced } = await enforcementFor({ companyId: line.companyId, db, now, env, subscriptionCreatedAt });
+  if (!enforced) return null;
+  const role = effectiveRole(line, 'agents', await oldestLineId(line.companyId));
+  if (role === 'agent') {
+    const only = line.assignedAgentId ? voiceIdentity(line.assignedAgentId) : null;
+    return (identity) => identity === only;
+  }
+  if (role === 'management') {
+    const agents = new Set([...(await agentIdsOf(db, line.companyId))].map(voiceIdentity));
+    return (identity) => !agents.has(identity);
+  }
+  return null;
+}
