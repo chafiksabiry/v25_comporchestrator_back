@@ -135,6 +135,12 @@ const phoneNumberSchema = new mongoose.Schema({
     enum: ['management', 'agent', 'shared'],
     default: undefined
   },
+  // Appel actif sur la ligne (offre Accueil, règle datée active) : { callSid, direction, startedAt, expiresAt }. Absent = ligne libre.
+  // Écrit UNIQUEMENT par services/lineCalls.js (prise atomique, libération idempotente, expiration de sécurité).
+  activeCall: {
+    type: mongoose.Schema.Types.Mixed,
+    default: undefined
+  },
   // Identifiant (chaîne) de l'agent titulaire de la ligne ; null = ligne libre. Un agent n'a qu'UNE ligne par centre (index unique ci-dessous).
   assignedAgentId: {
     type: String,
@@ -199,5 +205,8 @@ phoneNumberSchema.index({ companyId: 1, assignedAgentId: 1 }, { unique: true, pa
 
 // Index pour la recherche par orderId
 phoneNumberSchema.index({ orderId: 1 });
+
+// Libération par appel (services/lineCalls.js) : recherche par callSid sans parcourir toute la collection.
+phoneNumberSchema.index({ 'activeCall.callSid': 1 }, { sparse: true });
 
 export const PhoneNumber = mongoose.model('PhoneNumber', phoneNumberSchema);

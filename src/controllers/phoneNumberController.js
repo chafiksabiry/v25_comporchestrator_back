@@ -2,6 +2,7 @@ import { phoneNumberService } from '../services/phoneNumberService.js';
 import { callerAccess, ScopeError, scopeToCompany } from '../middleware/companyScope.js';
 import { AssignmentError, LINE_NOT_ASSIGNED, LINE_NOT_ASSIGNED_MESSAGE, agentLineStatus, inboundRingFilter, enforcementSettings, lineStatusView, agentCapacity, assertAgentCanHaveLine, assertReleasable, assignAgent, assignmentFields, offerKind, oldestOf, resolvePurchaseAssignment, unassignAgent, withCenterLock } from '../services/lineAssignment.js';
 import { listLinesFor } from '../services/phoneNumberList.js';
+import { LINE_BUSY_CODE, LINE_BUSY_MESSAGE, LINE_CALL_END_PATH, hasFreeLine, lineCallsEnforced, releaseCall, staleCheckFor, takeFirstFreeLine, takeLine } from '../services/lineCalls.js';
 import { checkNumberCountry } from '../services/numberCountry.js';
 import { purchaseCurrency } from '../services/purchaseCurrency.js';
 import { checkCompanyDestination } from '../services/outboundPolicy.js';
@@ -2283,6 +2284,14 @@ class PhoneNumberController {
       }
       const decision = await checkCompanyDestination(companyId, req.body?.to);
       if (!decision.ok) return res.status(422).json({ success: false, error: decision.code, reason: decision.reason, message: decision.message });
+      // Offre Accueil, règle active : toutes les lignes occupées => 409 LINE_BUSY (confort ; le webhook refuse de toute façon). Aucune prise ici.
+      if (enforcementSettings().from !== null || enforcementSettings().ruleStarts !== null) {
+        try {
+          if (await lineCallsEnforced({ companyId, limits: await loadCompanyPlanLimits(companyId), db: mongoose.connection.db }) && !hasFreeLine(await this.twilioLinesOf(companyId))) {
+            return res.status(409).json({ success: false, error: LINE_BUSY_CODE, code: LINE_BUSY_CODE, message: LINE_BUSY_MESSAGE });
+          }
+        } catch (error) { console.warn('[outbound-check] contrôle de ligne ignoré :', error?.message || error); }
+      }
       return res.json({ success: true, data: { to: decision.to } });
     } catch (error) {
       console.error('Error in outboundCheck:', error.message);
@@ -2332,10 +2341,27 @@ class PhoneNumberController {
         if (gate.blocked || (own && !usable && gate.enforced)) return send(refusal(LINE_NOT_ASSIGNED_MESSAGE, { language: 'en-US', voice: 'Polly.Joanna' }));
         if (usable) callerLine = own;
       }
-      const decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording });
+      let decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording });
       if (!decision.ok) {
         console.warn(`[browser-outbound] refusé pour l'entreprise ${companyId} : ${decision.message}`);
         return send(refusal(decision.message));
+      }
+      // Offre Accueil, règle datée active : une ligne = un appel à la fois. L'appel prend la première ligne LIBRE du centre (sinon « ligne occupée ») ;
+      // elle est libérée à la fin de la numérotation (action du <Dial>). Règle inactive ou autre offre : rien de tout cela. Toute panne : l'appel passe comme avant.
+      const sidForLine = String(req.body?.CallSid || '').trim();
+      if (sidForLine && (await lineCallsEnforced({ companyId, limits, db: mongoose.connection.db }))) {
+        try {
+          const pool = await this.twilioLinesOf(companyId);
+          const taken = await takeFirstFreeLine({ lineIds: pool.map((l) => l._id), callSid: sidForLine, direction: 'outbound', isStale: staleCheckFor(phoneNumberService.twilioClient) });
+          if (!taken.ok) {
+            console.warn(`[browser-outbound] ${LINE_BUSY_CODE} pour l'entreprise ${companyId}`);
+            return send(refusal(LINE_BUSY_MESSAGE, { language: 'en-US', voice: 'Polly.Joanna' }));
+          }
+          callerLine = pool.find((l) => String(l._id) === String(taken.lineId));
+          decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, action: `https://${req.get('host')}${LINE_CALL_END_PATH}` });
+        } catch (error) {
+          console.error('[browser-outbound] contrôle de ligne ignoré :', error?.message || error);
+        }
       }
       console.log(`📞 Appel sortant du navigateur (entreprise ${companyId}) vers ${to.slice(0, 6)}… depuis ${callerLine.phoneNumber}${recording ? ' (enregistré)' : ''}`);
       return send(decision.twiml);
@@ -2343,6 +2369,23 @@ class PhoneNumberController {
       console.error('Error in handleBrowserOutbound:', error);
       return send(refusal('Une erreur est survenue.'));
     }
+  }
+
+  /** La règle datée des lignes est-elle configurée ? (sinon le contrôle « une ligne = un appel » n'existe pas : aucune lecture ni écriture en plus) */
+  lineRuleConfigured() {
+    const rule = enforcementSettings();
+    return rule.from !== null || rule.ruleStarts !== null;
+  }
+
+  /** Lignes Twilio utilisables d'un centre, de la plus ancienne à la plus récente (réserve de lignes partagées de l'Accueil). */
+  async twilioLinesOf(companyId) {
+    return PhoneNumber.find({ companyId, provider: 'twilio', twilioId: { $exists: true, $ne: null }, status: 'active', billingStatus: { $ne: 'suspended' } }).sort({ createdAt: 1 }).lean();
+  }
+
+  /** Fin d'un appel sur une ligne (action du <Dial> sortant) : libère la ligne tenue par cet appel (idempotent) ; la réponse ne change rien à l'appel. */
+  async handleLineCallEnd(req, res) {
+    try { await releaseCall(req.body?.CallSid); } catch (error) { console.error('line-call-end:', error?.message || error); }
+    res.type('text/xml').status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response/>');
   }
 
   /** Signal de présence : le conseiller est (ou n'est plus) prêt à prendre les appels. Branche aussi les lignes de l'entreprise. */
@@ -2408,18 +2451,31 @@ class PhoneNumberController {
           { $set: { 'metadata.inboundTest': realCallProof({ from, callSid }) } }
         ).then((r) => { if (r?.modifiedCount) console.log(`✅ Appel réel reçu sur ${to} depuis ${from} : ligne considérée comme testée en entrant`); }).catch((e) => console.error('inbound proof:', e.message));
       }
+      // Offre Accueil, règle datée active : une ligne = un appel actif. Ligne déjà tenue par un autre appel : traité comme « aucun conseiller disponible »
+      // (même branche : mobile du titulaire s'il est configuré, sinon répondeur / flux « no_agent » existant, sans file ni sonnerie). Règle inactive : rien de tout cela.
+      let lineBusy = false; let leaseTaken = false;
+      if (line?.companyId && callSid && this.lineRuleConfigured()) {
+        try {
+          if (await lineCallsEnforced({ companyId: line.companyId, limits: await loadCompanyPlanLimits(line.companyId), db: mongoose.connection.db })) {
+            const taken = await takeLine({ lineId: line._id, callSid, direction: 'inbound', isStale: staleCheckFor(phoneNumberService.twilioClient) });
+            leaseTaken = taken.ok; lineBusy = !taken.ok && taken.reason === 'busy';
+          }
+        } catch (error) { console.error('[inbound] contrôle de ligne ignoré :', error?.message || error); }
+      }
       const ringAllow = await this.inboundRingFilterFor(line);
-      const online = line?.companyId ? (ringAllow ? availableIdentities(line.companyId).filter(ringAllow) : availableIdentities(line.companyId)) : [];
+      const online = line?.companyId && !lineBusy ? (ringAllow ? availableIdentities(line.companyId).filter(ringAllow) : availableIdentities(line.companyId)) : [];
       const settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
       const baseUrl = `https://${req.get('host')}`;
       const solo = await isSoloCompany(line?.companyId);
       const recording = solo ? null : await recordingPlanFor({ companyId: line?.companyId, callSid, baseUrl, from, language });
       // Files d'attente (routage par langues / compétences, menu vocal). null = aucune file, Nomad Solo ou erreur : comportement inchangé.
-      const queueRoute = !solo && line?.companyId ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'call', recording, language, allow: ringAllow }) : null;
+      const queueRoute = !solo && line?.companyId && !lineBusy ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'call', recording, language, allow: ringAllow }) : null;
       // File choisie sans conseiller éligible (langues / compétences) : les conseillers présents sonnent quand même, plutôt que le répondeur.
       const identities = queueRoute ? (queueRoute.kind === 'ring' ? queueRoute.firstIds : queueRoute.kind === 'none' ? online : []) : online;
       const reach = line?.companyId ? await ReachSettings.findOne({ companyId: line.companyId }).lean().catch((e) => { console.error('ReachSettings read:', e.message); return null; }) : null;
       const route = queueRoute?.kind === 'menu' ? { first: 'browser', mobileNext: false, mobile: null } : decideInboundRoute({ identities, reach, linePhone: to });
+      // Aucun conseiller à faire sonner : l'appel va au répondeur, il ne tient pas la ligne (un message laissé n'est pas un appel actif).
+      if (leaseTaken && route.first === 'voicemail') await releaseCall(callSid).catch((e) => console.error('[inbound] libération :', e?.message || e));
       // Chaque appel est consigné : niveau de service, abandon et attente en sont calculés (inbound-stats).
       if (line?.companyId && callSid) {
         await InboundCall.updateOne(
@@ -2562,6 +2618,8 @@ class PhoneNumberController {
       const mobile = leg === 'browser' && call && !call.mobileTried ? mobileTarget(reach, call.phoneNumber) : null;
       const ringMobile = shouldRingMobileAfter({ leg, dialStatus, mobile });
       const baseUrl = `https://${req.get('host')}`;
+      // Fin de la sonnerie (décroché puis raccroché, non décroché, abandonné) : la ligne est libérée, sauf si le mobile du titulaire va encore sonner. Idempotent.
+      if (!ringMobile && callSid && this.lineRuleConfigured()) await releaseCall(callSid).catch((e) => console.error('[inbound] libération :', e?.message || e));
       if (call) {
         const elapsed = Math.max(0, (Date.now() - new Date(call.startedAt).getTime()) / 1000);
         if (ringMobile) {
