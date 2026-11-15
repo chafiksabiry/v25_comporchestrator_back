@@ -18,7 +18,8 @@ import { buildCallbackTwiml, buildRefusalTwiml, CALLBACK_WEBHOOK_PATH, ensureCal
 
 const FOLLOW_UPS = ['new', 'to_call', 'called', 'closed'];
 const validId = (v) => mongoose.Types.ObjectId.isValid(String(v)) && String(v).length === 24;
-const fail = (res, status, message) => res.status(status).json({ success: false, error: message, message });
+// `code` : identifiant stable pour les clients (traduction) ; `error` / `message` restent inchangés.
+const fail = (res, status, message, code, extra = {}) => res.status(status).json({ success: false, error: message, message, ...(code ? { code } : {}), ...extra });
 
 export const toItem = (v) => ({
   id: String(v._id),
@@ -47,8 +48,8 @@ export const voicemailController = {
   async list(req, res) {
     try {
       const { companyId, status } = req.query || {};
-      if (!validId(companyId)) return fail(res, 400, 'companyId invalide.');
-      if (status !== undefined && !FOLLOW_UPS.includes(status)) return fail(res, 400, 'Statut de suivi invalide.');
+      if (!validId(companyId)) return fail(res, 400, 'companyId invalide.', 'INVALID_COMPANY');
+      if (status !== undefined && !FOLLOW_UPS.includes(status)) return fail(res, 400, 'Statut de suivi invalide.', 'INVALID_FOLLOW_UP_STATUS');
       const limit = Math.min(200, Math.max(1, Math.floor(Number(req.query.limit)) || 50));
       const filter = { companyId };
       if (status) filter.followUpStatus = status;
@@ -62,14 +63,14 @@ export const voicemailController = {
       res.json({ success: true, data: { items: rows.map(toItem), counts: { unlistened, toCall, total } } });
     } catch (error) {
       console.error('voicemails list:', error.message);
-      fail(res, 500, 'Lecture du répondeur impossible.');
+      fail(res, 500, 'Lecture du répondeur impossible.', 'VOICEMAIL_LIST_FAILED');
     }
   },
 
   async audio(req, res) {
     try {
       const vm = validId(req.params.id) ? await Voicemail.findById(req.params.id).lean() : null;
-      if (!vm) return fail(res, 404, 'Message introuvable.');
+      if (!vm) return fail(res, 404, 'Message introuvable.', 'VOICEMAIL_NOT_FOUND');
       // Copie conservée par HARX ; les anciens messages se relisent encore depuis Twilio.
       const audio = await loadAudio(vm);
       if (!vm.listenedAt) await Voicemail.updateOne({ _id: vm._id, listenedAt: null }, { $set: { listenedAt: new Date() } });
@@ -79,17 +80,17 @@ export const voicemailController = {
       res.end(audio);
     } catch (error) {
       console.error('voicemails audio:', error.name, error.message);
-      if (!res.headersSent) fail(res, 502, 'Enregistrement indisponible.');
+      if (!res.headersSent) fail(res, 502, 'Enregistrement indisponible.', 'RECORDING_UNAVAILABLE');
     }
   },
 
   async patch(req, res) {
     try {
       const vm = validId(req.params.id) ? await Voicemail.findById(req.params.id) : null;
-      if (!vm) return fail(res, 404, 'Message introuvable.');
+      if (!vm) return fail(res, 404, 'Message introuvable.', 'VOICEMAIL_NOT_FOUND');
       const { followUpStatus, note } = req.body || {};
-      if (followUpStatus !== undefined && !FOLLOW_UPS.includes(followUpStatus)) return fail(res, 400, 'Statut de suivi invalide.');
-      if (note !== undefined && (typeof note !== 'string' || note.length > 1000)) return fail(res, 400, 'La note doit être un texte de 1000 caractères maximum.');
+      if (followUpStatus !== undefined && !FOLLOW_UPS.includes(followUpStatus)) return fail(res, 400, 'Statut de suivi invalide.', 'INVALID_FOLLOW_UP_STATUS');
+      if (note !== undefined && (typeof note !== 'string' || note.length > 1000)) return fail(res, 400, 'La note doit être un texte de 1000 caractères maximum.', 'INVALID_NOTE');
       if (followUpStatus !== undefined) vm.followUpStatus = followUpStatus;
       if (note !== undefined) vm.note = note;
       if (followUpStatus !== undefined || note !== undefined) vm.handledBy = String(req.user?.userId || req.user?.id || '') || null;
@@ -97,18 +98,18 @@ export const voicemailController = {
       res.json({ success: true, data: toItem(vm.toObject()) });
     } catch (error) {
       console.error('voicemails patch:', error.message);
-      fail(res, 500, 'Mise à jour du message impossible.');
+      fail(res, 500, 'Mise à jour du message impossible.', 'VOICEMAIL_UPDATE_FAILED');
     }
   },
 
   async analyze(req, res) {
     try {
       const vm = validId(req.params.id) ? await Voicemail.findById(req.params.id) : null;
-      if (!vm) return fail(res, 404, 'Message introuvable.');
+      if (!vm) return fail(res, 404, 'Message introuvable.', 'VOICEMAIL_NOT_FOUND');
       if ((await getTokensBalance(vm.companyId)) < MIN_TOKENS) {
         vm.analysisStatus = 'needs_tokens';
         await vm.save();
-        return res.status(402).json({ success: false, error: 'insufficient_tokens', message: `Solde de jetons insuffisant (minimum ${MIN_TOKENS}).`, data: toItem(vm.toObject()) });
+        return res.status(402).json({ success: false, error: 'insufficient_tokens', code: 'insufficient_tokens', message: `Solde de jetons insuffisant (minimum ${MIN_TOKENS}).`, data: toItem(vm.toObject()) });
       }
       vm.analysisStatus = 'pending';
       await vm.save();
@@ -116,7 +117,7 @@ export const voicemailController = {
       res.status(202).json({ success: true, data: toItem(vm.toObject()) });
     } catch (error) {
       console.error('voicemails analyze:', error.message);
-      fail(res, 500, "Lancement de l'analyse impossible.");
+      fail(res, 500, "Lancement de l'analyse impossible.", 'ANALYSIS_START_FAILED');
     }
   },
   /**
@@ -126,21 +127,21 @@ export const voicemailController = {
   async callbackToken(req, res) {
     try {
       const userId = req.user?.userId || req.user?.id;
-      if (!userId) return fail(res, 401, 'Authentification requise.');
-      if (!validId(req.params.id)) return fail(res, 400, 'Identifiant invalide.');
+      if (!userId) return fail(res, 401, 'Authentification requise.', 'AUTH_REQUIRED');
+      if (!validId(req.params.id)) return fail(res, 400, 'Identifiant invalide.', 'INVALID_ID');
       const vm = await Voicemail.findById(req.params.id).lean();
-      if (!vm) return fail(res, 404, 'Message introuvable.');
+      if (!vm) return fail(res, 404, 'Message introuvable.', 'VOICEMAIL_NOT_FOUND');
       const to = pickDestination(vm);
-      if (!to) return fail(res, 422, 'Aucun numéro à rappeler : l’appelant n’a pas laissé de numéro exploitable.');
+      if (!to) return fail(res, 422, 'Aucun numéro à rappeler : l’appelant n’a pas laissé de numéro exploitable.', 'NO_CALLBACK_NUMBER');
       // Le numéro de rappel est celui que l'appelant a dicté : jamais un numéro surtaxé.
-      if (isPremiumRate(to)) return fail(res, 422, DESTINATION_MESSAGES.premium_rate);
+      if (isPremiumRate(to)) return fail(res, 422, DESTINATION_MESSAGES.premium_rate, 'destination_not_allowed', { reason: 'premium_rate' });
       const line = await callbackLine(vm);
-      if (!line) return fail(res, 422, 'Le rappel n’est disponible que depuis la ligne qui a reçu ce message, et elle est introuvable.');
-      if (!config.twilioAccountSid || !config.twilioAuthToken) return fail(res, 500, 'La configuration téléphonie du serveur est incomplète.');
+      if (!line) return fail(res, 422, 'Le rappel n’est disponible que depuis la ligne qui a reçu ce message, et elle est introuvable.', 'CALLBACK_LINE_NOT_FOUND');
+      if (!config.twilioAccountSid || !config.twilioAuthToken) return fail(res, 500, 'La configuration téléphonie du serveur est incomplète.', 'VOICE_SERVER_NOT_CONFIGURED');
       // Rappel = appel sortant : une secrétaire (rôle agent) ne rappelle que si le responsable l'autorise.
       if ((await callerAccess(req)).role === 'agent') {
         const settings = await InboundSettings.findOne({ companyId: vm.companyId }).select('secretaryOutbound').lean();
-        if (!secretaryOutboundAllowed(settings)) return fail(res, 403, SECRETARY_OUTBOUND_BLOCKED);
+        if (!secretaryOutboundAllowed(settings)) return fail(res, 403, SECRETARY_OUTBOUND_BLOCKED, 'secretary_outbound_disabled');
       }
       const client = phoneNumberService.twilioClient;
       const appSid = await ensureCallbackApp(client, `https://${req.get('host')}${CALLBACK_WEBHOOK_PATH}`);
@@ -151,7 +152,7 @@ export const voicemailController = {
       res.json({ success: true, data: { token, identity, params: { VoicemailId: voicemailId, Ticket: ticket }, from: line.phoneNumber, to } });
     } catch (error) {
       console.error('[voicemail] callbackToken failed:', error.message);
-      fail(res, 500, 'Le téléphone du navigateur n’est pas disponible pour le moment.');
+      fail(res, 500, 'Le téléphone du navigateur n’est pas disponible pour le moment.', 'BROWSER_PHONE_UNAVAILABLE');
     }
   },
 
