@@ -179,3 +179,104 @@ test('outbound-check : 409 LINE_BUSY (anglais) quand toutes les lignes sont occu
   assert.equal((await check()).code, 200);
   assert.equal(lines[1].activeCall, undefined, 'outbound-check ne prend jamais de ligne');
 });
+
+// ───────── entrant : une ligne tenue par un appel renvoie les suivants vers « aucun conseiller disponible » ─────────
+const present = (...users) => { clearPresence(); for (const u of users) markAvailable({ userId: u, companyId: C1 }); };
+const inbound = (to, callSid) => hit('handleTwilioInboundCall', { body: { To: to, From: CALLER, CallSid: callSid } });
+const rings = (twiml) => /<Client>/.test(String(twiml));
+const holder = (id) => lines.find((l) => l._id === id).activeCall?.callSid;
+
+test('entrant, règle inactive : deux appels sur la même ligne sonnent tous les deux, aucun bail (comportement actuel)', async () => {
+  present('owner');
+  assert.ok(rings(await inbound(L1, 'CA1')) && rings(await inbound(L1, 'CA2')));
+  assert.ok(!busy('l1'));
+  rule(FUTURE);
+  assert.ok(rings(await inbound(L1, 'CA3')) && rings(await inbound(L1, 'CA4')));
+  assert.ok(!busy('l1'));
+});
+
+test('entrant, règle active : le premier appel sonne et tient la ligne ; le second, sur la même ligne, ne sonne chez personne (même branche que « aucun conseiller ») ; l\'autre ligne reste libre', async () => {
+  rule(); present('owner', 'sec1');
+  assert.ok(rings(await inbound(L1, 'CA1')));
+  assert.equal(holder('l1'), 'CA1');
+  const second = await inbound(L1, 'CA2');
+  assert.ok(!rings(second), 'ligne occupée : personne ne sonne');
+  assert.equal(holder('l1'), 'CA1', 'le premier appel garde sa ligne');
+  assert.ok(rings(await inbound(L2, 'CA3')), 'l\'autre ligne sonne');
+  assert.equal(holder('l2'), 'CA3');
+});
+
+test('entrant occupé = EXACTEMENT le flux « aucun conseiller disponible » existant, avec ou sans répondeur activé (voicemailEnabled inchangé)', async () => {
+  for (const voicemailEnabled of [true, false]) {
+    InboundSettings.findOne = () => lean({ voicemailEnabled });
+    delete process.env.LINE_ENFORCEMENT_FROM; present(); lines.forEach((l) => delete l.activeCall);
+    const reference = await inbound(L1, 'CAREF'); // règle inactive, personne en ligne : flux existant
+    rule(); present('owner'); lines.forEach((l) => delete l.activeCall);
+    await inbound(L1, 'CA1');
+    const busyTwiml = await inbound(L1, 'CA2');
+    assert.equal(busyTwiml, reference, `voicemailEnabled=${voicemailEnabled}`);
+  }
+});
+
+test('entrant occupé avec mobile du titulaire configuré : même repli qu\'un appel sans conseiller (le mobile sonne)', async () => {
+  rule(); present('owner');
+  reachDoc = { forwardEnabled: true, mobileNumber: '+33611223344', mobileRingSeconds: 25 };
+  await inbound(L1, 'CA1');
+  const second = await inbound(L1, 'CA2');
+  assert.ok(String(second).includes('<Number>+33611223344</Number>'));
+  assert.equal(holder('l1'), 'CA1');
+});
+
+test('entrant sans aucun conseiller (répondeur d\'emblée) : la ligne n\'est PAS retenue', async () => {
+  rule(); present();
+  await inbound(L1, 'CA1');
+  assert.ok(!busy('l1'));
+});
+
+test('un appel sortant occupe la ligne pour les entrants, et un entrant pour les sortants (même ligne)', async () => {
+  rule(); present('owner');
+  lines = lines.slice(0, 1);
+  await outbound('CAOUT');
+  assert.ok(!rings(await inbound(L1, 'CAIN')), 'sortant en cours : l\'entrant va au répondeur');
+  await hit('handleLineCallEnd', { body: { CallSid: 'CAOUT' } });
+  assert.ok(rings(await inbound(L1, 'CAIN2')));
+  assert.match(await outbound('CAOUT2'), /All lines are busy/, 'entrant en cours : le sortant est refusé');
+});
+
+test('fin de la sonnerie (inbound-dial-result) libère la ligne, idempotent ; sonnerie du mobile à suivre : la ligne reste tenue', async () => {
+  rule(); present('owner');
+  await inbound(L1, 'CA1');
+  await hit('handleTwilioInboundDialResult', { body: { CallSid: 'CA1', DialCallStatus: 'completed', DialCallDuration: '30' }, query: {} });
+  assert.ok(!busy('l1'));
+  await hit('handleTwilioInboundDialResult', { body: { CallSid: 'CA1', DialCallStatus: 'completed' }, query: {} });
+  assert.ok(!busy('l1'), 'redite sans effet');
+  assert.ok(rings(await inbound(L1, 'CA2')));
+  // non décroché dans le navigateur, mobile du titulaire à faire sonner : la ligne reste tenue jusqu'à la fin du mobile
+  reachDoc = { forwardEnabled: true, mobileNumber: '+33611223344', mobileRingSeconds: 25 };
+  InboundCall.findOne = async () => ({ callSid: 'CA2', companyId: C1, phoneNumber: L1, startedAt: new Date(), mobileTried: false, async save() { return this; } });
+  await hit('handleTwilioInboundDialResult', { body: { CallSid: 'CA2', DialCallStatus: 'no-answer' }, query: { leg: 'browser' } });
+  assert.equal(holder('l1'), 'CA2');
+  await hit('handleTwilioInboundDialResult', { body: { CallSid: 'CA2', DialCallStatus: 'no-answer' }, query: { leg: 'mobile' } });
+  assert.ok(!busy('l1'));
+});
+
+test('concurrence entrante : 6 appels simultanés sur la même ligne ⇒ un seul sonne', async () => {
+  rule(); present('owner');
+  const xs = await Promise.all(Array.from({ length: 6 }, (_, i) => inbound(L1, `CAC${i}`)));
+  assert.equal(xs.filter(rings).length, 1);
+});
+
+test('entrant : Full Scope / Nomad, règle active : aucun bail, tous les appels sonnent', async () => {
+  rule(); present('owner');
+  for (const p of ['full_scope', 'nomad']) {
+    plan = p;
+    assert.ok(rings(await inbound(L1, `CA1-${p}`)) && rings(await inbound(L1, `CA2-${p}`)));
+    assert.ok(!busy('l1'));
+  }
+});
+
+test('entrant : panne du contrôle de ligne => l\'appel sonne comme avant', async () => {
+  rule(); present('owner');
+  PhoneNumber.updateOne = async () => { throw new Error('mongo down'); };
+  assert.ok(rings(await inbound(L1, 'CA1')));
+});

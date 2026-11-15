@@ -206,4 +206,7 @@ phoneNumberSchema.index({ companyId: 1, assignedAgentId: 1 }, { unique: true, pa
 // Index pour la recherche par orderId
 phoneNumberSchema.index({ orderId: 1 });
 
+// Libération par appel (services/lineCalls.js) : recherche par callSid sans parcourir toute la collection.
+phoneNumberSchema.index({ 'activeCall.callSid': 1 }, { sparse: true });
+
 export const PhoneNumber = mongoose.model('PhoneNumber', phoneNumberSchema);
