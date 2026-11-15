@@ -278,6 +278,7 @@ class PhoneNumberController {
         return res.status(200).json({
           numbers: [],
           regulatoryBlocked: true,
+          code: 'REGULATORY_BUNDLE_REQUIRED',
           message: error.message,
           countryCode: error.countryCode || 'FR'
         });
@@ -325,12 +326,13 @@ class PhoneNumberController {
         return res.status(200).json({
           numbers: [],
           regulatoryBlocked: true,
+          code: 'REGULATORY_BUNDLE_REQUIRED',
           message: error.message,
           countryCode: error.countryCode
         });
       }
       console.error('Error searching Twilio phone numbers:', error);
-      res.status(error.status || 500).json({ error: error.message || 'Failed to search Twilio phone numbers' });
+      res.status(error.status || 500).json({ error: error.message || 'Failed to search Twilio phone numbers', ...(typeof error.code === 'string' ? { code: error.code } : {}) });
     }
   }
 
@@ -951,7 +953,7 @@ class PhoneNumberController {
       res.json({ success: true, ...result });
     } catch (error) {
       if (error instanceof AssignmentError || error instanceof ScopeError) return this.sendAssignmentError(res, error);
-      if (error?.status) return res.status(error.status).json({ success: false, code: 'RELEASE_FAILED', error: 'RELEASE_FAILED', message: error.message });
+      if (error?.status) return res.status(error.status).json({ success: false, code: 'RELEASE_FAILED', error: 'RELEASE_FAILED', message: error.message, ...(typeof error.code === 'string' ? { reason: error.code } : {}) });
       this.sendAssignmentError(res, error);
     }
   }
