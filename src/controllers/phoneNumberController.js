@@ -1,6 +1,6 @@
 import { phoneNumberService } from '../services/phoneNumberService.js';
 import { callerAccess, ScopeError, scopeToCompany } from '../middleware/companyScope.js';
-import { AssignmentError, assertAgentCanHaveLine, assertReleasable, assignAgent, assignmentFields, offerKind, oldestOf, resolvePurchaseAssignment, unassignAgent, withCenterLock } from '../services/lineAssignment.js';
+import { AssignmentError, agentCapacity, assertAgentCanHaveLine, assertReleasable, assignAgent, assignmentFields, offerKind, oldestOf, resolvePurchaseAssignment, unassignAgent, withCenterLock } from '../services/lineAssignment.js';
 import { listLinesFor } from '../services/phoneNumberList.js';
 import { checkNumberCountry } from '../services/numberCountry.js';
 import { purchaseCurrency } from '../services/purchaseCurrency.js';
@@ -952,6 +952,20 @@ class PhoneNumberController {
     } catch (error) {
       if (error instanceof AssignmentError || error instanceof ScopeError) return this.sendAssignmentError(res, error);
       if (error?.status) return res.status(error.status).json({ success: false, code: 'RELEASE_FAILED', error: 'RELEASE_FAILED', message: error.message });
+      this.sendAssignmentError(res, error);
+    }
+  }
+
+  /** GET /phone-numbers/agent-capacity?companyId= : lecture seule (titulaire ou responsable du centre) : agents, lignes affectées, lignes libres. */
+  async getAgentCapacity(req, res) {
+    try {
+      const companyId = req.query?.companyId;
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ success: false, code: 'INVALID_COMPANY', error: 'INVALID_COMPANY', message: 'companyId invalide.' });
+      const access = scopeToCompany(await callerAccess(req), String(companyId));
+      if (!['owner', 'member'].includes(access.role)) throw new AssignmentError(403, 'OWNER_ONLY', 'Réservé au titulaire et aux responsables du centre.');
+      const limits = await loadCompanyPlanLimits(companyId);
+      res.json({ success: true, data: await agentCapacity({ companyId: String(companyId), limits, db: mongoose.connection.db }) });
+    } catch (error) {
       this.sendAssignmentError(res, error);
     }
   }

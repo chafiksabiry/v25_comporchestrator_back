@@ -66,6 +66,8 @@ router.post('/assign-gig', ...guard(companyFrom('companyId'), ofNumber), phoneNu
 // Affectation des lignes aux agents (offres Call Centre) : le titulaire seul (vérifié dans le contrôleur) ; la ligne doit être celle du centre.
 router.post('/assign-agent', ...guard(companyFrom('companyId'), ofNumber), phoneNumberController.assignLineToAgent.bind(phoneNumberController));
 router.post('/unassign-agent', ...guard(companyFrom('companyId'), ofNumber), phoneNumberController.unassignLineAgent.bind(phoneNumberController));
+// Capacité agents / lignes d'un centre (lecture seule) : agents, lignes affectées, lignes libres.
+router.get('/agent-capacity', ...guard(companyFrom('companyId')), phoneNumberController.getAgentCapacity.bind(phoneNumberController));
 // Seule façon de résilier une ligne : libération explicite, `confirm: true` obligatoire (résilie aussi l'abonnement mensuel de la ligne).
 router.post('/release', ...guard(companyFrom('companyId'), ofNumber), phoneNumberController.releaseLineExplicit.bind(phoneNumberController));
 
