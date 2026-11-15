@@ -2,6 +2,7 @@ import { phoneNumberService } from '../services/phoneNumberService.js';
 import { callerAccess, ScopeError, scopeToCompany } from '../middleware/companyScope.js';
 import { AssignmentError, LINE_NOT_ASSIGNED, LINE_NOT_ASSIGNED_MESSAGE, agentLineStatus, inboundRingFilter, enforcementSettings, lineStatusView, agentCapacity, assertAgentCanHaveLine, assertReleasable, assignAgent, assignmentFields, offerKind, oldestOf, resolvePurchaseAssignment, unassignAgent, withCenterLock } from '../services/lineAssignment.js';
 import { listLinesFor } from '../services/phoneNumberList.js';
+import { callingInfoOf } from '../services/outboundDestinations.js';
 import { LINE_BUSY_CODE, LINE_BUSY_MESSAGE, LINE_CALL_END_PATH, hasFreeLine, lineCallsEnforced, releaseCall, staleCheckFor, takeFirstFreeLine, takeLine } from '../services/lineCalls.js';
 import { checkNumberCountry } from '../services/numberCountry.js';
 import { purchaseCurrency } from '../services/purchaseCurrency.js';
@@ -34,7 +35,7 @@ import { createVoiceToken, pushCredentialFor, VOICE_TOKEN_TTL_S } from '../servi
 import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
-import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket } from '../services/browserOutbound.js';
+import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket, MINUTES_INSUFFICIENT_CODE, MINUTES_INSUFFICIENT_MESSAGE, spokenLanguage, spokenRefusal, SPOKEN_REFUSALS } from '../services/browserOutbound.js';
 import { transferResult } from './callTransferController.js';
 import { attachCallRecording, buildRecordingPlan, consentLanguageFor, consentTwiml, mapCallRecordingCallback, normalizeConsentLanguage, shouldRecordCompany, shouldRecordPlan, verifyRecordingToken } from '../services/callRecording.js';
 import { journalForwardedCall, journalUnansweredCall } from '../services/journalCall.js';
@@ -2232,16 +2233,19 @@ class PhoneNumberController {
       // de l'entreprise pour laquelle il est émis (le contrôle d'appartenance a été fait par le garde de la route).
       if (req.body?.outbound === true) {
         const companyId = String(req.body?.companyId || '');
-        if (!mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ error: 'Invalid companyId' });
+        if (!mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ error: 'Invalid companyId', code: 'invalid_company', messageEn: 'Invalid company.' });
         // Une secrétaire (rôle agent) n'appelle que si le responsable l'autorise ; son rôle est scellé dans la preuve.
         const secretary = (await callerAccess(req)).role === 'agent';
         if (secretary) {
           const settings = await InboundSettings.findOne({ companyId }).select('secretaryOutbound').lean();
-          if (!secretaryOutboundAllowed(settings)) return res.status(403).json({ success: false, error: 'secretary_outbound_disabled', message: SECRETARY_OUTBOUND_BLOCKED });
+          if (!secretaryOutboundAllowed(settings)) return res.status(403).json({ success: false, error: 'secretary_outbound_disabled', code: 'secretary_outbound_disabled', message: SECRETARY_OUTBOUND_BLOCKED, messageEn: SPOKEN_REFUSALS.en.secretary_outbound_disabled });
         }
         // Offres à agents : un agent sans ligne affectée n'appelle pas (règle datée, voir enforcementSettings).
         const gate = secretary ? await this.agentLineGate({ companyId, userId }) : null;
         if (gate?.blocked) return this.lineNotAssigned(res);
+        // Plus de minutes : refus AVANT d'émettre le jeton (lecture du solde en échec : jamais de blocage).
+        const shortfall = await this.minutesShortfall(companyId);
+        if (shortfall) return res.status(402).json(shortfall);
         const appSid = await ensureOutboundApp(client, `https://${req.get('host')}${OUTBOUND_WEBHOOK_PATH}`);
         const outboundToken = await createVoiceToken({ client, accountSid: config.twilioAccountSid, identity, outgoingApplicationSid: appSid, pushCredentialSid });
         const ticket = signOutboundTicket({ secret: config.twilioAuthToken, companyId, identity, secretary });
@@ -2276,14 +2280,17 @@ class PhoneNumberController {
   async outboundCheck(req, res) {
     try {
       const companyId = String(req.body?.companyId || '');
-      if (!mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ success: false, error: 'invalid_company', code: 'invalid_company', message: 'Entreprise invalide.' });
+      if (!mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ success: false, error: 'invalid_company', code: 'invalid_company', message: 'Entreprise invalide.', messageEn: 'Invalid company.' });
       // Confort : même refus que le jeton / le webhook pour un agent sans ligne.
       if (enforcementSettings().from !== null || enforcementSettings().ruleStarts !== null) {
         const access = await callerAccess(req);
         if (access.role === 'agent' && (await this.agentLineGate({ companyId, userId: access.userId })).blocked) return this.lineNotAssigned(res);
       }
       const decision = await checkCompanyDestination(companyId, req.body?.to);
-      if (!decision.ok) return res.status(422).json({ success: false, error: decision.code, reason: decision.reason, message: decision.message });
+      if (!decision.ok) return res.status(422).json({ success: false, error: decision.code, code: decision.code, reason: decision.reason, message: decision.message, messageEn: decision.messageEn });
+      // Plus de minutes : refus avant l'appel, avec le pays de destination (lecture du solde en échec : jamais de blocage).
+      const shortfall = await this.minutesShortfall(companyId, decision.to);
+      if (shortfall) return res.status(402).json(shortfall);
       // Offre Accueil, règle active : toutes les lignes occupées => 409 LINE_BUSY (confort ; le webhook refuse de toute façon). Aucune prise ici.
       if (enforcementSettings().from !== null || enforcementSettings().ruleStarts !== null) {
         try {
@@ -2312,17 +2319,17 @@ class PhoneNumberController {
       const companyId = String(CompanyId || '');
       const identity = String(From || Caller || '').replace(/^client:/, '');
       const role = mongoose.Types.ObjectId.isValid(companyId) ? outboundTicketRole({ secret: config.twilioAuthToken, companyId, identity, ticket: Ticket }) : null;
-      if (!role) return send(refusal('Appel non autorisé.'));
+      if (!role) return send(spokenRefusal('not_authorized'));
       // Le réglage est relu à chaque appel : si le responsable retire l'autorisation, la preuve encore valide (1 h) ne suffit plus.
       if (role === 'secretary') {
         const settings = await InboundSettings.findOne({ companyId }).select('secretaryOutbound').lean();
-        if (!secretaryOutboundAllowed(settings)) return send(refusal(SECRETARY_OUTBOUND_BLOCKED));
+        if (!secretaryOutboundAllowed(settings)) return send(spokenRefusal('secretary_outbound_disabled'));
       }
       // Destination : E.164 strict, pays activé pour CETTE entreprise, jamais de numéro surtaxé (décision du serveur).
       const destination = await checkCompanyDestination(companyId, To);
       if (!destination.ok) {
         console.warn(`[browser-outbound] destination refusée pour l'entreprise ${companyId} : ${destination.reason}`);
-        return send(refusal(destination.message));
+        return send(spokenRefusal(destination.reason));
       }
       const to = destination.to;
       const [limits, minutes, line] = await Promise.all([
@@ -2338,13 +2345,13 @@ class PhoneNumberController {
         const gate = await agentLineStatus({ companyId, userId: identity.replace(/^cc-/, ''), limits, db: mongoose.connection.db });
         const own = gate.line;
         const usable = own && own.provider === 'twilio' && own.twilioId && own.status === 'active' && own.billingStatus !== 'suspended';
-        if (gate.blocked || (own && !usable && gate.enforced)) return send(refusal(LINE_NOT_ASSIGNED_MESSAGE, { language: 'en-US', voice: 'Polly.Joanna' }));
+        if (gate.blocked || (own && !usable && gate.enforced)) return send(spokenRefusal('line_not_assigned'));
         if (usable) callerLine = own;
       }
       let decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording });
       if (!decision.ok) {
         console.warn(`[browser-outbound] refusé pour l'entreprise ${companyId} : ${decision.message}`);
-        return send(refusal(decision.message));
+        return send(spokenRefusal(decision.key, spokenLanguage(callerLine?.phoneNumber)));
       }
       // Offre Accueil, règle datée active : une ligne = un appel à la fois. L'appel prend la première ligne LIBRE du centre (sinon « ligne occupée ») ;
       // elle est libérée à la fin de la numérotation (action du <Dial>). Règle inactive ou autre offre : rien de tout cela. Toute panne : l'appel passe comme avant.
@@ -2355,7 +2362,7 @@ class PhoneNumberController {
           const taken = await takeFirstFreeLine({ lineIds: pool.map((l) => l._id), callSid: sidForLine, direction: 'outbound', isStale: staleCheckFor(phoneNumberService.twilioClient) });
           if (!taken.ok) {
             console.warn(`[browser-outbound] ${LINE_BUSY_CODE} pour l'entreprise ${companyId}`);
-            return send(refusal(LINE_BUSY_MESSAGE, { language: 'en-US', voice: 'Polly.Joanna' }));
+            return send(spokenRefusal('line_busy'));
           }
           callerLine = pool.find((l) => String(l._id) === String(taken.lineId));
           decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, action: `https://${req.get('host')}${LINE_CALL_END_PATH}` });
@@ -2367,7 +2374,7 @@ class PhoneNumberController {
       return send(decision.twiml);
     } catch (error) {
       console.error('Error in handleBrowserOutbound:', error);
-      return send(refusal('Une erreur est survenue.'));
+      return send(spokenRefusal('error'));
     }
   }
 
@@ -2375,6 +2382,32 @@ class PhoneNumberController {
   lineRuleConfigured() {
     const rule = enforcementSettings();
     return rule.from !== null || rule.ruleStarts !== null;
+  }
+
+  /**
+   * Contrôle des minutes AVANT un appel sortant : solde frais inférieur à une minute entière => corps du refus 402
+   * `MINUTES_INSUFFICIENT_FOR_DESTINATION` (pays de la destination si connu ; zone null tant que le modèle de zones n'existe pas ; solde global).
+   * Lecture du solde en échec : null (jamais de blocage, comme le webhook). Sans portefeuille : solde 0, comme le webhook.
+   */
+  async minutesShortfall(companyId, to = null) {
+    let minutes;
+    try {
+      minutes = await freshMinutesBalance(companyId, { sync: syncMinutesFromCalls, grant: ensurePlanMinutesGranted, readWallet: (id) => MinutesCompany.findOne({ companyId: id }).select('minutes').lean() });
+    } catch (error) {
+      console.warn('[minutes] solde illisible, aucun contrôle préalable :', error?.message || error);
+      return null;
+    }
+    const balance = Number(minutes);
+    if (Number.isFinite(balance) && Math.floor(balance) >= 1) return null;
+    return {
+      success: false,
+      error: MINUTES_INSUFFICIENT_CODE,
+      code: MINUTES_INSUFFICIENT_CODE,
+      country: to ? callingInfoOf(to).countryIso : null,
+      zone: null,
+      balance: Number.isFinite(balance) ? balance : 0,
+      message: MINUTES_INSUFFICIENT_MESSAGE,
+    };
   }
 
   /** Lignes Twilio utilisables d'un centre, de la plus ancienne à la plus récente (réserve de lignes partagées de l'Accueil). */
