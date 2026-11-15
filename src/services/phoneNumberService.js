@@ -146,7 +146,8 @@ class PhoneNumberService {
                 currency: typeof options.currency === 'string' && options.currency ? options.currency.toUpperCase() : 'EUR',
                 ...(options.paymentRef ? { paymentRef: options.paymentRef } : {}),
               }
-            : {})
+            : {}),
+          ...(options.assignedRole ? { assignedRole: options.assignedRole, assignedAgentId: options.assignedAgentId || null, assignedAt: options.assignedAt || null } : {})
         };
 
         const newPhoneNumber = new PhoneNumber(phoneNumberData);
@@ -643,7 +644,7 @@ class PhoneNumberService {
     return { owned: true, claimable: free.length > 0, number: n };
   }
 
-  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId, { bundleSid, addressSid, type, price, currency, paymentRef, isTrial, trialExpiresAt, billingModel } = {}) {
+  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId, { bundleSid, addressSid, type, price, currency, paymentRef, isTrial, trialExpiresAt, billingModel, assignedRole, assignedAgentId, assignedAt } = {}) {
     if (!companyId) {
       throw new Error('companyId is required to purchase a phone number');
     }
@@ -788,6 +789,8 @@ class PhoneNumberService {
       billingStatus: isTrial ? 'trial' : billingModel === 'monthly' ? 'pending' : 'n/a',
       // Abonnement mensuel par ligne : marqueur posé à la création ; l'abonnement Stripe est créé juste après l'achat.
       ...(billingModel === 'monthly' ? { billingModel: 'monthly' } : {}),
+      // Affectation (offres à agents) : écrite seulement quand l'appelant la fournit ; sinon aucun champ (lignes historiques inchangées).
+      ...(assignedRole ? { assignedRole, assignedAgentId: assignedAgentId || null, assignedAt: assignedAt || null } : {}),
       metadata: {
         type: type, // Save the original type (local, national, mobile)
         ...(isTrial ? { trial: { granted: true, expiresAt: trialExpiresAt } } : {})

@@ -126,6 +126,24 @@ const phoneNumberSchema = new mongoose.Schema({
     type: String,
     sparse: true
   },
+  // Affectation des lignes (offres Call Centre). Absent sur les lignes historiques : le rôle est alors DÉDUIT à la lecture
+  // (services/lineAssignment.js, effectiveRole), sans migration en base.
+  //  'management' : ligne incluse du titulaire (jamais affectable) ; 'agent' : ligne d'UN agent (agentId null = libre, réaffectable) ;
+  //  'shared' : ligne partagée de l'offre Accueil (une secrétaire à la fois, jamais affectée à une personne).
+  assignedRole: {
+    type: String,
+    enum: ['management', 'agent', 'shared'],
+    default: undefined
+  },
+  // Identifiant (chaîne) de l'agent titulaire de la ligne ; null = ligne libre. Un agent n'a qu'UNE ligne par centre (index unique ci-dessous).
+  assignedAgentId: {
+    type: String,
+    default: null
+  },
+  assignedAt: {
+    type: Date,
+    default: null
+  },
   // Abonnement mensuel par ligne (offres Call Centre) : 'monthly' pour les lignes achetées avec un abonnement Stripe propre
   // (stripeSubscriptionId). Absent sur toutes les lignes historiques, qui ne sont jamais touchées par ce mécanisme.
   billingModel: {
@@ -175,6 +193,9 @@ phoneNumberSchema.pre('save', function (next) {
 
 // Index pour la recherche rapide par gig et company
 phoneNumberSchema.index({ gigId: 1, companyId: 1 });
+
+// Un agent n'a qu'une seule ligne par centre (garde-fou en base ; la règle est aussi vérifiée sous verrou par services/lineAssignment.js).
+phoneNumberSchema.index({ companyId: 1, assignedAgentId: 1 }, { unique: true, partialFilterExpression: { assignedAgentId: { $type: 'string' } } });
 
 // Index pour la recherche par orderId
 phoneNumberSchema.index({ orderId: 1 });
