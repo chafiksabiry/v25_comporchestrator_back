@@ -876,6 +876,18 @@ test('buildRefusalTwiml : voix française par défaut (clients actuels inchangé
   assert.match(buildRefusalTwiml('No.', { language: 'en-US', voice: 'Polly.Joanna' }), /language="en-US" voice="Polly.Joanna"/);
 });
 
+test('3e-1 libération : échec opérateur / abonnement -> `reason` additif (code du service), code RELEASE_FAILED et message inchangés', async () => {
+  addLine(); const l = addLine();
+  for (const [code, status, message] of [['LINE_RELEASE_FAILED', 500, 'Échec de la résiliation chez twilio: boom'], ['LINE_SUBSCRIPTION_CANCEL_FAILED', 502, "Échec de la résiliation de l'abonnement de la ligne: stripe down"]]) {
+    phoneNumberService.deletePhoneNumber = async () => { throw Object.assign(new Error(message), { status, code }); };
+    const r = await release('owner', l._id, true);
+    assert.deepEqual([r.statusCode, r.body.code, r.body.error, r.body.message, r.body.reason], [status, 'RELEASE_FAILED', 'RELEASE_FAILED', message, code]);
+  }
+  phoneNumberService.deletePhoneNumber = async () => { throw Object.assign(new Error('sans code'), { status: 500 }); };
+  const r = await release('owner', l._id, true);
+  assert.equal(r.body.reason, undefined, 'pas de reason sans code de service');
+});
+
 // ───────── lot 3e-1 (test d'appel, voix) : codes stables ADDITIFS ; error / message d'origine inchangés ─────────
 const { config: appConfig } = await import('../config/env.js');
 const callReq = (body, user = 'owner') => ({ ...reqAs(user, body), get: () => 'orch.test' });
