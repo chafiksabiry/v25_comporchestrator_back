@@ -875,3 +875,74 @@ test('buildRefusalTwiml : voix française par défaut (clients actuels inchangé
   assert.match(buildRefusalTwiml('Appel non autorisé.'), /language="fr-FR" voice="Polly.Lea"/);
   assert.match(buildRefusalTwiml('No.', { language: 'en-US', voice: 'Polly.Joanna' }), /language="en-US" voice="Polly.Joanna"/);
 });
+
+// ───────── lot 3e-1 (test d'appel, voix) : codes stables ADDITIFS ; error / message d'origine inchangés ─────────
+const { config: appConfig } = await import('../config/env.js');
+const callReq = (body, user = 'owner') => ({ ...reqAs(user, body), get: () => 'orch.test' });
+async function testCall(body) { const r = mockRes(); await phoneNumberController.testCall(callReq(body), r); return r; }
+
+test('3e-1 testCall : codes stables (numéros, ligne, configuration), textes inchangés', async () => {
+  // (la branche « Numéros invalides » est inatteignable : toE164 ne renvoie jamais vide pour une valeur non vide ; son code est tout de même posé)
+  let r = await testCall({ fromNumber: '+33612340099', toNumber: '+33612345678', companyId: C1 });
+  assert.deepEqual([r.statusCode, r.body.code, r.body.message], [404, 'LINE_NOT_OWNED', "Ce numéro n'est pas le vôtre ou n'est plus actif."]);
+  twilioLine({ phoneNumber: '+33612340001' });
+  const sid = appConfig.twilioAccountSid; appConfig.twilioAccountSid = '';
+  try {
+    r = await testCall({ fromNumber: '+33612340001', toNumber: '+33612345678', companyId: C1 });
+    assert.deepEqual([r.statusCode, r.body.error, r.body.code, r.body.message], [500, 'Server Configuration', 'TELEPHONY_NOT_CONFIGURED', 'La configuration téléphonie du serveur est incomplète.']);
+  } finally { appConfig.twilioAccountSid = sid; }
+});
+
+test('3e-1 testCall : erreur de l\'opérateur -> code stable par cause, message d\'origine', async () => {
+  twilioLine({ phoneNumber: '+33612340001' });
+  const prevClient = phoneNumberService.twilioClient;
+  const cases = [
+    ['Authentication failed 20003', 500, 'PROVIDER_ACCOUNT_INACTIVE', "Le compte de l'opérateur téléphonique est inactif ou suspendu : les appels sont impossibles tant qu'il n'est pas réactivé. Contactez le support HARX."],
+    ['Origination number is not ready', 403, 'NUMBER_PENDING_REGULATORY_VALIDATION', "Ce numéro est en attente de validation réglementaire. Vous ne pouvez pas encore l'utiliser pour des appels sortants."],
+    ['The from number does not belong to you', 500, 'CALL_NOT_POSSIBLE_WITH_NUMBER', "Impossible de lancer l'appel avec ce numéro. Vérifiez qu'il est actif et correctement configuré."],
+    ['Twilio exploded', 500, 'TEST_CALL_FAILED', 'fournisseur exploded'],
+  ];
+  try {
+    for (const [msg, status, code, message] of cases) {
+      phoneNumberService.twilioClient = { calls: { create: async () => { throw new Error(msg); } } };
+      const r = await testCall({ fromNumber: '+33612340001', toNumber: '+33612345678', companyId: C1 });
+      assert.deepEqual([r.statusCode, r.body.error, r.body.code, r.body.message], [status, 'Failed to test call', code, message], msg);
+    }
+  } finally { phoneNumberService.twilioClient = prevClient; }
+});
+
+test('3e-1 testCall Telnyx : appel sans identifiant -> CALL_ID_MISSING, texte inchangé', async () => {
+  addLine({ provider: 'telnyx', telnyxId: 'T1', phoneNumber: '+33612340002' });
+  const prevFetch = global.fetch; const k = appConfig.telnyxApiKey; const c = appConfig.telnyxConnectionId;
+  appConfig.telnyxApiKey = 'k'; appConfig.telnyxConnectionId = 'c';
+  global.fetch = async () => ({ ok: true, json: async () => ({ data: {} }) });
+  try {
+    const r = await testCall({ fromNumber: '+33612340002', toNumber: '+33612345678', companyId: C1 });
+    assert.deepEqual([r.statusCode, r.body.code, r.body.message], [500, 'CALL_ID_MISSING', "L'appel n'a pas pu être démarré (identifiant manquant)."]);
+    appConfig.telnyxApiKey = ''; 
+    const r2 = await testCall({ fromNumber: '+33612340002', toNumber: '+33612345678', companyId: C1 });
+    assert.deepEqual([r2.statusCode, r2.body.code], [500, 'TELEPHONY_NOT_CONFIGURED']);
+  } finally { global.fetch = prevFetch; appConfig.telnyxApiKey = k; appConfig.telnyxConnectionId = c; }
+});
+
+test('3e-1 test d\'appel entrant, jeton, contrôle de destination, statistiques : codes stables, textes inchangés', async () => {
+  const ask = async (fn, body, query = {}) => { const r = mockRes(); await fn.call(phoneNumberController, { ...reqAs('owner', body, query), get: () => 'orch.test' }, r); return r; };
+  let r = await ask(phoneNumberController.startInboundTest, { phoneNumber: '', companyId: C1 });
+  assert.deepEqual([r.statusCode, r.body.code, r.body.message], [400, 'INVALID_PHONE_NUMBER', 'Numéro invalide. Utilisez le format international (+…).']);
+  r = await ask(phoneNumberController.startInboundTest, { phoneNumber: '+33612340077', companyId: C1 });
+  assert.deepEqual([r.statusCode, r.body.code], [404, 'LINE_NOT_OWNED']);
+  addLine({ provider: 'telnyx', phoneNumber: '+33612340003' });
+  r = await ask(phoneNumberController.startInboundTest, { phoneNumber: '+33612340003', companyId: C1 });
+  assert.deepEqual([r.statusCode, r.body.error, r.body.code, r.body.message], [400, 'Unsupported', 'INBOUND_TEST_NOT_SUPPORTED', "Le test d'appel entrant n'est pas disponible pour ce type de ligne."]);
+  r = await ask(phoneNumberController.getInboundTestStatus, {}, { phoneNumber: '+33612340077', companyId: C1 });
+  assert.deepEqual([r.statusCode, r.body.code], [404, 'LINE_NOT_OWNED']);
+  // contrôle de destination, statistiques
+  r = await ask(phoneNumberController.outboundCheck, { companyId: 'x' });
+  assert.deepEqual([r.statusCode, r.body.error, r.body.code, r.body.message], [400, 'invalid_company', 'invalid_company', 'Entreprise invalide.']);
+  r = await ask(phoneNumberController.getInboundStats, {}, { companyId: 'x' });
+  assert.deepEqual([r.statusCode, r.body.error, r.body.code, r.body.message], [400, 'Bad Request', 'INVALID_COMPANY', 'companyId invalide.']);
+  // jeton : panne interne -> BROWSER_PHONE_UNAVAILABLE
+  r = mockRes(); // panne interne dans le traitement (corps illisible)
+  await phoneNumberController.voiceToken({ get body() { throw new Error('boom'); }, query: {}, headers: {}, user: { userId: 'owner' }, get: () => 'orch.test' }, r);
+  assert.deepEqual([r.statusCode, r.body.error, r.body.code, r.body.message], [500, 'Failed to create voice token', 'BROWSER_PHONE_UNAVAILABLE', 'Téléphone du navigateur indisponible pour le moment.']);
+});
