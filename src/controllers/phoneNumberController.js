@@ -279,6 +279,7 @@ class PhoneNumberController {
         return res.status(200).json({
           numbers: [],
           regulatoryBlocked: true,
+          code: 'REGULATORY_BUNDLE_REQUIRED',
           message: error.message,
           countryCode: error.countryCode || 'FR'
         });
@@ -326,12 +327,13 @@ class PhoneNumberController {
         return res.status(200).json({
           numbers: [],
           regulatoryBlocked: true,
+          code: 'REGULATORY_BUNDLE_REQUIRED',
           message: error.message,
           countryCode: error.countryCode
         });
       }
       console.error('Error searching Twilio phone numbers:', error);
-      res.status(error.status || 500).json({ error: error.message || 'Failed to search Twilio phone numbers' });
+      res.status(error.status || 500).json({ error: error.message || 'Failed to search Twilio phone numbers', ...(typeof error.code === 'string' ? { code: error.code } : {}) });
     }
   }
 
@@ -967,7 +969,7 @@ class PhoneNumberController {
       res.json({ success: true, ...result });
     } catch (error) {
       if (error instanceof AssignmentError || error instanceof ScopeError) return this.sendAssignmentError(res, error);
-      if (error?.status) return res.status(error.status).json({ success: false, code: 'RELEASE_FAILED', error: 'RELEASE_FAILED', message: error.message });
+      if (error?.status) return res.status(error.status).json({ success: false, code: 'RELEASE_FAILED', error: 'RELEASE_FAILED', message: error.message, ...(typeof error.code === 'string' ? { reason: error.code } : {}) });
       this.sendAssignmentError(res, error);
     }
   }
@@ -1720,23 +1722,24 @@ class PhoneNumberController {
   }
 
   async testCall(req, res) {
-    const friendlyProviderError = (raw) => {
+    // Classe l'erreur de l'opérateur : { code, message } ; le texte est EXACTEMENT celui d'avant, `code` est le nouvel identifiant stable.
+    const classifyProviderError = (raw, errorCode) => {
       const msg = String(raw || '');
       if (/authentication failed|is not active|account .* (suspended|closed)|20003|20005/i.test(msg)) {
-        return "Le compte de l'opérateur téléphonique est inactif ou suspendu : les appels sont impossibles tant qu'il n'est pas réactivé. Contactez le support HARX.";
+        return { code: 'PROVIDER_ACCOUNT_INACTIVE', message: "Le compte de l'opérateur téléphonique est inactif ou suspendu : les appels sont impossibles tant qu'il n'est pas réactivé. Contactez le support HARX." };
       }
       if (
         /unverified|not been verified|Origination number is not ready|requirement-info|identity.?verif/i.test(
           msg
         )
       ) {
-        return "Ce numéro est en attente de validation réglementaire. Vous ne pouvez pas encore l'utiliser pour des appels sortants.";
+        return { code: 'NUMBER_PENDING_REGULATORY_VALIDATION', message: "Ce numéro est en attente de validation réglementaire. Vous ne pouvez pas encore l'utiliser pour des appels sortants." };
       }
       if (/not.?owned|does not belong|invalid.?from|from.?number/i.test(msg)) {
-        return "Impossible de lancer l'appel avec ce numéro. Vérifiez qu'il est actif et correctement configuré.";
+        return { code: 'CALL_NOT_POSSIBLE_WITH_NUMBER', message: "Impossible de lancer l'appel avec ce numéro. Vérifiez qu'il est actif et correctement configuré." };
       }
       const cleaned = msg.replace(/telnyx|twilio/gi, 'fournisseur').trim();
-      return cleaned || "Échec du test d'appel.";
+      return { code: errorCode === 'CALL_ID_MISSING' ? 'CALL_ID_MISSING' : 'TEST_CALL_FAILED', message: cleaned || "Échec du test d'appel." };
     };
 
     try {
@@ -1753,6 +1756,7 @@ class PhoneNumberController {
       if (!e164 || !destE164) {
         return res.status(400).json({
           error: 'Bad Request',
+          code: 'INVALID_PHONE_NUMBERS',
           message: 'Numéros invalides. Utilisez le format international (+…).',
         });
       }
@@ -1774,6 +1778,7 @@ class PhoneNumberController {
       if (!line) {
         return res.status(404).json({
           error: 'Not Found',
+          code: 'LINE_NOT_OWNED',
           message: "Ce numéro n'est pas le vôtre ou n'est plus actif.",
         });
       }
@@ -1791,6 +1796,7 @@ class PhoneNumberController {
         if (!config.twilioAccountSid || !config.twilioAuthToken) {
           return res.status(500).json({
             error: 'Server Configuration',
+            code: 'TELEPHONY_NOT_CONFIGURED',
             message: "La configuration téléphonie du serveur est incomplète.",
           });
         }
@@ -1834,6 +1840,7 @@ class PhoneNumberController {
       if (!config.telnyxApiKey || !config.telnyxConnectionId) {
         return res.status(500).json({
           error: 'Server Configuration',
+          code: 'TELEPHONY_NOT_CONFIGURED',
           message: "La configuration téléphonie du serveur est incomplète.",
         });
       }
@@ -1866,7 +1873,7 @@ class PhoneNumberController {
         data?.call_control_id ||
         null;
       if (!callId) {
-        throw new Error("L'appel n'a pas pu être démarré (identifiant manquant).");
+        throw Object.assign(new Error("L'appel n'a pas pu être démarré (identifiant manquant)."), { code: 'CALL_ID_MISSING' });
       }
       upsertTestCallSession(callId, {
         provider: 'telnyx',
@@ -1882,10 +1889,11 @@ class PhoneNumberController {
       });
     } catch (error) {
       console.error('Error in testCall:', error.message);
-      const message = friendlyProviderError(error.message);
+      const { code, message } = classifyProviderError(error.message, error.code);
       const isFriendlyError = message.includes('validation réglementaire');
       res.status(isFriendlyError ? 403 : 500).json({
         error: 'Failed to test call',
+        code,
         message,
       });
     }
@@ -2105,17 +2113,17 @@ class PhoneNumberController {
       const { phoneNumber, companyId } = req.body || {};
       const { e164, line } = await this.findCompanyLine(phoneNumber, companyId);
       if (!e164) {
-        return res.status(400).json({ error: 'Bad Request', message: 'Numéro invalide. Utilisez le format international (+…).' });
+        return res.status(400).json({ error: 'Bad Request', code: 'INVALID_PHONE_NUMBER', message: 'Numéro invalide. Utilisez le format international (+…).' });
       }
       if (!line) {
-        return res.status(404).json({ error: 'Not Found', message: "Ce numéro n'est pas le vôtre ou n'est plus actif." });
+        return res.status(404).json({ error: 'Not Found', code: 'LINE_NOT_OWNED', message: "Ce numéro n'est pas le vôtre ou n'est plus actif." });
       }
       const provider = String(line.provider || (line.twilioId ? 'twilio' : line.telnyxId ? 'telnyx' : '')).toLowerCase();
       if (provider !== 'twilio' && !line.twilioId) {
-        return res.status(400).json({ error: 'Unsupported', message: "Le test d'appel entrant n'est pas disponible pour ce type de ligne." });
+        return res.status(400).json({ error: 'Unsupported', code: 'INBOUND_TEST_NOT_SUPPORTED', message: "Le test d'appel entrant n'est pas disponible pour ce type de ligne." });
       }
       if (!config.twilioAccountSid || !config.twilioAuthToken) {
-        return res.status(500).json({ error: 'Server Configuration', message: 'La configuration téléphonie du serveur est incomplète.' });
+        return res.status(500).json({ error: 'Server Configuration', code: 'TELEPHONY_NOT_CONFIGURED', message: 'La configuration téléphonie du serveur est incomplète.' });
       }
       const voiceUrl = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/inbound-call`;
       let sid = line.twilioId ? String(line.twilioId) : '';
@@ -2124,7 +2132,7 @@ class PhoneNumberController {
         sid = found[0]?.sid || '';
       }
       if (!sid) {
-        return res.status(404).json({ error: 'Not Found', message: "La ligne n'a pas été retrouvée chez l'opérateur." });
+        return res.status(404).json({ error: 'Not Found', code: 'LINE_NOT_FOUND_AT_PROVIDER', message: "La ligne n'a pas été retrouvée chez l'opérateur." });
       }
       await phoneNumberService.twilioClient.incomingPhoneNumbers(sid).update({ voiceUrl, voiceMethod: 'POST' });
       await PhoneNumber.updateOne({ _id: line._id }, { $set: { 'metadata.inboundWebhook': voiceUrl } });
@@ -2132,7 +2140,7 @@ class PhoneNumberController {
       res.json({ success: true, data: { phoneNumber: e164, status: session.status, startedAt: session.startedAt, expiresAt: session.expiresAt } });
     } catch (error) {
       console.error('Error in startInboundTest:', error.message);
-      res.status(500).json({ error: 'Failed to start inbound test', message: "Impossible de préparer le test d'appel entrant : " + String(error.message || '').replace(/telnyx|twilio/gi, 'opérateur') });
+      res.status(500).json({ error: 'Failed to start inbound test', code: 'INBOUND_TEST_FAILED', message: "Impossible de préparer le test d'appel entrant : " + String(error.message || '').replace(/telnyx|twilio/gi, 'opérateur') });
     }
   }
 
@@ -2142,7 +2150,7 @@ class PhoneNumberController {
       const { phoneNumber, companyId } = req.query || {};
       const { e164, line } = await this.findCompanyLine(phoneNumber, companyId);
       if (!e164 || !line) {
-        return res.status(404).json({ error: 'Not Found', message: "Ce numéro n'est pas le vôtre ou n'est plus actif." });
+        return res.status(404).json({ error: 'Not Found', code: 'LINE_NOT_OWNED', message: "Ce numéro n'est pas le vôtre ou n'est plus actif." });
       }
       const session = getInboundTest(e164);
       res.json({
@@ -2194,7 +2202,7 @@ class PhoneNumberController {
       const userId = req.user?.userId || req.user?.id;
       if (!userId) return res.status(401).json({ error: 'Authentication required' });
       if (!config.twilioAccountSid || !config.twilioAuthToken) {
-        return res.status(500).json({ error: 'Server Configuration', message: 'La configuration téléphonie du serveur est incomplète.' });
+        return res.status(500).json({ error: 'Server Configuration', code: 'TELEPHONY_NOT_CONFIGURED', message: 'La configuration téléphonie du serveur est incomplète.' });
       }
       const identity = voiceIdentity(userId);
       const client = phoneNumberService.twilioClient;
@@ -2237,7 +2245,7 @@ class PhoneNumberController {
       res.json({ success: true, data: { token, identity, expiresIn: VOICE_TOKEN_TTL_S, ...(pushCredentialSid ? { push: true } : {}), ...(lineStatus ? { lineStatus } : {}) } });
     } catch (error) {
       console.error('Error in voiceToken:', error.message);
-      res.status(500).json({ error: 'Failed to create voice token', message: 'Téléphone du navigateur indisponible pour le moment.' });
+      res.status(500).json({ error: 'Failed to create voice token', code: 'BROWSER_PHONE_UNAVAILABLE', message: 'Téléphone du navigateur indisponible pour le moment.' });
     }
   }
 
@@ -2248,7 +2256,7 @@ class PhoneNumberController {
   async outboundCheck(req, res) {
     try {
       const companyId = String(req.body?.companyId || '');
-      if (!mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ success: false, error: 'invalid_company', message: 'Entreprise invalide.' });
+      if (!mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ success: false, error: 'invalid_company', code: 'invalid_company', message: 'Entreprise invalide.' });
       // Confort : même refus que le jeton / le webhook pour un agent sans ligne.
       if (enforcementSettings().from !== null || enforcementSettings().ruleStarts !== null) {
         const access = await callerAccess(req);
@@ -2259,7 +2267,7 @@ class PhoneNumberController {
       return res.json({ success: true, data: { to: decision.to } });
     } catch (error) {
       console.error('Error in outboundCheck:', error.message);
-      res.status(500).json({ success: false, error: 'outbound_check_failed', message: 'Vérification de la destination impossible pour le moment.' });
+      res.status(500).json({ success: false, error: 'outbound_check_failed', code: 'outbound_check_failed', message: 'Vérification de la destination impossible pour le moment.' });
     }
   }
 
@@ -2335,7 +2343,7 @@ class PhoneNumberController {
       res.json({ success: true, data: { available: true } });
     } catch (error) {
       console.error('Error in voicePresence:', error.message);
-      res.status(500).json({ error: 'Failed to update presence', message: 'Disponibilité non enregistrée.' });
+      res.status(500).json({ error: 'Failed to update presence', code: 'PRESENCE_NOT_SAVED', message: 'Disponibilité non enregistrée.' });
     }
   }
 
@@ -2670,7 +2678,7 @@ class PhoneNumberController {
   async getInboundStats(req, res) {
     try {
       const { companyId, gigId } = req.query || {};
-      if (!mongoose.Types.ObjectId.isValid(String(companyId))) return res.status(400).json({ error: 'Bad Request', message: 'companyId invalide.' });
+      if (!mongoose.Types.ObjectId.isValid(String(companyId))) return res.status(400).json({ error: 'Bad Request', code: 'INVALID_COMPANY', message: 'companyId invalide.' });
       const days = Math.min(365, Math.max(1, Number(req.query.days) || 30));
       const slaSeconds = Math.min(600, Math.max(1, Number(req.query.slaSeconds) || 20));
       const filter = { companyId, startedAt: { $gte: new Date(Date.now() - days * 86400000) } };

@@ -285,6 +285,7 @@ class PhoneNumberService {
       if (error.status === 403 || error.message?.includes('403') || error.message?.includes('Forbidden')) {
         const friendlyError = new Error(`Twilio Forbidden (403): Activez les Geo Permissions pour "${countryCode}" dans Twilio Console (Voice > Settings > Geo Permissions). La recherche de numéros en France (FR) requiert également un Regulatory Bundle approuvé.`);
         friendlyError.status = 403;
+        friendlyError.code = 'TWILIO_GEO_PERMISSIONS_REQUIRED';
         throw friendlyError;
       }
       throw error;
@@ -933,6 +934,7 @@ class PhoneNumberService {
           `Échec de la résiliation chez ${provider || 'le fournisseur'}: ${msg}`
         );
         err.status = status >= 400 ? status : 502;
+        err.code = 'LINE_RELEASE_FAILED';
         err.cause = providerErr;
         throw err;
       }
@@ -945,6 +947,7 @@ class PhoneNumberService {
     } catch (stripeErr) {
       const err = new Error(`Échec de la résiliation de l'abonnement de la ligne: ${stripeErr.message}`);
       err.status = 502;
+      err.code = 'LINE_SUBSCRIPTION_CANCEL_FAILED';
       err.cause = stripeErr;
       throw err;
     }
