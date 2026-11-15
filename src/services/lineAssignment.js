@@ -40,11 +40,22 @@ export function effectiveRole(line, kind, oldestId) {
   return null;
 }
 
+/**
+ * Ligne « incluse » dans l'offre (ne se libère pas tant que le forfait est actif) : ligne du titulaire (rôle management : offres à agents, Nomad)
+ * ou, en Accueil (toutes les lignes sont 'shared'), la PLUS ANCIENNE ligne du centre. Offres sans ligne incluse (TaaS, sans forfait) : false.
+ */
+export function isIncludedLine(line, kind, oldestId) {
+  if (kind === 'accueil') return !!oldestId && String(line?._id) === String(oldestId);
+  if (kind === 'agents' || kind === 'nomad') return effectiveRole(line, kind, oldestId) === 'management';
+  return false;
+}
+
 /** Vue d'affectation d'une ligne (ajoutée à la liste des lignes des responsables). */
 export function assignmentFields(line, kind, oldestId) {
   const role = effectiveRole(line, kind, oldestId);
-  if (!role) return {};
-  return { assignedRole: role, assignedAgentId: line.assignedAgentId ?? null, assignedAt: line.assignedAt ?? null };
+  const isIncluded = isIncludedLine(line, kind, oldestId);
+  if (!role) return { isIncluded };
+  return { isIncluded, assignedRole: role, assignedAgentId: line.assignedAgentId ?? null, assignedAt: line.assignedAt ?? null };
 }
 
 /** Identifiant de la plus ancienne ligne d'un centre (la ligne incluse des offres à agents) à partir de ses lignes. */
@@ -138,12 +149,12 @@ export async function assignAgent({ companyId, lineId, agentId, limits, db }) {
 
 /**
  * Libération explicite : la ligne « management » (ligne incluse du titulaire) ne se libère PAS tant que le forfait est actif (`limits` non nul :
- * abonnement actif, en essai ou en impayé). Sans forfait actif, elle peut être libérée. Les autres lignes (agent, shared, offres sans agents) : toujours libérables.
+ * abonnement actif, en essai ou en impayé). Sans forfait actif, elle peut être libérée. En Accueil, la ligne incluse est la plus ancienne du centre (voir isIncludedLine). Les autres lignes restent libérables.
  * À appeler SOUS VERROU de centre, avant toute résiliation. Lève LINE_NOT_FOUND (404) ou MANAGEMENT_LINE_NOT_RELEASABLE (409).
  */
 export async function assertReleasable({ companyId, lineId, limits }) {
   const line = await loadLine(companyId, lineId);
-  if (limits && effectiveRole(line, offerKind(limits), await oldestLineId(companyId)) === 'management') {
+  if (limits && isIncludedLine(line, offerKind(limits), await oldestLineId(companyId))) {
     throw fail(409, 'MANAGEMENT_LINE_NOT_RELEASABLE', 'La ligne incluse ne se libère pas tant que votre forfait est actif.');
   }
   return line;

@@ -1085,3 +1085,43 @@ test('première ligne incluse : une offre sans prix de ligne configuré ne bloqu
   assert.equal(second.body.code, 'PHONE_LINE_PRICE_NOT_CONFIGURED');
   assert.equal(second.body.included, undefined);
 });
+
+// ───────── ligne incluse : `isIncluded` en liste, non libérable (Accueil : la plus ancienne) ─────────
+test('Accueil : la plus ancienne ligne est incluse (isIncluded) et ne se libère pas (409 MANAGEMENT_LINE_NOT_RELEASABLE) ; les suivantes se libèrent', async () => {
+  setup('accueil');
+  const oldest = addLine({ assignedRole: 'shared' }); const extra = addLine({ assignedRole: 'shared' });
+  const rows = await listAs('owner');
+  const byId = Object.fromEntries(rows.map((r) => [String(r._id), r]));
+  assert.deepEqual([byId[oldest._id].isIncluded, byId[extra._id].isIncluded], [true, false]);
+  assert.deepEqual([byId[oldest._id].assignedRole, byId[extra._id].assignedRole], ['shared', 'shared']);
+  const calls0 = names().length;
+  const r = await release('owner', oldest._id, true);
+  assert.equal(r.statusCode, 409); assert.equal(r.body.code, 'MANAGEMENT_LINE_NOT_RELEASABLE');
+  assert.equal(names().length, calls0, 'rien n\'est résilié');
+  const ok = await release('owner', extra._id, true);
+  assert.equal(ok.statusCode, 200, JSON.stringify(ok.body));
+});
+
+test('isIncluded : Accueil sans rôle enregistré (lignes historiques) = la plus ancienne ; Full Scope / Nomad = ligne management ; TaaS = aucune', async () => {
+  setup('accueil');
+  const a = addLine(); const b = addLine();
+  let rows = await listAs('owner');
+  assert.deepEqual(rows.sort((x, y) => String(x._id).localeCompare(String(y._id))).map((r) => r.isIncluded), [true, false]);
+  setup('full_scope');
+  rows = await listAs('owner');
+  assert.deepEqual(Object.fromEntries(rows.map((r) => [String(r._id), r.isIncluded])), { [String(a._id)]: true, [String(b._id)]: false });
+  setup('nomad');
+  rows = await listAs('owner');
+  assert.ok(rows.every((r) => r.isIncluded === true), 'Nomad : chaque ligne est celle du titulaire');
+  setup('taas');
+  rows = await listAs('owner');
+  assert.ok(rows.every((r) => r.isIncluded === false));
+});
+
+test('Accueil sans forfait actif : la ligne la plus ancienne reste libérable', async () => {
+  setup('accueil');
+  const a = addLine({ assignedRole: 'shared' });
+  planMetadata = null;
+  const { assertReleasable } = await import('../services/lineAssignment.js');
+  assert.equal((await assertReleasable({ companyId: C1, lineId: a._id, limits: null }))._id, a._id);
+});
