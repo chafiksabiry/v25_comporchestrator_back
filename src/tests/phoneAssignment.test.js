@@ -564,3 +564,52 @@ test('/release : les offres sans modèle d\'agents (TaaS) et les lignes Accueil 
   const foreign = addLine({ companyId: C2 });
   assert.equal((await release('owner', foreign._id, true)).statusCode, 404);
 });
+
+// ───────── lot 3c : GET /phone-numbers/agent-capacity (lecture seule) ─────────
+async function capacity(user, companyId = C1) { const r = mockRes(); await phoneNumberController.getAgentCapacity(reqAs(user, {}, companyId === null ? {} : { companyId }), r); return r; }
+function withCapacityDb(users, invitations) {
+  const origFind = PhoneNumber.find; const origCollection = fakeDb.collection;
+  PhoneNumber.find = (q) => ({ lean: async () => Object.values(lines).filter((l) => String(l.companyId) === String(q.companyId)) });
+  fakeDb.collection = (name) => ({ ...origCollection(name), find: () => ({ toArray: async () => (name === 'users' ? users : invitations) }) });
+  return () => { PhoneNumber.find = origFind; fakeDb.collection = origCollection; };
+}
+
+test('agent-capacity : agents, lignes affectées et libres (Full Scope) ; la ligne incluse n\'est ni affectée ni libre', async () => {
+  addLine(); // incluse (management)
+  const a = addLine({ assignedRole: 'agent', assignedAgentId: AG1 }); const free = addLine();
+  const restore = withCapacityDb([{ _id: AG1 }, { _id: AG2 }], [{ userId: '64f000000000000000000099', status: 'pending' }, { status: 'pending' }, { userId: 'x', status: 'declined' }, { userId: 'm', status: 'accepted', kind: 'member' }]);
+  try {
+    const r = await capacity('owner');
+    assert.equal(r.statusCode, 200, JSON.stringify(r.body));
+    const d = r.body.data;
+    assert.equal(d.applicable, true);
+    assert.deepEqual(d.lines, { total: 3, assigned: 1, free: 1, freeIds: [String(free._id)] });
+    assert.equal(d.agents.find((x) => x.agentId === AG1).lineId, String(a._id));
+    assert.equal(d.agents.find((x) => x.agentId === AG2).lineId, null);
+    assert.equal(d.agents.length, 3); // AG1, AG2, invité en attente ; refusé et responsable exclus
+    assert.equal(d.agentsWithoutLine, 3); // AG2 + invité + invitation sans compte
+    assert.equal(d.canAddAgentWithoutPurchase, false);
+    assert.equal((await capacity('member')).statusCode, 200);
+  } finally { restore(); }
+  assert.ok(!names().includes('line.save'), 'lecture seule');
+});
+
+test('agent-capacity : droits (agent 403, autre centre 403, sans companyId 400) ; offres sans agents : applicable:false', async () => {
+  addLine(); addLine();
+  const restore = withCapacityDb([], []);
+  try {
+    assert.equal((await capacity('agent')).statusCode, 403);
+    assert.equal((await capacity('ownerC2')).statusCode, 403);
+    assert.equal((await capacity('owner', null)).statusCode, 400);
+    setup('accueil');
+    const r = await capacity('owner');
+    assert.equal(r.body.data.applicable, false); assert.equal(r.body.data.offer, 'accueil');
+    // lignes libres plus nombreuses que les agents sans ligne : un agent de plus sans achat
+    setup('full_scope');
+    assert.equal((await capacity('owner')).body.data.canAddAgentWithoutPurchase, true);
+  } finally { restore(); }
+});
+
+test('agent-capacity : la route GET est branchée', () => {
+  assert.ok(phoneNumberRoutes.stack.some((l) => l.route?.path === '/agent-capacity' && l.route.methods.get));
+});
