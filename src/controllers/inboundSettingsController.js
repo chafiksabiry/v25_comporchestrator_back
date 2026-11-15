@@ -14,42 +14,43 @@ const outboundView = async (companyId) => {
 
 const NO_BYTES = '-greetingAudio.data -voicemailAudio.data';
 const validId = (v) => mongoose.Types.ObjectId.isValid(String(v)) && String(v).length === 24;
-const fail = (res, status, message) => res.status(status).json({ success: false, error: message, message });
+// `code` (et `params`) : identifiants stables pour les clients (traduction) ; `error` / `message` restent inchangés.
+const fail = (res, status, message, code, params) => res.status(status).json({ success: false, error: message, message, ...(code ? { code } : {}), ...(params ? { params } : {}) });
 
 export const inboundSettingsController = {
   async get(req, res) {
     try {
       const { companyId } = req.query || {};
-      if (!validId(companyId)) return fail(res, 400, 'companyId invalide.');
+      if (!validId(companyId)) return fail(res, 400, 'companyId invalide.', 'INVALID_COMPANY');
       const doc = await InboundSettings.findOne({ companyId }).select(NO_BYTES).lean();
       res.json({ success: true, data: { ...toPublicSettings(doc), outbound: await outboundView(companyId) } });
     } catch (error) {
       console.error('inbound-settings get:', error.message);
-      fail(res, 500, "Lecture des réglages d'accueil impossible.");
+      fail(res, 500, "Lecture des réglages d'accueil impossible.", 'INBOUND_SETTINGS_READ_FAILED');
     }
   },
 
   async put(req, res) {
     try {
       const { companyId } = req.body || {};
-      if (!validId(companyId)) return fail(res, 400, 'companyId invalide.');
-      const { ok, errors, value } = validateSettingsInput(req.body);
-      if (!ok) return res.status(400).json({ success: false, error: errors[0], message: errors[0], errors });
+      if (!validId(companyId)) return fail(res, 400, 'companyId invalide.', 'INVALID_COMPANY');
+      const { ok, errors, issues, value } = validateSettingsInput(req.body);
+      if (!ok) return res.status(400).json({ success: false, error: errors[0], message: errors[0], errors, code: issues[0].code, issues });
       // Seul le responsable (titulaire ou membre) autorise ou interdit les appels sortants : une secrétaire ne se l'accorde pas.
       if (value.secretaryOutbound !== undefined) {
         const access = await callerAccess(req).catch((e) => { if (e instanceof ScopeError) return null; throw e; });
-        if (!access || access.role === 'agent') return fail(res, 403, 'Seul le responsable peut régler les appels sortants des secrétaires.');
+        if (!access || access.role === 'agent') return fail(res, 403, 'Seul le responsable peut régler les appels sortants des secrétaires.', 'SECRETARY_OUTBOUND_MANAGER_ONLY');
       }
       // Pays autorisés pour les appels sortants : liste d'indicatifs connus, ou null pour revenir au réglage par défaut.
       // Réservé au responsable (même règle que l'autorisation des secrétaires) ; validé par le serveur.
       const update = { $set: value, $setOnInsert: { companyId } };
       if (req.body.outboundPrefixes !== undefined) {
         const access = await callerAccess(req).catch((e) => { if (e instanceof ScopeError) return null; throw e; });
-        if (!access || access.role === 'agent') return fail(res, 403, 'Seul le responsable peut choisir les pays autorisés pour les appels sortants.');
+        if (!access || access.role === 'agent') return fail(res, 403, 'Seul le responsable peut choisir les pays autorisés pour les appels sortants.', 'OUTBOUND_COUNTRIES_MANAGER_ONLY');
         if (req.body.outboundPrefixes === null) update.$unset = { outboundPrefixes: '' };
         else {
           const checked = validatePrefixList(req.body.outboundPrefixes);
-          if (!checked.ok) return fail(res, 400, checked.error);
+          if (!checked.ok) return fail(res, 400, checked.error, checked.code, checked.params);
           update.$set.outboundPrefixes = checked.value;
         }
       }
@@ -67,7 +68,7 @@ export const inboundSettingsController = {
       res.json({ success: true, data });
     } catch (error) {
       console.error('inbound-settings put:', error.message);
-      fail(res, 500, "Enregistrement des réglages d'accueil impossible.");
+      fail(res, 500, "Enregistrement des réglages d'accueil impossible.", 'INBOUND_SETTINGS_SAVE_FAILED');
     }
   },
 
@@ -75,13 +76,13 @@ export const inboundSettingsController = {
     try {
       const { companyId } = req.query || {};
       const { kind } = req.params;
-      if (!validId(companyId)) return fail(res, 400, 'companyId invalide.');
-      if (!KINDS.includes(kind)) return fail(res, 400, 'Type audio inconnu (greeting ou voicemail).');
+      if (!validId(companyId)) return fail(res, 400, 'companyId invalide.', 'INVALID_COMPANY');
+      if (!KINDS.includes(kind)) return fail(res, 400, 'Type audio inconnu (greeting ou voicemail).', 'INVALID_AUDIO_KIND');
       const bytes = req.body;
-      if (!isMp3(bytes)) return fail(res, 400, 'Fichier audio invalide : un MP3 de plus de 1 ko est attendu.');
+      if (!isMp3(bytes)) return fail(res, 400, 'Fichier audio invalide : un MP3 de plus de 1 ko est attendu.', 'INVALID_AUDIO_FILE');
       const settings = await InboundSettings.findOne({ companyId }).select(NO_BYTES).lean();
       const text = settings?.[`${kind}Text`];
-      if (!text) return fail(res, 409, "Enregistrez d'abord le texte correspondant dans les réglages.");
+      if (!text) return fail(res, 409, "Enregistrez d'abord le texte correspondant dans les réglages.", 'AUDIO_TEXT_REQUIRED');
       const version = audioVersion(bytes);
       const voice = settings.voice || 'nova';
       const updated = await InboundSettings.findOneAndUpdate(
@@ -92,7 +93,7 @@ export const inboundSettingsController = {
       res.json({ success: true, data: toPublicSettings(updated) });
     } catch (error) {
       console.error('inbound-settings putAudio:', error.message);
-      fail(res, 500, "Enregistrement de l'audio impossible.");
+      fail(res, 500, "Enregistrement de l'audio impossible.", 'AUDIO_SAVE_FAILED');
     }
   },
 

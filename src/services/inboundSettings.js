@@ -19,39 +19,45 @@ export const DEFAULTS = Object.freeze({
 export const KINDS = ['greeting', 'voicemail'];
 export const MIN_AUDIO_BYTES = 1024;
 
-/** Valide les champs fournis (les champs absents sont ignorés). @returns {{ok:boolean, errors:string[], value:object}} */
+/**
+ * Valide les champs fournis (les champs absents sont ignorés).
+ * `errors` : messages d'origine (inchangés). `issues` : même ordre, { code, field, params? } pour que les clients traduisent d'après le code.
+ * @returns {{ok:boolean, errors:string[], issues:object[], value:object}}
+ */
 export function validateSettingsInput(body = {}) {
   const errors = [];
+  const issues = [];
+  const bad = (message, code, field, params) => { errors.push(message); issues.push({ code, field, ...(params ? { params } : {}) }); };
   const value = {};
   for (const [field, label] of [['greetingText', "Le message d'accueil"], ['voicemailText', 'Le message du répondeur']]) {
     if (body[field] === undefined) continue;
-    if (typeof body[field] !== 'string') errors.push(`${label} doit être un texte.`);
-    else if (body[field].trim().length > MAX_TEXT) errors.push(`${label} ne peut pas dépasser ${MAX_TEXT} caractères.`);
+    if (typeof body[field] !== 'string') bad(`${label} doit être un texte.`, 'INVALID_TEXT', field);
+    else if (body[field].trim().length > MAX_TEXT) bad(`${label} ne peut pas dépasser ${MAX_TEXT} caractères.`, 'TEXT_TOO_LONG', field, { max: MAX_TEXT });
     else value[field] = body[field].trim();
   }
   if (body.voice !== undefined) {
-    if (!VOICES.includes(body.voice)) errors.push(`Voix inconnue. Voix disponibles : ${VOICES.join(', ')}.`);
+    if (!VOICES.includes(body.voice)) bad(`Voix inconnue. Voix disponibles : ${VOICES.join(', ')}.`, 'UNKNOWN_VOICE', 'voice', { voices: VOICES });
     else value.voice = body.voice;
   }
   if (body.ringTimeoutSeconds !== undefined) {
     const n = body.ringTimeoutSeconds;
     if (typeof n !== 'number' || !Number.isInteger(n) || n < RING_MIN || n > RING_MAX) {
-      errors.push(`Le délai de sonnerie doit être un nombre entier de secondes entre ${RING_MIN} et ${RING_MAX}.`);
+      bad(`Le délai de sonnerie doit être un nombre entier de secondes entre ${RING_MIN} et ${RING_MAX}.`, 'INVALID_RING_TIMEOUT', 'ringTimeoutSeconds', { min: RING_MIN, max: RING_MAX });
     } else value.ringTimeoutSeconds = n;
   }
   if (body.voicemailEnabled !== undefined) {
-    if (typeof body.voicemailEnabled !== 'boolean') errors.push("L'activation du répondeur doit être vrai ou faux.");
+    if (typeof body.voicemailEnabled !== 'boolean') bad("L'activation du répondeur doit être vrai ou faux.", 'INVALID_BOOLEAN', 'voicemailEnabled');
     else value.voicemailEnabled = body.voicemailEnabled;
   }
   if (body.greetingEnabled !== undefined) {
-    if (typeof body.greetingEnabled !== 'boolean') errors.push("L'activation du message d'accueil doit être vrai ou faux.");
+    if (typeof body.greetingEnabled !== 'boolean') bad("L'activation du message d'accueil doit être vrai ou faux.", 'INVALID_BOOLEAN', 'greetingEnabled');
     else value.greetingEnabled = body.greetingEnabled;
   }
   if (body.secretaryOutbound !== undefined) {
-    if (typeof body.secretaryOutbound !== 'boolean') errors.push("L'autorisation d'appeler des secrétaires doit être vrai ou faux.");
+    if (typeof body.secretaryOutbound !== 'boolean') bad("L'autorisation d'appeler des secrétaires doit être vrai ou faux.", 'INVALID_BOOLEAN', 'secretaryOutbound');
     else value.secretaryOutbound = body.secretaryOutbound;
   }
-  return { ok: errors.length === 0, errors, value };
+  return { ok: errors.length === 0, errors, issues, value };
 }
 
 /** Un audio est « validé » s'il existe et correspond exactement au texte et à la voix actuels. */
