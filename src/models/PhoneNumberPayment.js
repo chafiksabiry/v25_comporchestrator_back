@@ -88,6 +88,11 @@ const phoneNumberPaymentSchema = new mongoose.Schema({
     default: undefined
   },
   /** Réservé atomiquement par le premier achat qui l'utilise (abonnement mensuel) : un paiement n'achète jamais deux lignes. */
+  // Agent à qui la ligne sera affectée à l'achat (validé à l'initialisation du paiement ; revalidé à l'achat).
+  assignedAgentId: {
+    type: String,
+    default: null
+  },
   purchaseClaimedAt: {
     type: Date,
     default: null
