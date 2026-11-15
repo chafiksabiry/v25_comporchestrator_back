@@ -1,6 +1,6 @@
 import { phoneNumberService } from '../services/phoneNumberService.js';
 import { callerAccess, ScopeError, scopeToCompany } from '../middleware/companyScope.js';
-import { AssignmentError, LINE_NOT_ASSIGNED, LINE_NOT_ASSIGNED_MESSAGE, agentLineStatus, enforcementSettings, lineStatusView, agentCapacity, assertAgentCanHaveLine, assertReleasable, assignAgent, assignmentFields, offerKind, oldestOf, resolvePurchaseAssignment, unassignAgent, withCenterLock } from '../services/lineAssignment.js';
+import { AssignmentError, LINE_NOT_ASSIGNED, LINE_NOT_ASSIGNED_MESSAGE, agentLineStatus, inboundRingFilter, enforcementSettings, lineStatusView, agentCapacity, assertAgentCanHaveLine, assertReleasable, assignAgent, assignmentFields, offerKind, oldestOf, resolvePurchaseAssignment, unassignAgent, withCenterLock } from '../services/lineAssignment.js';
 import { listLinesFor } from '../services/phoneNumberList.js';
 import { checkNumberCountry } from '../services/numberCountry.js';
 import { purchaseCurrency } from '../services/purchaseCurrency.js';
@@ -2176,6 +2176,21 @@ class PhoneNumberController {
     return res.status(status).json({ success: false, error: LINE_NOT_ASSIGNED, code: LINE_NOT_ASSIGNED, message: LINE_NOT_ASSIGNED_MESSAGE, lineStatus: { required: true, hasLine: false, notice: null } });
   }
 
+  /**
+   * Restriction des conseillers qui peuvent recevoir un appel entrant sur cette ligne (offres à agents, règle datée) : null = aucune.
+   * Toute anomalie (lecture du forfait ou de la base) : aucune restriction, l'appel suit le comportement habituel.
+   */
+  async inboundRingFilterFor(line) {
+    if (!line?.companyId) return null;
+    try {
+      if (enforcementSettings().from === null && enforcementSettings().ruleStarts === null) return null;
+      return await inboundRingFilter({ line, limits: await loadCompanyPlanLimits(line.companyId), db: mongoose.connection.db });
+    } catch (error) {
+      console.error('inbound ring filter (ignoré):', error?.message);
+      return null;
+    }
+  }
+
   /** Blocage d'un agent sans ligne dans CE centre (offres à agents, règle active). Renvoie le statut ; `blocked` = refuser. */
   async agentLineGate({ companyId, userId, limits }) {
     return agentLineStatus({ companyId: String(companyId), userId, limits: limits ?? (await loadCompanyPlanLimits(companyId)), db: mongoose.connection.db });
@@ -2374,13 +2389,14 @@ class PhoneNumberController {
           { $set: { 'metadata.inboundTest': realCallProof({ from, callSid }) } }
         ).then((r) => { if (r?.modifiedCount) console.log(`✅ Appel réel reçu sur ${to} depuis ${from} : ligne considérée comme testée en entrant`); }).catch((e) => console.error('inbound proof:', e.message));
       }
-      const online = line?.companyId ? availableIdentities(line.companyId) : [];
+      const ringAllow = await this.inboundRingFilterFor(line);
+      const online = line?.companyId ? (ringAllow ? availableIdentities(line.companyId).filter(ringAllow) : availableIdentities(line.companyId)) : [];
       const settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
       const baseUrl = `https://${req.get('host')}`;
       const solo = await isSoloCompany(line?.companyId);
       const recording = solo ? null : await recordingPlanFor({ companyId: line?.companyId, callSid, baseUrl, from, language });
       // Files d'attente (routage par langues / compétences, menu vocal). null = aucune file, Nomad Solo ou erreur : comportement inchangé.
-      const queueRoute = !solo && line?.companyId ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'call', recording, language }) : null;
+      const queueRoute = !solo && line?.companyId ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'call', recording, language, allow: ringAllow }) : null;
       // File choisie sans conseiller éligible (langues / compétences) : les conseillers présents sonnent quand même, plutôt que le répondeur.
       const identities = queueRoute ? (queueRoute.kind === 'ring' ? queueRoute.firstIds : queueRoute.kind === 'none' ? online : []) : online;
       const reach = line?.companyId ? await ReachSettings.findOne({ companyId: line.companyId }).lean().catch((e) => { console.error('ReachSettings read:', e.message); return null; }) : null;
@@ -2443,6 +2459,7 @@ class PhoneNumberController {
     let to = '';
     let from = '';
     let language = 'fr';
+    let ringAllow = null;
     try {
       to = toE164(req.body?.To || req.body?.Called);
       language = languageForPhone(to);
@@ -2452,14 +2469,15 @@ class PhoneNumberController {
       line = to ? (await PhoneNumber.findOne({ phoneNumber: to })) || (await PhoneNumber.findOne({ phoneNumber: to.replace(/^\+/, '') })) : null;
       settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
       solo = await isSoloCompany(line?.companyId);
+      ringAllow = await this.inboundRingFilterFor(line);
       const recording = solo ? null : await recordingPlanFor({ companyId: line?.companyId, callSid, baseUrl, from, language });
       const queueRoute = !solo && line?.companyId
-        ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'menu', digits: String(req.body?.Digits || '').trim(), attempt, recording, language })
+        ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'menu', digits: String(req.body?.Digits || '').trim(), attempt, recording, language, allow: ringAllow })
         : null;
       if (queueRoute && (queueRoute.kind === 'menu' || queueRoute.kind === 'ring')) return reply(queueRoute.body);
       // Aucune file ne couvre ce cas (ou personne d'éligible) : repli existant, sans rejouer l'accueil.
       // Personne d'éligible dans la file : les conseillers présents sonnent quand même (sinon l'appel tombait au répondeur alors qu'ils étaient en ligne).
-      const identities = line?.companyId ? availableIdentities(line.companyId) : [];
+      const identities = line?.companyId ? (ringAllow ? availableIdentities(line.companyId).filter(ringAllow) : availableIdentities(line.companyId)) : [];
       if (queueRoute?.kind === 'none' && identities.length) console.log(`📞 Aucun conseiller éligible dans la file sur ${to} : sonnerie chez les ${identities.length} conseiller(s) présent(s)`);
       const reach = line?.companyId ? await ReachSettings.findOne({ companyId: line.companyId }).lean().catch(() => null) : null;
       const route = decideInboundRoute({ identities, reach, linePhone: to });
@@ -2478,7 +2496,7 @@ class PhoneNumberController {
     } catch (error) {
       console.error('Error in handleTwilioInboundMenu:', error);
       try {
-        const identities = line?.companyId ? availableIdentities(line.companyId) : [];
+        const identities = line?.companyId ? (ringAllow ? availableIdentities(line.companyId).filter(ringAllow) : availableIdentities(line.companyId)) : [];
         return reply(buildInboundTwiml({ solo, settings, baseUrl, companyId: line?.companyId ? String(line.companyId) : '', identities, from, resultUrl: `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result`, linePhone: to, withGreeting: false, language }));
       } catch (e) {
         console.error('Error in handleTwilioInboundMenu (repli):', e);
