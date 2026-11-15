@@ -786,7 +786,7 @@ test('webhook sortant : l\'agent appelle depuis SA ligne (jamais celle du centre
   PhoneNumber.findOne = ((orig) => (q) => (q?.provider === 'twilio' && q?.twilioId ? (() => { const c = { sort: () => c, lean: async () => included, then: (r) => Promise.resolve(included).then(r) }; return c; })() : orig(q)))(PhoneNumber.findOne);
   await withRule(PAST, async () => {
     let xml = await browserOutbound(AG1);
-    assert.match(xml, /Aucune ligne ne vous est affectée/);
+    assert.match(xml, /No line is assigned to you/); assert.match(xml, /language="en-US"/);
     assert.ok(!xml.includes('+33611110001'), 'pas de repli sur la ligne du centre');
     twilioLine({ phoneNumber: '+33622220002', assignedRole: 'agent', assignedAgentId: AG1 });
     xml = await browserOutbound(AG1);
@@ -812,4 +812,66 @@ test('outboundCheck : même refus line_not_assigned pour un agent sans ligne', a
     const r = mockRes(); await phoneNumberController.outboundCheck(reqAs(AG1, { companyId: C1, to: '+33612345678' }), r);
     assert.equal(r.statusCode, 403); assert.equal(r.body.code, 'line_not_assigned');
   });
+});
+
+// ───────── lot 3d : data.enforcement (agent-capacity), lineStatus (jeton vocal), messages en anglais ─────────
+test('agent-capacity : data.enforcement { from, active } (D lu à chaque appel ; active = règle applicable à CE centre)', async () => {
+  addLine(); addLine();
+  const restore = withCapacityDb([], []);
+  try {
+    await withRule(undefined, async () => { assert.deepEqual((await capacity('owner')).body.data.enforcement, { from: null, active: false }); });
+    await withRule(FUTURE, async () => { assert.deepEqual((await capacity('owner')).body.data.enforcement, { from: new Date(FUTURE).toISOString(), active: false }); });
+    await withRule(PAST, async () => { assert.deepEqual((await capacity('owner')).body.data.enforcement, { from: new Date(PAST).toISOString(), active: true }); });
+    // centre créé après le déploiement : active tout de suite, même avant D
+    const prev = process.env.LINE_ENFORCEMENT_RULE_STARTS; process.env.LINE_ENFORCEMENT_RULE_STARTS = '2026-06-01T00:00:00Z';
+    const origCollection = fakeDb.collection;
+    fakeDb.collection = (name) => (name === 'subscriptions' ? { find: () => ({ sort: () => ({ limit: () => ({ next: async () => ({ _id: 's', createdAt: new Date('2026-08-01T00:00:00Z') }) }) }) }) } : origCollection(name));
+    try { await withRule(FUTURE, async () => { assert.equal((await capacity('owner')).body.data.enforcement.active, true); }); }
+    finally { fakeDb.collection = origCollection; if (prev === undefined) delete process.env.LINE_ENFORCEMENT_RULE_STARTS; else process.env.LINE_ENFORCEMENT_RULE_STARTS = prev; }
+    // offres sans agents : D visible, jamais active
+    setup('accueil');
+    await withRule(PAST, async () => { const d = (await capacity('owner')).body.data; assert.equal(d.applicable, false); assert.deepEqual(d.enforcement, { from: new Date(PAST).toISOString(), active: false }); });
+  } finally { restore(); }
+});
+
+test('jeton vocal : lineStatus { required, hasLine, notice } pour l\'agent (sortant et entrant) ; absent pour le titulaire ; le refus le porte aussi', async () => {
+  voiceStubs(); addLine();
+  // préavis, sans ligne : pas encore requis, la date D est annoncée
+  await withRule(FUTURE, async () => {
+    for (const body of [{ outbound: true, companyId: C1 }, {}]) {
+      const r = await voiceTokenAs(AG1, body);
+      assert.equal(r.statusCode, 200, JSON.stringify(r.body));
+      assert.deepEqual(r.body.data.lineStatus, { required: false, hasLine: false, notice: new Date(FUTURE).toISOString() });
+    }
+    assert.equal((await voiceTokenAs('owner', { outbound: true, companyId: C1 })).body.data.lineStatus, undefined);
+    assert.equal((await voiceTokenAs('owner', {})).body.data.lineStatus, undefined);
+  });
+  // règle active, avec ligne
+  addLine({ assignedRole: 'agent', assignedAgentId: AG1 });
+  await withRule(PAST, async () => {
+    for (const body of [{ outbound: true, companyId: C1 }, {}]) assert.deepEqual((await voiceTokenAs(AG1, body)).body.data.lineStatus, { required: true, hasLine: true, notice: null });
+  });
+  // règle non configurée : jeton sortant -> statut informatif (jamais requis) ; jeton entrant -> champ absent (aucune recherche supplémentaire)
+  await withRule(undefined, async () => {
+    assert.deepEqual((await voiceTokenAs(AG1, { outbound: true, companyId: C1 })).body.data.lineStatus, { required: false, hasLine: true, notice: null });
+    assert.equal((await voiceTokenAs(AG1, {})).body.data.lineStatus, undefined);
+  });
+});
+
+test('line_not_assigned : message en ANGLAIS, code stable, lineStatus joint ; TwiML en voix anglaise', async () => {
+  voiceStubs(); addLine();
+  await withRule(PAST, async () => {
+    const r = await voiceTokenAs(AG1, {});
+    assert.equal(r.statusCode, 403);
+    assert.deepEqual([r.body.code, r.body.error], ['line_not_assigned', 'line_not_assigned']);
+    assert.equal(r.body.message, 'No line is assigned to you. Ask the account owner to assign you one.');
+    assert.ok(!/[àâçéèêëîïôùûü]/i.test(r.body.message), 'aucun caractère accentué');
+    assert.deepEqual(r.body.lineStatus, { required: true, hasLine: false, notice: null });
+  });
+});
+
+test('buildRefusalTwiml : voix française par défaut (clients actuels inchangés), voix paramétrable', async () => {
+  const { buildRefusalTwiml } = await import('../services/voicemailCallback.js');
+  assert.match(buildRefusalTwiml('Appel non autorisé.'), /language="fr-FR" voice="Polly.Lea"/);
+  assert.match(buildRefusalTwiml('No.', { language: 'en-US', voice: 'Polly.Joanna' }), /language="en-US" voice="Polly.Joanna"/);
 });

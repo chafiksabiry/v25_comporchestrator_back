@@ -201,7 +201,10 @@ export async function resolvePurchaseAssignment({ companyId, limits, existingCou
  */
 export async function agentCapacity({ companyId, limits, db }) {
   const kind = offerKind(limits);
-  if (kind !== 'agents') return { applicable: false, offer: kind, agents: [], lines: { total: 0, assigned: 0, free: 0, freeIds: [] }, agentsWithoutLine: 0, canAddAgentWithoutPurchase: false };
+  const rule = enforcementSettings();
+  const iso = (ms) => (ms === null ? null : new Date(ms).toISOString());
+  if (kind !== 'agents') return { applicable: false, offer: kind, agents: [], lines: { total: 0, assigned: 0, free: 0, freeIds: [] }, agentsWithoutLine: 0, canAddAgentWithoutPurchase: false, enforcement: { from: iso(rule.from), active: false } };
+  const enforcement = { from: iso(rule.from), active: (await enforcementFor({ companyId, db })).enforced };
   const company = oid(companyId);
   const rows = await PhoneNumber.find({ companyId: String(companyId) }).lean();
   const live = rows.filter((l) => !['terminated', 'release_failed'].includes(String(l.billingStatus)));
@@ -224,12 +227,13 @@ export async function agentCapacity({ companyId, limits, db }) {
   const agents = [...people.values()].map((a) => ({ ...a, lineId: byAgent.get(a.agentId) ?? null }));
   const agentsWithoutLine = agents.filter((a) => !a.lineId).length + anonymous;
   const assigned = [...byAgent.values()].length;
-  return { applicable: true, offer: kind, agents, lines: { total: live.length, assigned, free: free.length, freeIds: free }, agentsWithoutLine, canAddAgentWithoutPurchase: free.length > agentsWithoutLine };
+  return { applicable: true, offer: kind, agents, lines: { total: live.length, assigned, free: free.length, freeIds: free }, agentsWithoutLine, canAddAgentWithoutPurchase: free.length > agentsWithoutLine, enforcement };
 }
 
 // ───────── Blocage « agent sans ligne » (lot 3a) ─────────
 export const LINE_NOT_ASSIGNED = 'line_not_assigned';
-export const LINE_NOT_ASSIGNED_MESSAGE = "Aucune ligne ne vous est affectée : demandez au titulaire de vous en affecter une.";
+// Messages serveur en anglais ; les clients (web, mobile) traduisent d'après le CODE stable, jamais d'après le texte.
+export const LINE_NOT_ASSIGNED_MESSAGE = 'No line is assigned to you. Ask the account owner to assign you one.';
 
 const asDate = (v) => { const t = Date.parse(String(v ?? '').trim()); return Number.isFinite(t) ? t : null; };
 
@@ -253,6 +257,14 @@ export function enforcementSettings(env = process.env) {
 export async function agentLineStatus({ companyId, userId, limits, db, now = Date.now(), env = process.env, subscriptionCreatedAt } = {}) {
   const none = { applicable: false, enforced: false, blocked: false, notice: null, line: null };
   if (offerKind(limits) !== 'agents' || !companyId || !userId) return none;
+  const { from, enforced } = await enforcementFor({ companyId, db, now, env, subscriptionCreatedAt });
+  const line = await PhoneNumber.findOne({ companyId: String(companyId), assignedAgentId: String(userId), billingStatus: { $nin: UNASSIGNABLE_BILLING } }).lean();
+  const hasLine = Boolean(line);
+  return { applicable: true, enforced, blocked: enforced && !hasLine, notice: !enforced && !hasLine && from !== null ? new Date(from).toISOString() : null, line: line || null };
+}
+
+/** La règle s'applique-t-elle dès maintenant à CE centre ? { from: D en ms ou null, enforced: boolean } (réglages lus à chaque appel). */
+export async function enforcementFor({ companyId, db, now = Date.now(), env = process.env, subscriptionCreatedAt } = {}) {
   const { from, ruleStarts } = enforcementSettings(env);
   let enforced = from !== null && now >= from;
   if (!enforced && ruleStarts !== null) {
@@ -261,7 +273,8 @@ export async function agentLineStatus({ companyId, userId, limits, db, now = Dat
     const t = asDate(created instanceof Date ? created.toISOString() : created);
     enforced = t !== null && t >= ruleStarts;
   }
-  const line = await PhoneNumber.findOne({ companyId: String(companyId), assignedAgentId: String(userId), billingStatus: { $nin: UNASSIGNABLE_BILLING } }).lean();
-  const hasLine = Boolean(line);
-  return { applicable: true, enforced, blocked: enforced && !hasLine, notice: !enforced && !hasLine && from !== null ? new Date(from).toISOString() : null, line: line || null };
+  return { from, enforced };
 }
+
+/** Vue publique du statut d'un agent : { required, hasLine, notice } (required = la règle s'applique déjà ; notice = D en ISO pendant le préavis, sinon null). */
+export const lineStatusView = (status) => ({ required: Boolean(status?.applicable && status.enforced), hasLine: Boolean(status?.line), notice: status?.notice ?? null });

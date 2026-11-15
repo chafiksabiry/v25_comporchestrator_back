@@ -60,8 +60,8 @@ export const buildCallbackTwiml = ({ callerId, to, maxSeconds, recording = null 
   return wrap(`<Dial callerId="${xmlEscape(callerId)}" answerOnBridge="true" timeout="30"${limit}${record}><Number${whisper}>${xmlEscape(to)}</Number></Dial>`);
 };
 
-export const buildRefusalTwiml = (message) =>
-  wrap(`<Say language="fr-FR" voice="Polly.Lea">${xmlEscape(message)}</Say><Hangup/>`);
+export const buildRefusalTwiml = (message, { language = 'fr-FR', voice = 'Polly.Lea' } = {}) =>
+  wrap(`<Say language="${language}" voice="${voice}">${xmlEscape(message)}</Say><Hangup/>`);
 
 /**
  * Application TwiML qui reçoit les appels sortants du navigateur pour les rappels : retrouvée par son nom, créée si elle
