@@ -280,3 +280,28 @@ test('entrant : panne du contrôle de ligne => l\'appel sonne comme avant', asyn
   PhoneNumber.updateOne = async () => { throw new Error('mongo down'); };
   assert.ok(rings(await inbound(L1, 'CA1')));
 });
+
+// ───────── lecture : GET /phone-numbers (vue responsable) ─────────
+const { listLinesFor } = await import('../services/phoneNumberList.js');
+const listAs = (role, kindPlan) => listLinesFor({ user: { userId: 'u' }, headers: { authorization: 'Bearer tok' }, query: { companyId: C1 } }, {
+  access: async () => ({ userId: 'u', companyId: C1, companyIds: [C1], role, permissions: {} }),
+  find: async () => lines.map((l) => ({ ...l })),
+  limits: async () => ({ product: 'callcenter', callcenterTier: kindPlan }),
+});
+
+test('liste (responsable, Accueil) : busy / activeCallStartedAt additifs, jamais le callSid ; autres offres et vue agent : aucun nouveau champ', async () => {
+  rule(); present('owner');
+  await inbound(L1, 'CASECRET');
+  const rows = await listAs('owner', 'accueil');
+  const byId = Object.fromEntries(rows.map((r) => [r._id, r]));
+  assert.equal(byId.l1.busy, true);
+  assert.ok(Number.isFinite(Date.parse(byId.l1.activeCallStartedAt)));
+  assert.deepEqual([byId.l2.busy, byId.l2.activeCallStartedAt], [false, null]);
+  assert.ok(!JSON.stringify(rows).includes('CASECRET'), 'identifiant d\'appel jamais exposé');
+  assert.ok(rows.every((r) => !('activeCall' in r)));
+  for (const t of ['full_scope', 'nomad_solo']) assert.ok((await listAs('owner', t)).every((r) => !('busy' in r) && !('activeCallStartedAt' in r)), t);
+  assert.ok((await listAs('agent', 'accueil')).every((r) => !('busy' in r)), 'vue secrétaire inchangée');
+  // bail expiré : la ligne apparaît libre
+  lines[0].activeCall.expiresAt = new Date(Date.now() - 1000);
+  assert.equal((await listAs('owner', 'accueil')).find((r) => r._id === 'l1').busy, false);
+});

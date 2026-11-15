@@ -3,6 +3,7 @@ import { PhoneNumber } from '../models/PhoneNumber.js';
 import { callerAccess, scopeToCompany } from '../middleware/companyScope.js';
 import { loadCompanyPlanLimits } from './planLimits.js';
 import { assignmentFields, offerKind, oldestOf } from './lineAssignment.js';
+import { busyView } from './lineCalls.js';
 
 /**
  * Liste des lignes (GET /api/phone-numbers) : toujours limitée côté serveur à la société de l'appelant.
@@ -71,5 +72,6 @@ export async function listLinesFor(req, { access = callerAccess, find = (company
   let kind = 'other';
   try { kind = offerKind(await limits(companyId)); } catch (error) { console.warn('[phone-numbers] plan unreadable, no deduced line roles:', error.message); }
   const oldestId = oldestOf(rows);
-  return rows.map((l) => ({ ...managerLineView(l), ...assignmentFields(l, kind, oldestId) }));
+  // Offre Accueil : `busy` / `activeCallStartedAt` (additifs) disent si la ligne tient un appel actif ; l'identifiant de l'appel n'est jamais exposé.
+  return rows.map((l) => ({ ...managerLineView(l), ...assignmentFields(l, kind, oldestId), ...(kind === 'accueil' ? busyView(l) : {}) }));
 }
