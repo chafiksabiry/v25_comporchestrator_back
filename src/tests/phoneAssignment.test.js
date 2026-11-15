@@ -525,3 +525,42 @@ test('entrées hostiles : identifiants non textuels ou opérateurs Mongo refusé
   assert.equal(bad.statusCode, 400);
   assert.equal(lineOf(l._id).assignedAgentId, null);
 });
+
+// ───────── décision CTO : la ligne management ne se libère pas tant que le forfait est actif ─────────
+test('/release refuse la ligne « management » (la plus ancienne, ou au rôle enregistré) tant que le forfait est actif : 409 MANAGEMENT_LINE_NOT_RELEASABLE', async () => {
+  const included = addLine(); const agentLine = addLine();
+  let r = await release('owner', included._id, true);
+  assert.equal(r.statusCode, 409);
+  assert.equal(r.body.code, 'MANAGEMENT_LINE_NOT_RELEASABLE');
+  assert.ok(!names().includes('release') && lineOf(included._id), 'rien n\'est résilié');
+  const explicit = addLine({ assignedRole: 'management' });
+  assert.equal((await release('owner', explicit._id, true)).body.code, 'MANAGEMENT_LINE_NOT_RELEASABLE');
+  // Nomad : sa ligne unique est la ligne incluse
+  setup('nomad');
+  assert.equal((await release('owner', included._id, true)).body.code, 'MANAGEMENT_LINE_NOT_RELEASABLE');
+  // les autres lignes restent libérables
+  setup('full_scope');
+  r = await release('owner', agentLine._id, true);
+  assert.equal(r.statusCode, 200, JSON.stringify(r.body));
+  assert.ok(names().includes('release'));
+});
+
+test('/release : la confirmation reste vérifiée avant le refus, et sans forfait actif la ligne incluse est libérable', async () => {
+  const included = addLine(); addLine();
+  assert.equal((await release('owner', included._id, undefined)).body.code, 'CONFIRMATION_REQUIRED');
+  planMetadata = null; // plus de forfait actif
+  const r = await release('owner', included._id, true);
+  assert.equal(r.statusCode, 200, JSON.stringify(r.body));
+  assert.ok(names().includes('release'));
+});
+
+test('/release : les offres sans modèle d\'agents (TaaS) et les lignes Accueil « shared » restent libérables ; un autre centre : 404', async () => {
+  const a = addLine(); addLine();
+  setup('taas');
+  assert.equal((await release('owner', a._id, true)).statusCode, 200);
+  setup('accueil');
+  const shared = addLine();
+  assert.equal((await release('owner', shared._id, true)).statusCode, 200);
+  const foreign = addLine({ companyId: C2 });
+  assert.equal((await release('owner', foreign._id, true)).statusCode, 404);
+});

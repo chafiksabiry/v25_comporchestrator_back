@@ -134,6 +134,19 @@ export async function assignAgent({ companyId, lineId, agentId, limits, db }) {
   return line;
 }
 
+/**
+ * Libération explicite : la ligne « management » (ligne incluse du titulaire) ne se libère PAS tant que le forfait est actif (`limits` non nul :
+ * abonnement actif, en essai ou en impayé). Sans forfait actif, elle peut être libérée. Les autres lignes (agent, shared, offres sans agents) : toujours libérables.
+ * À appeler SOUS VERROU de centre, avant toute résiliation. Lève LINE_NOT_FOUND (404) ou MANAGEMENT_LINE_NOT_RELEASABLE (409).
+ */
+export async function assertReleasable({ companyId, lineId, limits }) {
+  const line = await loadLine(companyId, lineId);
+  if (limits && effectiveRole(line, offerKind(limits), await oldestLineId(companyId)) === 'management') {
+    throw fail(409, 'MANAGEMENT_LINE_NOT_RELEASABLE', 'La ligne incluse ne se libère pas tant que votre forfait est actif.');
+  }
+  return line;
+}
+
 /** À appeler SOUS VERROU de centre. Retire l'agent : la ligne RESTE au centre, facturée, libre, réaffectable. Idempotent. */
 export async function unassignAgent({ companyId, lineId, limits }) {
   const kind = offerKind(limits);

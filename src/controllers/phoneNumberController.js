@@ -1,6 +1,6 @@
 import { phoneNumberService } from '../services/phoneNumberService.js';
 import { callerAccess, ScopeError, scopeToCompany } from '../middleware/companyScope.js';
-import { AssignmentError, assertAgentCanHaveLine, assignAgent, assignmentFields, offerKind, oldestOf, resolvePurchaseAssignment, unassignAgent, withCenterLock } from '../services/lineAssignment.js';
+import { AssignmentError, assertAgentCanHaveLine, assertReleasable, assignAgent, assignmentFields, offerKind, oldestOf, resolvePurchaseAssignment, unassignAgent, withCenterLock } from '../services/lineAssignment.js';
 import { listLinesFor } from '../services/phoneNumberList.js';
 import { checkNumberCountry } from '../services/numberCountry.js';
 import { purchaseCurrency } from '../services/purchaseCurrency.js';
@@ -938,7 +938,11 @@ class PhoneNumberController {
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ success: false, code: 'INVALID_COMPANY', error: 'INVALID_COMPANY', message: 'companyId invalide.' });
       await this.requireOwner(req, companyId);
       if (confirm !== true) return res.status(400).json({ success: false, code: 'CONFIRMATION_REQUIRED', error: 'CONFIRMATION_REQUIRED', message: 'La libération résilie la ligne : confirmez avec « confirm: true ».' });
-      const result = await withCenterLock(companyId, () => phoneNumberService.deletePhoneNumber({ id, companyId }));
+      const limits = await loadCompanyPlanLimits(companyId);
+      const result = await withCenterLock(companyId, async () => {
+        await assertReleasable({ companyId: String(companyId), lineId: id, limits }); // la ligne incluse (management) ne se libère pas tant que le forfait est actif
+        return phoneNumberService.deletePhoneNumber({ id, companyId });
+      });
       res.json({ success: true, ...result });
     } catch (error) {
       if (error instanceof AssignmentError || error instanceof ScopeError) return this.sendAssignmentError(res, error);
