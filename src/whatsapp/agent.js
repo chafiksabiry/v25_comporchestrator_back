@@ -96,7 +96,9 @@ export function createAgent({ store, claude, whatsapp, kb, tools, cfg, logger = 
 
     // --- Messages non lisibles (audio, image sans légende...) ---
     if (!msg.supported) {
-      events.push(`The user sent a ${msg.type} message, which you cannot read or listen to. Politely ask them to write their question as text.`);
+      events.push(msg.type === 'video'
+        ? 'The user sent a video, which you cannot watch. Politely ask them to send a screenshot of the problem or to describe it in text.'
+        : `The user sent a ${msg.type} message, which you cannot read or listen to. Politely ask them to write their question as text.`);
     }
     const storedText = userText || `[${msg.type} message]`;
     await store.appendMessage(waId, { role: 'user', text: storedText, wamid: msg.id, ts: msg.timestamp });
@@ -114,9 +116,28 @@ export function createAgent({ store, claude, whatsapp, kb, tools, cfg, logger = 
       return { reply: text, language: hint, rateLimited: true, toolCalls: [] };
     }
 
+    // --- Image : téléchargée chez Meta et jointe au message courant (jamais stockée) ---
+    let image = null;
+    if (msg.type === 'image' && msg.mediaId && whatsapp.downloadImage) {
+      try {
+        image = await whatsapp.downloadImage(msg.mediaId);
+        events.push('The user attached an image; it is included in their message. Use it to help with their HARX question (for example a screenshot of an error). If it is unreadable or unrelated to HARX, say so politely. Never identify people in a photo.');
+      } catch (e) {
+        logger.warn('[whatsapp-agent] image download failed:', e.message);
+        events.push('The user sent an image but it could not be opened (unsupported format, too large or unavailable). Politely ask them to send it again as a PNG/JPEG screenshot or to describe the problem in text.');
+      }
+    }
+
     // --- Contexte envoyé à Claude ---
     conv = await store.getConversation(waId);
     const msgs = toApiMessages((conv.messages || []).slice(-cfg.historyWindow));
+    if (image && msgs.length && msgs[msgs.length - 1].role === 'user') {
+      const last = msgs[msgs.length - 1];
+      last.content = [
+        { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.data } },
+        { type: 'text', text: String(last.content) },
+      ];
+    }
     const system = [
       { type: 'text', text: staticPrompt, cache_control: { type: 'ephemeral' } },
       { type: 'text', text: buildDynamicPrompt({ now: startedAt, languageHint: hint, previousLanguage: previousLang, linked: Boolean(conv.linkedUserId), notes: conv.notes || [], handoff: conv.handoff, userName: conv.profileName, events }) },
@@ -191,12 +212,43 @@ export function createAgent({ store, claude, whatsapp, kb, tools, cfg, logger = 
      */
     handleWebhookBody(body) {
       const { messages, statuses } = parseWebhookPayload(body, { expectedPhoneNumberId: cfg.phoneNumberId });
+      // Diagnostic (sans contenu ni numéro d'utilisateur) : ce que Meta envoie et ce qui est retenu.
+      try {
+        const events = (body?.entry || []).flatMap((e) => e?.changes || []).map((c) => ({
+          field: c?.field,
+          phoneNumberId: c?.value?.metadata?.phone_number_id || null,
+          messageTypes: (c?.value?.messages || []).map((m) => m?.type),
+          // Noms de champs seulement (jamais les valeurs) : aide à comprendre pourquoi un message est écarté.
+          messageShapes: (c?.value?.messages || []).map((m) => ({ hasId: Boolean(m?.id), hasFrom: Boolean(m?.from), keys: Object.keys(m || {}) })),
+          statuses: (c?.value?.statuses || []).map((st) => st?.status),
+        }));
+        // Événements de compte (nom d'affichage, qualité, statut) : on journalise uniquement la décision et le motif.
+        const accountEvents = (body?.entry || []).flatMap((e) => e?.changes || [])
+          .filter((c) => c?.field && c.field !== 'messages')
+          .map((c) => {
+            const v = c.value || {};
+            return { field: c.field, event: v.event || null, decision: v.decision || null, requestedName: v.requested_verified_name || v.display_name || null, rejectionReason: v.rejection_reason || null, currentLimit: v.current_limit || null };
+          });
+        if (accountEvents.length) logger.info(`[whatsapp] account event: ${JSON.stringify(accountEvents)}`);
+        const rawMessages = events.reduce((n, ev) => n + ev.messageTypes.length, 0);
+        logger.info(`[whatsapp] webhook received: expectedPhoneNumberId=${cfg.phoneNumberId || '(none)'} kept=${messages.length} events=${JSON.stringify(events)}`);
+        if (rawMessages > 0 && messages.length === 0) {
+          logger.warn('[whatsapp] inbound message(s) NOT RETAINED (see messageShapes: missing id/from, or phone_number_id differs from WHATSAPP_PHONE_NUMBER_ID)');
+        }
+      } catch { /* diagnostic best-effort */ }
       for (const s of statuses) {
         if (s.status === 'failed') logger.warn(`[whatsapp] delivery failed for ${s.id}:`, JSON.stringify(s.errors).slice(0, 300));
       }
       const done = Promise.all(messages.map(async (m) => {
         try {
           if (!(await store.claimMessage(m.id))) return { id: m.id, duplicate: true };
+          if (cfg.humanMode) {
+            // Mode « Claude répond » : aucun appel à l'API Anthropic ; le message est journalisé pour traitement par un humain / une session Claude Code.
+            const entry = { id: m.id, from: m.from, name: m.name || '', type: m.type, text: String(m.text || '').slice(0, cfg.maxInboundChars), mediaId: m.mediaId || undefined, ts: (m.timestamp instanceof Date ? m.timestamp : new Date()).toISOString() };
+            logger.info(`[whatsapp-inbox] ${JSON.stringify(entry)}`);
+            await store.appendMessage(m.from, { role: 'user', text: entry.text || `[${m.type} message]`, wamid: m.id, ts: m.timestamp }).catch(() => {});
+            return { id: m.id, humanMode: true };
+          }
           whatsapp.markReadAndType(m.id).catch(() => {});
           const result = await serialize(m.from, () => processMessage(m));
           return { id: m.id, ...result };
