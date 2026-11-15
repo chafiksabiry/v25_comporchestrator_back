@@ -565,6 +565,60 @@ test('/release : les offres sans modèle d\'agents (TaaS) et les lignes Accueil 
   assert.equal((await release('owner', foreign._id, true)).statusCode, 404);
 });
 
+// ───────── lot 1b : DELETE /:id et POST /terminate suivent la même règle que /release ─────────
+async function legacyDelete(user, { id, body = {}, query = {}, params } = {}) {
+  const r = mockRes(); const req = reqAs(user, body, query); req.params = params ?? (id ? { id } : {});
+  await phoneNumberController.deleteNumber(req, r); return r;
+}
+
+test('DELETE /:id et POST /terminate : titulaire seul (responsable et agent : 403 OWNER_ONLY), rien n\'est résilié', async () => {
+  addLine(); const l = addLine();
+  for (const user of ['member', 'agent']) {
+    let r = await legacyDelete(user, { id: l._id, body: { confirm: true } });
+    assert.equal(r.statusCode, 403, user); assert.equal(r.body.code, 'OWNER_ONLY');
+    r = await legacyDelete(user, { body: { phoneNumber: l.phoneNumber, confirm: true } });
+    assert.equal(r.statusCode, 403, user); assert.equal(r.body.code, 'OWNER_ONLY');
+  }
+  assert.ok(lineOf(l._id)); assert.ok(!names().includes('release'));
+});
+
+test('DELETE /:id et POST /terminate : confirm:true OBLIGATOIRE (400 CONFIRMATION_REQUIRED), le centre est celui de la ligne', async () => {
+  addLine(); const l = addLine();
+  for (const confirm of [undefined, false, 'true', 1]) {
+    const r = await legacyDelete('owner', { id: l._id, body: confirm === undefined ? {} : { confirm } });
+    assert.equal(r.statusCode, 400, String(confirm)); assert.equal(r.body.code, 'CONFIRMATION_REQUIRED');
+  }
+  assert.equal((await legacyDelete('owner', { body: { id: l._id } })).body.code, 'CONFIRMATION_REQUIRED');
+  assert.ok(lineOf(l._id)); assert.ok(!names().includes('release'));
+  // un companyId menteur de l'appelant est sans effet : la ligne du centre C1 reste protégée du titulaire de C2
+  const r = await legacyDelete('ownerC2', { id: l._id, body: { companyId: C2, confirm: true } });
+  assert.equal(r.statusCode, 403); assert.ok(lineOf(l._id));
+  // confirmé par le titulaire : résilié (corps JSON, puis ?confirm=true sans corps)
+  let ok = await legacyDelete('owner', { id: l._id, body: { confirm: true } });
+  assert.equal(ok.statusCode, 200, JSON.stringify(ok.body)); assert.deepEqual(calls.find((c) => c[0] === 'release').slice(1), [String(l._id), C1]);
+  const l2 = addLine();
+  ok = await legacyDelete('owner', { id: l2._id, query: { confirm: 'true' } });
+  assert.equal(ok.statusCode, 200, JSON.stringify(ok.body));
+});
+
+test('DELETE /:id et POST /terminate : la ligne « management » est refusée (409 MANAGEMENT_LINE_NOT_RELEASABLE) tant que le forfait est actif ; ligne inconnue : 404 ; sans id : 400', async () => {
+  const included = addLine(); addLine();
+  let r = await legacyDelete('owner', { id: included._id, body: { confirm: true } });
+  assert.equal(r.statusCode, 409); assert.equal(r.body.code, 'MANAGEMENT_LINE_NOT_RELEASABLE');
+  r = await legacyDelete('owner', { body: { phoneNumber: included.phoneNumber, confirm: true } });
+  assert.equal(r.body.code, 'MANAGEMENT_LINE_NOT_RELEASABLE');
+  assert.ok(lineOf(included._id)); assert.ok(!names().includes('release'));
+  r = await legacyDelete('owner', { id: '64e0000000000000000000ff', body: { confirm: true } });
+  assert.equal(r.statusCode, 404); assert.equal(r.body.code, 'LINE_NOT_FOUND');
+  r = await legacyDelete('owner', { body: { confirm: true } });
+  assert.equal(r.statusCode, 400);
+});
+
+test('lot 1b : les routes DELETE /:id et POST /terminate sont bien branchées sur deleteNumber', async () => {
+  const layers = phoneNumberRoutes.stack.filter((l) => l.route && ((l.route.path === '/:id' && l.route.methods.delete) || (l.route.path === '/terminate' && l.route.methods.post)));
+  assert.equal(layers.length, 2);
+});
+
 // ───────── lot 3c : GET /phone-numbers/agent-capacity (lecture seule) ─────────
 async function capacity(user, companyId = C1) { const r = mockRes(); await phoneNumberController.getAgentCapacity(reqAs(user, {}, companyId === null ? {} : { companyId }), r); return r; }
 function withCapacityDb(users, invitations) {

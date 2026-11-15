@@ -933,9 +933,14 @@ class PhoneNumberController {
    * exactement true. Libère le numéro chez l'opérateur et annule l'abonnement mensuel de la ligne (idempotent, voir phoneNumberService.deletePhoneNumber).
    */
   async releaseLineExplicit(req, res) {
+    const { companyId, id, confirm } = req.body || {};
+    if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ success: false, code: 'INVALID_COMPANY', error: 'INVALID_COMPANY', message: 'companyId invalide.' });
+    return this.runExplicitRelease(req, res, { companyId, id, confirm });
+  }
+
+  /** Cœur de la libération explicite, commun à /release, DELETE /:id et POST /terminate : titulaire seul, confirm:true, ligne « management » refusée. */
+  async runExplicitRelease(req, res, { companyId, id, confirm }) {
     try {
-      const { companyId, id, confirm } = req.body || {};
-      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ success: false, code: 'INVALID_COMPANY', error: 'INVALID_COMPANY', message: 'companyId invalide.' });
       await this.requireOwner(req, companyId);
       if (confirm !== true) return res.status(400).json({ success: false, code: 'CONFIRMATION_REQUIRED', error: 'CONFIRMATION_REQUIRED', message: 'La libération résilie la ligne : confirmez avec « confirm: true ».' });
       const limits = await loadCompanyPlanLimits(companyId);
@@ -2709,27 +2714,23 @@ class PhoneNumberController {
     }
   }
 
+  /**
+   * DELETE /phone-numbers/:id et POST /phone-numbers/terminate : même règle que /release (titulaire seul, `confirm: true` obligatoire, ligne
+   * « management » refusée, mêmes codes d'erreur). Le centre est celui de la LIGNE (jamais celui annoncé par l'appelant). `confirm` : corps JSON, ou
+   * `?confirm=true` pour un DELETE sans corps.
+   */
   async deleteNumber(req, res) {
     try {
-      const companyId =
-        req.body?.companyId ||
-        req.query?.companyId ||
-        req.headers['x-company-id'];
-      const phoneNumber = req.body?.phoneNumber || req.query?.phoneNumber;
       const id = req.params.id || req.body?.id || req.query?.id;
-      const result = await phoneNumberService.deletePhoneNumber({
-        id,
-        phoneNumber,
-        companyId,
-      });
-      res.json({ success: true, ...result });
+      const phoneNumber = req.body?.phoneNumber || req.query?.phoneNumber;
+      const query = id && mongoose.Types.ObjectId.isValid(String(id)) ? { _id: id } : phoneNumber ? { phoneNumber: String(phoneNumber).trim() } : null;
+      if (!query) return res.status(400).json({ success: false, code: 'LINE_REQUIRED', error: 'LINE_REQUIRED', message: 'id ou phoneNumber requis.' });
+      const line = await PhoneNumber.findOne(query).lean();
+      if (!line || !line.companyId) return res.status(404).json({ success: false, code: 'LINE_NOT_FOUND', error: 'LINE_NOT_FOUND', message: 'Ligne introuvable.' });
+      const confirm = req.body?.confirm === true || req.query?.confirm === 'true';
+      return this.runExplicitRelease(req, res, { companyId: String(line.companyId), id: String(line._id), confirm });
     } catch (error) {
-      console.error('Error deleting phone number:', error);
-      const status = error.status || (error.message === 'Phone number not found' ? 404 : 500);
-      res.status(status).json({
-        error: status === 404 ? 'Not Found' : 'Failed to terminate phone number',
-        message: error.message || 'Failed to terminate phone number',
-      });
+      this.sendAssignmentError(res, error);
     }
   }
 
