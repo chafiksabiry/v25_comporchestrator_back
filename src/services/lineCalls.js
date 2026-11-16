@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { enforcementFor, offerKind } from './lineAssignment.js';
 
@@ -105,3 +106,15 @@ export const staleCheckFor = (client) => async (lease) => {
 
 /** Webhook de fin d'appel sortant (action du <Dial>) : libère la ligne. */
 export const LINE_CALL_END_PATH = '/api/phone-numbers/webhooks/twilio/line-call-end';
+
+/**
+ * Jeton de l'URL d'action du <Dial> : HMAC du CallSid avec le secret du serveur (même base que signOutboundTicket). Le webhook de fin d'appel est
+ * appelé par Twilio sans session : sans ce jeton, n'importe qui connaissant un CallSid pourrait libérer une ligne en cours d'appel.
+ */
+const lineEndMac = (secret, callSid) => crypto.createHmac('sha256', String(secret)).update(`line-call-end.${callSid}`).digest('hex');
+export const signLineCallEnd = ({ secret, callSid }) => lineEndMac(secret, String(callSid));
+export function verifyLineCallEnd({ secret, callSid, token }) {
+  if (!secret || !callSid || typeof token !== 'string' || !token) return false;
+  const a = Buffer.from(token); const b = Buffer.from(lineEndMac(secret, String(callSid)));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
