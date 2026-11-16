@@ -41,9 +41,16 @@ export const inboundSettingsController = {
         const access = await callerAccess(req).catch((e) => { if (e instanceof ScopeError) return null; throw e; });
         if (!access || access.role === 'agent') return fail(res, 403, 'Seul le responsable peut régler les appels sortants des secrétaires.', 'SECRETARY_OUTBOUND_MANAGER_ONLY');
       }
+      // Enregistrement des conversations : réservé au responsable, comme les autres réglages sensibles. Mise à jour partielle (inbound / outbound).
+      if (value.recording !== undefined) {
+        const access = await callerAccess(req).catch((e) => { if (e instanceof ScopeError) return null; throw e; });
+        if (!access || access.role === 'agent') return fail(res, 403, "Seul le responsable peut régler l'enregistrement des appels.", 'RECORDING_MANAGER_ONLY');
+      }
       // Pays autorisés pour les appels sortants : liste d'indicatifs connus, ou null pour revenir au réglage par défaut.
       // Réservé au responsable (même règle que l'autorisation des secrétaires) ; validé par le serveur.
-      const update = { $set: value, $setOnInsert: { companyId } };
+      const { recording, ...plain } = value;
+      const update = { $set: plain, $setOnInsert: { companyId } };
+      if (recording) for (const [k, v] of Object.entries(recording)) update.$set[`recording.${k}`] = v;
       if (req.body.outboundPrefixes !== undefined) {
         const access = await callerAccess(req).catch((e) => { if (e instanceof ScopeError) return null; throw e; });
         if (!access || access.role === 'agent') return fail(res, 403, 'Seul le responsable peut choisir les pays autorisés pour les appels sortants.', 'OUTBOUND_COUNTRIES_MANAGER_ONLY');

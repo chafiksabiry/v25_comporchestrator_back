@@ -27,15 +27,52 @@ export function shouldRecordPlan(limits) {
   return limits.product === null || limits.product === undefined;
 }
 
-/** Décision pour une entreprise ; toute erreur de lecture = ne pas enregistrer. `loadLimits` est injecté. */
-export async function shouldRecordCompany(companyId, loadLimits) {
-  if (!companyId) return false;
+/** Motifs de la décision d'enregistrement, propagés à dash_calls (`recordingReason`). */
+export const RECORDING_REASONS = ['recorded_planned', 'plan_excludes', 'disabled_by_company', 'not_applicable', 'lookup_failed'];
+export const RECORDING_DIRECTIONS = ['inbound', 'outbound'];
+
+/**
+ * Décision unique « enregistré = offre éligible ET réglage société » + motif. Ne lève jamais.
+ * L'offre est un plafond : lue d'abord, offre exclue = `plan_excludes` (le réglage n'est pas lu). Offre éligible : le réglage
+ * `recording.<direction>` à `false` (seule valeur qui désactive ; absent = activé, comme avant) donne `disabled_by_company`.
+ * Toute erreur de lecture (offre, réglage) ou entreprise inconnue : non enregistré, `lookup_failed`.
+ * `loadLimits` et `loadSettings` (optionnel : sans lui, aucun réglage) sont injectés.
+ * @returns {Promise<{record: boolean, reason: 'recorded_planned'|'plan_excludes'|'disabled_by_company'|'lookup_failed'}>}
+ */
+export async function decideRecording(companyId, { direction = 'inbound', loadLimits, loadSettings } = {}) {
+  if (!companyId) return { record: false, reason: 'lookup_failed' };
   try {
-    return shouldRecordPlan(await loadLimits(companyId));
+    if (!shouldRecordPlan(await loadLimits(companyId))) return { record: false, reason: 'plan_excludes' };
   } catch (e) {
     console.error('[call-recording] offre illisible, appel non enregistré:', e?.message || e);
-    return false;
+    return { record: false, reason: 'lookup_failed' };
   }
+  if (typeof loadSettings !== 'function') return { record: true, reason: 'recorded_planned' };
+  try {
+    const settings = await loadSettings(companyId);
+    if (settings?.recording?.[direction] === false) return { record: false, reason: 'disabled_by_company' };
+    return { record: true, reason: 'recorded_planned' };
+  } catch (e) {
+    console.error('[call-recording] réglage société illisible, appel non enregistré:', e?.message || e);
+    return { record: false, reason: 'lookup_failed' };
+  }
+}
+
+/** Décision pour une entreprise (booléen) ; toute erreur de lecture = ne pas enregistrer. Voir decideRecording. */
+export async function shouldRecordCompany(companyId, loadLimits, { direction = 'inbound', loadSettings } = {}) {
+  return (await decideRecording(companyId, { direction, loadLimits, loadSettings })).record;
+}
+
+/**
+ * Décision + consigne d'un appel. `plan` (annonce + attributs du <Dial>) n'existe que si l'appel est réellement enregistré :
+ * décision positive mais consigne impossible (CallSid illisible, jeton non signé) = non enregistré, motif `lookup_failed`.
+ * @returns {Promise<{plan: null|{attrs: string, say: string, announceUrl: string}, reason: string}>}
+ */
+export async function planForCall({ companyId, callSid, baseUrl, language, direction, loadLimits, loadSettings }) {
+  const d = await decideRecording(companyId, { direction, loadLimits, loadSettings });
+  if (!d.record) return { plan: null, reason: d.reason };
+  const plan = buildRecordingPlan({ record: true, companyId: String(companyId), callSid, baseUrl, language });
+  return plan ? { plan, reason: 'recorded_planned' } : { plan: null, reason: 'lookup_failed' };
 }
 
 // ---------------------------------------------------------------- consentement (annonce vocale)

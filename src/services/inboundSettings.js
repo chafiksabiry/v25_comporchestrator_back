@@ -15,6 +15,8 @@ export const DEFAULTS = Object.freeze({
   /** Message d'accueil dit à l'appelant avant la sonnerie ; désactivé : l'appel entre directement. */
   greetingEnabled: true,
   secretaryOutbound: true,
+  /** Enregistrement des conversations voulu par la société, par sens ; ne s'applique qu'aux offres éligibles (voir callRecording). */
+  recording: Object.freeze({ inbound: true, outbound: true }),
 });
 export const KINDS = ['greeting', 'voicemail'];
 export const MIN_AUDIO_BYTES = 1024;
@@ -57,6 +59,15 @@ export function validateSettingsInput(body = {}) {
     if (typeof body.secretaryOutbound !== 'boolean') bad("L'autorisation d'appeler des secrétaires doit être vrai ou faux.", 'INVALID_BOOLEAN', 'secretaryOutbound');
     else value.secretaryOutbound = body.secretaryOutbound;
   }
+  if (body.recording !== undefined) {
+    const r = body.recording;
+    const keys = r && typeof r === 'object' && !Array.isArray(r) ? Object.keys(r) : null;
+    if (!keys || !keys.length || keys.some((k) => k !== 'inbound' && k !== 'outbound')) {
+      bad("Le réglage d'enregistrement doit être un objet { inbound, outbound } (vrai ou faux).", 'INVALID_RECORDING', 'recording');
+    } else if (keys.some((k) => typeof r[k] !== 'boolean')) {
+      bad("L'activation de l'enregistrement doit être vrai ou faux.", 'INVALID_BOOLEAN', 'recording');
+    } else value.recording = Object.fromEntries(keys.map((k) => [k, r[k]]));
+  }
   return { ok: errors.length === 0, errors, issues, value };
 }
 
@@ -76,6 +87,7 @@ export function toPublicSettings(doc) {
     voicemailEnabled: d.voicemailEnabled ?? DEFAULTS.voicemailEnabled,
     greetingEnabled: d.greetingEnabled ?? DEFAULTS.greetingEnabled,
     secretaryOutbound: d.secretaryOutbound ?? DEFAULTS.secretaryOutbound,
+    recording: { inbound: d.recording?.inbound ?? DEFAULTS.recording.inbound, outbound: d.recording?.outbound ?? DEFAULTS.recording.outbound },
   };
   return {
     ...s,

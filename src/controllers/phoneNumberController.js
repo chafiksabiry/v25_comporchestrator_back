@@ -37,7 +37,8 @@ import { syncMinutesFromCalls } from './escrowController.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket, MINUTES_INSUFFICIENT_CODE, MINUTES_INSUFFICIENT_MESSAGE, spokenLanguage, spokenRefusal, SPOKEN_REFUSALS } from '../services/browserOutbound.js';
 import { transferResult } from './callTransferController.js';
-import { attachCallRecording, buildRecordingPlan, consentLanguageFor, consentTwiml, mapCallRecordingCallback, normalizeConsentLanguage, shouldRecordCompany, shouldRecordPlan, verifyRecordingToken } from '../services/callRecording.js';
+import { consentLanguageFor, consentTwiml, mapCallRecordingCallback, normalizeConsentLanguage, planForCall, verifyRecordingToken } from '../services/callRecording.js';
+import { attachRecordingTracked, recordDecision } from '../services/recordingStatus.js';
 import { journalForwardedCall, journalUnansweredCall } from '../services/journalCall.js';
 import ReachSettings from '../models/ReachSettings.js';
 import { decideInboundRoute, mobileTarget, shouldRingMobileAfter } from '../services/reach.js';
@@ -58,15 +59,27 @@ const isSoloCompany = async (companyId) => {
   }
 };
 
+/** Réglage société lu pour la décision d'enregistrement (lève en cas d'erreur : l'appel n'est alors pas enregistré). */
+const loadRecordingSettings = (companyId) => InboundSettings.findOne({ companyId }).select('recording').lean();
+
+/**
+ * Décision et consigne d'enregistrement d'un appel, entrant ou sortant : offre éligible ET réglage société (voir callRecording.decideRecording).
+ * `plan` null = non enregistré, aucune annonce. Le motif est consigné et signalé à dash_calls sans bloquer l'appel.
+ */
+const recordingDecisionFor = async ({ companyId, callSid, baseUrl, language, direction, loadLimits = loadCompanyPlanLimits }) => {
+  const { plan, reason } = await planForCall({ companyId, callSid, baseUrl, language, direction, loadLimits, loadSettings: loadRecordingSettings });
+  void recordDecision({ callSid, companyId, direction, reason });
+  return plan;
+};
+
 /**
  * Consigne d'enregistrement d'un appel entrant pour l'entreprise de la ligne (null = non enregistré, aucune annonce).
- * Offre non listée (voir callRecording.shouldRecordPlan), erreur de lecture ou CallSid absent : jamais d'enregistrement.
+ * Offre non éligible, réglage société désactivé, erreur de lecture ou CallSid absent : jamais d'enregistrement.
  */
 const recordingPlanFor = async ({ companyId, callSid, baseUrl, from, language = 'fr' }) => {
   if (!companyId || !callSid) return null;
-  if (!(await shouldRecordCompany(companyId, loadCompanyPlanLimits))) return null;
   // Annonce dans la langue de l'interlocuteur quand son indicatif est reconnu, sinon dans celle de la société (`language`).
-  return buildRecordingPlan({ record: true, companyId: String(companyId), callSid, baseUrl, language: consentLanguageFor(from, language) });
+  return recordingDecisionFor({ companyId, callSid, baseUrl, language: consentLanguageFor(from, language), direction: 'inbound' });
 };
 
 /** In-memory status for live test-call monitoring (popup). */
@@ -2338,7 +2351,7 @@ class PhoneNumberController {
         PhoneNumber.findOne({ companyId, provider: 'twilio', twilioId: { $exists: true, $ne: null }, status: 'active', billingStatus: { $ne: 'suspended' } }).sort({ createdAt: 1 }).lean(),
       ]);
       // Enregistrement selon l'offre (liste blanche) ; l'annonce est jouée à la personne appelée quand elle décroche.
-      const recording = buildRecordingPlan({ record: shouldRecordPlan(limits), companyId, callSid: String(req.body?.CallSid || ''), baseUrl: `https://${req.get('host')}`, language: consentLanguageFor(to, languageForPhone(line?.phoneNumber)) });
+      const recording = await recordingDecisionFor({ companyId, callSid: String(req.body?.CallSid || ''), baseUrl: `https://${req.get('host')}`, language: consentLanguageFor(to, languageForPhone(line?.phoneNumber)), direction: 'outbound', loadLimits: async () => limits });
       // Offres à agents : l'agent appelle depuis SA ligne, jamais depuis une autre ligne du centre ; sans ligne, refusé une fois la règle active.
       let callerLine = line;
       if (role === 'secretary' && offerKind(limits) === 'agents') {
@@ -2715,7 +2728,7 @@ class PhoneNumberController {
         console.warn('Enregistrement d\'appel : CallSid différent du jeton, rappel ignoré');
         return res.status(200).json({ success: true, ignored: 'call_mismatch' });
       }
-      void attachCallRecording({ companyId: claims.companyId, value: mapped.value });
+      void attachRecordingTracked({ companyId: claims.companyId, value: mapped.value });
       return res.status(200).json({ success: true });
     } catch (error) {
       console.error('Error in handleTwilioCallRecording:', error.message);
