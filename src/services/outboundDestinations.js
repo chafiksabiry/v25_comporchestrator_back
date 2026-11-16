@@ -17,6 +17,84 @@ export const MESSAGES = Object.freeze({
   unknown_country: 'Les appels vers ce pays ne sont pas pris en charge.',
 });
 
+/** Messages anglais (additifs) des mêmes refus : `messageEn` ; le français de `MESSAGES` reste dans `message`. */
+export const MESSAGES_EN = Object.freeze({
+  country_not_enabled: 'Calls to this country are not enabled for your company.',
+  premium_rate: 'Premium-rate and value-added numbers cannot be called.',
+  invalid_number: 'Invalid number. Enter it in international format, for example +1 415 555 2671.',
+  unknown_country: 'Calls to this country are not supported.',
+});
+
+/** Libellés additifs (clé ISO 3166-1 alpha-2 + libellé anglais), par indicatif : les clients traduisent d'après `iso`. Le champ `name` (français) est inchangé. */
+export const COUNTRY_LABELS_EN = Object.freeze({
+  '+1': { iso: ['US', 'CA'], nameEn: "United States / Canada" }, '+7': { iso: ['RU', 'KZ'], nameEn: "Russia / Kazakhstan" },
+  '+20': { iso: ['EG'], nameEn: "Egypt" }, '+27': { iso: ['ZA'], nameEn: "South Africa" }, '+30': { iso: ['GR'], nameEn: "Greece" },
+  '+31': { iso: ['NL'], nameEn: "Netherlands" }, '+32': { iso: ['BE'], nameEn: "Belgium" }, '+33': { iso: ['FR'], nameEn: "France" },
+  '+34': { iso: ['ES'], nameEn: "Spain" }, '+36': { iso: ['HU'], nameEn: "Hungary" }, '+39': { iso: ['IT'], nameEn: "Italy" },
+  '+40': { iso: ['RO'], nameEn: "Romania" }, '+41': { iso: ['CH'], nameEn: "Switzerland" }, '+43': { iso: ['AT'], nameEn: "Austria" },
+  '+44': { iso: ['GB'], nameEn: "United Kingdom" }, '+45': { iso: ['DK'], nameEn: "Denmark" }, '+46': { iso: ['SE'], nameEn: "Sweden" },
+  '+47': { iso: ['NO'], nameEn: "Norway" }, '+48': { iso: ['PL'], nameEn: "Poland" }, '+49': { iso: ['DE'], nameEn: "Germany" },
+  '+51': { iso: ['PE'], nameEn: "Peru" }, '+52': { iso: ['MX'], nameEn: "Mexico" }, '+53': { iso: ['CU'], nameEn: "Cuba" },
+  '+54': { iso: ['AR'], nameEn: "Argentina" }, '+55': { iso: ['BR'], nameEn: "Brazil" }, '+56': { iso: ['CL'], nameEn: "Chile" },
+  '+57': { iso: ['CO'], nameEn: "Colombia" }, '+58': { iso: ['VE'], nameEn: "Venezuela" }, '+60': { iso: ['MY'], nameEn: "Malaysia" },
+  '+61': { iso: ['AU'], nameEn: "Australia" }, '+62': { iso: ['ID'], nameEn: "Indonesia" }, '+63': { iso: ['PH'], nameEn: "Philippines" },
+  '+64': { iso: ['NZ'], nameEn: "New Zealand" }, '+65': { iso: ['SG'], nameEn: "Singapore" }, '+66': { iso: ['TH'], nameEn: "Thailand" },
+  '+81': { iso: ['JP'], nameEn: "Japan" }, '+82': { iso: ['KR'], nameEn: "South Korea" }, '+84': { iso: ['VN'], nameEn: "Vietnam" },
+  '+86': { iso: ['CN'], nameEn: "China" }, '+90': { iso: ['TR'], nameEn: "Türkiye" }, '+91': { iso: ['IN'], nameEn: "India" },
+  '+92': { iso: ['PK'], nameEn: "Pakistan" }, '+93': { iso: ['AF'], nameEn: "Afghanistan" }, '+94': { iso: ['LK'], nameEn: "Sri Lanka" },
+  '+95': { iso: ['MM'], nameEn: "Myanmar" }, '+98': { iso: ['IR'], nameEn: "Iran" }, '+211': { iso: ['SS'], nameEn: "South Sudan" },
+  '+212': { iso: ['MA'], nameEn: "Morocco" }, '+213': { iso: ['DZ'], nameEn: "Algeria" }, '+216': { iso: ['TN'], nameEn: "Tunisia" },
+  '+218': { iso: ['LY'], nameEn: "Libya" }, '+220': { iso: ['GM'], nameEn: "Gambia" }, '+221': { iso: ['SN'], nameEn: "Senegal" },
+  '+222': { iso: ['MR'], nameEn: "Mauritania" }, '+223': { iso: ['ML'], nameEn: "Mali" }, '+224': { iso: ['GN'], nameEn: "Guinea" },
+  '+225': { iso: ['CI'], nameEn: "Côte d’Ivoire" }, '+226': { iso: ['BF'], nameEn: "Burkina Faso" }, '+227': { iso: ['NE'], nameEn: "Niger" },
+  '+228': { iso: ['TG'], nameEn: "Togo" }, '+229': { iso: ['BJ'], nameEn: "Benin" }, '+230': { iso: ['MU'], nameEn: "Mauritius" },
+  '+231': { iso: ['LR'], nameEn: "Liberia" }, '+232': { iso: ['SL'], nameEn: "Sierra Leone" }, '+233': { iso: ['GH'], nameEn: "Ghana" },
+  '+234': { iso: ['NG'], nameEn: "Nigeria" }, '+235': { iso: ['TD'], nameEn: "Chad" }, '+236': { iso: ['CF'], nameEn: "Central African Republic" },
+  '+237': { iso: ['CM'], nameEn: "Cameroon" }, '+238': { iso: ['CV'], nameEn: "Cape Verde" }, '+239': { iso: ['ST'], nameEn: "São Tomé and Príncipe" },
+  '+240': { iso: ['GQ'], nameEn: "Equatorial Guinea" }, '+241': { iso: ['GA'], nameEn: "Gabon" }, '+242': { iso: ['CG'], nameEn: "Congo" },
+  '+243': { iso: ['CD'], nameEn: "DR Congo" }, '+244': { iso: ['AO'], nameEn: "Angola" }, '+245': { iso: ['GW'], nameEn: "Guinea-Bissau" },
+  '+248': { iso: ['SC'], nameEn: "Seychelles" }, '+249': { iso: ['SD'], nameEn: "Sudan" }, '+250': { iso: ['RW'], nameEn: "Rwanda" },
+  '+251': { iso: ['ET'], nameEn: "Ethiopia" }, '+252': { iso: ['SO'], nameEn: "Somalia" }, '+253': { iso: ['DJ'], nameEn: "Djibouti" },
+  '+254': { iso: ['KE'], nameEn: "Kenya" }, '+255': { iso: ['TZ'], nameEn: "Tanzania" }, '+256': { iso: ['UG'], nameEn: "Uganda" },
+  '+257': { iso: ['BI'], nameEn: "Burundi" }, '+258': { iso: ['MZ'], nameEn: "Mozambique" }, '+260': { iso: ['ZM'], nameEn: "Zambia" },
+  '+261': { iso: ['MG'], nameEn: "Madagascar" }, '+262': { iso: ['RE', 'YT'], nameEn: "Réunion / Mayotte" },
+  '+263': { iso: ['ZW'], nameEn: "Zimbabwe" }, '+264': { iso: ['NA'], nameEn: "Namibia" }, '+265': { iso: ['MW'], nameEn: "Malawi" },
+  '+266': { iso: ['LS'], nameEn: "Lesotho" }, '+267': { iso: ['BW'], nameEn: "Botswana" }, '+268': { iso: ['SZ'], nameEn: "Eswatini" },
+  '+269': { iso: ['KM'], nameEn: "Comoros" }, '+297': { iso: ['AW'], nameEn: "Aruba" }, '+298': { iso: ['FO'], nameEn: "Faroe Islands" },
+  '+299': { iso: ['GL'], nameEn: "Greenland" }, '+350': { iso: ['GI'], nameEn: "Gibraltar" }, '+351': { iso: ['PT'], nameEn: "Portugal" },
+  '+352': { iso: ['LU'], nameEn: "Luxembourg" }, '+353': { iso: ['IE'], nameEn: "Ireland" }, '+354': { iso: ['IS'], nameEn: "Iceland" },
+  '+355': { iso: ['AL'], nameEn: "Albania" }, '+356': { iso: ['MT'], nameEn: "Malta" }, '+357': { iso: ['CY'], nameEn: "Cyprus" },
+  '+358': { iso: ['FI'], nameEn: "Finland" }, '+359': { iso: ['BG'], nameEn: "Bulgaria" }, '+370': { iso: ['LT'], nameEn: "Lithuania" },
+  '+371': { iso: ['LV'], nameEn: "Latvia" }, '+372': { iso: ['EE'], nameEn: "Estonia" }, '+373': { iso: ['MD'], nameEn: "Moldova" },
+  '+374': { iso: ['AM'], nameEn: "Armenia" }, '+375': { iso: ['BY'], nameEn: "Belarus" }, '+376': { iso: ['AD'], nameEn: "Andorra" },
+  '+377': { iso: ['MC'], nameEn: "Monaco" }, '+378': { iso: ['SM'], nameEn: "San Marino" }, '+380': { iso: ['UA'], nameEn: "Ukraine" },
+  '+381': { iso: ['RS'], nameEn: "Serbia" }, '+382': { iso: ['ME'], nameEn: "Montenegro" }, '+383': { iso: ['XK'], nameEn: "Kosovo" },
+  '+385': { iso: ['HR'], nameEn: "Croatia" }, '+386': { iso: ['SI'], nameEn: "Slovenia" }, '+387': { iso: ['BA'], nameEn: "Bosnia & Herzegovina" },
+  '+389': { iso: ['MK'], nameEn: "North Macedonia" }, '+420': { iso: ['CZ'], nameEn: "Czechia" }, '+421': { iso: ['SK'], nameEn: "Slovakia" },
+  '+423': { iso: ['LI'], nameEn: "Liechtenstein" }, '+500': { iso: ['FK'], nameEn: "Falkland Islands" }, '+501': { iso: ['BZ'], nameEn: "Belize" },
+  '+502': { iso: ['GT'], nameEn: "Guatemala" }, '+503': { iso: ['SV'], nameEn: "El Salvador" }, '+504': { iso: ['HN'], nameEn: "Honduras" },
+  '+505': { iso: ['NI'], nameEn: "Nicaragua" }, '+506': { iso: ['CR'], nameEn: "Costa Rica" }, '+507': { iso: ['PA'], nameEn: "Panama" },
+  '+508': { iso: ['PM'], nameEn: "St. Pierre & Miquelon" }, '+509': { iso: ['HT'], nameEn: "Haiti" }, '+590': { iso: ['GP'], nameEn: "Guadeloupe" },
+  '+591': { iso: ['BO'], nameEn: "Bolivia" }, '+592': { iso: ['GY'], nameEn: "Guyana" }, '+593': { iso: ['EC'], nameEn: "Ecuador" },
+  '+594': { iso: ['GF'], nameEn: "French Guiana" }, '+595': { iso: ['PY'], nameEn: "Paraguay" }, '+596': { iso: ['MQ'], nameEn: "Martinique" },
+  '+597': { iso: ['SR'], nameEn: "Suriname" }, '+598': { iso: ['UY'], nameEn: "Uruguay" },
+  '+599': { iso: ['CW', 'BQ'], nameEn: "Curaçao / Caribbean Netherlands" }, '+670': { iso: ['TL'], nameEn: "Timor-Leste" },
+  '+673': { iso: ['BN'], nameEn: "Brunei" }, '+674': { iso: ['NR'], nameEn: "Nauru" }, '+675': { iso: ['PG'], nameEn: "Papua New Guinea" },
+  '+676': { iso: ['TO'], nameEn: "Tonga" }, '+677': { iso: ['SB'], nameEn: "Solomon Islands" }, '+678': { iso: ['VU'], nameEn: "Vanuatu" },
+  '+679': { iso: ['FJ'], nameEn: "Fiji" }, '+681': { iso: ['WF'], nameEn: "Wallis & Futuna" }, '+682': { iso: ['CK'], nameEn: "Cook Islands" },
+  '+685': { iso: ['WS'], nameEn: "Samoa" }, '+687': { iso: ['NC'], nameEn: "New Caledonia" }, '+689': { iso: ['PF'], nameEn: "French Polynesia" },
+  '+850': { iso: ['KP'], nameEn: "North Korea" }, '+852': { iso: ['HK'], nameEn: "Hong Kong" }, '+853': { iso: ['MO'], nameEn: "Macao" },
+  '+855': { iso: ['KH'], nameEn: "Cambodia" }, '+856': { iso: ['LA'], nameEn: "Laos" }, '+880': { iso: ['BD'], nameEn: "Bangladesh" },
+  '+886': { iso: ['TW'], nameEn: "Taiwan" }, '+960': { iso: ['MV'], nameEn: "Maldives" }, '+961': { iso: ['LB'], nameEn: "Lebanon" },
+  '+962': { iso: ['JO'], nameEn: "Jordan" }, '+963': { iso: ['SY'], nameEn: "Syria" }, '+964': { iso: ['IQ'], nameEn: "Iraq" },
+  '+965': { iso: ['KW'], nameEn: "Kuwait" }, '+966': { iso: ['SA'], nameEn: "Saudi Arabia" }, '+967': { iso: ['YE'], nameEn: "Yemen" },
+  '+968': { iso: ['OM'], nameEn: "Oman" }, '+970': { iso: ['PS'], nameEn: "Palestine" }, '+971': { iso: ['AE'], nameEn: "United Arab Emirates" },
+  '+972': { iso: ['IL'], nameEn: "Israel" }, '+973': { iso: ['BH'], nameEn: "Bahrain" }, '+974': { iso: ['QA'], nameEn: "Qatar" },
+  '+975': { iso: ['BT'], nameEn: "Bhutan" }, '+976': { iso: ['MN'], nameEn: "Mongolia" }, '+977': { iso: ['NP'], nameEn: "Nepal" },
+  '+992': { iso: ['TJ'], nameEn: "Tajikistan" }, '+993': { iso: ['TM'], nameEn: "Turkmenistan" }, '+994': { iso: ['AZ'], nameEn: "Azerbaijan" },
+  '+995': { iso: ['GE'], nameEn: "Georgia" }, '+996': { iso: ['KG'], nameEn: "Kyrgyzstan" }, '+998': { iso: ['UZ'], nameEn: "Uzbekistan" },
+});
+
 /** Indicatifs pays connus (UIT) : [indicatif, libellé]. Les pays du plan nord-américain partagent « +1 ». */
 export const COUNTRY_CATALOG = Object.freeze([
   ['+1', 'États-Unis / Canada'], ['+7', 'Russie / Kazakhstan'], ['+20', 'Égypte'], ['+27', 'Afrique du Sud'],
@@ -53,7 +131,7 @@ export const COUNTRY_CATALOG = Object.freeze([
   ['+966', 'Arabie saoudite'], ['+967', 'Yémen'], ['+968', 'Oman'], ['+970', 'Palestine'], ['+971', 'Émirats arabes unis'],
   ['+972', 'Israël'], ['+973', 'Bahreïn'], ['+974', 'Qatar'], ['+975', 'Bhoutan'], ['+976', 'Mongolie'], ['+977', 'Népal'],
   ['+992', 'Tadjikistan'], ['+993', 'Turkménistan'], ['+994', 'Azerbaïdjan'], ['+995', 'Géorgie'], ['+996', 'Kirghizistan'], ['+998', 'Ouzbékistan'],
-].map(([prefix, name]) => Object.freeze({ prefix, name })));
+].map(([prefix, name]) => Object.freeze({ prefix, name, ...COUNTRY_LABELS_EN[prefix] })));
 
 const KNOWN = new Set(COUNTRY_CATALOG.map((c) => c.prefix));
 
@@ -87,14 +165,62 @@ export function countryPrefixOf(e164) {
   return '';
 }
 
+/**
+ * Indicatifs régionaux (NANP, « +1 ») qui ne sont NI américains NI canadiens : territoires et pays des Caraïbes.
+ * Sans cette distinction, tout « +1 » serait attribué aux États-Unis.
+ */
+const NANP_OTHER = Object.freeze({
+  242: 'BS', 246: 'BB', 264: 'AI', 268: 'AG', 284: 'VG', 340: 'VI', 345: 'KY', 441: 'BM', 473: 'GD', 649: 'TC', 664: 'MS',
+  670: 'MP', 671: 'GU', 684: 'AS', 721: 'SX', 758: 'LC', 767: 'DM', 784: 'VC', 787: 'PR', 809: 'DO', 829: 'DO', 849: 'DO',
+  868: 'TT', 869: 'KN', 876: 'JM', 939: 'PR',
+});
+/** Indicatifs régionaux canadiens (source : Wikipédia, « Telephone numbers in Canada », plan de numérotation par province ; 600 : non géographique canadien). */
+const CANADA_AREA_CODES = new Set([
+  403, 780, 368, 587, 825, 604, 250, 236, 672, 778, 257, 204, 431, 584, 506, 428, 709, 879, 902, 782,
+  416, 613, 519, 705, 807, 905, 226, 249, 289, 343, 382, 365, 437, 548, 647, 683, 742, 753, 942,
+  418, 514, 450, 819, 263, 354, 367, 438, 468, 579, 581, 873, 306, 474, 639, 867, 600,
+]);
+
+/** Pays le plus probable pour un indicatif partagé (« +1 », « +7 », « +262 », « +599 ») d'après le numéro national ; null si indéterminé. */
+function sharedPrefixCountry(prefix, national) {
+  if (prefix === '+1') {
+    const area = Number(national.slice(0, 3));
+    if (national.length < 3) return null;
+    if (CANADA_AREA_CODES.has(area)) return 'CA';
+    return NANP_OTHER[area] || 'US';
+  }
+  if (prefix === '+7') return national[0] === '6' || national[0] === '7' ? 'KZ' : 'RU';
+  if (prefix === '+262') return national.startsWith('269') || national.startsWith('639') ? 'YT' : 'RE';
+  if (prefix === '+599') return national[0] === '9' ? 'CW' : ['3', '4', '7'].includes(national[0]) ? 'BQ' : null;
+  return null;
+}
+
+/**
+ * Indicatif numérique et pays (ISO 3166-1 alpha-2) d'un numéro de ligne E.164 (« + » facultatif), d'après la table des indicatifs.
+ * Indicatif partagé : pays le plus probable d'après le numéro national, sinon null. Numéro invalide, national (sans indicatif) ou indicatif inconnu :
+ * { callingCode: null, countryIso: null }. Un numéro n'est jamais « deviné » français.
+ * @returns {{callingCode: number|null, countryIso: string|null}}
+ */
+export function callingInfoOf(raw) {
+  const none = { callingCode: null, countryIso: null };
+  const s = String(raw ?? '').trim().replace(/[\s().-]/g, '');
+  const e164 = /^\+[1-9]\d{7,14}$/.test(s) ? s : /^[1-9]\d{7,14}$/.test(s) ? `+${s}` : '';
+  if (!e164) return none;
+  const prefix = countryPrefixOf(e164);
+  if (!prefix) return none;
+  const isos = COUNTRY_LABELS_EN[prefix]?.iso || [];
+  const countryIso = isos.length === 1 ? isos[0] : isos.length > 1 ? sharedPrefixCountry(prefix, e164.slice(prefix.length)) : null;
+  return { callingCode: Number(prefix.slice(1)), countryIso: countryIso || null };
+}
+
 export const isPremiumRate = (e164) => PREMIUM_RATE_PREFIXES.some((p) => String(e164).startsWith(p));
 
 /** Indicatifs proposés dans les réglages : seulement les pays connus, sans doublon, ordre du catalogue. */
 export function validatePrefixList(list) {
-  if (!Array.isArray(list)) return { ok: false, error: 'La liste des pays autorisés doit être un tableau.' };
+  if (!Array.isArray(list)) return { ok: false, code: 'LIST_NOT_ARRAY', error: 'La liste des pays autorisés doit être un tableau.' };
   const clean = [...new Set(list.map((p) => String(p ?? '').trim()))];
   const unknown = clean.find((p) => !KNOWN.has(p));
-  if (unknown !== undefined) return { ok: false, error: `Indicatif de pays inconnu : « ${unknown} ».` };
+  if (unknown !== undefined) return { ok: false, code: 'UNKNOWN_COUNTRY_PREFIX', params: { prefix: unknown }, error: `Indicatif de pays inconnu : « ${unknown} ».` };
   return { ok: true, value: COUNTRY_CATALOG.map((c) => c.prefix).filter((p) => clean.includes(p)) };
 }
 
@@ -118,10 +244,10 @@ export function effectiveOutboundPrefixes({ saved, companyCountry = '', envPrefi
  */
 export function checkDestination(raw, allowedPrefixes) {
   const to = toStrictE164(raw);
-  if (!to) return { ok: false, code: INVALID_NUMBER, reason: 'invalid_number', message: MESSAGES.invalid_number };
-  if (isPremiumRate(to)) return { ok: false, code: DESTINATION_NOT_ALLOWED, reason: 'premium_rate', message: MESSAGES.premium_rate };
+  if (!to) return { ok: false, code: INVALID_NUMBER, reason: 'invalid_number', message: MESSAGES.invalid_number, messageEn: MESSAGES_EN.invalid_number };
+  if (isPremiumRate(to)) return { ok: false, code: DESTINATION_NOT_ALLOWED, reason: 'premium_rate', message: MESSAGES.premium_rate, messageEn: MESSAGES_EN.premium_rate };
   const country = countryPrefixOf(to);
-  if (!country) return { ok: false, code: DESTINATION_NOT_ALLOWED, reason: 'unknown_country', message: MESSAGES.unknown_country };
-  if (!allowedPrefixes.includes(country)) return { ok: false, code: DESTINATION_NOT_ALLOWED, reason: 'country_not_enabled', message: MESSAGES.country_not_enabled };
+  if (!country) return { ok: false, code: DESTINATION_NOT_ALLOWED, reason: 'unknown_country', message: MESSAGES.unknown_country, messageEn: MESSAGES_EN.unknown_country };
+  if (!allowedPrefixes.includes(country)) return { ok: false, code: DESTINATION_NOT_ALLOWED, reason: 'country_not_enabled', message: MESSAGES.country_not_enabled, messageEn: MESSAGES_EN.country_not_enabled };
   return { ok: true, to };
 }

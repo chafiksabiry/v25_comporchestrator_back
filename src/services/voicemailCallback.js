@@ -53,15 +53,16 @@ const wrap = (inner) => `<?xml version="1.0" encoding="UTF-8"?><Response>${inner
  * `recording` (optionnel, voir callRecording.buildRecordingPlan) : enregistre l'appel, et l'annonce est jouée à la personne
  * appelée quand elle décroche (`<Number url>`), avant la mise en relation. Sans `recording`, TwiML inchangé.
  */
-export const buildCallbackTwiml = ({ callerId, to, maxSeconds, recording = null }) => {
+export const buildCallbackTwiml = ({ callerId, to, maxSeconds, recording = null, action = null }) => {
   const limit = Number.isFinite(maxSeconds) && maxSeconds > 0 ? ` timeLimit="${Math.floor(maxSeconds)}"` : '';
   const record = recording ? recording.attrs : '';
   const whisper = recording ? ` url="${xmlEscape(recording.announceUrl)}" method="POST"` : '';
-  return wrap(`<Dial callerId="${xmlEscape(callerId)}" answerOnBridge="true" timeout="30"${limit}${record}><Number${whisper}>${xmlEscape(to)}</Number></Dial>`);
+  const onEnd = action ? ` action="${xmlEscape(action)}" method="POST"` : '';
+  return wrap(`<Dial callerId="${xmlEscape(callerId)}" answerOnBridge="true" timeout="30"${limit}${record}${onEnd}><Number${whisper}>${xmlEscape(to)}</Number></Dial>`);
 };
 
-export const buildRefusalTwiml = (message) =>
-  wrap(`<Say language="fr-FR" voice="Polly.Lea-Generative">${xmlEscape(message)}</Say><Hangup/>`);
+export const buildRefusalTwiml = (message, { language = 'fr-FR', voice = 'Polly.Lea-Generative' } = {}) =>
+  wrap(`<Say language="${language}" voice="${voice}">${xmlEscape(message)}</Say><Hangup/>`);
 
 /**
  * Application TwiML qui reçoit les appels sortants du navigateur pour les rappels : retrouvée par son nom, créée si elle

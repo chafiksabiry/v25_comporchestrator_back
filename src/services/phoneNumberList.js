@@ -1,6 +1,10 @@
 import mongoose from 'mongoose';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { callerAccess, scopeToCompany } from '../middleware/companyScope.js';
+import { loadCompanyPlanLimits } from './planLimits.js';
+import { assignmentFields, offerKind, oldestOf } from './lineAssignment.js';
+import { busyView } from './lineCalls.js';
+import { callingInfoOf } from './outboundDestinations.js';
 
 /**
  * Liste des lignes (GET /api/phone-numbers) : toujours limitée côté serveur à la société de l'appelant.
@@ -21,6 +25,8 @@ export function agentLineView(line) {
   return {
     id: line._id, _id: line._id, phoneNumber: line.phoneNumber, status: line.status, label: labelOf(line),
     companyId: line.companyId, gigId: line.gigId ?? null,
+    // Indicatif numérique et pays ISO de la ligne (saisie nationale côté application) ; null si inconnu. Additifs.
+    ...callingInfoOf(line.phoneNumber),
   };
 }
 
@@ -50,9 +56,11 @@ export function scopeForListing(req, access) {
 
 /**
  * @param {object} req requête authentifiée
- * @param {{access?: Function, find?: Function}} [deps] injectables pour les tests
+ * Les responsables reçoivent aussi l'affectation de chaque ligne (assignedRole, assignedAgentId, assignedAt) : rôle enregistré, sinon déduit de l'offre
+ * (lignes historiques sans champ). Une secrétaire ne reçoit rien de plus. Lecture seule : aucune migration en base.
+ * @param {{access?: Function, find?: Function, limits?: Function}} [deps] injectables pour les tests
  */
-export async function listLinesFor(req, { access = callerAccess, find = (companyId) => PhoneNumber.find({ companyId }).sort({ createdAt: -1 }).lean() } = {}) {
+export async function listLinesFor(req, { access = callerAccess, find = (companyId) => PhoneNumber.find({ companyId }).sort({ createdAt: -1 }).lean(), limits = loadCompanyPlanLimits } = {}) {
   const u = req.user || {};
   const isService = !u.userId && !u.id && u.service;
   const { companyId, role } = scopeForListing(req, isService ? null : await access(req));
@@ -62,5 +70,11 @@ export async function listLinesFor(req, { access = callerAccess, find = (company
     return [];
   }
   const rows = (await find(companyId)).filter((l) => String(l.companyId) === String(companyId));
-  return rows.map(role === 'agent' ? agentLineView : managerLineView);
+  if (role === 'agent') return rows.map(agentLineView);
+  // Affectation : une panne de lecture du forfait ne casse jamais la liste (les lignes sont alors listées sans rôle déduit).
+  let kind = 'other';
+  try { kind = offerKind(await limits(companyId)); } catch (error) { console.warn('[phone-numbers] plan unreadable, no deduced line roles:', error.message); }
+  const oldestId = oldestOf(rows);
+  // Offre Accueil : `busy` / `activeCallStartedAt` (additifs) disent si la ligne tient un appel actif ; l'identifiant de l'appel n'est jamais exposé.
+  return rows.map((l) => ({ ...managerLineView(l), ...assignmentFields(l, kind, oldestId), ...(kind === 'accueil' ? busyView(l) : {}) }));
 }
