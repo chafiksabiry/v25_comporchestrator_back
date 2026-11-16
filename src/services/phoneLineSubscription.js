@@ -1,5 +1,6 @@
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { Subscription } from '../models/Subscription.js';
+import { config } from '../config/env.js';
 import { stripeService } from './stripeService.js';
 
 /**
@@ -69,6 +70,13 @@ export function addMonths(date, months) {
   return d;
 }
 
+/** Le produit Stripe de la ligne est-il configurable ? STRIPE_PRODUCT_PHONE_LINE, ou un STRIPE_PRICE_PHONE_LINE valide (jamais la valeur factice par défaut). */
+export function phoneLineProductConfigured(cfg = config) {
+  if (String(cfg.stripeProductPhoneLine || '').trim()) return true;
+  const price = String(cfg.stripePricePhoneLine || '').trim();
+  return price.startsWith('price_') && !price.includes('placeholder');
+}
+
 function codedError(code, message, cause) {
   const err = new Error(message);
   err.code = code;
@@ -93,11 +101,15 @@ export async function resolveCompanyStripeCustomerId(companyId, { activeOnly = f
 
 /**
  * Vérifie, AVANT toute commande de numéro, que les renouvellements pourront être prélevés. Renvoie le client Stripe.
- * Lève LINE_SUBSCRIPTION_UNAVAILABLE (Stripe absent), LINE_SUBSCRIPTION_NO_CUSTOMER ou LINE_SUBSCRIPTION_NO_PAYMENT_METHOD.
+ * Lève LINE_SUBSCRIPTION_UNAVAILABLE (Stripe absent), LINE_SUBSCRIPTION_PRODUCT_MISSING (ni STRIPE_PRODUCT_PHONE_LINE ni STRIPE_PRICE_PHONE_LINE valide), LINE_SUBSCRIPTION_NO_CUSTOMER ou LINE_SUBSCRIPTION_NO_PAYMENT_METHOD.
  */
 export async function assertMonthlyLineBillable(companyId) {
   if (!stripeService.isConfigured()) {
     throw codedError('LINE_SUBSCRIPTION_UNAVAILABLE', "L'abonnement mensuel de la ligne est indisponible pour le moment.");
+  }
+  // Sans produit Stripe de ligne, la création de l'abonnement échouerait APRÈS l'achat du numéro : refus avant tout paiement.
+  if (!phoneLineProductConfigured()) {
+    throw codedError('LINE_SUBSCRIPTION_PRODUCT_MISSING', "L'abonnement mensuel de la ligne n'est pas configuré (produit Stripe de la ligne manquant).");
   }
   const customerId = await resolveCompanyStripeCustomerId(companyId, { activeOnly: true });
   if (!customerId) {
