@@ -3,7 +3,7 @@ import { callerAccess, ScopeError, scopeToCompany } from '../middleware/companyS
 import { AssignmentError, LINE_NOT_ASSIGNED, LINE_NOT_ASSIGNED_MESSAGE, agentLineStatus, inboundRingFilter, enforcementSettings, lineStatusView, agentCapacity, assertAgentCanHaveLine, assertReleasable, assignAgent, assignmentFields, offerKind, oldestOf, resolvePurchaseAssignment, unassignAgent, withCenterLock } from '../services/lineAssignment.js';
 import { listLinesFor } from '../services/phoneNumberList.js';
 import { callingInfoOf } from '../services/outboundDestinations.js';
-import { LINE_BUSY_CODE, LINE_BUSY_MESSAGE, LINE_CALL_END_PATH, hasFreeLine, lineCallsEnforced, releaseCall, staleCheckFor, takeFirstFreeLine, takeLine } from '../services/lineCalls.js';
+import { LINE_BUSY_CODE, LINE_BUSY_MESSAGE, LINE_CALL_END_PATH, hasFreeLine, signLineCallEnd, verifyLineCallEnd, lineCallsEnforced, releaseCall, staleCheckFor, takeFirstFreeLine, takeLine } from '../services/lineCalls.js';
 import { checkNumberCountry } from '../services/numberCountry.js';
 import { purchaseCurrency } from '../services/purchaseCurrency.js';
 import { checkCompanyDestination } from '../services/outboundPolicy.js';
@@ -2365,7 +2365,7 @@ class PhoneNumberController {
             return send(spokenRefusal('line_busy'));
           }
           callerLine = pool.find((l) => String(l._id) === String(taken.lineId));
-          decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, action: `https://${req.get('host')}${LINE_CALL_END_PATH}` });
+          decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, action: `https://${req.get('host')}${LINE_CALL_END_PATH}?t=${signLineCallEnd({ secret: config.twilioAuthToken, callSid: sidForLine })}` });
         } catch (error) {
           console.error('[browser-outbound] contrôle de ligne ignoré :', error?.message || error);
         }
@@ -2417,6 +2417,10 @@ class PhoneNumberController {
 
   /** Fin d'un appel sur une ligne (action du <Dial> sortant) : libère la ligne tenue par cet appel (idempotent) ; la réponse ne change rien à l'appel. */
   async handleLineCallEnd(req, res) {
+    // Jeton signé de l'URL d'action (lié au CallSid) : sans lui, rien n'est libéré (403).
+    if (!verifyLineCallEnd({ secret: config.twilioAuthToken, callSid: String(req.body?.CallSid || ''), token: req.query?.t })) {
+      return res.type('text/xml').status(403).send('<?xml version="1.0" encoding="UTF-8"?><Response/>');
+    }
     try { await releaseCall(req.body?.CallSid); } catch (error) { console.error('line-call-end:', error?.message || error); }
     res.type('text/xml').status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response/>');
   }

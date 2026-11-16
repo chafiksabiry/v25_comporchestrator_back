@@ -10,6 +10,7 @@ process.env.TELNYX_API_KEY = process.env.TELNYX_API_KEY || 'x';
 process.env.TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || 'ACtest';
 process.env.TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || 'x';
 process.env.REGISTRATION_BACKEND_URL = 'https://registration.test';
+process.env.STRIPE_PRICE_PHONE_LINE = process.env.STRIPE_PRICE_PHONE_LINE || 'price_test_phone_line'; // valeur de test (jamais la valeur factice par défaut)
 
 const { phoneNumberController } = await import('../controllers/phoneNumberController.js');
 const { clearCompanyCache } = await import('../middleware/companyScope.js');

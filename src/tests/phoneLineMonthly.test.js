@@ -9,6 +9,7 @@ process.env.TELNYX_API_KEY = process.env.TELNYX_API_KEY || 'x';
 process.env.TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || 'ACtest';
 process.env.TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || 'x';
 process.env.REGISTRATION_BACKEND_URL = 'https://registration.test';
+process.env.STRIPE_PRICE_PHONE_LINE = process.env.STRIPE_PRICE_PHONE_LINE || 'price_test_phone_line'; // valeur de test (jamais la valeur factice par défaut)
 
 const { phoneNumberController } = await import('../controllers/phoneNumberController.js');
 const { subscriptionController } = await import('../controllers/subscriptionController.js');
@@ -24,6 +25,7 @@ const { syncPlanMetadataFromStripe } = await import('../services/planMetadataSyn
 const { SubscriptionPlan } = await import('../models/SubscriptionPlan.js');
 const { companyFromIfPresent } = await import('../middleware/phoneScope.js');
 const phoneNumberRouter = (await import('../routes/phoneNumber.js')).phoneNumberRoutes;
+const { config } = await import('../config/env.js');
 const { PhoneNumber } = await import('../models/PhoneNumber.js');
 const { Subscription } = await import('../models/Subscription.js');
 const PhoneNumberPayment = (await import('../models/PhoneNumberPayment.js')).default;
@@ -1189,4 +1191,30 @@ test('[f] PayPal : la réconciliation ne gère que Stripe, une ligne pending Pay
   assert.ok(lines[line._id]);
   assert.equal(r.skipped, 1);
   assert.ok(!names().some((n) => n.startsWith('stripe.') || n === 'twilio.release'));
+});
+
+// ── produit Stripe de la ligne : refus AVANT tout paiement s'il n'est pas configurable ──
+test('assertMonthlyLineBillable : ni STRIPE_PRODUCT_PHONE_LINE ni STRIPE_PRICE_PHONE_LINE valide -> LINE_SUBSCRIPTION_PRODUCT_MISSING ; sinon passe', async () => {
+  const saved = [config.stripeProductPhoneLine, config.stripePricePhoneLine];
+  try {
+    for (const price of ['price_phone_line_placeholder', '', undefined, 'prod_pas_un_prix']) {
+      config.stripeProductPhoneLine = ''; config.stripePricePhoneLine = price;
+      await assert.rejects(() => sub.assertMonthlyLineBillable(COMPANY), (e) => e.code === 'LINE_SUBSCRIPTION_PRODUCT_MISSING', `refusé pour « ${price} »`);
+    }
+    config.stripeProductPhoneLine = 'prod_ligne'; config.stripePricePhoneLine = 'price_phone_line_placeholder';
+    assert.equal(await sub.assertMonthlyLineBillable(COMPANY), 'cus_1', 'STRIPE_PRODUCT_PHONE_LINE suffit');
+    config.stripeProductPhoneLine = ''; config.stripePricePhoneLine = 'price_reel';
+    assert.equal(await sub.assertMonthlyLineBillable(COMPANY), 'cus_1', 'un prix valide suffit');
+  } finally { [config.stripeProductPhoneLine, config.stripePricePhoneLine] = saved; }
+});
+
+test('checkout/init : produit de ligne non configuré -> 402 LINE_SUBSCRIPTION_PRODUCT_MISSING, aucun paiement créé', async () => {
+  const saved = [config.stripeProductPhoneLine, config.stripePricePhoneLine];
+  try {
+    config.stripeProductPhoneLine = ''; config.stripePricePhoneLine = 'price_phone_line_placeholder';
+    const res = mockRes();
+    await phoneNumberController.initLineCheckout(lineReq({ phoneNumber: '+33612345678', companyId: COMPANY, provider: 'stripe' }), res);
+    assert.equal(res.statusCode, 402); assert.equal(res.body.code, 'LINE_SUBSCRIPTION_PRODUCT_MISSING'); assert.equal(res.body.moneyStatus, 'not_charged');
+    assert.ok(!calls.some((c) => c[0] === 'payment.create'), 'aucun paiement créé');
+  } finally { [config.stripeProductPhoneLine, config.stripePricePhoneLine] = saved; }
 });
