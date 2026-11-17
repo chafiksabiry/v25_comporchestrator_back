@@ -71,7 +71,7 @@ assert.equal(X.validateSettings({ urgentUnseenMinutes: 90 }).value.urgentUnseenM
 for (const b of [{ urgentUnseenMinutes: 5 }, { escalateAfterMinutes: 2000 }, { urgentUnseenMinutes: 'x' }, { remindersEnabled: 'oui' }, {}]) assert.ok(X.validateSettings(b).error, JSON.stringify(b));
 
 // ---------------------------------------------------------------- décisions de relance
-const item = (o = {}) => ({ _id: 'i1', model: 'message_taken', status: 'todo', urgency: 'normal', seenAt: null, dueAt: null, createdAt: ago(10), remindedAt: null, escalatedAt: null, ...o });
+const item = (o = {}) => ({ createdById: 'sec2', createdByName: 'Créateur', _id: 'i1', model: 'message_taken', status: 'todo', urgency: 'normal', seenAt: null, dueAt: null, createdAt: ago(10), remindedAt: null, escalatedAt: null, ...o });
 const act = (o) => X.reminderAction(item(o), S, NOW);
 assert.equal(act({}), null, 'rien à relancer');
 assert.deepEqual(act({ dueAt: ago(1) }), { type: 'remind', reason: 'overdue' }, 'rappeler avant dépassé');
@@ -127,7 +127,7 @@ assert.ok(rows[2].escalatedAt); assert.deepEqual(rows[2].escalatedToNames, ['Mme
 assert.deepEqual(pushes.filter((p) => p[0] === 'sec1').length, 2, 'push de relance à la personne visée');
 assert.ok(pushes.some((p) => p[0] === 'owner1') && pushes.some((p) => p[0] === 'mgr1'), 'push aux responsables');
 assert.deepEqual(mails.map((m) => m.entry.name), ['Mme Martin', 'Resp Un', 'Resp externe']);
-assert.equal(mails[0].message.escalationFor, 'Léa'); assert.equal(mails[0].takenBy.id, 'system');
+assert.equal(mails[0].message.escalationFor, 'Léa'); assert.equal(mails[0].takenBy.id, 'sec2', 'la relance part de la boîte de CELUI QUI A CRÉÉ l’élément (jamais « système »)'); assert.equal(mails[0].takenBy.name, 'Créateur');
 // idempotent : un second passage ne relance rien de plus
 pushes.length = 0; mails.length = 0;
 res = await runMessageReminders({ now: NOW + MIN, deps });
@@ -208,7 +208,7 @@ ReceptionDirectory.findOneAndUpdate = (f, upd) => {
 const store = [];
 FollowUpItem.create = async (doc) => { const d = { _id: `64b0000000000000000${String(store.length + 1).padStart(5, '0')}`, status: 'todo', createdAt: new Date(), seenAt: null, ...doc, async save() { return d; }, toObject() { const { save, toObject, ...r } = d; return r; } }; store.push(d); return d; };
 FollowUpItem.find = () => ({ select() { return this; }, limit() { return this; }, lean: async () => store.map((s) => s.toObject()) });
-setNotifyDeps({ resolveMailbox: async () => ({ error: 'not_connected', provider: null }) });
+setNotifyDeps({ resolveUserMailbox: async () => ({ error: 'not_connected', provider: null }) });
 
 async function call(fn, { user = 'owner1', body = {}, query = {} } = {}) {
   clearCompanyCache();

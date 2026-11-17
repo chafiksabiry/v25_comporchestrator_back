@@ -1,3 +1,4 @@
+import { stripeLocaleFromRequest } from '../services/stripeLocale.js';
 import { findCompanyStripeCustomerId } from '../services/billingCustomer.js';
 import mongoose from 'mongoose';
 import { guardCompanyAccess } from '../middleware/companyGuard.js';
@@ -257,6 +258,7 @@ export const paymentCheckoutController = {
             cancelUrl,
             clientReferenceId: payment._id,
             customerId: await findCompanyStripeCustomerId(companyId),
+            locale: stripeLocaleFromRequest(req),
             metadata: { purpose, companyId: String(companyId) }
           });
 

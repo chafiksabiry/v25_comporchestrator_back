@@ -103,6 +103,12 @@ const schema = new mongoose.Schema(
      * `calendarMessage` = raison claire d'un échec (`failed`), vide sinon.
      */
     calendarAccountId: { type: String, default: null },
+    /**
+     * Personne dont la connexion Google / Microsoft porte l'événement d'agenda (assignée ou créatrice) ; vide = rendez-vous antérieur à cette règle.
+     * La modification / l'annulation agit sur CE calendrier seulement. `videoOwnerId` : idem pour le lien Meet / Teams.
+     */
+    calendarOwnerId: { type: String, default: '' },
+    videoOwnerId: { type: String, default: '' },
     calendarAccountLabel: { type: String, default: null, maxlength: 120 },
     calendarMessage: { type: String, default: null, maxlength: 300 },
   },

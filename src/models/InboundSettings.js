@@ -25,6 +25,11 @@ const schema = new mongoose.Schema(
     greetingEnabled: { type: Boolean, default: true },
     /** Les secrétaires (rôle agent) peuvent passer des appels sortants depuis leur navigateur. Autorisé par défaut. */
     secretaryOutbound: { type: Boolean, default: true },
+    /** Enregistrement des conversations voulu par la société, par sens. Aucun défaut écrit : absent = activé pour Full Scope / Multi-clients / TaaS, désactivé pour Accueil (option) ; sans effet pour Nomad Solo. */
+    recording: {
+      inbound: { type: Boolean, default: undefined },
+      outbound: { type: Boolean, default: undefined },
+    },
     /** Indicatifs pays autorisés pour les appels sortants. Absent : pays de l'entreprise + liste globale de l'environnement. */
     outboundPrefixes: { type: [String], default: undefined },
     greetingAudio: { type: audioSchema, default: undefined },

@@ -2,6 +2,7 @@ import { callerAccess, ScopeError } from '../middleware/companyScope.js';
 import { stripeService } from '../services/stripeService.js';
 import { Subscription } from '../models/Subscription.js';
 import { sanitizeReturnUrl, returnBase } from './subscriptionController.js';
+import { stripeLocaleFromRequest } from '../services/stripeLocale.js';
 
 const MANAGEABLE = ['active', 'trialing', 'past_due', 'unpaid'];
 
@@ -52,7 +53,7 @@ export function createPortalHandlers(deps = {}) {
         }
         const fallback = defaultReturn();
         const returnUrl = sanitize(req.body?.returnUrl, fallback) || fallback;
-        const session = await stripe.billingPortal.sessions.create({ customer, return_url: returnUrl });
+        const session = await stripe.billingPortal.sessions.create({ customer, return_url: returnUrl, locale: stripeLocaleFromRequest(req) });
         return res.json({ success: true, url: session.url });
       } catch (error) {
         const msg = String(error?.message || '');

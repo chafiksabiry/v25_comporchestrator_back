@@ -1,7 +1,8 @@
 import mongoose from 'mongoose';
 
 async function run() {
-  const uri = 'mongodb://harx:gcZ62rl8hoME@38.242.208.242:27018/harx';
+  const uri = process.env.MONGODB_URI;
+  if (!uri) throw new Error('MONGODB_URI is required (no credentials are stored in the repository)');
   await mongoose.connect(uri);
   const db = mongoose.connection.db;
 
