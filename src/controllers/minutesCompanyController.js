@@ -4,6 +4,54 @@ import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { callerAccess, ScopeError } from '../middleware/companyScope.js';
 import mongoose from 'mongoose';
 
+async function readMinutes(companyId, res) {
+  try {
+    // Credit plan-included minutes (e.g. Starter 120) for the current period
+    // when not yet granted — also backfills existing trialing/active subs.
+    let planGrant = { granted: false, allowance: 0, planName: undefined };
+    try {
+      planGrant = await ensurePlanMinutesGranted(companyId);
+    } catch (grantErr) {
+      console.warn('[minutes] plan grant skipped:', grantErr?.message || grantErr);
+    }
+
+    // Ensure every completed call has been deducted from the balance.
+    // Billing rule: any started minute is billed in full (ceil seconds/60).
+    await syncMinutesFromCalls(companyId);
+
+    let wallet = await MinutesCompany.findOne({ companyId });
+    if (!wallet) {
+      wallet = new MinutesCompany({ companyId, minutes: 0 });
+      await wallet.save();
+    }
+
+    const minutes = typeof wallet.minutes === 'number' ? wallet.minutes : 0;
+    const consumedSeconds =
+      typeof wallet.consumedSeconds === 'number' ? wallet.consumedSeconds : 0;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        companyId,
+        minutes,
+        purchasedMinutes: typeof wallet.purchasedMinutes === 'number' ? wallet.purchasedMinutes : 0,
+        planMinutesIncluded: planGrant.allowance || 0,
+        planMinutesGranted:
+          typeof wallet.planMinutesGranted === 'number' ? wallet.planMinutesGranted : 0,
+        planName: planGrant.planName || null,
+        credits: Array.isArray(wallet.credits)
+          ? [...wallet.credits].sort((a, b) => new Date(b.at) - new Date(a.at))
+          : [],
+        consumedSeconds,
+        limitReached: minutes <= 0,
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching minutes:', err);
+    res.status(500).json({ error: 'Failed to fetch minutes' });
+  }
+}
+
 export const minutesCompanyController = {
   getMinutes: async (req, res) => {
     const { companyId } = req.params;
@@ -19,51 +67,15 @@ export const minutesCompanyController = {
       const status = error instanceof ScopeError ? error.status : 503;
       return res.status(status).json({ error: error.message || 'Company lookup failed', code: error.code || 'COMPANY_LOOKUP_FAILED' });
     }
-    try {
-      // Credit plan-included minutes (e.g. Starter 120) for the current period
-      // when not yet granted — also backfills existing trialing/active subs.
-      let planGrant = { granted: false, allowance: 0, planName: undefined };
-      try {
-        planGrant = await ensurePlanMinutesGranted(companyId);
-      } catch (grantErr) {
-        console.warn('[minutes] plan grant skipped:', grantErr?.message || grantErr);
-      }
+    return readMinutes(companyId, res);
+  },
 
-      // Ensure every completed call has been deducted from the balance.
-      // Billing rule: any started minute is billed in full (ceil seconds/60).
-      await syncMinutesFromCalls(companyId);
-
-      let wallet = await MinutesCompany.findOne({ companyId });
-      if (!wallet) {
-        wallet = new MinutesCompany({ companyId, minutes: 0 });
-        await wallet.save();
-      }
-
-      const minutes = typeof wallet.minutes === 'number' ? wallet.minutes : 0;
-      const consumedSeconds =
-        typeof wallet.consumedSeconds === 'number' ? wallet.consumedSeconds : 0;
-
-      res.status(200).json({
-        success: true,
-        data: {
-          companyId,
-          minutes,
-          purchasedMinutes: typeof wallet.purchasedMinutes === 'number' ? wallet.purchasedMinutes : 0,
-          planMinutesIncluded: planGrant.allowance || 0,
-          planMinutesGranted:
-            typeof wallet.planMinutesGranted === 'number' ? wallet.planMinutesGranted : 0,
-          planName: planGrant.planName || null,
-          credits: Array.isArray(wallet.credits)
-            ? [...wallet.credits].sort((a, b) => new Date(b.at) - new Date(a.at))
-            : [],
-          consumedSeconds,
-          limitReached: minutes <= 0,
-        }
-      });
-    } catch (err) {
-      console.error('Error fetching minutes:', err);
-      res.status(500).json({ error: 'Failed to fetch minutes' });
-    }
+  // Lecture serveur à serveur (dash_calls, portillon avant appel) : route interne SANS jeton, comportement d'origine conservé. Le contrôle de
+  // propriété de getMinutes (jeton utilisateur) ne s'y applique pas : sans cette séparation le portillon recevrait 401 et s'ouvrirait en silence.
+  getMinutesInternal: async (req, res) => {
+    const { companyId } = req.params;
+    if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    return readMinutes(companyId, res);
   },
 
   buyMinutes: async (req, res) => {
