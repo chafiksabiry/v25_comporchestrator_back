@@ -14,6 +14,7 @@ const { default: InboundSettings } = await import('../models/InboundSettings.js'
 const { default: MinutesCompany } = await import('../models/MinutesCompany.js');
 const { PhoneNumber } = await import('../models/PhoneNumber.js');
 const { Subscription } = await import('../models/Subscription.js');
+const { default: CallCreditDecision } = await import('../models/CallCreditDecision.js');
 const BO = await import('../services/browserOutbound.js');
 const { loadCompanyPlanLimits } = await import('../services/planLimits.js');
 const { syncMinutesFromCalls } = await import('../controllers/escrowController.js');
@@ -27,7 +28,7 @@ const { phoneNumberService } = await import('../services/phoneNumberService.js')
 const C1 = '64b0000000000000000000c1';
 const BASE = { harx_product: 'callcenter', callcenter_tier: 'full_scope' };
 const GB = '+442071234567'; const DE = '+4915112345678'; const FR = '+33612345678'; const DOM = '+262692123456';
-let meta; let N; let CALLS; let lines; let lineReads; let planReads;
+let meta; let N; let CALLS; let lines; let lineReads; let planReads; let decisions;
 const clone = (v) => (v === null || v === undefined ? v : structuredClone(v));
 const thenable = (get) => ({ lean: async () => clone(get()), select() { return this; }, sort() { return this; }, limit() { return this; }, then(r, j) { return Promise.resolve(clone(get())).then(r, j); } });
 const wallet = (minutes) => ({ companyId: C1, minutes, consumedSeconds: 0, chargedCallSids: [], planGrantKeys: [], credits: [], purchasedMinutes: 0, planMinutesGranted: 0 });
@@ -42,6 +43,9 @@ beforeEach(() => {
   lines = [{ _id: 'l1', companyId: C1, phoneNumber: '+33611110001', provider: 'twilio', twilioId: 'PN1', status: 'active', billingStatus: 'active', createdAt: new Date('2026-01-01') }];
   PhoneNumber.find = () => { lineReads += 1; return thenable(() => lines); };
   PhoneNumber.findOne = () => thenable(() => lines[0] || null);
+  decisions = new Map();
+  CallCreditDecision.find = () => thenable(() => [...decisions].map(([sid, factor]) => ({ sid, factor })));
+  CallCreditDecision.updateOne = async (f, u) => { if (!decisions.has(f.sid)) decisions.set(f.sid, u.$setOnInsert.factor); return {}; };
   Subscription.findOne = () => { planReads += 1; return { populate: async () => subscription() }; };
   // Pays activés : France, Royaume-Uni, Allemagne (sinon la destination est refusée avant toute question de minutes).
   InboundSettings.findOne = () => thenable(() => ({ secretaryOutbound: true, outboundPrefixes: ['+33', '+44', '+49'] }));
@@ -284,4 +288,43 @@ test('endpoint : titulaire de CETTE entreprise seulement, lecture seule, route G
   assert.deepEqual(N, before);
   const layer = minutesCompanyRoutes.stack.find((l) => l.route?.path === '/:companyId/credits');
   assert.ok(layer); assert.deepEqual(Object.keys(layer.route.methods), ['get']); assert.ok(layer.route.stack.length >= 2);
+});
+
+// --- Revue CTO : B1 (trace du webhook réutilisée au débit), B2 (entrant / interne = 1), C4 (ligne de l'appel transféré) -------------------
+test('B1 : le webhook enregistre sa décision (ligne, zone, facteur) et le débit la réutilise au lieu de reclasser, même si from est « client:cc-… » et la première ligne a changé', async () => {
+  process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(100);
+  const xml = await webhook(GB); // ligne FR (+33…) → Royaume-Uni : international
+  assert.equal(timeLimit(xml), 25 * 60);
+  assert.equal(decisions.get('CA1'), 4, 'facteur décidé enregistré sous le sid de l\'appel');
+  // Entre-temps la première ligne lisible devient britannique : un reclassement donnerait « national » (1).
+  lines = [{ ...lines[0], phoneNumber: '+442071230000' }];
+  CALLS = [callDoc('CA1', 60, { to: GB, from: 'client:cc-sec1' })];
+  await syncMinutesFromCalls(C1);
+  assert.equal(N.minutes, 96, 'débité 4 (décision du webhook), pas 1 (reclassement)');
+});
+
+test('B1 : sans trace (autre canal), le débit reclasse comme avant ; un échec d\'enregistrement ne bloque jamais l\'appel', async () => {
+  process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(100);
+  CALLS = [callDoc('NOTRACE', 60, { to: GB, from: '+33411112222' })];
+  await syncMinutesFromCalls(C1);
+  assert.equal(N.minutes, 96);
+  N = wallet(100); CALLS = []; decisions = new Map();
+  CallCreditDecision.updateOne = async () => { throw new Error('mongo down'); };
+  assert.equal(timeLimit(await webhook(GB)), 25 * 60, 'l\'appel passe malgré l\'échec de la trace');
+});
+
+test('B2 : direction absente, « incoming », « inbound » ou appel vers une ligne de l\'entreprise => 1 crédit ; sortant explicite (outbound, outbound-api, outbound-dial) => N', async () => {
+  process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(100);
+  CALLS = [
+    callDoc('ABS', 60, { to: GB, direction: undefined }), callDoc('INC', 60, { to: GB, direction: 'incoming' }), callDoc('INB', 60, { to: GB, direction: 'inbound' }),
+    callDoc('LINE', 60, { to: '+33611110001', from: '+442071230000' }),
+    callDoc('OUT', 60, { to: GB }), callDoc('API', 60, { to: GB, direction: 'outbound-api' }), callDoc('DIAL', 60, { to: GB, direction: 'outbound-dial' }),
+  ];
+  await syncMinutesFromCalls(C1);
+  assert.equal(N.minutes, 100 - 4 * 1 - 3 * 4);
+});
+
+test('C4 : le transfert passe au calcul la ligne réellement utilisée (celle qui a reçu l\'appel)', async () => {
+  const src = (await import('node:fs')).readFileSync(new URL('../controllers/callTransferController.js', import.meta.url), 'utf8');
+  assert.match(src, /deps\.creditFactor\(access\.companyId, number, call\.phoneNumber\)/);
 });

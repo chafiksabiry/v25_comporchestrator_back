@@ -12,7 +12,7 @@ process.env.TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || 'x';
 const C = await import('../services/creditCoefficient.js');
 const { maxSecondsForBalance, decideOutboundCall, spokenRefusal, SPOKEN_REFUSALS } = await import('../services/browserOutbound.js');
 
-const FR = '+33612345678'; const DE = '+4915112345678'; const GB = '+442071234567'; const US = '+14155550123'; const DOM = '+262692123456';
+const FR_LINE = '+33611110001'; const FR = '+33612345678'; const DE = '+4915112345678'; const GB = '+442071234567'; const US = '+14155550123'; const DOM = '+262692123456';
 const warns = () => { const w = []; const orig = console.warn; console.warn = (...a) => w.push(a.join(' ')); return { w, restore: () => { console.warn = orig; } }; };
 
 // --- Lecture du coefficient -----------------------------------------------------------------------------------------------
@@ -156,24 +156,24 @@ test('message de refus du pré-contrôle : clair, avec N', () => {
 // --- Choix des crédits pour un lot d'appels ----------------------------------------------------------------------------------
 const intlCall = (sid, to, d = 60, over = {}) => ({ sid, direction: 'outbound', to, duration: d, ...over });
 
-test('lot d\'appels : coefficient 1 => aucune lecture du pays, facteur 1, rien différé', async () => {
+test('lot d\'appels : coefficient 1 => aucune lecture du pays, facteur 1, facteur 1', async () => {
   let countryReads = 0;
   const plan = await C.planCreditCharging({ companyId: 'C1', calls: [intlCall('A', GB)], loadLimits: async () => ({ internationalCoefficient: 1 }), country: async () => { countryReads += 1; return '+33'; } });
-  assert.equal(plan.factorOf(intlCall('A', GB)), 1); assert.equal(plan.deferred.size, 0); assert.equal(countryReads, 0);
+  assert.equal(plan.factorOf(intlCall('A', GB)), 1); assert.equal(countryReads, 0);
 });
 
 test('lot d\'appels : coefficient 4 => facteurs par appel', async () => {
-  const plan = await C.planCreditCharging({ companyId: 'C1', calls: [], loadLimits: async () => ({ internationalCoefficient: 4 }), country: async () => '+33' });
-  assert.equal(plan.factorOf(intlCall('A', GB)), 4); assert.equal(plan.factorOf(intlCall('B', DE)), 1); assert.equal(plan.deferred.size, 0);
+  const plan = await C.planCreditCharging({ companyId: 'C1', calls: [], loadLimits: async () => ({ internationalCoefficient: 4 }), country: async () => '+33', lines: async () => new Set(), decisions: async () => new Map() });
+  assert.equal(plan.factorOf(intlCall('A', GB)), 4); assert.equal(plan.factorOf(intlCall('B', DE)), 1);
 });
 
 test('A4 : forfait ou pays illisible => facteur 1 (comportement d\'avant), jamais de report ni d\'interruption', async () => {
   const w = warns();
   try {
     const calls = [intlCall('I', GB), intlCall('D', DE)];
-    const noPlan = await C.planCreditCharging({ companyId: 'C1', calls, loadLimits: async () => { throw new Error('mongo down'); }, country: async () => '+33' });
-    assert.equal(noPlan.factorOf(intlCall('I', GB)), 1); assert.equal(noPlan.deferred?.size ?? 0, 0);
-    const noCountry = await C.planCreditCharging({ companyId: 'C1', calls, loadLimits: async () => ({ internationalCoefficient: 4 }), country: async () => { throw new Error('mongo down'); } });
+    const noPlan = await C.planCreditCharging({ companyId: 'C1', calls, loadLimits: async () => { throw new Error('mongo down'); }, country: async () => '+33', lines: async () => new Set(), decisions: async () => new Map() });
+    assert.equal(noPlan.factorOf(intlCall('I', GB)), 1);
+    const noCountry = await C.planCreditCharging({ companyId: 'C1', calls, loadLimits: async () => ({ internationalCoefficient: 4 }), country: async () => { throw new Error('mongo down'); }, lines: async () => new Set(), decisions: async () => new Map() });
     assert.equal(noCountry.factorOf(intlCall('I', GB)), 1);
     assert.ok(w.w.length >= 2, 'avertissements');
   } finally { w.restore(); }
@@ -264,4 +264,33 @@ test('M1 : un seul texte par langue pour « 1 minute = N crédits » (parlé, pr
   const d = decideOutboundCall({ to: GB, line: { phoneNumber: '+33411112222' }, subscribed: true, minutes: 3, creditFactor: 4 });
   assert.equal(d.message, m.messageFr);
   assert.match(m.messageEs, /1 minuto = 4 créditos/);
+});
+
+test('B2 : sortant explicite seulement ; une destination qui est une ligne de l\'entreprise vaut 1', () => {
+  const o = { coefficient: 4, companyCountry: '+33', companyLines: new Set([FR_LINE]) };
+  const base = { to: GB, from: '+33411112222' };
+  for (const d of [undefined, '', 'incoming', 'inbound', 'transfer']) assert.equal(C.callCreditFactor({ ...base, direction: d }, o), 1, String(d));
+  for (const d of ['outbound', 'outbound-api', 'outbound-dial', 'Outbound']) assert.equal(C.callCreditFactor({ ...base, direction: d }, o), 4, d);
+  assert.equal(C.callCreditFactor({ ...base, to: FR_LINE, direction: 'outbound' }, o), 1);
+});
+
+test('C2 : le cache ne garde ni null ni erreur, partage les lectures simultanées et reste borné', async () => {
+  C.clearCoefficientCache();
+  let reads = 0; let value = null;
+  const load = async () => { reads += 1; return value; };
+  assert.equal(await C.cachedPlanLimits('X', { load }), null); assert.equal(await C.cachedPlanLimits('X', { load }), null);
+  assert.equal(reads, 2, 'null jamais mis en cache');
+  value = { internationalCoefficient: 4 };
+  assert.deepEqual(await C.cachedPlanLimits('X', { load }), value); await C.cachedPlanLimits('X', { load });
+  assert.equal(reads, 3, 'une valeur est réutilisée');
+  C.clearCoefficientCache(); reads = 0;
+  await Promise.all([C.cachedPlanLimits('Y', { load }), C.cachedPlanLimits('Y', { load }), C.cachedPlanLimits('Y', { load })]);
+  assert.equal(reads, 1, 'lectures simultanées dédoublonnées');
+  C.clearCoefficientCache();
+  await assert.rejects(C.cachedPlanLimits('Z', { load: async () => { throw new Error('down'); } }));
+  assert.equal(await C.cachedPlanLimits('Z', { load: async () => value }), value, 'une erreur n\'est pas mémorisée');
+  C.clearCoefficientCache();
+  for (let i = 0; i < C.COEFFICIENT_CACHE_MAX + 50; i += 1) await C.cachedPlanLimits(`S${i}`, { load: async () => ({ i }) });
+  let hits = 0; for (let i = 0; i < 50; i += 1) await C.cachedPlanLimits(`S${i}`, { load: async () => { hits += 1; return { i }; } });
+  assert.equal(hits, 50, 'les plus anciennes sociétés ont été évincées');
 });

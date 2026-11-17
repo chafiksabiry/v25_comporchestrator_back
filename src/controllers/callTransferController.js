@@ -36,11 +36,11 @@ const deps = {
     return freshMinutesBalance(companyId, { sync: syncMinutesFromCalls, grant: ensurePlanMinutesGranted, readWallet: (id) => MinutesCompany.findOne({ companyId: id }).select('minutes').lean() });
   },
   /** Crédits débités par minute vers ce numéro (1, ou N à l'international). */
-  creditFactor: async (companyId, to) => {
+  creditFactor: async (companyId, to, lineNumber = '') => {
     const { loadCompanyPlanLimits } = await import('../services/planLimits.js');
     let limits = null;
     try { limits = await loadCompanyPlanLimits(companyId); } catch { limits = null; }
-    return outboundCreditFactor({ companyId, limits, to });
+    return outboundCreditFactor({ companyId, limits, to, lineNumber });
   },
   now: () => Date.now(),
 };
@@ -103,7 +103,7 @@ export const callTransferController = {
       if (mode === 'dial') {
         number = normalizeOutboundDestination(entry.phone);
         if (!number) return fail(res, 422, `Le numéro de ${entry.name} n’est pas une destination autorisée.`, { code: 'destination_not_allowed' });
-        const creditFactor = await deps.creditFactor(access.companyId, number);
+        const creditFactor = await deps.creditFactor(access.companyId, number, call.phoneNumber);
         maxSeconds = maxSecondsForBalance(await deps.minutes(access.companyId), { creditFactor });
         if (!maxSeconds && creditFactor > 1) {
           const m = insufficientInternationalMessages(creditFactor);

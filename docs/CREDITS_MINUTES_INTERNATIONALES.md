@@ -58,3 +58,13 @@ Refus parlé du webhook (en/fr/es) : « Solde insuffisant pour un appel internat
 - Le rappel de messagerie vocale reprend la même logique que le webhook (ligne du rappel, refus parlé en/fr/es) mais n'a pas de test dédié (le contrôleur n'est pas testable sans simulations lourdes) ; la durée maximale et le refus passent par `maxSecondsForBalance(…, N)` testé.
 - Plafond « mou » : plusieurs appels simultanés lancés avec le même solde peuvent le dépasser ensemble (comme avant).
 - Front (affichage du coefficient, écran Facturation) et `dash_calls` hors périmètre.
+
+## Revue indépendante : règles ajoutées avant d'activer N > 1
+
+- **Trace du webhook (B1)** : l'appel sortant du navigateur enregistre sa décision (ligne retenue, zone, facteur) dans `CallCreditDecision`, sous le `CallSid` reçu par le webhook (premier enregistrement gagnant, purge à 45 jours). Le débit (lecture du solde, `charge-call`) relit cette trace ; il ne reclasse que les appels sans trace (autres canaux). Plafond et débit utilisent ainsi la même zone. Hypothèse non vérifiée : le `sid` de l'appel stocké dans `calls` est celui du `CallSid` du webhook ; sinon le débit reclasse (comportement d'avant, jamais plus d'erreur que cela).
+- **Entrant / interne (B2)** : seul un appel dont `direction` commence par `outbound` (outbound, outbound-api, outbound-dial) peut être facturé au coefficient. Direction absente, `incoming`, `inbound`, jambe de transfert : 1. Un appel dont la destination est une ligne de l'entreprise : 1.
+- **Périmètre de « aucun accès supplémentaire à N = 1 » (C1)** : vrai pour les lignes (aucune lecture du pays ni des lignes à N = 1) ; le forfait, lui, est lu (cache 30 s) comme l'exige le plafond de durée.
+- **Cache du forfait (C2)** : ni `null` ni erreur ne sont mémorisés, les lectures simultanées d'une société sont partagées, 500 sociétés au plus (la plus ancienne est évincée). **Sous-facturation assumée** : si le forfait ou les lignes sont illisibles pendant un appel international, il est débité 1 crédit la minute (jamais bloqué, jamais reporté).
+- **Offre Accueil (C3)** : après la prise d'une ligne dans la réserve, le facteur et le plafond sont recalculés avec cette ligne ; s'il ne couvre plus le solde, la ligne est libérée et l'appel refusé.
+- **Transfert (C4)** : le facteur est calculé avec la ligne qui a reçu l'appel (celle utilisée comme identifiant de l'appelant du transfert).
+- **Code mort (C6)** : `planCreditCharging` ne renvoie plus de `deferred` (toujours vide) ; commentaire d'`escrowController` corrigé.

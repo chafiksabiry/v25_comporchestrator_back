@@ -951,9 +951,9 @@ export async function syncMinutesFromCalls(companyId) {
     ).toArray();
 
     // Crédits par minute selon la zone (1 minute internationale = N crédits ; N = 1 par défaut : comportement actuel, sans lecture du pays).
-    // Forfait illisible : les appels de type international sont différés (jamais débités à 1 à tort), les autres débités normalement.
+    // Trace du webhook d'abord (même zone que le plafond), sinon reclassement ; forfait ou lignes illisibles : 1 crédit la minute (comme avant, jamais de report).
     const pending = calls.filter((c) => !alreadyCharged.has(String(c.sid || c._id || '')));
-    const charging = pending.length ? await planCreditCharging({ companyId, calls: pending }) : { factorOf: () => 1, deferred: new Set() };
+    const charging = pending.length ? await planCreditCharging({ companyId, calls: pending }) : { factorOf: () => 1 };
 
     // Billing rule: each call is billed at the ceiling of its duration in
     // minutes (10s → 1 min, 1m02s → 2 min). We aggregate the per-call ceiling
@@ -963,7 +963,7 @@ export async function syncMinutesFromCalls(companyId) {
     const newKeys = [];
     for (const c of calls) {
       const key = String(c.sid || c._id || '');
-      if (!key || alreadyCharged.has(key) || charging.deferred.has(key)) continue;
+      if (!key || alreadyCharged.has(key)) continue;
       const secs = Number(c.duration || 0);
       if (secs <= 0) continue;
       addedSeconds += secs;

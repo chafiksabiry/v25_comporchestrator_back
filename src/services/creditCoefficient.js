@@ -16,6 +16,17 @@ import { internationalInsufficientText } from './browserOutbound.js';
  * résultat ne dépend donc pas de l'instant de la synchro. ENTRANTS : toujours 1 (décision du propriétaire : le périmètre ne porte que sur
  * les appels sortants vers l'international ; un débit après coup, sans pré-contrôle, pourrait rendre le solde négatif sans décision).
  * Pays de l'entreprise inconnu : 1 (historique). Toute lecture impossible (forfait, lignes) : 1, comme avant (jamais de report ni de blocage).
+ *
+ * SOUS-FACTURATION ASSUMÉE : si le forfait ou les lignes sont illisibles pendant un appel international, cet appel est débité à 1 crédit la
+ * minute (jamais bloqué ni reporté) : à N > 1 cela facture moins que prévu, jamais plus.
+ * PÉRIMÈTRE de « aucun accès supplémentaire à N = 1 » : il vaut pour les LIGNES (aucune lecture du pays à N = 1) ; le FORFAIT est lu (cache 30 s)
+ * par les chemins du webhook, du rappel, du transfert et du débit, comme avant l'arrivée du coefficient pour le plafond de durée.
+ *
+ * ENTRANT / SORTANT : un appel n'est facturé au coefficient que s'il est EXPLICITEMENT sortant (`direction` commence par « outbound » :
+ * outbound, outbound-api, outbound-dial). Direction absente, « incoming », « inbound », jambe de transfert : 1. Un appel dont la destination
+ * est une ligne de l'entreprise : 1 (appel interne).
+ * TRACE DU WEBHOOK : l'appel sortant du navigateur enregistre sa décision (ligne retenue, zone, facteur) sous son sid ; le débit la réutilise
+ * (`CallCreditDecision`) au lieu de reclasser, et ne reclasse que les appels sans trace (autres canaux).
  */
 export const COEFFICIENT_METADATA_KEY = 'international_minute_credits';
 export const COEFFICIENT_ENV = 'INTERNATIONAL_MINUTE_CREDITS';
@@ -60,7 +71,8 @@ export function resolveInternationalCoefficient({ metadata, env = process.env } 
   return { coefficient: 1, source: 'default', invalid: false };
 }
 
-const isInbound = (call) => call?.direction === 'inbound';
+/** Sortant EXPLICITE seulement (outbound, outbound-api, outbound-dial…). Tout le reste (absent, incoming, inbound, transfert) : entrant. */
+export const isExplicitOutbound = (call) => /^outbound/i.test(String(call?.direction || '').trim());
 
 /**
  * Un SEUL point de résolution du coefficient (débit, webhook, pré-contrôle, rappel, transfert, lecture Facturation) : celui du forfait
@@ -79,9 +91,12 @@ export function coefficientOf(limits) {
  * Zone : depuis la ligne réellement utilisée (`call.from`) si c'est un numéro lisible, sinon depuis `companyCountry` (première ligne de
  * l'entreprise). Ne lit rien d'autre.
  */
-export function callCreditFactor(call, { coefficient = 1, companyCountry = '' } = {}) {
-  if (!(coefficient > 1) || isInbound(call)) return 1;
-  if (!toStrictE164(call?.to)) return 1;
+export function callCreditFactor(call, { coefficient = 1, companyCountry = '', companyLines = null } = {}) {
+  if (!(coefficient > 1) || !isExplicitOutbound(call)) return 1;
+  const dest = toStrictE164(call?.to);
+  if (!dest) return 1;
+  // Destination = une ligne de l'entreprise : appel interne, 1.
+  if (companyLines && companyLines.has(dest)) return 1;
   const line = toStrictE164(call?.from);
   const home = line || companyCountry;
   const { zone } = classifyZone({ to: call.to, companyCountry: home });
@@ -101,48 +116,114 @@ export async function companyHomeOf(companyId, options) {
   return resolveCompanyHome(companyId, options);
 }
 
+/** Numéros E.164 des lignes de l'entreprise (pour reconnaître un appel interne). Illisible : ensemble vide (comportement d'avant). */
+export async function companyLinesOf(companyId) {
+  try {
+    const { PhoneNumber } = await import('../models/PhoneNumber.js');
+    const rows = await PhoneNumber.find({ companyId }).select('phoneNumber').lean();
+    return new Set((rows || []).map((r) => toStrictE164(r.phoneNumber)).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
 /** Durée pendant laquelle le forfait lu d'une société est réutilisé (une lecture au plus par société) : limite l'accès supplémentaire. */
 export const COEFFICIENT_CACHE_MS = 30 * 1000;
+/** Nombre maximal de sociétés gardées en mémoire (la plus ancienne est évincée). */
+export const COEFFICIENT_CACHE_MAX = 500;
 const limitsCache = new Map();
-export const clearCoefficientCache = () => limitsCache.clear();
+const inflight = new Map();
+export const clearCoefficientCache = () => { limitsCache.clear(); inflight.clear(); };
 
-/** Forfait de la société (loadCompanyPlanLimits), réutilisé brièvement. Une erreur n'est jamais mise en cache. */
+/**
+ * Forfait de la société (loadCompanyPlanLimits), réutilisé brièvement. Jamais mis en cache : une erreur ni une absence de forfait (null) :
+ * la lecture suivante réessaie. Lectures simultanées d'une même société : une seule requête partagée. Mémoire bornée.
+ */
 export async function cachedPlanLimits(companyId, { load, now = () => Date.now() } = {}) {
   const key = String(companyId);
   const hit = limitsCache.get(key);
   if (hit && now() - hit.at < COEFFICIENT_CACHE_MS && now() >= hit.at) return hit.limits;
+  if (inflight.has(key)) return inflight.get(key);
   const loader = load || (async (id) => (await import('./planLimits.js')).loadCompanyPlanLimits(id));
-  const limits = await loader(companyId);
-  limitsCache.set(key, { at: now(), limits });
-  return limits;
+  const pending = (async () => {
+    try {
+      const limits = await loader(companyId);
+      if (limits !== null && limits !== undefined) {
+        limitsCache.delete(key);
+        limitsCache.set(key, { at: now(), limits });
+        while (limitsCache.size > COEFFICIENT_CACHE_MAX) limitsCache.delete(limitsCache.keys().next().value);
+      }
+      return limits;
+    } finally {
+      inflight.delete(key);
+    }
+  })();
+  inflight.set(key, pending);
+  return pending;
 }
 
 const defaultLoadLimits = (companyId) => cachedPlanLimits(companyId);
 
+/** Décisions du webhook pour ces sids : Map sid -> facteur. Illisible : Map vide (reclassement, comme avant). */
+export async function loadCallDecisions(sids) {
+  const list = [...new Set((sids || []).map(String).filter(Boolean))];
+  if (!list.length) return new Map();
+  try {
+    const { default: CallCreditDecision } = await import('../models/CallCreditDecision.js');
+    const rows = await CallCreditDecision.find({ sid: { $in: list } }).select('sid factor').lean();
+    return new Map((rows || []).map((r) => [String(r.sid), Number(r.factor) >= 1 ? Number(r.factor) : 1]));
+  } catch (error) {
+    console.warn('[credits] traces de décision illisibles, reclassement des appels :', error?.message || error);
+    return new Map();
+  }
+}
+
+/** Enregistre la décision du webhook (le premier enregistrement fait foi). Ne bloque ni ne fait échouer jamais l'appel. */
+export async function recordCallDecision({ sid, companyId, factor, zone = '', line = '' }) {
+  const key = String(sid || '').trim();
+  if (!key || !companyId || !(factor >= 1)) return false;
+  try {
+    const { default: CallCreditDecision } = await import('../models/CallCreditDecision.js');
+    await CallCreditDecision.updateOne({ sid: key }, { $setOnInsert: { sid: key, companyId: String(companyId), factor, zone, line } }, { upsert: true });
+    return true;
+  } catch (error) {
+    console.warn("[credits] décision non enregistrée (le débit reclassera l'appel) :", error?.message || error);
+    return false;
+  }
+}
+
 /**
- * Prépare le débit d'un lot d'appels : { factorOf(appel) }. Coefficient 1 (cas par défaut) : aucune lecture du pays, facteur 1 :
- * comportement actuel. Coefficient > 1 : facteur par appel d'après la zone. Forfait ou lignes illisibles : facteur 1, comme avant
- * (jamais de report ni d'interruption : le débit normal n'est jamais sauté).
+ * Prépare le débit d'un lot d'appels : { factorOf(appel) }. Trace du webhook d'abord (même zone et même facteur que le plafond), sinon
+ * reclassement. Coefficient 1 (cas par défaut) : facteur 1 sans lire ni lignes ni traces. Forfait ou lignes illisibles : facteur 1, comme
+ * avant (jamais de report ni d'interruption : le débit normal n'est jamais sauté).
  */
-export async function planCreditCharging({ companyId, calls, loadLimits = defaultLoadLimits, country = companyHomeOf }) {
-  void calls;
+export async function planCreditCharging({ companyId, calls = [], loadLimits = defaultLoadLimits, country = companyHomeOf, lines = companyLinesOf, decisions = loadCallDecisions }) {
   let limits = null;
   try {
     limits = await loadLimits(companyId);
   } catch (error) {
     console.warn('[credits] forfait illisible, 1 crédit par minute (comportement d\'avant) :', error?.message || error);
-    return { factorOf: () => 1, deferred: new Set(), coefficient: 1 };
+    return { factorOf: () => 1, coefficient: 1 };
   }
   const { coefficient } = coefficientOf(limits);
-  if (!(coefficient > 1)) return { factorOf: () => 1, deferred: new Set(), coefficient: 1 };
+  if (!(coefficient > 1)) return { factorOf: () => 1, coefficient: 1 };
   let home = '';
+  let companyLines = new Set();
   try {
     home = await country(companyId);
+    companyLines = await lines(companyId);
   } catch (error) {
     console.warn('[credits] lignes illisibles, 1 crédit par minute (comportement d\'avant) :', error?.message || error);
-    return { factorOf: () => 1, deferred: new Set(), coefficient };
+    return { factorOf: () => 1, coefficient };
   }
-  return { factorOf: (call) => callCreditFactor(call, { coefficient, companyCountry: home }), deferred: new Set(), coefficient };
+  const recorded = await decisions(calls.map((c) => c?.sid || c?._id));
+  return {
+    factorOf: (call) => {
+      const traced = recorded.get(String(call?.sid || call?._id || ''));
+      return traced !== undefined ? traced : callCreditFactor(call, { coefficient, companyCountry: home, companyLines });
+    },
+    coefficient,
+  };
 }
 
 /** Crédits par minute d'un appel déjà enregistré (charge-call) : 1 si le forfait ou les lignes sont illisibles (comme avant). */
@@ -152,20 +233,30 @@ export async function creditFactorForCall({ companyId, call, loadLimits = defaul
 }
 
 /**
- * Crédits par minute d'un appel sortant à venir vers `to` (webhook, rappel, transfert, pré-contrôle). `limits` : forfait déjà chargé
- * (peut être null). `lineNumber` : ligne qui passera l'appel (sinon première ligne de l'entreprise). Ne bloque jamais sur une lecture
- * impossible : 1 (le débit réel reclasse l'appel à la lecture du solde).
+ * Décision pour un appel sortant à venir vers `to` (webhook, rappel, transfert, pré-contrôle) : { factor, zone, line }. `limits` : forfait
+ * déjà chargé (peut être null). `lineNumber` : ligne RÉELLEMENT utilisée (sinon première ligne de l'entreprise). Ne bloque jamais sur une
+ * lecture impossible : facteur 1 (le débit relira la trace ou reclassera).
  */
-export async function outboundCreditFactor({ companyId, limits, to, lineNumber = '', country = companyHomeOf }) {
+export async function outboundCreditDecision({ companyId, limits, to, lineNumber = '', country = companyHomeOf, lines = companyLinesOf }) {
   const { coefficient } = coefficientOf(limits);
-  if (!(coefficient > 1)) return 1;
+  if (!(coefficient > 1)) return { factor: 1, zone: '', line: toStrictE164(lineNumber) || '', coefficient };
   try {
     const line = toStrictE164(lineNumber);
-    return callCreditFactor({ direction: 'outbound', to, from: line || undefined }, { coefficient, companyCountry: line ? '' : await country(companyId) });
+    const home = line || (await country(companyId));
+    const companyLines = await lines(companyId);
+    const call = { direction: 'outbound', to };
+    const factor = callCreditFactor(call, { coefficient, companyCountry: home, companyLines });
+    const zone = classifyZone({ to, companyCountry: home }).zone;
+    return { factor, zone, line: line || '', coefficient };
   } catch (error) {
-    console.warn("[credits] lignes illisibles, 1 crédit par minute :", error?.message || error);
-    return 1;
+    console.warn('[credits] lignes illisibles, 1 crédit par minute :', error?.message || error);
+    return { factor: 1, zone: '', line: '', coefficient };
   }
+}
+
+/** Crédits par minute d'un appel sortant à venir (nombre seul) : voir outboundCreditDecision. */
+export async function outboundCreditFactor(options) {
+  return (await outboundCreditDecision(options)).factor;
 }
 
 /** Messages du refus « solde insuffisant pour un appel international : 1 minute = N crédits » : un seul texte par langue, tous canaux. */
