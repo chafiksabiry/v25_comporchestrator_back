@@ -79,9 +79,11 @@ export const secretaryOutboundAllowed = (settings) => settings?.secretaryOutboun
  * Durée maximale (secondes) d'un appel pour ce solde de minutes : minutes entières × 60, 4 h au plus ; 0 si le solde ne
  * couvre pas une minute entière (toute minute commencée est facturée en entier).
  */
-export function maxSecondsForBalance(minutes) {
+export function maxSecondsForBalance(minutes, creditFactor = 1) {
   const whole = Math.floor(Number(minutes));
-  return whole >= 1 ? Math.min(whole * 60, MAX_CALL_SECONDS) : 0;
+  // `creditFactor` : crédits débités par minute (appel international : coefficient N ; sinon 1). Minutes entières affordables = solde / N.
+  const affordable = creditFactor > 1 ? Math.floor(whole / creditFactor) : whole;
+  return affordable >= 1 ? Math.min(affordable * 60, MAX_CALL_SECONDS) : 0;
 }
 
 /**
@@ -96,6 +98,7 @@ export const SPOKEN_REFUSALS = Object.freeze({
     no_subscription: 'No active subscription.',
     no_line: 'No line is available to place the call.',
     insufficient_minutes: 'Insufficient minutes balance.',
+    insufficient_minutes_international: 'Insufficient balance for an international call: 1 minute = {credits} credits.',
     error: 'An error occurred.',
     secretary_outbound_disabled: 'The account owner has turned off outbound calls for secretaries.',
     invalid_number: 'Invalid number. Enter it in international format.',
@@ -111,6 +114,7 @@ export const SPOKEN_REFUSALS = Object.freeze({
     no_subscription: 'Aucun abonnement actif.',
     no_line: 'Aucune ligne disponible pour appeler.',
     insufficient_minutes: 'Solde de minutes insuffisant.',
+    insufficient_minutes_international: 'Solde insuffisant pour un appel international : 1 minute = {credits} crédits.',
     error: 'Une erreur est survenue.',
     secretary_outbound_disabled: SECRETARY_OUTBOUND_BLOCKED,
     invalid_number: 'Numéro invalide. Saisissez-le au format international.',
@@ -124,6 +128,7 @@ export const SPOKEN_REFUSALS = Object.freeze({
     no_subscription: 'No hay ninguna suscripción activa.',
     no_line: 'No hay ninguna línea disponible para llamar.',
     insufficient_minutes: 'Saldo de minutos insuficiente.',
+    insufficient_minutes_international: 'Saldo insuficiente para una llamada internacional: 1 minuto = {credits} créditos.',
     error: 'Se ha producido un error.',
     secretary_outbound_disabled: 'El titular de la cuenta ha desactivado las llamadas salientes para las secretarias.',
     invalid_number: 'Número no válido. Introdúzcalo en formato internacional.',
@@ -141,9 +146,9 @@ export function spokenLanguage(linePhone) {
 }
 
 /** TwiML de refus parlé : clé de refus (voir SPOKEN_REFUSALS), langue (en par défaut). Clé inconnue : message d'erreur générique. */
-export function spokenRefusal(key, language = 'en') {
+export function spokenRefusal(key, language = 'en', params = {}) {
   const lang = SPOKEN_REFUSALS[language] ? language : 'en';
-  const text = SPOKEN_REFUSALS[lang][key] || SPOKEN_REFUSALS[lang].error;
+  const text = (SPOKEN_REFUSALS[lang][key] || SPOKEN_REFUSALS[lang].error).replace('{credits}', String(params?.credits ?? ''));
   const [voiceLanguage, voice] = SPOKEN_VOICES[lang];
   return buildRefusalTwiml(text, { language: voiceLanguage, voice });
 }
@@ -152,14 +157,19 @@ export function spokenRefusal(key, language = 'en') {
  * Décision de numérotation, sans accès réseau : renvoie la consigne TwiML à donner à Twilio.
  * `line` est la ligne Twilio de l'entreprise utilisée comme numéro appelant ; `minutes` le solde de minutes.
  */
-export function decideOutboundCall({ to, line, subscribed, minutes, recording = null, action = null }) {
+export function decideOutboundCall({ to, line, subscribed, minutes, recording = null, action = null, creditFactor = 1 }) {
   if (!to) return { ok: false, message: 'Numéro non autorisé.', key: 'number_not_allowed' };
   if (!subscribed) return { ok: false, message: 'Aucun abonnement actif.', key: 'no_subscription' };
   if (!line) return { ok: false, message: 'Aucune ligne disponible pour appeler.', key: 'no_line' };
   // Toute minute commencée est facturée en entier : il faut au moins une minute entière, et l'appel est coupé quand
   // les minutes entières du solde sont écoulées, pour que le solde ne passe jamais sous zéro.
-  const maxSeconds = maxSecondsForBalance(minutes);
-  if (!maxSeconds) return { ok: false, message: 'Solde de minutes insuffisant.', key: 'insufficient_minutes' };
+  const maxSeconds = maxSecondsForBalance(minutes, creditFactor);
+  if (!maxSeconds) {
+    // Appel international à N crédits la minute : le solde ne couvre pas une minute internationale (message clair avec N).
+    return creditFactor > 1
+      ? { ok: false, message: `Solde insuffisant pour un appel international : 1 minute = ${creditFactor} crédits.`, key: 'insufficient_minutes_international', creditFactor }
+      : { ok: false, message: 'Solde de minutes insuffisant.', key: 'insufficient_minutes' };
+  }
   return { ok: true, maxSeconds, twiml: buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds, recording, action }) };
 }
 

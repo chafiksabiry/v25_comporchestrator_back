@@ -2,6 +2,7 @@ import { Subscription } from '../models/Subscription.js';
 import { stripeService } from './stripeService.js';
 import { CALLCENTER_TIER_LINES, callcenterTierFromMetadata } from './callcenterTier.js';
 import { phoneLinePriceCentsFromMetadata } from './phoneLineSubscription.js';
+import { resolveInternationalCoefficient } from './creditCoefficient.js';
 
 function numberOrNull(value) {
   const n = Number(value);
@@ -32,6 +33,7 @@ export async function loadCompanyPlanLimits(companyId) {
   const metadata = metadataObject(plan.metadata);
   const productEntry = Object.entries(metadata).find(([k]) => k.trim().toLowerCase() === 'harx_product');
   const fromMeta = stripeService.extractStripeProductLimits({ metadata });
+  const coefficient = resolveInternationalCoefficient({ metadata });
   return {
     planName: plan.name ? String(plan.name) : null,
     /** Produit du forfait (metadata `harx_product`), ex. `callcenter` ; null pour les forfaits TaaS. */
@@ -40,6 +42,9 @@ export async function loadCompanyPlanLimits(companyId) {
     callcenterTier: callcenterTierFromMetadata(metadata),
     /** Prix mensuel d'une ligne supplémentaire (metadata `phone_line_price_cents`, centimes) ; null = prix par défaut. */
     phoneLinePriceCents: phoneLinePriceCentsFromMetadata(metadata),
+    /** Crédits débités par minute internationale (métadonnée `international_minute_credits` du produit, sinon INTERNATIONAL_MINUTE_CREDITS, sinon 1). */
+    internationalCoefficient: coefficient.coefficient,
+    internationalCoefficientSource: coefficient.source,
     maxGigs: numberOrNull(fromMeta.maxGigs) ?? numberOrNull(plan.maxGigs),
     maxReps: numberOrNull(fromMeta.maxReps) ?? numberOrNull(plan.maxReps),
     communicationMinutes: numberOrNull(fromMeta.communicationMinutes) ?? numberOrNull(plan.communicationMinutes),

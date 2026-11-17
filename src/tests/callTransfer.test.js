@@ -92,7 +92,7 @@ const legs = {
 const updates = [];
 let failUpdate = false;
 const client = { calls: (sid) => ({ fetch: async () => { if (!legs[sid]) throw new Error('404'); return legs[sid]; }, update: async (p) => { if (failUpdate) throw new Error('twilio down'); updates.push({ sid, ...p }); return {}; } }) };
-setTransferDeps({ twilio: async () => client, minutes: async () => 30, now: () => NOW });
+setTransferDeps({ twilio: async () => client, minutes: async () => 30, creditFactor: async () => 1, now: () => NOW });
 
 let calls = [];
 const resetCalls = () => { calls = [
@@ -154,6 +154,13 @@ assert.equal(calls[0].transfer.startedAt, null, 'rien n’est consigné');
 setTransferDeps({ minutes: async () => 0 });
 assert.equal((await call(ctl.transfer, { body: { callSid: SID_CHILD, entryId: E_ONE } })).code, 402);
 setTransferDeps({ minutes: async () => 30 });
+
+// destination internationale à 4 crédits la minute : solde insuffisant pour une minute internationale => refus clair avec le coefficient
+setTransferDeps({ minutes: async () => 3, creditFactor: async () => 4 });
+r = await call(ctl.transfer, { body: { callSid: SID_CHILD, entryId: E_ONE } });
+assert.equal(r.code, 402); assert.equal(r.body.code, 'no_minutes'); assert.equal(r.body.creditsPerMinute, 4); assert.match(r.body.message, /1 minute = 4 crédits/);
+assert.equal(calls[0].transfer.startedAt, null, 'rien n’est consigné');
+setTransferDeps({ minutes: async () => 30, creditFactor: async () => 1 });
 
 // échec du fournisseur : l'appel reste à la secrétaire, rien de consigné
 failUpdate = true;

@@ -23,6 +23,7 @@ import {
   isRepShareInRetraction,
 } from '../utils/retraction.js';
 import { clearExpiredRetractions, reverseSaleCommission } from '../services/retractionService.js';
+import { planCreditCharging } from '../services/creditCoefficient.js';
 
 // 70/30 split enforced server-side. Single source of truth.
 const REP_SHARE = 0.7;
@@ -946,8 +947,13 @@ export async function syncMinutesFromCalls(companyId) {
         // Les appels de test du centre ne consomment pas de minutes.
         isTest: { $ne: true }
       },
-      { projection: { sid: 1, duration: 1 } }
+      { projection: { sid: 1, duration: 1, direction: 1, to: 1, from: 1 } }
     ).toArray();
+
+    // Crédits par minute selon la zone (1 minute internationale = N crédits ; N = 1 par défaut : comportement actuel, sans lecture du pays).
+    // Forfait illisible : les appels de type international sont différés (jamais débités à 1 à tort), les autres débités normalement.
+    const pending = calls.filter((c) => !alreadyCharged.has(String(c.sid || c._id || '')));
+    const charging = pending.length ? await planCreditCharging({ companyId, calls: pending }) : { factorOf: () => 1, deferred: new Set() };
 
     // Billing rule: each call is billed at the ceiling of its duration in
     // minutes (10s → 1 min, 1m02s → 2 min). We aggregate the per-call ceiling
@@ -957,11 +963,12 @@ export async function syncMinutesFromCalls(companyId) {
     const newKeys = [];
     for (const c of calls) {
       const key = String(c.sid || c._id || '');
-      if (!key || alreadyCharged.has(key)) continue;
+      if (!key || alreadyCharged.has(key) || charging.deferred.has(key)) continue;
       const secs = Number(c.duration || 0);
       if (secs <= 0) continue;
       addedSeconds += secs;
-      addedMinutes += Math.ceil(secs / 60);
+      // Minute entamée arrondie à la minute supérieure, PUIS multipliée par les crédits de la zone (1 ou N).
+      addedMinutes += Math.ceil(secs / 60) * charging.factorOf(c);
       newKeys.push(key);
     }
 

@@ -9,6 +9,7 @@ import { loadUserName } from '../services/followUpDirectory.js';
 import { loadTools, mergedTools } from '../services/secretariatTools.js';
 import { voiceIdentity } from '../services/voicePresenceService.js';
 import { normalizeOutboundDestination, maxSecondsForBalance } from '../services/browserOutbound.js';
+import { outboundCreditFactor } from '../services/creditCoefficient.js';
 import { languageForPhone, phrasesFor } from '../services/companyLanguage.js';
 import {
   buildTransferMessageTwiml, buildTransferResultTwiml, buildTransferTwiml, CALL_SID, entryAvailability, isReachableNow, resultOfDial,
@@ -33,6 +34,11 @@ const deps = {
       import('../services/browserOutbound.js'), import('./escrowController.js'), import('../services/planMinutesGrant.js'), import('../models/MinutesCompany.js'),
     ]);
     return freshMinutesBalance(companyId, { sync: syncMinutesFromCalls, grant: ensurePlanMinutesGranted, readWallet: (id) => MinutesCompany.findOne({ companyId: id }).select('minutes').lean() });
+  },
+  /** Crédits débités par minute vers ce numéro (1, ou N à l'international). */
+  creditFactor: async (companyId, to) => {
+    const { loadCompanyPlanLimits } = await import('../services/planLimits.js');
+    try { return await outboundCreditFactor({ companyId, limits: await loadCompanyPlanLimits(companyId), to }); } catch { return 1; }
   },
   now: () => Date.now(),
 };
@@ -95,8 +101,9 @@ export const callTransferController = {
       if (mode === 'dial') {
         number = normalizeOutboundDestination(entry.phone);
         if (!number) return fail(res, 422, `Le numéro de ${entry.name} n’est pas une destination autorisée.`, { code: 'destination_not_allowed' });
-        maxSeconds = maxSecondsForBalance(await deps.minutes(access.companyId));
-        if (!maxSeconds) return fail(res, 402, 'Solde de minutes insuffisant pour passer cet appel : proposez à l’appelant de laisser un message.', { code: 'no_minutes' });
+        const creditFactor = await deps.creditFactor(access.companyId, number);
+        maxSeconds = maxSecondsForBalance(await deps.minutes(access.companyId), creditFactor);
+        if (!maxSeconds) return fail(res, 402, creditFactor > 1 ? `Solde insuffisant pour un appel international (1 minute = ${creditFactor} crédits) : proposez à l’appelant de laisser un message.` : 'Solde de minutes insuffisant pour passer cet appel : proposez à l’appelant de laisser un message.', { code: 'no_minutes', ...(creditFactor > 1 ? { creditsPerMinute: creditFactor } : {}) });
       }
 
       const byName = (await loadUserName(access.userId)) || 'Accueil';
