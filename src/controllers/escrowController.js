@@ -1355,6 +1355,46 @@ async function reconcileCompanyRewards(companyId) {
   }
 }
 
+/**
+ * Rapprochement d'une société : au plus UN en cours et UN en attente par société. Une demande qui arrive pendant un rapprochement
+ * attend le suivant (jamais perdue : les écritures arrivées entre-temps sont prises en compte), les demandes suivantes le partagent.
+ * Borne la charge base quelle que soit la cadence des appels.
+ */
+const reconcileRuns = new Map();
+export function runReconciliationCoalesced(companyId, run) {
+  const state = reconcileRuns.get(companyId) || { running: null, queued: null };
+  reconcileRuns.set(companyId, state);
+  const start = () => {
+    const p = Promise.resolve().then(run);
+    state.running = p;
+    const done = () => {
+      if (state.running === p) state.running = null;
+      if (!state.running && !state.queued) reconcileRuns.delete(companyId);
+    };
+    p.then(done, done);
+    return p;
+  };
+  if (!state.running) return start();
+  if (!state.queued) {
+    const settle = () => { state.queued = null; return start(); };
+    state.queued = state.running.then(settle, settle);
+  }
+  return state.queued;
+}
+
+/** Plafond des rapprochements demandés par des UTILISATEURS : RECONCILE_USER_LIMIT par minute et par société (le service n'est pas plafonné, il est coalescé). */
+const RECONCILE_USER_LIMIT = 20;
+const RECONCILE_WINDOW_MS = 60 * 1000;
+const reconcileHits = new Map();
+export function takeReconcileSlot(companyId, now = Date.now()) {
+  const recent = (reconcileHits.get(companyId) || []).filter((t) => now - t < RECONCILE_WINDOW_MS);
+  if (recent.length >= RECONCILE_USER_LIMIT) { reconcileHits.set(companyId, recent); return false; }
+  recent.push(now);
+  reconcileHits.set(companyId, recent);
+  return true;
+}
+export function resetReconcileLimits() { reconcileHits.clear(); reconcileRuns.clear(); }
+
 export const escrowController = {
   // Get wallet status (creates default + demo data if not exists)
   /** PAY-17: lightweight, server-to-server balance read for the pre-call gate (no heavy reconciliation). */
@@ -2589,18 +2629,28 @@ export const escrowController = {
   triggerReconciliation: async (req, res) => {
     try {
       const { companyId } = req.params;
-      if (!companyId) {
+      if (!companyId || !mongoose.Types.ObjectId.isValid(String(companyId))) {
         return res.status(400).json({ error: 'Company ID is required' });
       }
+      // Jeton de service (service des appels) : accepté pour toute société. Sinon : titulaire de CETTE société, refusé AVANT toute écriture.
+      if (!req.serviceCaller) {
+        const access = await guardCompanyAccess(req, res, companyId, { ownerOnly: true });
+        if (!access) return;
+        if (!takeReconcileSlot(String(companyId))) {
+          return res.status(429).json({ error: 'Too many reconciliations for this company, retry shortly', code: 'RATE_LIMITED' });
+        }
+      }
 
-      const zeroRateFix = await correctZeroRateOvercharges(companyId);
-      await reconcilePendingTransactions(companyId);
-      await reconcileCallCharges(companyId);
-      await reconcileCompanyRewards(companyId);
-      await reconcileHarxEarnings();
-
-      // Broadcast update via WebSocket (single-arg payload; clients filter by companyId)
-      broadcastUpdate({ type: 'reconciliation_complete', companyId });
+      const zeroRateFix = await runReconciliationCoalesced(String(companyId), async () => {
+        const fix = await correctZeroRateOvercharges(companyId);
+        await reconcilePendingTransactions(companyId);
+        await reconcileCallCharges(companyId);
+        await reconcileCompanyRewards(companyId);
+        await reconcileHarxEarnings();
+        // Diffusé aux seules connexions de CETTE société (filtrage côté serveur, websocket/escrowUpdates.js).
+        broadcastUpdate({ type: 'reconciliation_complete', companyId: String(companyId) });
+        return fix;
+      });
 
       res.status(200).json({
         success: true,
@@ -2907,6 +2957,8 @@ export const escrowController = {
     if (!callId || !repId) {
       return res.status(400).json({ error: 'callId and repId are required' });
     }
+    // Utilisateur (pas le service des appels) : il doit nommer SA société, contrôlée avant toute diffusion.
+    if (!req.serviceCaller && !(await guardCompanyAccess(req, res, companyId))) return;
 
     broadcastUpdate({
       type: 'call_analysis_complete',
@@ -2928,6 +2980,7 @@ export const escrowController = {
     if (!companyId || !callId) {
       return res.status(400).json({ error: 'companyId and callId are required' });
     }
+    if (!req.serviceCaller && !(await guardCompanyAccess(req, res, companyId))) return;
 
     broadcastUpdate({
       type: 'call_analysis_help_requested',
