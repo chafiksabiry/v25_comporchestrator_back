@@ -25,7 +25,7 @@ After buying a number the "test call" rings the user's own phone from the line; 
 ## Receiving and making calls
 - Inbound calls ring the people available in the browser ("Calls enabled" / "Take calls", microphone must be allowed); if nobody is present the call is forwarded to the owner's mobile, then to voicemail.
 - Nomad Solo has an outbound keypad in the portal; outbound calls need an active or trial subscription and a minutes balance above zero; by default only French (+33) destinations.
-- Voicemail: ring delay adjustable (5 to 120 seconds), caller message up to 120 seconds, voicemail screen with follow-up status (new, to call back, called back, closed) and notes. AI analysis of a message (transcription, summary, intent, urgency, callback number) needs at least 3,000 AI tokens in the balance; otherwise the message waits ("waiting for tokens").
+- Voicemail: ring delay adjustable (5 to 120 seconds), caller message up to 10 minutes (600 seconds), voicemail screen with follow-up status (new, to call back, called back, closed) and notes. AI analysis of a message (transcription, summary, intent, urgency, callback number) needs at least 3,000 AI tokens in the balance; otherwise the message waits ("waiting for tokens").
 - Greeting message: proposed by AI, editable, voice selectable; without validation a standard voice reads the text.
 
 ## Troubleshooting quick list
