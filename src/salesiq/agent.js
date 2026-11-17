@@ -49,9 +49,9 @@ const signed = (text) => `${String(text).trim()}\n\n${SIGNATURE}`;
  */
 export const ackResponse = (lang = 'fr') => ({ action: 'reply', replies: [signed(MESSAGES[lang].ack)] });
 
-export function createAgent({ cfg, claude, zoho, tools, knowledge, logger = console, now = () => Date.now() }) {
+export function createAgent({ cfg, claude, zoho, tools, knowledge, kb = null, logger = console, now = () => Date.now() }) {
   const limiter = createRateLimiter({ perMinute: cfg.rateLimitPerMinute, perDay: cfg.rateLimitPerDay });
-  const staticPrompt = buildStaticPrompt(knowledge);
+  const staticPrompt = buildStaticPrompt({ ...knowledge, topicIndex: kb?.topicIndex?.() || '' });
   const sessions = new Map(); // clé visiteur -> { turns: [{role, content}], email, updated }
 
   const keyOf = (evt) => evt.visitorId || evt.conversationId || evt.visitorEmail || 'anonymous';
