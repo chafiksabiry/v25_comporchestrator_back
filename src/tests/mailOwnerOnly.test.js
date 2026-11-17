@@ -581,8 +581,8 @@ try {
   assert.equal(r.status, 201, JSON.stringify(r.body)); assert.equal(r.body.data.calendar.status, 'synced'); assert.deepEqual(eventsBy(), ['ACCESS_BOSS']); assert.equal(items.at(-1).calendarOwnerId, 'owner1', 'propriétaire de l’agenda mémorisé pour la suite');
   httpCalls.length = 0;
   r = await fup('PATCH', `/${items.at(-1)._id}`, { user: 'mgrA', body: { status: 'canceled' } });
-  assert.ok([200, 404].includes(r.status), `annulation par un autre responsable : ${r.status}`);
-  if (r.status === 200) assert.deepEqual(httpCalls.filter((c) => c.method === 'DELETE').map(bearer), ['ACCESS_BOSS'], 'l’annulation retire l’événement du calendrier où il a été créé');
+  assert.equal(r.status, 200, `annulation par un autre responsable : ${r.text}`);
+  assert.deepEqual(httpCalls.filter((c) => c.method === 'DELETE').map(bearer), ['ACCESS_BOSS'], 'l’annulation retire l’événement du calendrier où il a été créé (celui de son propriétaire mémorisé), jamais celui de l’auteur de l’annulation');
 
   // =========================================================================================================
   // 8. MIGRATION — anciennes lignes : pas de rattachement au hasard, sans PII dans le journal, idempotente
