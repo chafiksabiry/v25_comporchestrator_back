@@ -193,9 +193,10 @@ test('canReceive : société → ses connexions (titulaire, membre) ; repId → 
 
 // ───────── WebSocket réel : serveur HTTP + clients ws ─────────
 let server; let port;
+const fiches = new Map(); // userId -> fiches agent liées au compte (simulé)
 before(async () => {
   server = http.createServer();
-  ws.setupEscrowWebSocket(server, { lookup });
+  ws.setupEscrowWebSocket(server, { lookup, agentIds: async (uid) => new Set(fiches.get(uid) || []), refreshMs: 40 });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   port = server.address().port;
 });
@@ -314,4 +315,36 @@ test('agent : la connexion reçoit l\'évènement de SA fiche (agents._id lié a
   const down = await ws.authenticateUpgrade(bearer(userTok(A1)), { lookup, agentIds: async () => { throw new Error('mongo down'); } });
   assert.equal(down.ok, true); assert.deepEqual(down.access.agentIds, []);
   assert.equal(ws.canReceive(down.access, { repId: FICHE }), false);
+});
+
+test('rep FREELANCE (sans société, callerAccess ne le marque pas agent) : accepté si une fiche agent est liée à son compte, refusé sinon ; ne reçoit que SES fiches', async () => {
+  const FICHE = '64b0000000000000000000f9';
+  access.freelance = { userId: 'fr1', companyId: null, companyIds: [], role: 'owner', isOwner: true };
+  fiches.set('fr1', [FICHE]);
+  const rep = await open(userTok('fr1'));
+  assert.equal(rep.ok, true, 'rep freelance avec fiche : connexion acceptée');
+  const sans = await open(userTok('n1'));
+  assert.equal(sans.ok, false); assert.equal(sans.status, 403, 'sans société ni fiche : refusé');
+  await tick(); rep.got.length = 0;
+  ws.broadcastUpdate({ type: 'rep_wallet_update', repId: FICHE });
+  ws.broadcastUpdate({ type: 'escrow_update', companyId: C1 });
+  ws.broadcastUpdate({ type: 'rep_wallet_update', repId: '64b0000000000000000000fa' });
+  await tick();
+  assert.deepEqual(rep.got.map((m) => m.type), ['rep_wallet_update'], 'seulement l\'évènement de SA fiche');
+  rep.c.close(); delete access.freelance; fiches.delete('fr1');
+});
+
+test('fiches agent relues périodiquement : une fiche rattachée APRÈS la connexion reçoit ses évènements sans reconnexion', async () => {
+  const NOUVELLE = '64b0000000000000000000fb';
+  fiches.set('0', []);
+  access.late = { userId: 'late1', companyId: C1, companyIds: [C1], role: 'agent', isOwner: false };
+  const a = await open(userTok('late1'));
+  assert.equal(a.ok, true); await tick(); a.got.length = 0;
+  ws.broadcastUpdate({ type: 'rep_wallet_update', repId: NOUVELLE }); await tick();
+  assert.equal(a.got.length, 0, 'fiche inconnue au moment de la connexion');
+  fiches.set('late1', [NOUVELLE]);
+  await new Promise((r) => setTimeout(r, 160));
+  ws.broadcastUpdate({ type: 'rep_wallet_update', repId: NOUVELLE }); await tick();
+  assert.equal(a.got.length, 1, 'fiche prise en compte après le rafraîchissement');
+  a.c.close(); delete access.late;
 });

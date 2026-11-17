@@ -267,3 +267,16 @@ test('retractSale : la vente d\'une AUTRE société est refusée (403) même si 
   const r = await call('retractSale', { params: { transactionId: ID }, body: { companyId: C1 } });
   assert.equal(r.code, 403); assert.equal(writes, 0); assert.equal(foreign.status, 'earned');
 });
+
+test('guardAgentSelf : base des fiches agent ILLISIBLE => 403 HTTP (jamais ouvert) pour toute fiche qui n\'est pas l\'identifiant du compte lui-même, aucune écriture', async () => {
+  const broken = { collection: () => ({ find: () => { throw new Error('mongo down'); } }) };
+  Object.defineProperty(mongoose.connection, 'db', { get: () => broken, configurable: true });
+  for (const [name, req] of Object.entries(AGENT_SELF)) {
+    writes = 0;
+    const r = await call(name, { ...req, userId: 'agent-user-1' }); // la fiche A1 est liée à ce compte, mais la base ne répond pas
+    assert.equal(r.code, 403, name); assert.equal(writes, 0, name);
+  }
+  // le compte qui demande SA PROPRE identité (agentId = userId) n'a pas besoin de la base : le contrôle passe (aucun 403)
+  const self = await call('getAgentWithdrawals', { params: { agentId: 'agent-user-1' }, userId: 'agent-user-1' });
+  assert.notEqual(self.code, 403);
+});
