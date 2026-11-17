@@ -47,12 +47,14 @@ const companyPaymentSchema = new mongoose.Schema({
   checkoutUrl: { type: String },
   status: {
     type: String,
-    enum: ['pending', 'succeeded', 'failed', 'refunded'],
+    enum: ['pending', 'succeeded', 'failed', 'refunded', 'review'],
     default: 'pending',
     index: true
   },
   failureReason: { type: String },
   fulfilledAt: { type: Date },
+  /** Verrou de crédit (bail) : posé atomiquement avant de créditer, rendu en cas d'échec, périmé après un délai (voir fulfillCompanyPaymentOnce). */
+  fulfillClaimedAt: { type: Date },
   /** planId, userId, stripePriceId, planName for subscription_upgrade ; { minutes, tokens, minutesCredited, tokensCredited } for bundle_purchase */
   meta: { type: mongoose.Schema.Types.Mixed }
 }, { timestamps: true });
