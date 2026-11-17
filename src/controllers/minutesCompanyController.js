@@ -3,6 +3,7 @@ import { syncMinutesFromCalls } from './escrowController.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { callerAccess, ScopeError } from '../middleware/companyScope.js';
 import mongoose from 'mongoose';
+import { creditFactorForCall } from '../services/creditCoefficient.js';
 
 async function readMinutes(companyId, res) {
   try {
@@ -149,8 +150,12 @@ export const minutesCompanyController = {
         wallet = await MinutesCompany.create({ companyId, minutes: 0 });
       }
 
-      // Billing rule: any started minute is billed in full (10s → 1 min, 1m02s → 2 min).
-      const durationMinutes = Math.ceil(durationSeconds / 60);
+      // Crédits par minute selon la zone (1, ou N pour un appel international ; classement d'après la ligne de l'appel stocké). Forfait ou
+      // lignes illisibles : 1 crédit, comme avant (le débit normal n'est jamais sauté).
+      const factor = await creditFactorForCall({ companyId, call: stored });
+
+      // Billing rule: any started minute is billed in full (10s → 1 min, 1m02s → 2 min), then multiplied by the credits of the zone.
+      const durationMinutes = Math.ceil(durationSeconds / 60) * factor;
       const updated = await MinutesCompany.findOneAndUpdate(
         { companyId, chargedCallSids: { $ne: chargeKey } },
         {

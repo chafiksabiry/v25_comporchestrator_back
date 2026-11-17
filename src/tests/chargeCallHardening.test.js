@@ -12,6 +12,7 @@ process.env.TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || 'x';
 const { default: MinutesCompany } = await import('../models/MinutesCompany.js');
 const { minutesCompanyController } = await import('../controllers/minutesCompanyController.js');
 const { syncMinutesFromCalls } = await import('../controllers/escrowController.js');
+const { Subscription } = await import('../models/Subscription.js');
 
 const C1 = '64b0000000000000000000c1'; const C2 = '64b0000000000000000000c2';
 let W; let CALLS;
@@ -19,6 +20,7 @@ const clone = (v) => (v == null ? v : structuredClone(v));
 const saved = { log: console.log, warn: console.warn, error: console.error };
 beforeEach(() => {
   console.log = () => {}; console.warn = () => {}; console.error = () => {};
+  Subscription.findOne = () => ({ populate: async () => null }); // pas d'abonnement lisible : coefficient par défaut (1)
   W = { companyId: C1, minutes: 10, consumedSeconds: 0, chargedCallSids: [] }; CALLS = [];
   MinutesCompany.findOne = () => ({ then(r, j) { return Promise.resolve(clone(W)).then(r, j); } });
   MinutesCompany.create = async (d) => { W = { minutes: 0, consumedSeconds: 0, chargedCallSids: [], ...d }; return clone(W); };

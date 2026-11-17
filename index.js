@@ -3,6 +3,7 @@ import { config } from './src/config/env.js';
 import express from 'express';
 import http from 'http';
 import { setupEscrowWebSocket } from './src/websocket/escrowUpdates.js';
+import { demoBodyQueryAlias, idParam, demoAliasEnabled } from './src/middleware/demoAlias.js';
 import mongoose from 'mongoose';
 import { requirementRoutes } from './src/routes/requirement.js';
 import { addressRoutes } from './src/routes/address.js';
@@ -62,7 +63,7 @@ app.use((req, res, next) => {
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, x-user-id, x-agent-id, X-Api-Key');
   res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Expose-Headers', 'Content-Disposition');
+  res.header('Access-Control-Expose-Headers', 'Content-Disposition, X-Journal-Truncated');
 
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
@@ -95,38 +96,12 @@ app.use((req, res, next) => {
 });
 app.use(express.urlencoded({ extended: true }));
 
-// Map and Validate companyId / agentId parameters to prevent Mongoose CastErrors
-app.use((req, res, next) => {
-  if (req.body && req.body.companyId === 'demo_company_id') {
-    req.body.companyId = '6a0bfd35d605ccca8b51e13b';
-  }
-  if (req.query && req.query.companyId === 'demo_company_id') {
-    req.query.companyId = '6a0bfd35d605ccca8b51e13b';
-  }
-  next();
-});
-
-app.param('companyId', (req, res, next, value) => {
-  if (value === 'demo_company_id') {
-    req.params.companyId = '6a0bfd35d605ccca8b51e13b';
-    return next();
-  }
-  if (!mongoose.Types.ObjectId.isValid(value)) {
-    return res.status(400).json({ error: 'Invalid companyId format' });
-  }
-  next();
-});
-
-app.param('agentId', (req, res, next, value) => {
-  if (value === 'demo_company_id') {
-    req.params.agentId = '6a0bfd35d605ccca8b51e13b';
-    return next();
-  }
-  if (!mongoose.Types.ObjectId.isValid(value)) {
-    return res.status(400).json({ error: 'Invalid agentId format' });
-  }
-  next();
-});
+// Map and Validate companyId / agentId parameters to prevent Mongoose CastErrors (alias de démonstration : voir src/middleware/demoAlias.js ;
+// désactivé par défaut, réactivable avec DEMO_COMPANY_ID_ENABLED=true).
+app.use(demoBodyQueryAlias());
+app.param('companyId', idParam('companyId'));
+app.param('agentId', idParam('agentId'));
+if (demoAliasEnabled()) console.warn('[security] alias « demo_company_id » ACTIVÉ par DEMO_COMPANY_ID_ENABLED=true (donne accès à une société réelle sur les routes non protégées)');
 
 // Routes API
 app.use('/api/requirements', requirementRoutes);
