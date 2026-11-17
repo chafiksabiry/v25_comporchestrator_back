@@ -22,8 +22,9 @@ const NOT_CONNECTED = 'Connectez votre messagerie (Gmail ou Outlook) dans Param�
 const UNAVAILABLE = 'Votre messagerie connectée est momentanément indisponible. Aucun e-mail n’a été envoyé : réessayez dans un instant.';
 
 /**
- * Droits de l'appelant : titulaire, ou membre avec le droit d'appels (boîte de la société et comptes partagés). Une secrétaire (rôle agent)
- * n'envoie QUE depuis un compte partagé que le titulaire a autorisé, et ne lit que son propre journal. Répond lui-même et renvoie null en cas de refus.
+ * Droits de l'appelant : titulaire, ou membre avec le droit d'appels. Chacun n'envoie QUE depuis une boîte qu'il a lui-même connectée (sa connexion, sa messagerie
+ * personnelle, un compte partagé qu'il a connecté) ou depuis un compte qu'un propriétaire lui a explicitement délégué. Une secrétaire (rôle agent) n'envoie QUE depuis
+ * un compte (délégué ou sa messagerie personnelle) et ne lit que son propre journal. Répond lui-même et renvoie null en cas de refus.
  */
 async function context(req, res) {
   let access;
@@ -46,7 +47,14 @@ async function context(req, res) {
   return access;
 }
 
-const view = (l) => ({
+/**
+ * Entrée du journal d'envoi. Un e-mail part TOUJOURS de la boîte de son auteur : destinataires, objet, nom de l'expéditeur et adresse de la boîte ne sont montrés qu'à lui ;
+ * pour les autres (titulaire compris) l'entrée n'est qu'un total : date, modèle, état et élément « À traiter » lié.
+ */
+const view = (l, userId) => (userId !== undefined && String(l.sentById) !== String(userId) ? {
+  id: String(l._id), at: l.createdAt, by: { id: '', name: '' }, to: [], subject: '', template: l.template,
+  followUpId: l.followUpId ? String(l.followUpId) : null, withIcs: l.withIcs === true, status: l.status, error: '', from: null, masked: true,
+} : {
   id: String(l._id), at: l.createdAt, by: { id: l.sentById, name: l.sentByName || '' }, to: l.to || [], subject: l.subject, template: l.template,
   followUpId: l.followUpId ? String(l.followUpId) : null, withIcs: l.withIcs === true, status: l.status, error: l.error || '',
   from: l.accountId ? { accountId: String(l.accountId), email: l.fromEmail || '', label: l.fromLabel || '' } : null,
@@ -130,12 +138,12 @@ export const emailController = {
       const used = await usage(new mongoose.Types.ObjectId(access.companyId));
       if (access.role === 'agent') {
         // Une secrétaire n'a pas la messagerie de la société : « configuré » = au moins un compte utilisable pour écrire (délégué autorisé OU sa messagerie personnelle).
-        const usable = (await listAccounts(access.companyId, access)).filter((a) => a.can.send && !a.needsReauth);
+        const usable = (await listAccounts(access.companyId, access)).filter((a) => (a.can ? a.can.send : true) && !a.needsReauth);
         return res.json({ success: true, data: { configured: usable.length > 0, provider: null, account: null, limits: max, remainingThisHour: Math.max(0, max.perHour - used.hour), remainingToday: Math.max(0, max.perDay - used.day) } });
       }
       // Les e-mails ne partent que de la messagerie connectée du centre : `configured` = une messagerie active (aucune dépendance au service HARX).
       const identity = await loadEmailIdentity(access.companyId);
-      const mailbox = await resolveMailbox(access.companyId, identity.provider);
+      const mailbox = await resolveMailbox(access.companyId, identity.provider, access.userId); // SA boîte seulement : celle d'un autre n'existe pas pour lui
       const ok = !mailbox.error;
       res.json({ success: true, data: { configured: ok, provider: ok ? mailbox.provider : null, account: ok ? mailbox.account : null, limits: max, remainingThisHour: Math.max(0, max.perHour - used.hour), remainingToday: Math.max(0, max.perDay - used.day) } });
     } catch (error) {
@@ -156,7 +164,7 @@ export const emailController = {
       }
       const limit = Math.min(100, Math.max(1, Math.floor(Number(req.query.limit)) || 50));
       const rows = await EmailLog.find(filter).sort({ createdAt: -1 }).limit(limit).lean();
-      res.json({ success: true, data: { items: rows.map(view) } });
+      res.json({ success: true, data: { items: rows.map((l) => view(l, access.userId)) } }); // `from` (adresse d'une boîte) : montrée à la seule personne qui a envoyé
     } catch (error) {
       console.error('emails list:', error.message);
       fail(res, 500, 'Lecture du journal des e-mails impossible.');
@@ -173,7 +181,7 @@ export const emailController = {
       if (access.role === 'agent' && !wanted) return fail(res, 403, NOT_ALLOWED); // inchangé : sans compte (délégué autorisé ou sa messagerie personnelle), une secrétaire n'envoie pas
       if (wanted) return sendFromShared(req, res, access, wanted);
       const identity = await loadEmailIdentity(access.companyId);
-      const mailbox = await resolveMailbox(access.companyId, identity.provider);
+      const mailbox = await resolveMailbox(access.companyId, identity.provider, access.userId); // jamais la boîte d'un autre membre
       if (mailbox.error === 'needs_reauth') return refuse(res, 'mailbox_needs_reauth', connectionMessages.needsReauth(mailbox.provider));
       if (mailbox.error) return refuse(res, 'mailbox_not_connected', NOT_CONNECTED);
       const checked = validateSend(req.body);
@@ -208,7 +216,7 @@ export const emailController = {
         await sendViaConnection(access.companyId, mailbox.provider, {
           fromName: v.centerName, to: v.to, subject: v.subject, text: payload.textContent, html: payload.htmlContent, replyTo: payload.replyTo,
           attachments: (payload.attachment || []).map((a) => ({ name: a.name, contentType: 'text/calendar; charset=UTF-8; method=PUBLISH', contentBase64: a.content })),
-        });
+        }, { userId: access.userId });
       } catch (error) {
         const e = error instanceof SecretariatError ? error : new SecretariatError('provider_error', '');
         console.error(`emails send (${mailbox.provider}): ${e.code}`);

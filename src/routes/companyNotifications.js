@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import CompanyNotification from '../models/CompanyNotification.js';
 import { authenticate } from '../middleware/auth.js';
 import { toPublic } from '../services/companyNotificationService.js';
+import { guardCompanyAccess } from '../middleware/companyGuard.js';
 
 const router = express.Router();
 const validCompany = (req, res, next) => {
@@ -10,8 +11,10 @@ const validCompany = (req, res, next) => {
   next();
 };
 
-// Company dashboard (JWT required, like the other company money/usage routes).
+// Company dashboard : JWT + appartenance à CETTE société (propriétaire ou membre : lecture et « lu » ; propriétaire seul : suppression). Refus 403 sans
+// aucune lecture ni écriture, service d'inscription indisponible 503 (jamais ouvert).
 router.get('/:companyId', authenticate, validCompany, async (req, res) => {
+  if (!(await guardCompanyAccess(req, res, req.params.companyId))) return;
   try {
     const limit = Math.min(200, Math.max(1, Math.round(Number(req.query.limit || 50))));
     const rows = await CompanyNotification.find({ companyId: req.params.companyId }).sort({ createdAt: -1 }).limit(limit).lean();
@@ -23,6 +26,7 @@ router.get('/:companyId', authenticate, validCompany, async (req, res) => {
 });
 
 router.put('/:companyId/read-all', authenticate, validCompany, async (req, res) => {
+  if (!(await guardCompanyAccess(req, res, req.params.companyId))) return;
   try {
     await CompanyNotification.updateMany({ companyId: req.params.companyId, read: false }, { $set: { read: true } });
     res.json({ success: true });
@@ -32,6 +36,7 @@ router.put('/:companyId/read-all', authenticate, validCompany, async (req, res) 
 });
 
 router.put('/:companyId/:id/read', authenticate, validCompany, async (req, res) => {
+  if (!(await guardCompanyAccess(req, res, req.params.companyId))) return;
   try {
     const read = req.body?.read !== false;
     const row = await CompanyNotification.findOneAndUpdate(
@@ -47,6 +52,7 @@ router.put('/:companyId/:id/read', authenticate, validCompany, async (req, res) 
 });
 
 router.delete('/:companyId/:id', authenticate, validCompany, async (req, res) => {
+  if (!(await guardCompanyAccess(req, res, req.params.companyId, { ownerOnly: true }))) return;
   try {
     await CompanyNotification.deleteOne({ _id: req.params.id, companyId: req.params.companyId });
     res.json({ success: true });
@@ -56,6 +62,7 @@ router.delete('/:companyId/:id', authenticate, validCompany, async (req, res) =>
 });
 
 router.delete('/:companyId', authenticate, validCompany, async (req, res) => {
+  if (!(await guardCompanyAccess(req, res, req.params.companyId, { ownerOnly: true }))) return;
   try {
     await CompanyNotification.deleteMany({ companyId: req.params.companyId });
     res.json({ success: true });

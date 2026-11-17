@@ -277,7 +277,7 @@ try {
   const hit = (d, f) => Object.entries(f).every(([k, x]) => (x && typeof x === 'object' && '$in' in x ? x.$in.includes(d[k]) : String(d[k]) === String(x)));
   SecretariatConnection.find = (f) => ({ select() { return this; }, lean: async () => JSON.parse(JSON.stringify(conns.filter((d) => hit(d, f)))) });
   SecretariatConnection.findOne = (f) => connChain(conns.find((d) => hit(d, f)));
-  conns.push({ companyId: C1, provider: 'google', accountEmail: 'centre@gmail.test', status: 'connected',
+  conns.push({ companyId: C1, provider: 'google', accountEmail: 'centre@gmail.test', status: 'connected', connectedBy: 'owner1',
     credentialsEnc: encryptJson({ accessToken: 'ACCESS_SECRET', refreshToken: 'REFRESH_SECRET', expiresAt: Date.now() + 3600_000 }, { context: `secretariat:${C1}:google`, key: loadKey() }) });
   const net = [];
   SC.setConnectionsHttp(async (rq) => { net.push(rq); return /messages\/send/.test(rq.url) ? { status: 200, json: { id: 'm1' }, headers: {} } : { status: 599, json: null, headers: {} }; });

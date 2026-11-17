@@ -16,6 +16,7 @@ import { fulfillStripeCheckoutSessionPayment } from '../services/paymentFulfillm
 import { config } from '../config/env.js';
 import { handlePhoneLineInvoiceEvent, handlePhoneLineSubscriptionDeleted } from '../services/phoneLineSubscription.js';
 import { currencyForCountry, normalizeCurrency, pickCurrency, priceAmounts } from '../services/currency.js';
+import { stripeLocaleFromRequest } from '../services/stripeLocale.js';
 
 function numberOrNull(value) {
   const n = Number(value);
@@ -451,6 +452,8 @@ export const subscriptionController = {
           return res.status(503).json({ error: 'Stripe not configured', message: 'Définissez STRIPE_SECRET_KEY.' });
         }
         const metadata = { companyId: String(companyId), paymentId: String(payment._id) };
+        // Langue de l'interface (corps `locale` / `language`) ; anglais par défaut.
+        const stripeLocale = stripeLocaleFromRequest(req);
 
         if (uiMode === 'embedded') {
           const session = await stripeService.createEmbeddedSubscriptionSession(
@@ -458,7 +461,8 @@ export const subscriptionController = {
             effectivePriceId,
             metadata,
             promotionCodeId,
-            chosenCurrency
+            chosenCurrency,
+            { locale: stripeLocale }
           );
           payment.providerRef = session.id;
           payment.checkoutUrl = '';
@@ -495,7 +499,8 @@ export const subscriptionController = {
           cancelUrl,
           metadata,
           promotionCodeId,
-          chosenCurrency
+          chosenCurrency,
+          { locale: stripeLocale }
         );
         checkoutUrl = session.url;
         payment.providerRef = session.id;
@@ -624,7 +629,10 @@ export const subscriptionController = {
         priceId,
         successUrl,
         cancelUrl,
-        { companyId } // Pass metadata
+        { companyId }, // Pass metadata
+        null,
+        null,
+        { locale: stripeLocaleFromRequest(req) }
       );
 
       res.json({ 

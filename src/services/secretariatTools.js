@@ -108,9 +108,9 @@ export function validateToolsPatch(body, current, connected = new Set()) {
     }
     if (i.secretaries !== undefined) {
       if (typeof i.secretaries !== 'boolean') return bad('« inbound.secretaries » doit être vrai ou faux.');
-      const enabledAfter = i.enabled !== undefined ? i.enabled : cur.inbound.enabled === true;
-      if (i.secretaries && !enabledAfter) return bad('Activez d’abord la lecture des e-mails entrants avant de l’ouvrir aux secrétaires.');
-      set['inbound.secretaries'] = i.secretaries;
+      // L'ouverture de la lecture aux secrétaires n'existe plus : une boîte mail n'est lisible que par la personne qui l'a connectée. Seul « faux » est accepté (sans effet).
+      if (i.secretaries) return bad('Ouvrir la lecture des e-mails aux secrétaires n’est plus possible : une boîte mail n’est lisible que par la personne qui l’a connectée.');
+      set['inbound.secretaries'] = false;
     }
     if (i.mailboxActions !== undefined) {
       if (typeof i.mailboxActions !== 'boolean') return bad('« inbound.mailboxActions » doit être vrai ou faux.');
@@ -166,7 +166,7 @@ export function toView(doc, feedUrl = null) {
     visio: { provider: t.visio.provider, customUrl: t.visio.customUrl },
     agenda: { provider: t.agenda.provider, feedUrl: feedUrl || null },
     timeZone: t.timeZone,
-    inbound: { enabled: t.inbound.enabled === true, secretaries: t.inbound.enabled === true && t.inbound.secretaries === true, mailboxActions: t.inbound.enabled === true && t.inbound.mailboxActions === true },
+    inbound: { enabled: t.inbound.enabled === true, secretaries: false, mailboxActions: t.inbound.enabled === true && t.inbound.mailboxActions === true },
     configured: {
       email: Boolean(email.fromName || email.replyTo || email.signature) || email.provider !== 'platform',
       // Vrai seulement si un fournisseur connecté (Google Meet, Teams, Zoom) est choisi ; 'jitsi' / 'custom' = aucune visio.
