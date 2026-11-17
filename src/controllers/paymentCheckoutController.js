@@ -6,6 +6,7 @@ import { stripeService } from '../services/stripeService.js';
 import { bundleBalances, fulfillBundlePurchase, fulfillMinutesPurchase, fulfillTokensPurchase, fulfillWalletDeposit } from '../services/paymentFulfillment.js';
 import { bundleAmountCents, bundleLabel, parseBundleQuantities } from '../services/bundlePurchase.js';
 import { config } from '../config/env.js';
+import { paypalOrderMismatch, stripeSessionMismatch } from '../services/paymentVerification.js';
 import { FALLBACK_PURCHASE_CURRENCY, formatAmountLabel, purchaseCurrency } from '../services/purchaseCurrency.js';
 import {
   computeMinutesPurchaseCents,
@@ -369,9 +370,14 @@ export const paymentCheckoutController = {
       }
 
       if (payment.provider === 'paypal') {
-        const orderId = providerRef || payment.providerRef;
+        // La commande est celle créée pour CE paiement : jamais un identifiant imposé par le client (capturer la commande d'un autre).
+        const orderId = payment.providerRef;
         if (!orderId) {
-          return res.status(400).json({ error: 'PayPal order ID (providerRef) is required' });
+          return res.status(400).json({ error: 'PayPal order ID is missing on this payment' });
+        }
+        if (providerRef && providerRef !== orderId) {
+          console.warn(`[payments/checkout/confirm] commande PayPal étrangère refusée pour le paiement ${payment._id}`);
+          return res.status(400).json({ error: 'PayPal order does not belong to this payment' });
         }
 
         let capture;
@@ -397,13 +403,24 @@ export const paymentCheckoutController = {
           });
         }
 
+        const orderMismatch = paypalOrderMismatch(capture, payment);
+        if (orderMismatch) {
+          console.warn(`[payments/checkout/confirm] commande PayPal refusée pour le paiement ${payment._id} : ${orderMismatch}`);
+          return res.status(409).json({ error: 'PayPal order does not match this payment' });
+        }
+
         payment.status = 'succeeded';
         payment.providerRef = orderId;
         await payment.save();
       } else if (payment.provider === 'stripe') {
-        const sessionId = providerRef || payment.providerRef;
+        // La session est celle créée pour CE paiement : jamais un identifiant imposé par le client (payer peu, créditer beaucoup).
+        const sessionId = payment.providerRef;
         if (!sessionId) {
-          return res.status(400).json({ error: 'Stripe session ID (providerRef) is required' });
+          return res.status(400).json({ error: 'Stripe session ID is missing on this payment' });
+        }
+        if (providerRef && providerRef !== sessionId) {
+          console.warn(`[payments/checkout/confirm] session Stripe étrangère refusée pour le paiement ${payment._id}`);
+          return res.status(400).json({ error: 'Stripe session does not belong to this payment' });
         }
 
         let session;
@@ -419,11 +436,17 @@ export const paymentCheckoutController = {
           });
         }
 
-        if (session.payment_status !== 'paid' && session.status !== 'complete') {
+        if (session.payment_status !== 'paid') {
           return res.status(402).json({
             error: 'Stripe payment not completed',
             message: `Session status: ${session.payment_status || session.status}`
           });
+        }
+        // Même paiement, même montant, même devise : sinon rien n'est crédité.
+        const sessionMismatch = stripeSessionMismatch(session, payment);
+        if (sessionMismatch) {
+          console.warn(`[payments/checkout/confirm] session Stripe refusée pour le paiement ${payment._id} : ${sessionMismatch}`);
+          return res.status(409).json({ error: 'Stripe session does not match this payment' });
         }
 
         payment.status = 'succeeded';
