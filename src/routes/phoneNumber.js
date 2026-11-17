@@ -2,7 +2,7 @@ import express from 'express';
 import { phoneNumberController } from '../controllers/phoneNumberController.js';
 import { voicemailController } from '../controllers/voicemailController.js';
 import { authenticate } from '../middleware/auth.js';
-import { guard, companyFrom, companyFromIfPresent, ofNumber, ofPayment } from '../middleware/phoneScope.js';
+import { guard, companyFrom, companyFromIfPresent, ofNumber, ofPayment, ofCaller } from '../middleware/phoneScope.js';
 
 // Access control: `authenticate` = valid login; `guard(...)` = login + the caller belongs to the targeted company.
 // Left open on purpose: provider webhooks, and the two routes the REP copilot calls (gig check, configure-voice).
@@ -48,13 +48,13 @@ router.post(
 import multer from 'multer';
 const upload = multer({ storage: multer.memoryStorage() });
 
-router.get('/twilio/requirements', authenticate, phoneNumberController.getTwilioRequirements.bind(phoneNumberController));
-router.post('/twilio/end-users', authenticate, phoneNumberController.createTwilioEndUser.bind(phoneNumberController));
-router.post('/twilio/documents', authenticate, upload.single('file'), phoneNumberController.createTwilioDocument.bind(phoneNumberController));
-router.post('/twilio/bundles', authenticate, phoneNumberController.createTwilioBundle.bind(phoneNumberController));
-router.post('/twilio/bundles/:sid/items', authenticate, phoneNumberController.assignItemToBundle.bind(phoneNumberController));
-router.post('/twilio/bundles/:sid/submit', authenticate, phoneNumberController.submitTwilioBundle.bind(phoneNumberController));
-router.post('/twilio/addresses', authenticate, phoneNumberController.createTwilioAddress.bind(phoneNumberController));
+router.get('/twilio/requirements', ...guard(ofCaller), phoneNumberController.getTwilioRequirements.bind(phoneNumberController));
+router.post('/twilio/end-users', ...guard(ofCaller), phoneNumberController.createTwilioEndUser.bind(phoneNumberController));
+router.post('/twilio/documents', ...guard(ofCaller), upload.single('file'), phoneNumberController.createTwilioDocument.bind(phoneNumberController));
+router.post('/twilio/bundles', ...guard(ofCaller), phoneNumberController.createTwilioBundle.bind(phoneNumberController));
+router.post('/twilio/bundles/:sid/items', ...guard(ofCaller), phoneNumberController.assignItemToBundle.bind(phoneNumberController));
+router.post('/twilio/bundles/:sid/submit', ...guard(ofCaller), phoneNumberController.submitTwilioBundle.bind(phoneNumberController));
+router.post('/twilio/addresses', ...guard(ofCaller), phoneNumberController.createTwilioAddress.bind(phoneNumberController));
 
 // Get all phone numbers
 router.get('/', authenticate, phoneNumberController.getAllNumbers.bind(phoneNumberController));
