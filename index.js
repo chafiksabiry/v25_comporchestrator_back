@@ -35,7 +35,6 @@ import { clearExpiredRetractions } from './src/services/retractionService.js';
 import { resolveExpiredPendingReviews, flagWeeklyAiAudits } from './src/controllers/escrowController.js';
 import { billExpiredTrialLines, reconcilePendingMonthlyLines, terminateSuspendedLines } from './src/services/phoneLineBillingService.js';
 import { syncPlanMetadataFromStripe } from './src/services/planMetadataSync.js';
-import { billAllClosedPeriods } from './src/services/minutesOverage.js';
 import { neutralizeGoogleInbox } from './src/services/googleInboxMigration.js';
 
 const app = express();
@@ -233,14 +232,6 @@ setInterval(() => {
 // webhook product.updated, pour qu'un webhook manqué ne laisse pas un prix de ligne périmé.
 setTimeout(() => { syncPlanMetadataFromStripe(); }, 30 * 1000);
 setInterval(() => { syncPlanMetadataFromStripe(); }, 6 * 60 * 60 * 1000);
-
-// Minutes hors forfait (offre Multi-clients) : facture les périodes closes (lignes de facture Stripe). Idempotent, ne lève jamais ;
-// double le webhook invoice.created pour qu'un événement manqué ne laisse aucun dépassement sans facture.
-setInterval(() => {
-  billAllClosedPeriods().catch((err) => {
-    console.warn('[overage-billing-cron]', err.message);
-  });
-}, RETRACTION_CRON_MS);
 
 // Warn companies whose wallet / minutes / tokens run short (the first check runs a minute after boot).
 const runLowResourceScan = () =>

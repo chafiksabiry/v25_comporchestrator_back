@@ -152,14 +152,13 @@ export function spokenRefusal(key, language = 'en') {
  * Décision de numérotation, sans accès réseau : renvoie la consigne TwiML à donner à Twilio.
  * `line` est la ligne Twilio de l'entreprise utilisée comme numéro appelant ; `minutes` le solde de minutes.
  */
-export function decideOutboundCall({ to, line, subscribed, minutes, recording = null, action = null, allowedSeconds = null }) {
+export function decideOutboundCall({ to, line, subscribed, minutes, recording = null, action = null }) {
   if (!to) return { ok: false, message: 'Numéro non autorisé.', key: 'number_not_allowed' };
   if (!subscribed) return { ok: false, message: 'Aucun abonnement actif.', key: 'no_subscription' };
   if (!line) return { ok: false, message: 'Aucune ligne disponible pour appeler.', key: 'no_line' };
   // Toute minute commencée est facturée en entier : il faut au moins une minute entière, et l'appel est coupé quand
   // les minutes entières du solde sont écoulées, pour que le solde ne passe jamais sous zéro.
-  // `allowedSeconds` : durée déjà calculée par l'offre Multi-clients (solde + minutes hors forfait autorisées) ; absente, c'est le solde seul.
-  const maxSeconds = allowedSeconds === null ? maxSecondsForBalance(minutes) : allowedSeconds;
+  const maxSeconds = maxSecondsForBalance(minutes);
   if (!maxSeconds) return { ok: false, message: 'Solde de minutes insuffisant.', key: 'insufficient_minutes' };
   return { ok: true, maxSeconds, twiml: buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds, recording, action }) };
 }

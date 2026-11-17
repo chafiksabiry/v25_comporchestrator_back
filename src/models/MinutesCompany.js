@@ -47,33 +47,6 @@ const minutesCompanySchema = new mongoose.Schema({
     default: []
   },
   /**
-   * Minutes hors forfait (offre Multi-clients) : un enregistrement par appel entamant le dépassement, écrit dans la même
-   * opération atomique que le débit (voir services/minutesOverage.js). `invoiceItemId` : ligne de facture Stripe qui l'a facturé.
-   */
-  overageCalls: {
-    type: [{
-      _id: false,
-      callSid: { type: String, required: true },
-      periodKey: { type: String, required: true },
-      periodStart: { type: Date },
-      periodEnd: { type: Date },
-      klass: { type: String, enum: ['national', 'international'], required: true },
-      basis: { type: String, enum: ['destination', 'origin', 'default'], default: 'default' },
-      direction: { type: String, enum: ['inbound', 'outbound'], default: 'outbound' },
-      countryPrefix: { type: String, default: '' },
-      seconds: { type: Number, default: 0 },
-      callMinutes: { type: Number, default: 0 },
-      includedMinutes: { type: Number, default: 0 },
-      overageMinutes: { type: Number, required: true },
-      unitCents: { type: Number, required: true },
-      capCents: { type: Number, default: null },
-      at: { type: Date, required: true },
-      invoiceItemId: { type: String },
-      billedAt: { type: Date },
-    }],
-    default: [],
-  },
-  /**
    * Dated credits: plan inclusion (subscription + renewal) and paid top-ups.
    * Plan rows carry planName so they stay distinct from recharges.
    */

@@ -15,7 +15,6 @@ import {
 import { fulfillStripeCheckoutSessionPayment } from '../services/paymentFulfillment.js';
 import { config } from '../config/env.js';
 import { handlePhoneLineInvoiceEvent, handlePhoneLineSubscriptionDeleted } from '../services/phoneLineSubscription.js';
-import { billCompany } from '../services/minutesOverage.js';
 import { currencyForCountry, normalizeCurrency, pickCurrency, priceAmounts } from '../services/currency.js';
 
 function numberOrNull(value) {
@@ -674,10 +673,6 @@ export const subscriptionController = {
           // Abonnement mensuel d'une ligne : impayé -> suspension ; régularisation -> réactivation. Autres factures ignorées.
           await handlePhoneLineInvoiceEvent(event.type, event.data.object);
           break;
-        case 'invoice.created':
-          // Facture de renouvellement en brouillon : y ajoute les minutes hors forfait de la période qui se clôt (Multi-clients).
-          await handleOverageInvoiceCreated(event.data.object);
-          break;
         case 'product.updated':
           await handleProductUpdated(event.data.object);
           break;
@@ -729,22 +724,6 @@ async function handleCheckoutSessionCompleted(session) {
     console.log(`⚠️ Unknown session mode '${session.mode}' for session ${session.id}`);
   } catch (error) {
     console.error('❌ Error in handleCheckoutSessionCompleted:', error);
-  }
-}
-
-/**
- * `invoice.created` d'un renouvellement (brouillon, modifiable pendant ~1 h) : ajoute à CETTE facture les lignes « minutes
- * nationales / internationales » hors forfait de la période close. Ne lève jamais : un échec est journalisé et la tâche
- * périodique reprendra (les lignes iront alors sur la facture suivante). Aucun effet pour les entreprises sans dépassement.
- */
-async function handleOverageInvoiceCreated(invoice) {
-  try {
-    if (invoice?.billing_reason !== 'subscription_cycle' || invoice?.status !== 'draft' || !invoice?.customer) return;
-    const customer = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer.id;
-    const companyIds = await Subscription.distinct('companyId', { stripeCustomerId: customer, provider: { $ne: 'paypal' } });
-    for (const companyId of companyIds) await billCompany(companyId, { invoiceId: invoice.id });
-  } catch (error) {
-    console.warn('[overage] invoice.created ignoré :', error?.message || error);
   }
 }
 
