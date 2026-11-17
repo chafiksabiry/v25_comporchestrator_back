@@ -1,7 +1,7 @@
 import { stepFromStage } from './zohoClient.js';
 import { isValidEmail } from './payload.js';
 
-/** Outils exposés à Claude. lookup_candidate est la seule lecture de données ; send_reply et hand_off terminent la boucle. */
+/** Outils exposés à Claude. lookup_candidate est la seule lecture de données ; send_reply et flag_for_team terminent la boucle. */
 export const TOOL_DEFINITIONS = [
   {
     name: 'lookup_candidate',
@@ -14,14 +14,14 @@ export const TOOL_DEFINITIONS = [
     input_schema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
   },
   {
-    name: 'hand_off',
-    description: 'Passe la conversation à un humain de l\'équipe HARX.',
+    name: 'flag_for_team',
+    description: "Enregistre la demande pour l'équipe HARX (note interne) et envoie visitor_message au visiteur. AUCUN transfert : la conversation reste avec toi.",
     input_schema: {
       type: 'object',
       properties: {
-        reason: { type: 'string', description: 'Raison courte du transfert' },
+        reason: { type: 'string', description: 'Raison courte (pourquoi tu ne peux pas traiter la demande seul)' },
         urgency: { type: 'string', enum: ['normal', 'priority', 'enterprise_prospect'] },
-        visitor_message: { type: 'string', description: "Message d'attente poli pour le visiteur, sans promesse de délai, sans signature" },
+        visitor_message: { type: 'string', description: 'Réponse honnête et courte pour le visiteur : ce que les sources permettent de dire, ce que tu ne sais pas, demande enregistrée pour l\'équipe. Sans promesse de délai ni de rappel, sans signature.' },
         internal_summary: { type: 'string', description: "Résumé pour l'équipe : demande, étape trouvée, ce qui manque" },
       },
       required: ['reason', 'urgency', 'visitor_message', 'internal_summary'],
@@ -29,7 +29,7 @@ export const TOOL_DEFINITIONS = [
   },
 ];
 
-export const TERMINAL_TOOLS = new Set(['send_reply', 'hand_off']);
+export const TERMINAL_TOOLS = new Set(['send_reply', 'flag_for_team']);
 
 export function createToolRunner({ zoho, logger = console }) {
   return {
@@ -45,7 +45,7 @@ export function createToolRunner({ zoho, logger = console }) {
         return { found: true, step: stepFromStage(deals[0].stage) };
       } catch (e) {
         logger.warn('[salesiq] CRM lookup failed:', e.message);
-        return { error: 'CRM unavailable: do not guess, call hand_off' };
+        return { error: 'CRM unavailable: do not guess, call flag_for_team' };
       }
     },
   };

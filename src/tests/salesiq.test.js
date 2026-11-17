@@ -15,9 +15,10 @@ import { loadKnowledge } from '../salesiq/knowledge.js';
 const quiet = { log() {}, info() {}, warn() {}, error() {} };
 const knowledge = loadKnowledge();
 const cfgOf = (env = {}) => getSalesIqConfig({ SALESIQ_MODE: 'live', SALESIQ_WEBHOOK_KEY: 'k', ZOHO_CLIENT_ID: 'i', ZOHO_CLIENT_SECRET: 's', ZOHO_REFRESH_TOKEN: 'r', ANTHROPIC_API_KEY: 'a', ...env });
-const assertForward = (resp) => {
-  assert.equal(resp.action, 'forward');
-  assert.equal(resp.replies.length, 1, 'un forward sans texte est rejeté par SalesIQ');
+const assertAck = (resp) => {
+  assert.equal(resp.action, 'reply', 'jamais de transfert');
+  assert.equal(resp.replies.length, 1, 'une réponse sans texte est rejetée par SalesIQ');
+  assert.match(resp.replies[0], /enregistrée pour l'équipe HARX|recorded for the HARX team/);
   assert.match(resp.replies[0], /L'équipe HARX$/);
 };
 const tick = () => new Promise((r) => setImmediate(r));
@@ -147,7 +148,7 @@ assert.equal(stepFromStage('Onboarding'), null);
 {
   const { agent, claude } = build({ env: { SALESIQ_MODE: 'off' } });
   const r = agent.handleWebhookBody(body('Bonjour'));
-  assertForward(r.response);
+  assertAck(r.response);
   assert.equal(claude.calls.length, 0);
 }
 
@@ -194,7 +195,7 @@ assert.equal(stepFromStage('Onboarding'), null);
   const { agent } = build({ zoho, script: [use('send_reply', { text: 'La prochaine étape est [À COMPLÉTER].' })] });
   const r = agent.handleWebhookBody(body('Et ensuite ?'));
   await r.done;
-  assert.equal(zoho.calls.callbacks[0].payload.action, 'forward');
+  assert.equal(zoho.calls.callbacks[0].payload.action, 'reply');
   assert.doesNotMatch(zoho.calls.callbacks[0].payload.replies[0], /COMPLÉTER/);
   assert.match(zoho.calls.notes[0].text, /^A TRAITER PAR UN HUMAIN - garde-fou/);
 }
@@ -203,13 +204,13 @@ assert.equal(stepFromStage('Onboarding'), null);
 {
   const zoho = fakeZoho();
   const { agent } = build({ zoho, script: [
-    use('hand_off', { reason: 'visiteur mécontent', urgency: 'priority', visitor_message: 'Je suis sincèrement désolé que vous n’ayez pas eu de réponse. Je transmets votre message en priorité à un responsable.', internal_summary: 'Veut arrêter.' }),
-    use('hand_off', { reason: 'campagne', urgency: 'enterprise_prospect', visitor_message: 'Merci ! Un membre de l’équipe commerciale va vous recontacter.', internal_summary: 'Veut lancer une campagne.' }),
+    use('flag_for_team', { reason: 'visiteur mécontent', urgency: 'priority', visitor_message: 'Je suis sincèrement désolé que vous n’ayez pas eu de réponse. Je transmets votre message en priorité à un responsable.', internal_summary: 'Veut arrêter.' }),
+    use('flag_for_team', { reason: 'campagne', urgency: 'enterprise_prospect', visitor_message: 'Merci ! Un membre de l’équipe commerciale va vous recontacter.', internal_summary: 'Veut lancer une campagne.' }),
   ] });
   await agent.handleWebhookBody(body('Vous ne répondez jamais, je mets un terme à notre collaboration')).done;
   assert.match(zoho.calls.notes[0].text, /^A TRAITER PAR UN HUMAIN - PRIORITAIRE - visiteur mécontent/);
-  assert.equal(zoho.calls.callbacks[0].payload.action, 'forward');
-  const b = build({ zoho, script: [use('hand_off', { reason: 'campagne', urgency: 'enterprise_prospect', visitor_message: 'Merci ! Un membre de l’équipe commerciale va vous recontacter.', internal_summary: 'x' })] });
+  assert.equal(zoho.calls.callbacks[0].payload.action, 'reply');
+  const b = build({ zoho, script: [use('flag_for_team', { reason: 'campagne', urgency: 'enterprise_prospect', visitor_message: 'Merci ! Un membre de l’équipe commerciale va vous recontacter.', internal_summary: 'x' })] });
   await b.agent.handleWebhookBody(body('Nous voulons lancer une campagne', { visitor: { id: 'v2' } })).done;
   assert.match(zoho.calls.notes[1].text, /PROSPECT ENTREPRISE/);
 }
@@ -219,7 +220,7 @@ assert.equal(stepFromStage('Onboarding'), null);
   const zoho = fakeZoho();
   const { agent } = build({ zoho, script: [new Error('overloaded')] });
   await agent.handleWebhookBody(body('Question')).done;
-  assert.equal(zoho.calls.callbacks[0].payload.action, 'forward');
+  assert.equal(zoho.calls.callbacks[0].payload.action, 'reply');
   assert.match(zoho.calls.notes[0].text, /A TRAITER PAR UN HUMAIN - erreur technique/);
   const z2 = fakeZoho({ failCallback: true });
   await build({ zoho: z2, script: [use('send_reply', { text: 'Bonjour, voici la réponse.' })] }).agent.handleWebhookBody(body('Question 2', { visitor: { id: 'v9' } })).done;
@@ -232,7 +233,7 @@ assert.equal(stepFromStage('Onboarding'), null);
   const { agent } = build({ zoho, script: [use('send_reply', { text: 'Bonjour, voici la réponse.' })] });
   const b = body('Question'); delete b.request.request_id;
   const r = agent.handleWebhookBody(b);
-  assertForward(r.response);
+  assertAck(r.response);
   await r.done;
   assert.equal(zoho.calls.callbacks.length, 0);
   assert.match(zoho.calls.notes[0].text, /^BROUILLON CLAUDE/);
@@ -243,7 +244,7 @@ assert.equal(stepFromStage('Onboarding'), null);
   const zoho = fakeZoho();
   const { agent } = build({ env: { SALESIQ_MODE: 'shadow' }, zoho, script: [use('send_reply', { text: 'Bonjour, voici la réponse proposée.' })] });
   const r = agent.handleWebhookBody(body('Question'));
-  assertForward(r.response);
+  assertAck(r.response);
   await r.done;
   assert.equal(zoho.calls.callbacks.length, 0);
   assert.match(zoho.calls.notes[0].text, /^BROUILLON CLAUDE : Bonjour, voici la réponse proposée\./);
@@ -289,8 +290,8 @@ assert.equal(stepFromStage('Onboarding'), null);
 {
   const { agent } = build({ env: { SALESIQ_RATE_LIMIT_PER_MINUTE: '2' } });
   for (let i = 0; i < 2; i += 1) assert.equal(agent.handleWebhookBody(body('Bonjour')).response.action, 'reply');
-  assertForward(agent.handleWebhookBody(body('Bonjour')).response);
-  assertForward(build().agent.handleWebhookBody(body('   ')).response);
+  assertAck(agent.handleWebhookBody(body('Bonjour')).response);
+  assertAck(build().agent.handleWebhookBody(body('   ')).response);
   const welcome = build().agent.handleWebhookBody({ handler: 'trigger', visitor: { id: 'v7', language: 'fr' } }).response;
   assert.equal(welcome.action, 'reply');
   assert.equal(welcome.replies.length, 1, 'un trigger sans texte laisse « en train d’écrire » affiché');
@@ -324,6 +325,63 @@ assert.equal(stepFromStage('Onboarding'), null);
   assert.equal(st.mode, 'live');
   assert.ok(!JSON.stringify(st).includes('ZOHO_REFRESH'), 'aucune valeur secrète');
   await new Promise((r) => server.close(r));
+}
+
+// --- Autonomie : aucune réponse ne contient jamais de transfert à un opérateur ---
+{
+  const sent = [];
+  const record = (resp) => sent.push(JSON.stringify(resp));
+  // tous les modes et toutes les pannes
+  for (const mode of ['off', 'shadow', 'live']) {
+    const zoho = fakeZoho();
+    const { agent } = build({ env: { SALESIQ_MODE: mode }, zoho, script: [use('flag_for_team', { reason: 'paiement', urgency: 'normal', visitor_message: 'Je ne peux pas traiter les questions de rémunération dans ce chat ; votre demande est enregistrée pour l\'équipe.', internal_summary: 'Question paiement.' })] });
+    const r = agent.handleWebhookBody(body('Quand serai-je payé ?', { visitor: { id: `auto-${mode}` } }));
+    record(r.response);
+    await r.done;
+    zoho.calls.callbacks.forEach((c) => record(c.payload));
+    if (mode === 'live') {
+      assert.equal(zoho.calls.callbacks[0].payload.action, 'reply');
+      assert.match(zoho.calls.callbacks[0].payload.replies[0], /rémunération dans ce chat/);
+      assert.match(zoho.calls.callbacks[0].payload.replies[0], /L'équipe HARX$/);
+      assert.match(zoho.calls.notes[0].text, /^A TRAITER PAR UN HUMAIN - paiement/);
+      assert.match(zoho.calls.notes[0].text, /aucun transfert/);
+    }
+  }
+  const { agent: crashy } = build({ script: [new Error('boom')] });
+  const rc = crashy.handleWebhookBody(body('Question', { visitor: { id: 'auto-crash' } }));
+  record(rc.response); await rc.done;
+  const noReq = body('Question', { visitor: { id: 'auto-noreq' } }); delete noReq.request.request_id;
+  record(build({ script: [use('send_reply', { text: 'Bonjour, voici la réponse.' })] }).agent.handleWebhookBody(noReq).response);
+  record(build().agent.handleWebhookBody(body('   ')).response);
+  assert.ok(sent.length >= 6);
+  assert.ok(sent.every((s) => !/"action":"forward"/.test(s)), 'aucun forward, jamais');
+}
+
+// --- Le message de Claude est refusé s'il annonce un transfert : réponse fixe honnête à la place ---
+{
+  assert.equal(checkReply('Je vous transfère à un conseiller.').ok, false);
+  assert.equal(checkReply('Un conseiller va prendre le relais.').ok, false);
+  assert.equal(checkReply('Votre demande a été enregistrée pour l\'équipe HARX.').ok, true);
+  const zoho = fakeZoho();
+  const { agent } = build({ zoho, script: [use('flag_for_team', { reason: 'litige', urgency: 'priority', visitor_message: 'Je vous transfère à un conseiller tout de suite.', internal_summary: 'Litige.' })] });
+  await agent.handleWebhookBody(body('Je conteste ma facture', { visitor: { id: 'auto-lit' } })).done;
+  assert.doesNotMatch(zoho.calls.callbacks[0].payload.replies[0], /transf[èe]re/);
+  assert.match(zoho.calls.callbacks[0].payload.replies[0], /enregistrée pour l'équipe HARX/);
+  assert.match(zoho.calls.notes[0].text, /PRIORITAIRE/);
+}
+
+// --- Le prompt dit à Claude qu'il est seul et qu'il ne transfère jamais ---
+{
+  const { agent, claude } = build({ script: [use('send_reply', { text: 'Bonjour, voici la réponse.' })] });
+  await agent.handleWebhookBody(body('Question', { visitor: { id: 'auto-prompt' } })).done;
+  const full = claude.calls[0].system[0].text;
+  const sys = full.slice(0, full.indexOf('=== PIPELINE')); // les règles, sans les documents de connaissances
+  assert.match(sys, /TU ES SEUL DANS CETTE CONVERSATION/);
+  assert.match(sys, /JAMAIS transférée/);
+  assert.match(sys, /« passer à un humain » et « transmettre à un membre de l'équipe » signifient : appelle flag_for_team/);
+  assert.doesNotMatch(sys, /hand_off/);
+  assert.doesNotMatch(sys, /Passer à un humain\b|QUAND PASSER/);
+  assert.deepEqual(claude.calls[0].tools.map((x) => x.name), ['lookup_candidate', 'send_reply', 'flag_for_team']);
 }
 
 console.log('salesiq tests: OK');
