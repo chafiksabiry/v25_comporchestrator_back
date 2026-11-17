@@ -3,6 +3,7 @@ import { config } from './src/config/env.js';
 import express from 'express';
 import http from 'http';
 import { setupEscrowWebSocket } from './src/websocket/escrowUpdates.js';
+import { corsMiddleware, parseAllowedOrigins } from './src/middleware/cors.js';
 import mongoose from 'mongoose';
 import { requirementRoutes } from './src/routes/requirement.js';
 import { addressRoutes } from './src/routes/address.js';
@@ -57,18 +58,9 @@ mongoose.connect(config.mongodbUri, {
   process.exit(1); // Exit if we can't connect to database
 });
 
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, x-user-id, x-agent-id, X-Api-Key');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Expose-Headers', 'Content-Disposition');
-
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
-  next();
-});
+// CORS : liste blanche CORS_ALLOWED_ORIGINS (voir src/middleware/cors.js) ; absente = comportement historique.
+app.use(corsMiddleware());
+if (!parseAllowedOrigins()) console.warn('[security] CORS_ALLOWED_ORIGINS absent : toute origine est acceptée avec credentials (comportement historique)');
 
 // Database connection health check middleware
 app.use((req, res, next) => {
