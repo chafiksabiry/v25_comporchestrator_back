@@ -196,7 +196,7 @@ SecretariatConnection.findOne = (f) => chain(conns.find((d) => matches(d, f)));
 SecretariatConnection.updateOne = async () => ({});
 const connect = (provider, over = {}) => {
   const i = conns.findIndex((c) => c.provider === provider); if (i >= 0) conns.splice(i, 1);
-  conns.push({ companyId: COMPANY, provider, accountEmail: provider === 'google' ? 'centre@gmail.test' : 'centre@contoso.test', status: 'connected',
+  conns.push({ companyId: COMPANY, provider, accountEmail: provider === 'google' ? 'centre@gmail.test' : 'centre@contoso.test', status: 'connected', connectedBy: 'owner1', // la boîte n'est utilisable que par son propriétaire
     credentialsEnc: encryptJson({ accessToken: 'ACCESS_SECRET', refreshToken: 'REFRESH_SECRET', expiresAt: Date.now() + 3600_000 }, { context: `secretariat:${COMPANY}:${provider}`, key: loadKey() }), ...over });
 };
 let providerStatus = 200;
@@ -314,7 +314,11 @@ r = await call(mail.send, { user: 'm1', body: msg });
 assert.equal(r.code, 403);
 me = { isOwner: false, isAgent: false, companyId: COMPANY, permissions: { 'calls.view': true } };
 r = await call(mail.send, { user: 'm1', body: { ...msg, attachIcs: false } });
-assert.equal(r.code, 201, 'un membre avec le droit d’appels peut envoyer');
+assert.equal(r.code, 409, 'un membre avec le droit d’appels n’envoie PAS depuis la boîte connectée par un autre (le titulaire)'); assert.equal(r.body.code, 'mailbox_not_connected'); assert.equal(sentCount(), before);
+connect('microsoft', { connectedBy: 'm1' }); // il connecte SA boîte : il peut envoyer depuis celle-ci seulement
+const msBefore = net.filter((x) => /me\/sendMail/.test(x.url)).length;
+r = await call(mail.send, { user: 'm1', body: { ...msg, attachIcs: false } });
+assert.equal(r.code, 201, 'un membre avec le droit d’appels envoie depuis SA boîte'); assert.equal(net.filter((x) => /me\/sendMail/.test(x.url)).length, msBefore + 1); assert.equal(sentCount(), before, 'jamais par la boîte du titulaire');
 me = { isOwner: true, companyId: COMPANY, permissions: {} };
 r = await call(mail.send, { body: { ...msg, companyId: '64b0000000000000000000d2' } });
 assert.equal(r.code, 403, 'autre centre refusé');

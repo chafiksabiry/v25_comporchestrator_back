@@ -57,7 +57,8 @@ beforeEach(() => {
   InboundEmail.countDocuments = async () => 0;
 });
 
-const googleConn = (scopes) => ({ provider: 'google', accountEmail: 'centre@gmail.test', status: 'connected', scopes });
+const googleConn = (scopes) => ({ provider: 'google', accountEmail: 'centre@gmail.test', status: 'connected', scopes, connectedBy: 'owner1' }); // boîte de l'entreprise : lisible par son seul propriétaire
+const OWNER_SCOPE = () => I.connectionScope(C1, 'owner1');
 const googleAcc = (extra = {}) => ({ _id: ACC, provider: 'google', accountEmail: 'sec@gmail.test', status: 'connected', personalUserId: USER, scopes: ['openid', SEND, CAL, READ, MODIFY], inbound: { readEnabled: true }, ...extra });
 const ENABLED = { inbound: { enabled: true }, email: { provider: 'google' } };
 
@@ -117,9 +118,10 @@ test('[1] état OAuth Google avec shared.read = true : rejeté (aucune lecture n
 
 // ───────── 2. comptes déjà autorisés avec les anciens scopes ─────────
 test('[2] connectionsView : Google déjà autorisé avec gmail.readonly / modify -> canRead et canModify FAUX ; Microsoft vrai', async () => {
-  const rows = [{ ...googleConn(['openid', SEND, CAL, READ, MODIFY]) }, { provider: 'microsoft', accountEmail: 'c@ms.test', status: 'connected', scopes: ['Mail.Read', 'Mail.ReadWrite'] }];
+  const rows = [{ ...googleConn(['openid', SEND, CAL, READ, MODIFY]) }, { provider: 'microsoft', accountEmail: 'c@ms.test', status: 'connected', scopes: ['Mail.Read', 'Mail.ReadWrite'], connectedBy: USER }];
+  rows[0].connectedBy = USER; // une boîte n'est visible (et son état de lecture) que de son propriétaire
   SecretariatConnection.find = () => lean(rows);
-  const v = await S.connectionsView(C1);
+  const v = await S.connectionsView(C1, { userId: USER });
   assert.equal(v.google.canRead, false);
   assert.equal(v.google.canModify, false);
   assert.equal(v.microsoft.canRead, true);
@@ -172,20 +174,20 @@ test('[2] lecture / rafraîchissement / corps d\'une messagerie personnelle Goog
 test('[3] boîte de l\'entreprise = Google (même avec d\'anciens scopes) : le serveur répond « non », jamais un appel Gmail', async () => {
   conns = [googleConn(['openid', SEND, CAL, READ, MODIFY])];
   toolsDoc = ENABLED;
-  const located = await I.locateMailbox(C1, 'google');
+  const located = await I.locateMailbox(C1, 'google', 'owner1');
   assert.equal(located.canRead, false);
   assert.equal(located.error, 'read_unavailable');
-  await assert.rejects(() => I.refreshInbound(C1), (e) => e.code === 'read_unavailable');
-  await assert.rejects(() => I.readInboundBody(C1, '64b0000000000000000000e1'), (e) => e.code === 'read_unavailable');
+  await assert.rejects(() => I.refreshInbound(OWNER_SCOPE()), (e) => e.code === 'read_unavailable');
+  await assert.rejects(() => I.readInboundBody(OWNER_SCOPE(), '64b0000000000000000000e1'), (e) => e.code === 'read_unavailable');
   assert.deepEqual(providerCalls, []);
-  const view = await I.inboundView(C1);
+  const view = await I.inboundView(OWNER_SCOPE());
   assert.equal(view.canRead, false);
 });
 
 test('[3] Google choisi pour l\'envoi alors que Microsoft est lisible : la messagerie lue est Google -> non ; Microsoft choisi -> oui', async () => {
-  conns = [googleConn(['openid', SEND, CAL, READ]), { provider: 'microsoft', accountEmail: 'c@ms.test', status: 'connected', scopes: ['Mail.Read'] }];
-  assert.equal((await I.locateMailbox(C1, 'google')).canRead, false);
-  const ms = await I.locateMailbox(C1, 'microsoft');
+  conns = [googleConn(['openid', SEND, CAL, READ]), { provider: 'microsoft', accountEmail: 'c@ms.test', status: 'connected', scopes: ['Mail.Read'], connectedBy: 'owner1' }];
+  assert.equal((await I.locateMailbox(C1, 'google', 'owner1')).canRead, false);
+  const ms = await I.locateMailbox(C1, 'microsoft', 'owner1');
   assert.equal(ms.canRead, true);
   assert.equal(ms.mailbox.provider, 'microsoft');
 });
@@ -208,7 +210,7 @@ test('[3] corbeille / archivage répercutés chez Gmail : jamais, même avec mai
   conns = [googleConn([MODIFY])];
   toolsDoc = { inbound: { enabled: true, mailboxActions: true }, email: { provider: 'google' } };
   InboundEmail.findOne = () => ({ select() { return this; }, lean: async () => ({ provider: 'google', providerMessageId: 'gm1' }) });
-  await assert.rejects(() => I.markHandled(C1, '64b0000000000000000000e1', { archived: true }), (e) => ['read_unavailable', 'write_scope_missing'].includes(e.code));
+  await assert.rejects(() => I.markHandled(OWNER_SCOPE(), '64b0000000000000000000e1', { archived: true }), (e) => ['read_unavailable', 'write_scope_missing'].includes(e.code));
   assert.deepEqual(providerCalls, []);
 });
 

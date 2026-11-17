@@ -336,13 +336,13 @@ try {
   reset(); std();
   conns.length = 0;
   putConnection(C1, 'google');
-  assert.equal(await S.getAccessToken(C1, 'google'), 'ACCESS_SECRET_G1'); assert.equal(httpCalls.length, 0, 'jeton valide : aucun appel');
+  assert.equal(await S.getAccessToken(C1, 'google', { ownerId: 'owner1' }), 'ACCESS_SECRET_G1'); assert.equal(httpCalls.length, 0, 'jeton valide : aucun appel');
   putConnection(C1, 'google', {}, { expiresAt: Date.now() + 30_000 }); // sous la marge de 60 s
-  assert.equal(await S.getAccessToken(C1, 'google'), 'ACCESS_SECRET_G2');
+  assert.equal(await S.getAccessToken(C1, 'google', { ownerId: 'owner1' }), 'ACCESS_SECRET_G2');
   const rf = callsTo(/googleapis\.com\/token/); assert.equal(rf.length, 1);
   assert.deepEqual(rf[0].form, { client_id: 'g-id', client_secret: 'g-secret', grant_type: 'refresh_token', refresh_token: 'REFRESH_SECRET_G1' });
   const stored = credsOf(conns[0]); assert.equal(stored.accessToken, 'ACCESS_SECRET_G2'); assert.equal(stored.refreshToken, 'REFRESH_SECRET_G1', 'jeton de rafraîchissement conservé'); assert.ok(stored.expiresAt > Date.now() + 3000_000);
-  assert.equal(await S.getAccessToken(C1, 'google'), 'ACCESS_SECRET_G2'); assert.equal(callsTo(/googleapis\.com\/token/).length, 1, 'réutilisé tant qu’il est valide');
+  assert.equal(await S.getAccessToken(C1, 'google', { ownerId: 'owner1' }), 'ACCESS_SECRET_G2'); assert.equal(callsTo(/googleapis\.com\/token/).length, 1, 'réutilisé tant qu’il est valide');
   // jeton de rafraîchissement renouvelé (Zoom)
   putConnection(C1, 'zoom', {}, { expiresAt: Date.now() - 1000 });
   await S.getAccessToken(C1, 'zoom'); assert.equal(credsOf(conns.find((c) => c.provider === 'zoom')).refreshToken, 'REFRESH_SECRET_Z2');
@@ -350,40 +350,40 @@ try {
   // deux demandes simultanées : un seul rafraîchissement
   reset(); std();
   putConnection(C1, 'google', {}, { expiresAt: Date.now() - 1000 });
-  const both = await Promise.all([S.getAccessToken(C1, 'google'), S.getAccessToken(C1, 'google')]);
+  const both = await Promise.all([S.getAccessToken(C1, 'google', { ownerId: 'owner1' }), S.getAccessToken(C1, 'google', { ownerId: 'owner1' })]);
   assert.deepEqual(both, ['ACCESS_SECRET_G2', 'ACCESS_SECRET_G2']); assert.equal(callsTo(/googleapis\.com\/token/).length, 1);
   // isolation : un autre centre n'utilise pas cette connexion
-  await assert.rejects(S.getAccessToken(C2, 'google'), (e) => e.code === 'not_connected' && /n’est pas connecté/.test(e.message));
+  await assert.rejects(S.getAccessToken(C2, 'google', { ownerId: 'owner1' }), (e) => e.code === 'not_connected' && /n’est pas connecté/.test(e.message));
   conns.push({ ...conns.find((c) => c.provider === 'google'), companyId: C2 }); // blob copié tel quel chez un autre centre
-  await assert.rejects(S.getAccessToken(C2, 'google'), (e) => e.code === 'needs_reauth', 'blob copié : contexte différent, illisible');
+  await assert.rejects(S.getAccessToken(C2, 'google', { ownerId: 'owner1' }), (e) => e.code === 'needs_reauth', 'blob copié : contexte différent, illisible');
   conns.pop();
   // refus du rafraîchissement : needs_reauth, erreur claire, pas de boucle
   reset(); std();
   on('POST', /googleapis\.com\/token/, () => ({ status: 400, json: { error: 'invalid_grant' } }));
   putConnection(C1, 'google', {}, { expiresAt: Date.now() - 1000 });
-  await assert.rejects(S.getAccessToken(C1, 'google'), (e) => e.code === 'needs_reauth' && /expiré ou a été révoqué.*Reconnectez-la dans Paramétrage > Outils/.test(e.message));
+  await assert.rejects(S.getAccessToken(C1, 'google', { ownerId: 'owner1' }), (e) => e.code === 'needs_reauth' && /expiré ou a été révoqué.*Reconnectez-la dans Paramétrage > Outils/.test(e.message));
   assert.equal(conns.find((c) => c.provider === 'google').status, 'needs_reauth'); assert.equal(callsTo(/googleapis\.com\/token/).length, 1);
-  await assert.rejects(S.getAccessToken(C1, 'google'), (e) => e.code === 'needs_reauth'); assert.equal(callsTo(/googleapis\.com\/token/).length, 1, 'plus aucun appel une fois en needs_reauth');
+  await assert.rejects(S.getAccessToken(C1, 'google', { ownerId: 'owner1' }), (e) => e.code === 'needs_reauth'); assert.equal(callsTo(/googleapis\.com\/token/).length, 1, 'plus aucun appel une fois en needs_reauth');
   // panne temporaire : l'état ne change pas
   reset(); std();
   on('POST', /googleapis\.com\/token/, () => ({ status: 503, json: null }));
   putConnection(C1, 'google', {}, { expiresAt: Date.now() - 1000 });
-  await assert.rejects(S.getAccessToken(C1, 'google'), (e) => e.code === 'provider_error'); assert.equal(conns.find((c) => c.provider === 'google').status, 'connected');
+  await assert.rejects(S.getAccessToken(C1, 'google', { ownerId: 'owner1' }), (e) => e.code === 'provider_error'); assert.equal(conns.find((c) => c.provider === 'google').status, 'connected');
   // jeton refusé par l'API (401) : UN rafraîchissement, UN second essai, jamais plus
   reset(); std();
   putConnection(C1, 'google');
   let apiCalls = 0;
   on('GET', /api\.example\/x/, (r) => { apiCalls += 1; return { status: r.headers.Authorization === 'Bearer ACCESS_SECRET_G2' ? 200 : 401, json: {} }; });
   const probe = (token, http) => http({ method: 'GET', url: 'https://api.example/x', headers: { Authorization: `Bearer ${token}` } }).then((x) => { if (x.status === 401) throw new SecretariatError('provider_refused', 'non', { status: 401 }); return x.status; });
-  assert.equal(await S.withConnection(C1, 'google', probe), 200); assert.equal(apiCalls, 2); assert.equal(callsTo(/googleapis\.com\/token/).length, 1);
+  assert.equal(await S.withConnection(C1, 'google', probe, { ownerId: 'owner1' }), 200); assert.equal(apiCalls, 2); assert.equal(callsTo(/googleapis\.com\/token/).length, 1);
   reset(); std();
   putConnection(C1, 'google'); apiCalls = 0;
   on('GET', /api\.example\/x/, () => { apiCalls += 1; return { status: 401, json: {} }; });
-  await assert.rejects(S.withConnection(C1, 'google', probe), (e) => e.code === 'needs_reauth'); assert.equal(apiCalls, 2, 'pas de boucle'); assert.equal(conns.find((c) => c.provider === 'google').status, 'needs_reauth');
+  await assert.rejects(S.withConnection(C1, 'google', probe, { ownerId: 'owner1' }), (e) => e.code === 'needs_reauth'); assert.equal(apiCalls, 2, 'pas de boucle'); assert.equal(conns.find((c) => c.provider === 'google').status, 'needs_reauth');
   // clé de chiffrement absente : « non disponible », la connexion n'est pas condamnée
   reset(); std(); putConnection(C1, 'google');
   const keep = process.env.INTEGRATIONS_ENC_KEY; delete process.env.INTEGRATIONS_ENC_KEY;
-  await assert.rejects(S.getAccessToken(C1, 'google'), (e) => e.code === 'unavailable'); process.env.INTEGRATIONS_ENC_KEY = keep;
+  await assert.rejects(S.getAccessToken(C1, 'google', { ownerId: 'owner1' }), (e) => e.code === 'unavailable'); process.env.INTEGRATIONS_ENC_KEY = keep;
   assert.equal(conns.find((c) => c.provider === 'google').status, 'connected');
 
   // ---------- 7. fournisseurs : requêtes exactes (Gmail, Graph, agenda, visio)
@@ -454,10 +454,16 @@ try {
   const empty = { google: { available: true, connected: false, needsReauth: false, canRead: false, canModify: false, account: null, connectedAt: null }, microsoft: { available: true, connected: false, needsReauth: false, canRead: false, canModify: false, account: null, connectedAt: null }, zoom: { available: true, connected: false, needsReauth: false, canRead: false, canModify: false, account: null, connectedAt: null } };
   for (const user of ['owner1', 'member1', 'memberNoCalls', 'agent1']) assert.deepEqual((await req('GET', `/connections/${C1}`, { user })).body, { success: true, data: empty }, user);
   putConnection(C1, 'google'); putConnection(C1, 'microsoft', { status: 'needs_reauth' });
-  r = await req('GET', `/connections/${C1}`, { user: 'agent1' });
+  // Une boîte Google / Microsoft n'est visible (statut, adresse, droits) que de la personne qui l'a connectée (owner1) ; tout autre membre voit « non connecté » (voir mailOwnerOnly.test.js).
+  r = await req('GET', `/connections/${C1}`, { user: 'owner1' });
   assert.deepEqual(r.body.data.google, { available: true, connected: true, needsReauth: false, canRead: false, canModify: false, account: 'centre@gmail.test', connectedAt: '2026-11-01T10:00:00.000Z' });
   assert.deepEqual(r.body.data.microsoft, { available: true, connected: false, needsReauth: true, canRead: false, canModify: false, account: 'centre@contoso.test', connectedAt: '2026-11-01T10:00:00.000Z' });
   assert.deepEqual(Object.keys(r.body.data.google).sort(), ['account', 'available', 'canModify', 'canRead', 'connected', 'connectedAt', 'needsReauth']);
+  for (const user of ['agent1', 'member1', 'memberNoCalls']) {
+    r = await req('GET', `/connections/${C1}`, { user });
+    assert.deepEqual(r.body.data.google, empty.google, `${user} : Google « non connecté »`); assert.deepEqual(r.body.data.microsoft, empty.microsoft, `${user} : Microsoft « non connecté »`);
+    assert.ok(!r.text.includes('centre@'), 'aucune adresse');
+  }
   assert.deepEqual((await req('GET', `/connections/${C2}`, { user: 'other1' })).body.data, empty, 'autre centre : aucune connexion visible');
   // indisponible : jamais de nom de variable dans la réponse
   const keepEnv = { ...process.env }; for (const k of Object.keys(process.env)) if (/^(GOOGLE|MICROSOFT|ZOOM)_/.test(k)) delete process.env[k];
@@ -471,12 +477,15 @@ try {
   assert.equal((await req('POST', `/connections/${C1}/skype/start`, { user: 'owner1', body: { returnTo: 'tools' } })).status, 400);
   assert.equal((await req('POST', `/connections/${C1}/google/start`, { user: 'owner1', body: { returnTo: 'https://evil.example' } })).status, 400);
   assert.equal((await req('POST', '/connections/pas-un-id/google/start', { user: 'owner1', body: { returnTo: 'tools' } })).status, 403);
+  assert.equal((await req('POST', `/connections/${C1}/microsoft/start`, { user: 'member1', body: { returnTo: 'onboarding' } })).status, 409, 'la connexion Microsoft appartient à owner1 : member1 ne la remplace pas');
+  const keepMs = conns.splice(conns.findIndex((c) => c.provider === 'microsoft'), 1)[0]; // sans connexion existante, un responsable peut connecter la sienne
   for (const user of ['owner1', 'member1']) {
     r = await req('POST', `/connections/${C1}/microsoft/start`, { user, body: { returnTo: 'onboarding' } });
     assert.equal(r.status, 200, user); assert.deepEqual(Object.keys(r.body), ['success', 'data']); assert.deepEqual(Object.keys(r.body.data), ['url']);
     const sp = S.readState(qs(r.body.data.url).state, 'microsoft');
     assert.deepEqual(sp, { companyId: C1, userId: user, provider: 'microsoft', returnTo: 'onboarding' }, 'état lié au centre et à la personne');
   }
+  conns.push(keepMs);
   assert.equal(S.readState(qs((await req('POST', `/connections/${C1}/google/start`, { user: 'owner1', body: {} })).body.data.url).state, 'google').returnTo, 'tools', 'page de retour par défaut');
   // déconnexion : révocation au mieux, jetons supprimés
   reset(); std();
@@ -684,9 +693,9 @@ try {
   assert.equal(p.body.data.calendar.status, 'synced', 'une modification ultérieure retente la synchronisation'); assert.equal(item.calendarExternalId, 'evG1');
   on('PATCH', /primary\/events\/evG1/, () => ({ status: 500, json: null })); p = await patch(item, { title: 'Encore' });
   assert.equal(p.code, 200); assert.equal(p.body.data.calendar.status, 'failed'); assert.equal(item.calendarExternalId, 'evG1', 'identifiant conservé pour réessayer');
-  // agenda configuré mais connexion absente : rendez-vous créé, échec visible
+  // agenda configuré mais aucune connexion Google / Microsoft pour la personne assignée ni pour celle qui crée : rendez-vous créé, `not_connected`, rien n'est envoyé
   conns.length = 0; reset(); std();
-  a = await create(); assert.equal(a.code, 201); assert.equal(a.body.data.calendar.status, 'failed'); assert.equal(httpCalls.length, 0);
+  a = await create(); assert.equal(a.code, 201); assert.equal(a.body.data.calendar.status, 'not_connected'); assert.equal(httpCalls.length, 0);
   // aucun agenda : comme avant
   setTools({}); a = await create(); assert.deepEqual(a.body.data.calendar, { status: 'not_connected', provider: null, accountId: null, accountLabel: null, message: null }); assert.equal(httpCalls.length, 0);
   // agenda Microsoft

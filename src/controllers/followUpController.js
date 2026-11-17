@@ -39,6 +39,7 @@ function delegatedFail(res, error) {
 const extView = (item) => ({
   ...toItem(item), companyId: String(item.companyId), calendarProvider: item.calendarProvider || null, calendarExternalId: item.calendarExternalId || null,
   videoProvider: item.videoProvider || '', videoExternalId: item.videoExternalId || '', calendarAccountId: item.calendarAccountId || null,
+  calendarOwnerId: item.calendarOwnerId || '', videoOwnerId: item.videoOwnerId || '', // propriétaires des boîtes qui portent l'événement / le lien
 });
 
 /** Reporte la synchronisation avec l'agenda DÉLÉGUÉ du rendez-vous. Un échec est conservé avec son message (jamais masqué, jamais de repli). */
@@ -59,10 +60,11 @@ function applySync(item, sync, op) {
     if (sync.status === 'synced') { item.calendarExternalId = null; item.calendarStatus = 'synced'; } else item.calendarStatus = 'failed';
   } else if (sync.status === 'synced') {
     item.calendarProvider = sync.provider; item.calendarExternalId = sync.externalId; item.calendarStatus = 'synced';
+    if (sync.ownerId) item.calendarOwnerId = sync.ownerId; // calendrier de la personne assignée ou créatrice : les mises à jour y retournent
   } else if (sync.status === 'failed') {
     item.calendarProvider = sync.provider || item.calendarProvider; item.calendarStatus = 'failed';
   } else if (had) item.calendarStatus = 'failed'; // un événement existe mais l'agenda n'est plus joignable : on ne le cache pas
-  else { item.calendarStatus = 'not_connected'; item.calendarProvider = null; item.calendarExternalId = null; }
+  else { item.calendarStatus = 'not_connected'; item.calendarProvider = null; item.calendarExternalId = null; item.calendarOwnerId = ''; }
 }
 
 /** Répercute une modification d'un rendez-vous sur l'agenda / la visio connectés. Ne lève jamais. */
@@ -237,14 +239,14 @@ export const followUpController = {
       // Lien de visio, une fois les vérifications passées (rien d'orphelin chez le fournisseur). Échec du fournisseur : le rendez-vous
       // n'est pas enregistré et l'erreur est claire (jamais de faux lien).
       const video = v.videoLink
-        ? await createVideo(access.companyId, { title: v.title, contactName: v.contactName, dueAt: v.dueAt, durationMinutes: v.durationMinutes, timeZone: v.timeZone })
-        : { url: '', provider: '', externalId: '', sharesCalendar: false, eventProvider: '' };
+        ? await createVideo(access.companyId, { title: v.title, contactName: v.contactName, dueAt: v.dueAt, durationMinutes: v.durationMinutes, timeZone: v.timeZone }, { userId: access.userId }) // Meet / Teams : la boîte de celle qui crée
+        : { url: '', provider: '', externalId: '', sharesCalendar: false, eventProvider: '', ownerId: '' };
       let item;
       try {
         item = await FollowUpItem.create({
           companyId, model: v.model, originType: v.originType, originId: v.originId, title: v.title, note: v.note,
           contactName: v.contactName, contactPhone: v.contactPhone || origin?.from || '', contactEmail: v.contactEmail, location: v.location,
-          videoUrl: video.url, videoProvider: video.provider, videoExternalId: video.externalId,
+          videoUrl: video.url, videoProvider: video.provider, videoExternalId: video.externalId, videoOwnerId: video.ownerId || '',
           dueAt: v.dueAt, timeZone: v.timeZone, durationMinutes: v.durationMinutes, assigneeId: assignee.id, assigneeName: assignee.name,
           createdById: access.userId, createdByName: me?.name || '', fromAiPlan: v.fromAiPlan,
           ...(delegated ? {
@@ -263,7 +265,7 @@ export const followUpController = {
         // l'événement est déjà dans l'agenda délégué (calendarStatus 'synced') : rien à synchroniser avec l'agenda de la société
       } else if (v.model === 'appointment') {
         if (video.sharesCalendar) { // l'événement qui porte le lien Meet / Teams est l'événement d'agenda du rendez-vous
-          item.calendarProvider = video.eventProvider; item.calendarExternalId = video.externalId; item.calendarStatus = 'synced';
+          item.calendarProvider = video.eventProvider; item.calendarExternalId = video.externalId; item.calendarStatus = 'synced'; item.calendarOwnerId = video.ownerId || '';
         } else applySync(item, await syncAppointment(extView(item)), 'push');
         await item.save();
       }
@@ -294,9 +296,9 @@ export const followUpController = {
       Object.assign(item, fields);
       if (videoLink === true && !item.videoUrl) {
         // Échec du fournisseur : réponse d'erreur, rien n'est enregistré (le document modifié en mémoire n'est pas sauvegardé).
-        const video = await createVideo(item.companyId, { title: item.title, contactName: item.contactName, dueAt: item.dueAt, durationMinutes: item.durationMinutes, timeZone: item.timeZone }, { calendar: { provider: item.calendarProvider, externalId: item.calendarExternalId } });
-        item.videoUrl = video.url; item.videoProvider = video.provider; item.videoExternalId = video.externalId;
-        if (video.sharesCalendar && !item.calendarExternalId) { item.calendarProvider = video.eventProvider; item.calendarExternalId = video.externalId; item.calendarStatus = 'synced'; }
+        const video = await createVideo(item.companyId, { title: item.title, contactName: item.contactName, dueAt: item.dueAt, durationMinutes: item.durationMinutes, timeZone: item.timeZone }, { calendar: item.calendarOwnerId && item.calendarOwnerId === access.userId ? { provider: item.calendarProvider, externalId: item.calendarExternalId } : null, userId: access.userId }); // l'événement d'agenda n'est réutilisé que dans le calendrier de celui qui le possède
+        item.videoUrl = video.url; item.videoProvider = video.provider; item.videoExternalId = video.externalId; item.videoOwnerId = video.ownerId || '';
+        if (video.sharesCalendar && !item.calendarExternalId) { item.calendarProvider = video.eventProvider; item.calendarExternalId = video.externalId; item.calendarStatus = 'synced'; item.calendarOwnerId = video.ownerId || ''; }
       }
       if (videoLink === false) {
         await removeVideoResource(String(item.companyId), extView(item)); // réunion Zoom / événement dédié ; l'événement d'agenda reste

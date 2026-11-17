@@ -2,16 +2,20 @@ import mongoose from 'mongoose';
 import SecretariatSharedAccount from '../models/SecretariatSharedAccount.js';
 import { disconnectSharedAccount, messages, SHARED_LABEL_MAX, sharedReauthMessage, withConnection } from './secretariatConnections.js';
 import { hasReadScope, SecretariatError } from './secretariatProviders/common.js';
+import { isOwnerless, ownsRow } from './mailOwnership.js';
 import { PROVIDERS } from './secretariatProviders/index.js';
 import { DEFAULT_TIME_ZONE, normalizeTimeZone, UNKNOWN_TIME_ZONE_MESSAGE } from './timeZone.js';
 
 /**
- * Comptes connectés PARTAGÉS avec les secrétaires (boîte / agenda d'un patron ou d'un collègue). Contrôle d'accès STRICT, côté serveur :
- *  - titulaire et responsables (rôle ≠ agent) : voient et gèrent tous les comptes de leur société ;
- *  - secrétaire (rôle agent) : ne voit QUE les comptes où le titulaire a autorisé au moins une action, et n'agit que dans ce cadre ;
- *  - un compte d'une autre société, inconnu ou non autorisé répond « introuvable » (on ne confirme pas son existence) ;
- *  - messagerie PERSONNELLE d'une secrétaire (`personalUserId`) : visible, utilisable (envoi, agenda) et déconnectable par sa seule propriétaire ;
- *    jamais listée au titulaire / aux responsables ni aux autres secrétaires, jamais modifiable par eux ; non autorisé = « introuvable » ;
+ * Comptes connectés PARTAGÉS avec les collègues (boîte / agenda d'un patron ou d'un collègue). Contrôle d'accès STRICT, côté serveur, quel que soit le rôle
+ * (titulaire, responsable ou secrétaire : le rôle ne donne aucun droit sur le compte d'un autre) :
+ *  - PROPRIÉTAIRE (`connectedBy`, la personne qui l'a connecté) : le voit, le modifie, le reconnecte, le supprime et l'utilise sans restriction ;
+ *  - tout autre membre : ne voit et n'utilise QUE les comptes que le propriétaire a explicitement délégués (`permissions.send` / `permissions.calendar`),
+ *    et seulement pour l'action déléguée ; jamais de gestion ; sans délégation = « introuvable » (on ne confirme pas son existence) ;
+ *  - compte ORPHELIN (ancien, sans propriétaire) : inutilisable et invisible pour tous ; seul le titulaire de la société peut le retirer ;
+ *  - un compte d'une autre société ou inconnu répond « introuvable » ;
+ *  - messagerie PERSONNELLE (`personalUserId`) d'un membre, de TOUT rôle : visible, utilisable (envoi, agenda) et déconnectable par sa seule propriétaire ;
+ *    jamais listée aux autres, jamais modifiable par eux ; non autorisé = « introuvable » ;
  *  - un compte à reconnecter répond 409 `account_needs_reauth` : jamais de repli sur un autre compte ;
  *  - les jetons ne sortent jamais d'ici (les vues ne contiennent que des champs d'affichage).
  * Comptes PARTAGÉS : AUCUNE lecture de boîte de réception (elle exigerait gmail.readonly, périmètre restreint soumis à vérification Google).
@@ -28,7 +32,7 @@ const oid = (v) => new mongoose.Types.ObjectId(String(v));
 const bad = (error) => ({ error });
 const fail = (code, message, status) => new SecretariatError(code, message, { status });
 
-/** Titulaire et responsables gèrent les comptes ; une secrétaire (rôle `agent`) n'en est que bénéficiaire. */
+/** Titulaire et responsables peuvent CONNECTER un compte partagé ; une secrétaire (rôle `agent`) n'en est que bénéficiaire. Cela ne donne aucun droit sur le compte d'un autre. */
 export const isManager = (access) => access.role !== 'agent';
 
 /** Texte court d'affichage (libellé, nom) : espaces normalisés, pas de caractère de contrôle ni de < >. */
@@ -76,19 +80,23 @@ export const secretaryView = (d) => (d.personalUserId
   ? { ...base(d), mine: true, can: { send: true, calendar: true }, inbound: { readEnabled: d.inbound?.readEnabled === true && hasReadScope(d.provider, d.scopes) } } // c'est SA messagerie : droits fixes ; état de la lecture de SA boîte
   : { ...base(d), can: { send: d.permissions?.send === true, calendar: d.permissions?.calendar === true } });
 
-const DISPLAY_FIELDS = 'provider label ownerName accountEmail status permissions connectedAt personalUserId scopes inbound';
+const DISPLAY_FIELDS = 'provider label ownerName accountEmail status permissions connectedAt personalUserId scopes inbound connectedBy ownerless';
 /** Messagerie personnelle de cet utilisateur ? (jamais vrai pour un compte partagé ni pour la messagerie d'une autre personne) */
 const isMine = (d, access) => Boolean(d.personalUserId) && String(d.personalUserId) === String(access.userId);
+/** Compte PARTAGÉ dont cet utilisateur est le propriétaire (celui qui l'a connecté). */
+const ownsShared = (d, access) => !d.personalUserId && ownsRow(d, access.userId);
+const delegatedAny = (d) => d.permissions?.send === true || d.permissions?.calendar === true;
 
-/** Comptes visibles de l'appelant (jamais de jeton : `credentialsEnc` est `select: false` et n'est pas demandé). */
+/**
+ * Comptes visibles de l'appelant, quel que soit son rôle (jamais de jeton : `credentialsEnc` est `select: false` et n'est pas demandé) :
+ * sa messagerie personnelle, les comptes partagés qu'il a connectés (vue de gestion), puis ceux qu'un propriétaire lui a délégués (vue bénéficiaire).
+ */
 export async function listAccounts(companyId, access) {
   const rows = await SecretariatSharedAccount.find({ companyId: oid(companyId) }).select(DISPLAY_FIELDS).sort({ label: 1 }).lean();
-  // Titulaire / responsables : jamais une messagerie personnelle de secrétaire.
-  if (isManager(access)) return rows.filter((d) => !d.personalUserId).map(managerView);
-  // Secrétaire : sa messagerie personnelle (en premier) puis les comptes délégués autorisés ; jamais celle d'une autre.
-  const mine = rows.filter((d) => isMine(d, access));
-  const delegated = rows.filter((d) => !d.personalUserId && (d.permissions?.send === true || d.permissions?.calendar === true));
-  return [...mine, ...delegated].map(secretaryView);
+  const personal = rows.filter((d) => isMine(d, access)).map(secretaryView);
+  const owned = rows.filter((d) => ownsShared(d, access)).map((d) => ({ ...managerView(d), mine: true }));
+  const delegated = rows.filter((d) => !d.personalUserId && !isOwnerless(d) && !ownsShared(d, access) && delegatedAny(d)).map(secretaryView);
+  return [...personal, ...owned, ...delegated];
 }
 
 /**
@@ -99,12 +107,12 @@ export async function requireAccount(companyId, access, accountId, need) {
   if (!isOid(accountId)) throw fail('account_not_found', NOT_FOUND, 404);
   const d = await SecretariatSharedAccount.findOne({ _id: oid(accountId), companyId: oid(companyId) }).select(DISPLAY_FIELDS).lean();
   if (!d) throw fail('account_not_found', NOT_FOUND, 404);
-  // Messagerie personnelle : sa seule propriétaire (rôle secrétaire) y accède, droits fixes ; pour tout autre elle n'existe pas.
-  if (d.personalUserId && (isManager(access) || !isMine(d, access))) throw fail('account_not_found', NOT_FOUND, 404);
-  if (!isManager(access) && !d.personalUserId) {
-    const p = d.permissions || {};
-    if (p.send !== true && p.calendar !== true) throw fail('account_not_found', NOT_FOUND, 404); // jamais révélé à la secrétaire
-    if (p[need] !== true) throw fail('account_not_allowed', need === 'send' ? 'Le titulaire n’a pas autorisé l’envoi d’e-mails depuis ce compte.' : 'Le titulaire n’a pas autorisé l’accès à l’agenda de ce compte.', 403);
+  // Messagerie personnelle : sa seule propriétaire (tout rôle) y accède, droits fixes ; pour tout autre elle n'existe pas.
+  if (d.personalUserId && !isMine(d, access)) throw fail('account_not_found', NOT_FOUND, 404);
+  if (!d.personalUserId && !ownsShared(d, access)) {
+    // Compte d'une autre personne (ou orphelin) : seulement s'il est DÉLÉGUÉ, et seulement pour l'action déléguée ; sinon il n'existe pas pour lui. Valable pour tous les rôles.
+    if (isOwnerless(d) || !delegatedAny(d)) throw fail('account_not_found', NOT_FOUND, 404);
+    if (d.permissions?.[need] !== true) throw fail('account_not_allowed', need === 'send' ? 'Le propriétaire du compte n’a pas autorisé l’envoi d’e-mails depuis ce compte.' : 'Le propriétaire du compte n’a pas autorisé l’accès à l’agenda de ce compte.', 403);
   }
   if (d.status === 'needs_reauth') throw fail('account_needs_reauth', sharedReauthMessage(d), 409);
   return d;
@@ -245,20 +253,28 @@ export async function deleteAccountEvent(companyId, account, eventId) {
   }
 }
 
-/** Reconnexion / suppression / modification : le compte doit appartenir à la société (titulaire ou responsable uniquement, vérifié par le contrôleur). */
-export async function updateAccount(companyId, accountId, patch) {
+/** Modification : le compte doit appartenir à la société ET à `userId` (son propriétaire). Un autre membre, titulaire compris : introuvable. */
+export async function updateAccount(companyId, accountId, patch, userId) {
+  if (!String(userId || '').trim()) return null;
   if (!isOid(accountId)) return null;
   const set = {};
   if (patch.label !== undefined) set.label = patch.label;
   if (patch.ownerName !== undefined) set.ownerName = patch.ownerName;
   if (patch.send !== undefined) set['permissions.send'] = patch.send;
   if (patch.calendar !== undefined) set['permissions.calendar'] = patch.calendar;
-  return SecretariatSharedAccount.findOneAndUpdate({ _id: oid(accountId), companyId: oid(companyId), personalUserId: null }, { $set: set }, { new: true }).select(DISPLAY_FIELDS).lean();
+  return SecretariatSharedAccount.findOneAndUpdate({ _id: oid(accountId), companyId: oid(companyId), personalUserId: null, connectedBy: String(userId) }, { $set: set }, { new: true }).select(DISPLAY_FIELDS).lean();
 }
 
-export async function removeAccount(companyId, accountId) {
+/**
+ * Suppression : le propriétaire supprime SON compte ; le titulaire de la société (`titulaire`) peut en plus retirer un compte ORPHELIN (sans propriétaire).
+ * Jamais le compte d'une autre personne, jamais une messagerie personnelle.
+ */
+export async function removeAccount(companyId, accountId, { userId, titulaire = false } = {}) {
   if (!isOid(accountId)) return false;
-  return disconnectSharedAccount(companyId, accountId, { owner: null }); // jamais une messagerie personnelle
+  const u = String(userId || '').trim();
+  if (u && (await disconnectSharedAccount(companyId, accountId, { owner: null, connectedBy: u }))) return true;
+  if (titulaire) return disconnectSharedAccount(companyId, accountId, { owner: null, connectedBy: '' });
+  return false;
 }
 
 /** La secrétaire déconnecte SA messagerie personnelle (propriété vérifiée dans le filtre ; autre compte = introuvable). */

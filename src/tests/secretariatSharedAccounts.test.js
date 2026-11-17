@@ -459,9 +459,9 @@ try {
     reset(); oauthOk(email, access, refresh);
     return cb(provider, { code: 'c', state: stateFrom(S.startAuthorization({ companyId: extra.companyId || C1, userId: user, provider, returnTo: 'profile', shared: { personal: true, ownerName: '' } })) });
   };
-  // démarrage : secrétaire seulement, pour elle-même (identité = session), retour = profil uniquement
+  // démarrage : tout membre avec accès au module, pour lui-même (identité = session), retour = profil uniquement
   reset();
-  for (const [user, status] of [['owner1', 403], ['member1', 403], ['memberNoCalls', 403], ['otherAgent', 403]]) assert.equal((await req('POST', `/accounts/${C1}/mine/google/start`, { user })).status, status, `démarrage refusé à ${user}`);
+  for (const [user, status] of [['owner1', 200], ['member1', 200], ['memberNoCalls', 403], ['otherAgent', 403]]) assert.equal((await req('POST', `/accounts/${C1}/mine/google/start`, { user })).status, status, `démarrage : tout membre avec accès au module connecte SA messagerie (${user})`);
   assert.equal((await req('POST', `/accounts/${C1}/mine/google/start`)).status, 401);
   assert.equal((await req('POST', `/accounts/${C2}/mine/google/start`, { user: 'sophie' })).status, 403, 'pas pour une autre société');
   assert.equal((await req('POST', `/accounts/${C1}/mine/zoom/start`, { user: 'sophie' })).status, 400);
@@ -523,7 +523,7 @@ try {
   assert.equal((await req('POST', `/accounts/${C1}/${sophieAcc._id}/reconnect`, { user: 'owner1' })).status, 404);
   assert.equal((await req('DELETE', `/accounts/${C1}/${sophieAcc._id}`, { user: 'owner1' })).status, 404); assert.ok(accounts.includes(sophieAcc));
   assert.equal((await req('PATCH', `/accounts/${C1}/${sophieAcc._id}`, { user: 'sophie', body: { label: 'x' } })).status, 403, 'une secrétaire ne modifie pas via la route de gestion');
-  assert.equal((await req('DELETE', `/accounts/${C1}/mine/${sophieAcc._id}`, { user: 'owner1' })).status, 403, 'route « mine » : secrétaire seulement');
+  assert.equal((await req('DELETE', `/accounts/${C1}/mine/${sophieAcc._id}`, { user: 'owner1' })).status, 404, 'route « mine » : propriétaire de la messagerie seulement (le titulaire n’est pas Sophie : introuvable)');
   assert.equal((await req('DELETE', `/accounts/${C1}/mine/${sophieAcc._id}`, { user: 'paul' })).status, 404, 'une autre secrétaire ne déconnecte pas la sienne'); assert.ok(accounts.includes(sophieAcc));
   assert.equal((await req('DELETE', `/accounts/${C1}/mine/${equipe._id}`, { user: 'sophie' })).status, 404, 'compte partagé : pas via « mine »'); assert.ok(accounts.includes(equipe));
   assert.equal((await req('DELETE', `/accounts/${C1}/mine/xx`, { user: 'sophie' })).status, 404);

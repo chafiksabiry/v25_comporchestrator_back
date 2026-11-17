@@ -22,8 +22,9 @@ const NOT_CONNECTED = 'Connectez votre messagerie (Gmail ou Outlook) dans Param�
 const UNAVAILABLE = 'Votre messagerie connectée est momentanément indisponible. Aucun e-mail n’a été envoyé : réessayez dans un instant.';
 
 /**
- * Droits de l'appelant : titulaire, ou membre avec le droit d'appels (boîte de la société et comptes partagés). Une secrétaire (rôle agent)
- * n'envoie QUE depuis un compte partagé que le titulaire a autorisé, et ne lit que son propre journal. Répond lui-même et renvoie null en cas de refus.
+ * Droits de l'appelant : titulaire, ou membre avec le droit d'appels. Chacun n'envoie QUE depuis une boîte qu'il a lui-même connectée (sa connexion, sa messagerie
+ * personnelle, un compte partagé qu'il a connecté) ou depuis un compte qu'un propriétaire lui a explicitement délégué. Une secrétaire (rôle agent) n'envoie QUE depuis
+ * un compte (délégué ou sa messagerie personnelle) et ne lit que son propre journal. Répond lui-même et renvoie null en cas de refus.
  */
 async function context(req, res) {
   let access;
@@ -135,7 +136,7 @@ export const emailController = {
       }
       // Les e-mails ne partent que de la messagerie connectée du centre : `configured` = une messagerie active (aucune dépendance au service HARX).
       const identity = await loadEmailIdentity(access.companyId);
-      const mailbox = await resolveMailbox(access.companyId, identity.provider);
+      const mailbox = await resolveMailbox(access.companyId, identity.provider, access.userId); // SA boîte seulement : celle d'un autre n'existe pas pour lui
       const ok = !mailbox.error;
       res.json({ success: true, data: { configured: ok, provider: ok ? mailbox.provider : null, account: ok ? mailbox.account : null, limits: max, remainingThisHour: Math.max(0, max.perHour - used.hour), remainingToday: Math.max(0, max.perDay - used.day) } });
     } catch (error) {
@@ -173,7 +174,7 @@ export const emailController = {
       if (access.role === 'agent' && !wanted) return fail(res, 403, NOT_ALLOWED); // inchangé : sans compte (délégué autorisé ou sa messagerie personnelle), une secrétaire n'envoie pas
       if (wanted) return sendFromShared(req, res, access, wanted);
       const identity = await loadEmailIdentity(access.companyId);
-      const mailbox = await resolveMailbox(access.companyId, identity.provider);
+      const mailbox = await resolveMailbox(access.companyId, identity.provider, access.userId); // jamais la boîte d'un autre membre
       if (mailbox.error === 'needs_reauth') return refuse(res, 'mailbox_needs_reauth', connectionMessages.needsReauth(mailbox.provider));
       if (mailbox.error) return refuse(res, 'mailbox_not_connected', NOT_CONNECTED);
       const checked = validateSend(req.body);
@@ -208,7 +209,7 @@ export const emailController = {
         await sendViaConnection(access.companyId, mailbox.provider, {
           fromName: v.centerName, to: v.to, subject: v.subject, text: payload.textContent, html: payload.htmlContent, replyTo: payload.replyTo,
           attachments: (payload.attachment || []).map((a) => ({ name: a.name, contentType: 'text/calendar; charset=UTF-8; method=PUBLISH', contentBase64: a.content })),
-        });
+        }, { userId: access.userId });
       } catch (error) {
         const e = error instanceof SecretariatError ? error : new SecretariatError('provider_error', '');
         console.error(`emails send (${mailbox.provider}): ${e.code}`);

@@ -37,6 +37,7 @@ import { resolveExpiredPendingReviews, flagWeeklyAiAudits } from './src/controll
 import { billExpiredTrialLines, reconcilePendingMonthlyLines, terminateSuspendedLines } from './src/services/phoneLineBillingService.js';
 import { syncPlanMetadataFromStripe } from './src/services/planMetadataSync.js';
 import { neutralizeGoogleInbox } from './src/services/googleInboxMigration.js';
+import { applyMailOwnership } from './src/services/mailOwnershipMigration.js';
 
 const app = express();
 
@@ -51,6 +52,8 @@ mongoose.connect(config.mongodbUri, {
   console.log('✅ Connected to MongoDB');
   // Google ne demande plus jamais la lecture de la boîte : lecture coupée et e-mails Google purgés pour les comptes déjà autorisés (idempotent, journalisé).
   neutralizeGoogleInbox();
+  // Une boîte mail connectée n'est utilisable que par la personne qui l'a connectée : anciennes connexions sans propriétaire marquées (inutilisables jusqu'à reconnexion), e-mails stockés partagés purgés (idempotent, journalisé sans donnée personnelle).
+  applyMailOwnership();
 }).catch((error) => {
   console.error('❌ MongoDB connection error:', error);
   process.exit(1); // Exit if we can't connect to database

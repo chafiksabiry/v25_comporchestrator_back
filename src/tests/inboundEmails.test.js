@@ -191,7 +191,7 @@ try {
   assert.equal((await req('POST', `/connections/${C1}/microsoft/start`, { user: 'agent1', body: { read: true } })).status, 403);
   // un compte Google autorisé avant le retrait (ancien scope en base) n'a plus aucun droit de lecture
   putConnection(C1, 'microsoft', { scopes: READ_M });
-  assert.deepEqual([(r = await req('GET', `/connections/${C1}`, { user: 'member1' })).body.data.google.canRead, r.body.data.google.canModify], [false, false]);
+  assert.deepEqual([(r = await req('GET', `/connections/${C1}`, { user: 'owner1' })).body.data.google.canRead, r.body.data.google.canModify], [false, false]);
 
   // ---------- 4. réglage inbound.enabled
   reset();
@@ -229,7 +229,7 @@ try {
   assert.equal(before(), 0);
 
   // ---------- 6. rafraîchissement (Graph) : métadonnées seulement, limite de fréquence
-  r = await req('POST', `/inbound-emails/${C1}/refresh`, { user: 'member1' });
+  r = await req('POST', `/inbound-emails/${C1}/refresh`, { user: 'owner1' });
   assert.equal(r.status, 200, r.text); assert.equal(r.body.success, true);
   const calls = providerCalls();
   assert.match(calls[0].url, /mailFolders\/inbox\/messages\?/); assert.equal(qs(calls[0].url).$top, '25');
@@ -254,7 +254,7 @@ try {
   const n2 = providerCalls().length;
   r = await req('GET', `/inbound-emails/${C1}`, { user: 'owner1' }); assert.equal(r.body.data.items.length, 2); assert.equal(providerCalls().length, n2);
   // isolation : l'autre centre ne voit rien
-  toolsDocs.push({ companyId: C2, inbound: { enabled: true } }); putConnection(C2, 'microsoft', { scopes: READ_M });
+  toolsDocs.push({ companyId: C2, inbound: { enabled: true } }); putConnection(C2, 'microsoft', { scopes: READ_M, connectedBy: 'other1' });
   assert.deepEqual((await req('GET', `/inbound-emails/${C2}`, { user: 'other1' })).body.data.items, []);
 
   // ---------- 7. corps lu en direct
@@ -332,7 +332,7 @@ try {
 
   // ---------- 10b. suppression et archivage (dans l'application seulement)
   reset(); enable(); putConnection(C1, 'microsoft', { scopes: READ_M }); graphStd();
-  toolsDocs.push({ companyId: C2, inbound: { enabled: true } }); putConnection(C2, 'microsoft', { scopes: READ_M });
+  toolsDocs.push({ companyId: C2, inbound: { enabled: true } }); putConnection(C2, 'microsoft', { scopes: READ_M, connectedBy: 'other1' });
   const refreshNow = async () => { I.resetRefreshThrottle(); toolsDocs[0].inbound.lastSyncAt = null; return req('POST', `/inbound-emails/${C1}/refresh`, { user: 'owner1' }); };
   const get = (view, user = 'owner1', c = C1) => req('GET', `/inbound-emails/${c}${view ? `?view=${view}` : ''}`, { user });
   const idOf = (items, subject) => items.find((i) => i.subject === subject).id;
@@ -438,53 +438,49 @@ try {
   assert.deepEqual(Object.keys(InboundEmail.schema.paths).filter((x) => /body|text|html|content/i.test(x)), []);
   assert.equal(InboundEmail.schema.path('snippet').options.maxlength, 200);
 
-  // ---------- 13. secrétaires : accès seulement si l'entreprise l'a autorisé
+  // ---------- 13. secrétaires et autres membres : AUCUN accès à la boîte d'un autre (le réglage « secrétaires » n'existe plus ; voir mailOwnerOnly.test.js)
   reset(); enable(); putConnection(C1, 'microsoft', { scopes: READ_M }); graphStd();
   const routes = [['GET', `/inbound-emails/${C1}`], ['POST', `/inbound-emails/${C1}/refresh`], ['GET', `/inbound-emails/${C1}/${'a'.repeat(24)}/body`], ['PATCH', `/inbound-emails/${C1}/${'a'.repeat(24)}`], ['DELETE', `/inbound-emails/${C1}/${'a'.repeat(24)}`], ['POST', `/inbound-emails/${C1}/delete-many`], ['POST', `/inbound-emails/${C1}/archive-many`]];
   const status = async (user, m, p) => (await req(m, p, { user, body: { status: 'handled' } })).status;
-  // validation du réglage
-  for (const bad of [{ secretaries: 'true' }, { secretaries: 1 }, { secretaries: null }]) assert.equal((await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: bad } })).status, 400, JSON.stringify(bad));
-  assert.equal((await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: { enabled: false, secretaries: true } } })).status, 400, 'pas de secrétaires sans lecture');
+  // validation du réglage : ouvrir la lecture aux secrétaires est refusé ; « faux » est accepté sans effet
+  for (const bad of [{ secretaries: 'true' }, { secretaries: 1 }, { secretaries: null }, { secretaries: true }]) assert.equal((await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: bad } })).status, 400, JSON.stringify(bad));
   assert.equal((await req('PUT', `/tools/${C1}`, { user: 'agent1', body: { inbound: { secretaries: true } } })).status, 403, 'une secrétaire ne modifie pas les réglages');
-  assert.equal(toolsDocs[0].inbound.secretaries, undefined);
-  // non autorisée (défaut) : 403 partout, access = false sans 403
-  for (const [m, p] of routes) assert.equal(await status('agent1', m, p), 403, `agent non autorisé ${m} ${p}`);
+  r = await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: { secretaries: false } } }); assert.equal(r.status, 200); assert.equal(r.body.data.inbound.secretaries, false);
+  // une secrétaire : 403 partout (même si un ancien réglage « secretaries » est resté vrai en base), access = false sans 403
+  toolsDocs[0].inbound.secretaries = true;
+  for (const [m, p] of routes) assert.equal(await status('agent1', m, p), 403, `secrétaire ${m} ${p}`);
   r = await req('GET', `/inbound-emails/${C1}/access`, { user: 'agent1' }); assert.equal(r.status, 200); assert.deepEqual(r.body, { success: true, data: { allowed: false } });
+  assert.equal((await req('GET', `/tools/${C1}`, { user: 'agent1' })).body.data.inbound.secretaries, false, 'jamais exposé comme actif');
+  // le propriétaire (owner1, connecteur de la boîte) : accès ; un autre responsable : « aucune messagerie » (la boîte d'owner1 n'existe pas pour lui)
   assert.deepEqual((await req('GET', `/inbound-emails/${C1}/access`, { user: 'owner1' })).body.data, { allowed: true });
-  assert.deepEqual((await req('GET', `/inbound-emails/${C1}/access`, { user: 'member1' })).body.data, { allowed: true });
+  assert.deepEqual((await req('GET', `/inbound-emails/${C1}/access`, { user: 'member1' })).body.data, { allowed: false });
+  assert.equal((await req('POST', `/inbound-emails/${C1}/refresh`, { user: 'member1' })).body.code, 'no_mailbox');
   assert.deepEqual((await req('GET', `/inbound-emails/${C1}/access`, { user: 'memberNoCalls' })).body.data, { allowed: false });
   assert.equal((await req('GET', `/inbound-emails/${C1}/access`)).status, 401);
   assert.equal((await req('GET', `/inbound-emails/${C1}/access`, { user: 'other1' })).status, 403, 'access : jamais un autre centre');
-  // autorisation (PUT partiel : n'écrase pas enabled)
-  r = await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: { secretaries: true } } });
-  assert.equal(r.status, 200); assert.deepEqual(r.body.data.inbound, { enabled: true, secretaries: true, mailboxActions: false });
-  assert.deepEqual((await req('GET', `/tools/${C1}`, { user: 'agent1' })).body.data.inbound, { enabled: true, secretaries: true, mailboxActions: false });
-  assert.deepEqual((await req('GET', `/inbound-emails/${C1}/access`, { user: 'agent1' })).body.data, { allowed: true });
-  assert.equal((await req('GET', `/inbound-emails/${C1}`, { user: 'agent1' })).status, 200);
-  assert.equal((await req('POST', `/inbound-emails/${C1}/refresh`, { user: 'agent1' })).status, 200);
   I.resetRefreshThrottle();
-  const list = (await req('GET', `/inbound-emails/${C1}`, { user: 'agent1' })).body.data.items; assert.ok(list.length > 0); const g1 = list.find((i) => i.subject === 'Demande de rendez-vous');
-  assert.equal((await req('GET', `/inbound-emails/${C1}/${g1.id}/body`, { user: 'agent1' })).status, 200);
-  assert.equal((await req('PATCH', `/inbound-emails/${C1}/${g1.id}`, { user: 'agent1', body: { status: 'handled' } })).status, 200);
-  assert.equal((await req('PATCH', `/inbound-emails/${C1}/${g1.id}`, { user: 'agent1', body: { archived: true } })).status, 200, 'secrétaire autorisée : archivage');
-  assert.equal((await req('POST', `/inbound-emails/${C1}/archive-many`, { user: 'agent1', body: { ids: [g1.id], archived: false } })).body.data.updated, 1);
-  assert.deepEqual((await req('POST', `/inbound-emails/${C1}/delete-many`, { user: 'agent1', body: { ids: [g1.id] } })).body, { success: true, data: { deleted: 1, mailbox: 'app_only' } }, 'secrétaire autorisée : suppression en lot');
-  assert.equal((await req('DELETE', `/inbound-emails/${C1}/${list.find((i) => i.id !== g1.id).id}`, { user: 'agent1' })).status, 200, 'secrétaire autorisée : suppression');
+  assert.equal((await req('POST', `/inbound-emails/${C1}/refresh`, { user: 'owner1' })).status, 200);
+  const list = (await req('GET', `/inbound-emails/${C1}`, { user: 'owner1' })).body.data.items; assert.ok(list.length > 0); const g1 = list.find((i) => i.subject === 'Demande de rendez-vous');
+  assert.equal((await req('GET', `/inbound-emails/${C1}/${g1.id}/body`, { user: 'agent1' })).status, 403);
+  assert.equal((await req('PATCH', `/inbound-emails/${C1}/${g1.id}`, { user: 'member1', body: { status: 'handled' } })).status, 404, 'un autre responsable ne touche pas aux e-mails stockés du propriétaire');
+  assert.equal((await req('DELETE', `/inbound-emails/${C1}/${g1.id}`, { user: 'member1' })).status, 404);
+  assert.equal((await req('GET', `/inbound-emails/${C1}`, { user: 'member1' })).body.data.items.length, 0);
+  assert.equal((await req('PATCH', `/inbound-emails/${C1}/${g1.id}`, { user: 'owner1', body: { status: 'handled' } })).status, 200);
+  assert.equal((await req('PATCH', `/inbound-emails/${C1}/${g1.id}`, { user: 'owner1', body: { archived: true } })).status, 200, 'le propriétaire : archivage');
+  assert.equal((await req('POST', `/inbound-emails/${C1}/archive-many`, { user: 'owner1', body: { ids: [g1.id], archived: false } })).body.data.updated, 1);
+  assert.deepEqual((await req('POST', `/inbound-emails/${C1}/delete-many`, { user: 'owner1', body: { ids: [g1.id] } })).body, { success: true, data: { deleted: 1, mailbox: 'app_only' } }, 'le propriétaire : suppression en lot');
+  assert.equal((await req('DELETE', `/inbound-emails/${C1}/${list.find((i) => i.id !== g1.id).id}`, { user: 'owner1' })).status, 200, 'le propriétaire : suppression');
   assert.equal((await req('DELETE', `/inbound-emails/${C1}/${g1.id}`, { user: 'memberNoCalls' })).status, 403);
   assert.equal((await req('GET', `/inbound-emails/${C1}`, { user: 'memberNoCalls' })).status, 403, 'un membre sans droit reste refusé');
-  // isolation : la secrétaire d'un autre centre (non autorisé) ne passe pas, ni sur C1 ni sur C2
+  // isolation : une secrétaire d'un autre centre ne passe pas, ni sur C1 ni sur C2
   assert.equal((await req('GET', `/inbound-emails/${C1}`, { user: 'agent2' })).status, 403);
   assert.equal((await req('GET', `/inbound-emails/${C1}/access`, { user: 'agent2' })).status, 403);
-  toolsDocs.push({ companyId: C2, inbound: { enabled: true, secretaries: false } });
-  assert.equal((await req('GET', `/inbound-emails/${C2}`, { user: 'agent2' })).status, 403, 'C2 n’a pas autorisé ses secrétaires');
+  assert.equal((await req('GET', `/inbound-emails/${C2}`, { user: 'agent2' })).status, 403, 'agent2 est une secrétaire : jamais la boîte de l’entreprise');
   assert.equal((await req('GET', `/inbound-emails/${C2}`, { user: 'agent1' })).status, 403, 'agent de C1 sur C2');
-  // désactivation de la lecture : secretaries repasse à false, plus d'accès
+  // désactivation de la lecture par le propriétaire : plus d'accès pour personne
   r = await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: { enabled: false } } });
   assert.deepEqual(r.body.data.inbound, { enabled: false, secretaries: false, mailboxActions: false }); assert.equal(toolsDocs[0].inbound.secretaries, false);
-  assert.equal((await req('GET', `/inbound-emails/${C1}`, { user: 'agent1' })).status, 403);
-  assert.deepEqual((await req('GET', `/inbound-emails/${C1}/access`, { user: 'agent1' })).body.data, { allowed: false });
   assert.deepEqual((await req('GET', `/inbound-emails/${C1}/access`, { user: 'owner1' })).body.data, { allowed: false }, 'lecture désactivée : allowed false pour tous');
-  // réactivation : les secrétaires ne sont pas réautorisées automatiquement
   await req('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: { enabled: true } } });
   assert.equal((await req('GET', `/inbound-emails/${C1}`, { user: 'agent1' })).status, 403);
 
@@ -507,11 +503,11 @@ try {
     assert.equal((await req('POST', `/connections/${C1}/zoom/start`, { user: 'owner1', body: { write: true } })).status, 400);
     assert.equal((await req('POST', `/connections/${C1}/microsoft/start`, { user: 'agent1', body: { write: true } })).status, 403);
     putConnection(C1, 'microsoft', { scopes: WRITE_M });
-    assert.deepEqual([(r = await req('GET', `/connections/${C1}`, { user: 'member1' })).body.data.microsoft.canRead, r.body.data.microsoft.canModify], [true, true], 'Mail.ReadWrite seul : lecture ET écriture');
+    assert.deepEqual([(r = await req('GET', `/connections/${C1}`, { user: 'owner1' })).body.data.microsoft.canRead, r.body.data.microsoft.canModify], [true, true], 'Mail.ReadWrite seul : lecture ET écriture');
     putConnection(C1, 'microsoft', { scopes: READ_M });
-    assert.deepEqual([(r = await req('GET', `/connections/${C1}`, { user: 'member1' })).body.data.microsoft.canRead, r.body.data.microsoft.canModify], [true, false]);
+    assert.deepEqual([(r = await req('GET', `/connections/${C1}`, { user: 'owner1' })).body.data.microsoft.canRead, r.body.data.microsoft.canModify], [true, false]);
     putConnection(C1, 'google', { scopes: [...READ_G, 'https://www.googleapis.com/auth/gmail.modify'] });
-    assert.deepEqual([(r = await req('GET', `/connections/${C1}`, { user: 'member1' })).body.data.google.canRead, r.body.data.google.canModify], [false, false], 'Google déjà autorisé avec gmail.modify : plus aucun droit');
+    assert.deepEqual([(r = await req('GET', `/connections/${C1}`, { user: 'owner1' })).body.data.google.canRead, r.body.data.google.canModify], [false, false], 'Google déjà autorisé avec gmail.modify : plus aucun droit');
 
     // réglage : validation stricte, dépend de enabled, remis à false à la désactivation, aucun appel fournisseur
     reset(); putConnection(C1, 'microsoft', { scopes: READ_M });
@@ -527,7 +523,7 @@ try {
     await put({ enabled: true }); assert.equal(toolsDocs[0].inbound.mailboxActions, false, 'pas réactivé automatiquement');
 
     // jeu de données
-    const mk = (n, provider = 'microsoft', extra = {}) => { const id = n.toString(16).padStart(24, 'e'); inbox.push({ _id: id, companyId: C1, provider, providerMessageId: `${provider[0]}${n}`, receivedAt: new Date(), fromName: 'X', fromEmail: 'x@exemple.fr', subject: `S${n}`, snippet: '', status: 'new', followUpIds: [], ...extra }); return id; };
+    const mk = (n, provider = 'microsoft', extra = {}) => { const id = n.toString(16).padStart(24, 'e'); inbox.push({ _id: id, companyId: C1, connectionOwnerId: 'owner1', provider, providerMessageId: `${provider[0]}${n}`, receivedAt: new Date(), fromName: 'X', fromEmail: 'x@exemple.fr', subject: `S${n}`, snippet: '', status: 'new', followUpIds: [], ...extra }); return id; };
     const calls = () => providerCalls().filter((c) => c.method === 'POST');
     const dele = (id) => req('DELETE', `/inbound-emails/${C1}/${id}`, { user: 'owner1' });
     const dmany = (ids) => req('POST', `/inbound-emails/${C1}/delete-many`, { user: 'owner1', body: { ids } });

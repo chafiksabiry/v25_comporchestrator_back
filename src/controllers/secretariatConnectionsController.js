@@ -1,26 +1,33 @@
 import mongoose from 'mongoose';
+import SecretariatConnection from '../models/SecretariatConnection.js';
 import { canManage } from '../services/followUps.js';
 import {
   completeConnection, connectionsView, disconnect, isAvailable, messages, readState, returnUrl, startAuthorization,
 } from '../services/secretariatConnections.js';
 import { GOOGLE_MAILBOX_ACCESS_REFUSED, isProviderId, SecretariatError } from '../services/secretariatProviders/common.js';
+import { isMailProvider, mayTakeOver } from '../services/mailOwnership.js';
 
 const fail = (res, status, message) => res.status(status).json({ success: false, error: message, message });
-const NOT_ALLOWED = 'Seuls le titulaire et les membres autorisés à gérer les appels peuvent connecter ou déconnecter un compte.';
+const NOT_ALLOWED = 'Seuls le titulaire et les membres autorisés à gérer les appels peuvent connecter ou déconnecter un compte. Une boîte mail n’est gérée que par la personne qui l’a connectée.';
 const RETURN_TO = ['tools', 'onboarding'];
 const companyOid = (req) => (mongoose.Types.ObjectId.isValid(req.params.companyId) ? new mongoose.Types.ObjectId(req.params.companyId) : null);
 const mayWrite = (req) => Boolean(req.companyAccess) && canManage(req.companyAccess);
+/** Qui regarde : l'identité de la session ; seul le titulaire de la société (rôle `owner`) peut voir qu'une connexion orpheline existe. */
+const viewerOf = (req) => ({ userId: req.companyAccess?.userId || '', titulaire: req.companyAccess?.role === 'owner' });
 
 /** Codes courts renvoyés au portail (?error=…) : aucun détail technique. */
-const ERROR_CODES = new Set(['invalid_state', 'invalid_request', 'access_denied', 'unavailable', 'exchange_failed', 'no_refresh_token', 'missing_permissions', 'no_account', 'storage_failed', 'wrong_account', 'too_many_accounts', 'email_in_use']);
+const ERROR_CODES = new Set(['invalid_state', 'invalid_request', 'access_denied', 'unavailable', 'exchange_failed', 'no_refresh_token', 'missing_permissions', 'no_account', 'storage_failed', 'wrong_account', 'too_many_accounts', 'email_in_use', 'not_owner']);
 
 export const secretariatConnectionsController = {
-  /** Lecture : tout membre rattaché au centre. Jamais de jeton ni de nom de variable. */
+  /**
+   * Lecture : tout membre rattaché au centre ; une boîte Google / Microsoft n'y apparaît « connectée » (avec son adresse) que pour la personne qui l'a connectée.
+   * Jamais de jeton ni de nom de variable.
+   */
   async list(req, res) {
     try {
       const companyId = companyOid(req);
       if (!companyId) return fail(res, 400, 'Identifiant de centre invalide.');
-      res.json({ success: true, data: await connectionsView(companyId) });
+      res.json({ success: true, data: await connectionsView(companyId, viewerOf(req)) });
     } catch (error) {
       console.error('secretariat connections list:', error.message);
       fail(res, 500, 'Lecture des connexions impossible.');
@@ -37,6 +44,11 @@ export const secretariatConnectionsController = {
       const returnTo = req.body?.returnTo === undefined ? 'tools' : req.body.returnTo;
       if (!RETURN_TO.includes(returnTo)) return fail(res, 400, 'Page de retour invalide.');
       if (!isAvailable(provider)) return fail(res, 409, messages.unavailable(provider));
+      // Boîte Google / Microsoft : on ne démarre pas la connexion par-dessus celle d'une autre personne (ni adresse ni identité révélées).
+      if (isMailProvider(provider)) {
+        const existing = await SecretariatConnection.findOne({ companyId, provider }).select('connectedBy ownerless').lean();
+        if (!mayTakeOver(existing, req.companyAccess.userId)) return res.status(409).json({ success: false, code: 'connection_owned', error: 'connection_owned', message: messages.ownedByOther(provider) });
+      }
       // `read: true` : demande en plus le scope (optionnel) de lecture de la boîte de réception (e-mails entrants).
       const read = req.body?.read === undefined ? false : req.body.read;
       if (typeof read !== 'boolean') return fail(res, 400, 'Le champ « read » doit être vrai ou faux.');
@@ -92,9 +104,10 @@ export const secretariatConnectionsController = {
       if (!mayWrite(req)) return fail(res, 403, NOT_ALLOWED);
       const { provider } = req.params;
       if (!isProviderId(provider)) return fail(res, 400, 'Fournisseur inconnu.');
-      await disconnect(companyId, provider);
-      res.json({ success: true, data: await connectionsView(companyId) });
+      await disconnect(companyId, provider, { userId: req.companyAccess.userId, titulaire: req.companyAccess.role === 'owner' });
+      res.json({ success: true, data: await connectionsView(companyId, viewerOf(req)) });
     } catch (error) {
+      if (error instanceof SecretariatError && error.code === 'not_owner') return res.status(403).json({ success: false, code: 'not_owner', error: 'not_owner', message: error.message });
       console.error('secretariat connections remove:', error.message);
       fail(res, 500, 'Déconnexion impossible.');
     }

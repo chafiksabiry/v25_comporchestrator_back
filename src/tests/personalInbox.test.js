@@ -294,7 +294,10 @@ try {
   assert.ok(providerCalls().every((c) => tokenOf(c) === 'ACCESS_COMPANY'), 'la boîte de l’entreprise n’utilise jamais le jeton de la secrétaire');
   assert.equal(companyDocs().length, 2); assert.equal(sophieDocs().length, 2);
   const persoId = first._id;
-  for (const user of ['owner1', 'member1', 'sophie']) {
+  // la secrétaire n'a pas accès à la boîte de l'entreprise (403) ; un autre responsable que le propriétaire n'y voit RIEN (200, vide) : jamais d'e-mail personnel ni d'e-mail d'entreprise
+  assert.equal((await req('GET', `/inbound-emails/${C1}`, { user: 'sophie' })).status, 403);
+  r = await req('GET', `/inbound-emails/${C1}`, { user: 'member1' }); assert.equal(r.status, 200); assert.deepEqual(r.body.data.items, []); assert.ok(!r.text.includes(SUBJECT_SECRET) && !r.text.includes('Sujet entreprise'));
+  for (const user of ['owner1']) {
     r = await req('GET', `/inbound-emails/${C1}`, { user });
     assert.equal(r.status, 200, user); assert.ok(!r.text.includes(SUBJECT_SECRET) && !r.text.includes('extrait perso') && !r.text.includes(persoId), `${user} : aucun e-mail personnel dans la liste entreprise`);
     assert.deepEqual(r.body.data.counts, { new: 2, handled: 0, archived: 0 }, 'compteurs entreprise sans e-mail perso');
@@ -339,7 +342,7 @@ try {
   // état de lecture : seulement SES messageries
   r = await req('GET', `/accounts/${C1}/mine/inbound`, { user: 'sophie' });
   assert.deepEqual(r.body.data.accounts.map((a) => [a.id, a.email, a.readEnabled, a.canRead, a.needsReauth]), [[ACC_SOPHIE, 'sophie@cabinet.test', true, true, false]]); assert.ok(!r.text.includes('paul@') && !r.text.includes('credentialsEnc') && !r.text.includes('REFRESH'));
-  r = await req('GET', `/accounts/${C1}/mine/inbound`, { user: 'owner1' }); assert.equal(r.status, 404);
+  r = await req('GET', `/accounts/${C1}/mine/inbound`, { user: 'owner1' }); assert.equal(r.status, 200, 'tout membre a SA messagerie personnelle : ici aucune'); assert.deepEqual(r.body.data.accounts, [], 'jamais celle de Sophie');
   assert.equal((await req('GET', `/accounts/${C1}/mine/inbound`, { user: 'paul' })).body.data.accounts[0].email, 'paul@cabinet.test');
   accounts.splice(accounts.findIndex((a) => a._id === ACC_PAUL), 1);
 
@@ -399,7 +402,7 @@ try {
   // ---------- 7. déconnexion de la messagerie : e-mails stockés purgés avant les jetons
   reset(); seedMine({ scopes: READ_G, inbound: { readEnabled: true, lastSyncAt: null } }); seedCompany(); gmail();
   await req('POST', `${mine()}/refresh`, { user: 'sophie' }); await req('POST', `/inbound-emails/${C1}/refresh`, { user: 'owner1' });
-  assert.equal((await req('DELETE', `/accounts/${C1}/mine/${ACC_SOPHIE}`, { user: 'owner1' })).status, 403); assert.equal(sophieDocs().length, 2);
+  assert.equal((await req('DELETE', `/accounts/${C1}/mine/${ACC_SOPHIE}`, { user: 'owner1' })).status, 404, 'le titulaire ne déconnecte pas la messagerie de Sophie (introuvable)'); assert.equal(sophieDocs().length, 2);
   assert.equal((await req('DELETE', `/accounts/${C1}/mine/${ACC_SOPHIE}`, { user: 'paul' })).status, 404); assert.equal(sophieDocs().length, 2);
   r = await req('DELETE', `/accounts/${C1}/mine/${ACC_SOPHIE}`, { user: 'sophie' });
   assert.equal(r.status, 200); assert.equal(accounts.length, 0); assert.equal(sophieDocs().length, 0, 'déconnexion : e-mails stockés purgés'); assert.equal(companyDocs().length, 2);
@@ -409,7 +412,7 @@ try {
   reset(); seedMine({ scopes: READ_G, inbound: { readEnabled: true, lastSyncAt: null } }); seedCompany(); gmail();
   await req('POST', `${mine()}/refresh`, { user: 'sophie' });
   const origDelete = SecretariatConnection.deleteOne; SecretariatConnection.deleteOne = async (f) => { const i = conns.findIndex((x) => match(x, f)); if (i >= 0) conns.splice(i, 1); return {}; };
-  await S.disconnect(C1, 'microsoft'); SecretariatConnection.deleteOne = origDelete;
+  await S.disconnect(C1, 'microsoft', { userId: 'owner1' }); SecretariatConnection.deleteOne = origDelete;
   assert.equal(sophieDocs().length, 2, 'déconnecter la messagerie de l’entreprise ne touche pas aux e-mails personnels');
 
   // ---------- 8. messagerie à reconnecter : signalée clairement, aucun repli sur un autre compte

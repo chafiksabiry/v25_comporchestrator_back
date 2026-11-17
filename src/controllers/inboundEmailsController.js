@@ -1,27 +1,27 @@
 import mongoose from 'mongoose';
-import { canManage } from '../services/followUps.js';
-import { archiveManyInbound, deleteInbound, deleteManyInbound, inboundView, loadMine, markHandled, mineReadEnabled, mineScope, readInboundBody, refreshInbound, stopMineReading } from '../services/inboundEmails.js';
+import { canManage, canUse } from '../services/followUps.js';
+import { archiveManyInbound, connectionScope, deleteInbound, deleteManyInbound, inboundView, loadMine, markHandled, mineReadEnabled, mineScope, readInboundBody, refreshInbound, stopMineReading } from '../services/inboundEmails.js';
 import { scopeToCompany } from '../middleware/companyScope.js';
 import { loadUserName } from '../services/followUpDirectory.js';
 import SecretariatSharedAccount from '../models/SecretariatSharedAccount.js';
-import { isAvailable, messages, startAuthorization } from '../services/secretariatConnections.js';
+import { isAvailable, messages, ownsMailConnection, startAuthorization } from '../services/secretariatConnections.js';
 import { loadTools, mergedTools } from '../services/secretariatTools.js';
 import { GOOGLE_MAILBOX_ACCESS_REFUSED, SecretariatError } from '../services/secretariatProviders/common.js';
 
-const NOT_ALLOWED = 'Seuls le titulaire, les membres autorisés à gérer les appels et, si l’entreprise l’a autorisé, les secrétaires peuvent consulter les e-mails entrants.';
+const NOT_ALLOWED = 'Seuls le titulaire et les membres autorisés peuvent consulter les e-mails entrants de la messagerie qu’ils ont connectée ; une secrétaire lit sa propre messagerie depuis son profil.';
 const fail = (res, status, code, message) => res.status(status).json({ success: false, code, error: message, message });
 const companyOid = (req) => (mongoose.Types.ObjectId.isValid(req.params.companyId) ? new mongoose.Types.ObjectId(req.params.companyId) : null);
 /** Titulaire ou membre autorisé (jamais un agent, jamais un appel de service sans personne). */
 const mayManage = (req) => Boolean(req.companyAccess) && canManage(req.companyAccess);
 /**
- * Accès aux e-mails entrants : gestionnaire, OU secrétaire (rôle agent, entreprise du JWT déjà vérifiée par requireCompanyParam)
- * quand l'entreprise a activé la lecture ET l'a ouverte aux secrétaires.
+ * Portée de lecture des e-mails entrants de la connexion de l'entreprise : titulaire ou membre autorisé (jamais une secrétaire : elle lit SA messagerie personnelle),
+ * avec le propriétaire tiré de la SESSION. Le service ne lit et n'affiche que la boîte DONT cette personne est propriétaire ; pour tout autre membre (titulaire compris)
+ * la boîte d'un autre n'existe pas : même réponse que « aucune messagerie connectée » (`no_mailbox`, liste vide), qui ne révèle pas qu'une boîte existe.
+ * Le réglage `inbound.secretaries` n'a plus aucun effet : une boîte n'est jamais ouverte à d'autres membres.
  */
-async function mayRead(req, companyId) {
-  if (mayManage(req)) return true;
-  if (req.companyAccess?.role !== 'agent') return false;
-  const { inbound } = mergedTools(await loadTools(companyId));
-  return inbound.enabled === true && inbound.secretaries === true;
+async function readScope(req, companyId) {
+  if (!mayManage(req) || !req.companyAccess?.userId) return null;
+  return connectionScope(companyId, req.companyAccess.userId);
 }
 
 /** 409 : inbound_disabled | no_mailbox | read_scope_missing | read_unavailable (messagerie Google) | write_scope_missing | needs_reauth ; 502 provider_error ; jamais le détail du fournisseur, ni un contenu de message. */
@@ -42,21 +42,22 @@ const guard = (handler, what) => async (req, res) => {
   try {
     const companyId = companyOid(req);
     if (!companyId) return fail(res, 400, 'invalid_request', 'Identifiant de centre invalide.');
-    if (!(await mayRead(req, String(companyId)))) return fail(res, 403, 'forbidden', NOT_ALLOWED);
-    return await handler(String(companyId), req, res);
+    const scope = await readScope(req, String(companyId));
+    if (!scope) return fail(res, 403, 'forbidden', NOT_ALLOWED);
+    return await handler(scope, req, res);
   } catch (error) {
     return sendError(res, error, what);
   }
 };
 
 export const inboundEmailsController = {
-  /** Léger, pour tout membre : { allowed } seulement (jamais de 403 pour un agent non autorisé). */
+  /** Léger, pour tout membre : { allowed } seulement (jamais de 403 pour qui n'est pas propriétaire de la boîte). */
   async access(req, res) {
     try {
       const companyId = companyOid(req);
       if (!companyId) return fail(res, 400, 'invalid_request', 'Identifiant de centre invalide.');
       const { inbound } = mergedTools(await loadTools(String(companyId)));
-      const allowed = inbound.enabled === true && (await mayRead(req, String(companyId)));
+      const allowed = inbound.enabled === true && Boolean(await readScope(req, String(companyId))) && (await ownsMailConnection(String(companyId), req.companyAccess.userId));
       res.json({ success: true, data: { allowed } });
     } catch (error) {
       return sendError(res, error, 'access');
@@ -85,13 +86,13 @@ const MINE_NOT_FOUND = 'Messagerie introuvable.';
 const OID = /^[0-9a-fA-F]{24}$/;
 
 /**
- * Identité de la secrétaire : TOUJOURS la session (JWT + rattachement vérifié par requireCompanyParam), jamais le corps de requête. Seul le rôle secrétaire (`agent`)
- * a une messagerie personnelle : titulaire, responsable, appel de service ou autre société → null, donc « introuvable » (on ne confirme rien).
+ * Identité du membre : TOUJOURS la session (JWT + rattachement vérifié par requireCompanyParam), jamais le corps de requête. Tout membre qui a accès au module
+ * (titulaire, responsable, secrétaire) a SA messagerie personnelle ; appel de service, membre sans accès ou autre société → null, donc « introuvable » (on ne confirme rien).
  */
 function mineIdentity(req) {
   try {
     const a = req.companyAccess ? scopeToCompany(req.companyAccess, req.params.companyId) : null;
-    if (!a || a.role !== 'agent' || !a.userId || String(a.companyId) !== String(req.params.companyId) || !OID.test(String(req.params.companyId))) return null;
+    if (!a || !canUse(a) || !a.userId || String(a.companyId) !== String(req.params.companyId) || !OID.test(String(req.params.companyId))) return null;
     return { companyId: String(a.companyId), userId: String(a.userId) };
   } catch { return null; }
 }

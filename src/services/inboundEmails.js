@@ -7,6 +7,7 @@ import SecretariatTools from '../models/SecretariatTools.js';
 import { MAILBOX_PROVIDERS, messages, withConnection } from './secretariatConnections.js';
 import { purgeInboundEmails, purgePersonalInbox } from './inboundEmailStore.js';
 import { loadTools, mergedTools } from './secretariatTools.js';
+import { ownsRow } from './mailOwnership.js';
 import { GOOGLE_MAILBOX_ACCESS_REFUSED, hasReadScope, hasWriteScope, SecretariatError } from './secretariatProviders/common.js';
 import { PROVIDERS } from './secretariatProviders/index.js';
 
@@ -19,7 +20,8 @@ import { PROVIDERS } from './secretariatProviders/index.js';
  * compte autorisé avant le retrait ; les données Google déjà stockées sont purgées par services/googleInboxMigration.js.
  *
  * DEUX PORTÉES, mêmes règles :
- *  - ENTREPRISE (premier argument = identifiant de société, chaîne) : e-mails de la boîte du centre, `ownerUserId` et `accountId` nuls ;
+ *  - ENTREPRISE = connexion Google / Microsoft de la société, lisible par son SEUL PROPRIÉTAIRE (`connectionScope(société, utilisateur)`) : e-mails stockés avec `ownerUserId` et
+ *    `accountId` nuls et `connectionOwnerId` = le propriétaire ; un autre membre, titulaire compris, ne les lit pas et ne déclenche aucune lecture de sa boîte ;
  *  - PERSONNELLE (`mineScope(société, utilisateur, compte)`) : e-mails de la messagerie PERSONNELLE d'une secrétaire (SecretariatSharedAccount.personalUserId),
  *    lisibles par elle SEULE. Le compte est TOUJOURS rechargé avec société + propriétaire (`loadMine`) : toute autre personne, un autre compte ou une autre
  *    société obtient « introuvable ». Consentement de lecture séparé et optionnel (`inbound.readEnabled` + scope), indépendant du réglage `inbound.enabled`
@@ -33,13 +35,15 @@ export const isId = (v) => typeof v === 'string' && OID_RE.test(v);
 
 /** Portée PERSONNELLE : les trois identifiants viennent de la SESSION (jamais du corps de requête). */
 export const mineScope = (companyId, userId, accountId) => ({ companyId: String(companyId), userId: String(userId), accountId: String(accountId) });
-const asScope = (s) => (s && typeof s === 'object' ? s : { companyId: String(s), userId: null, accountId: null });
+/** Portée « boîte de l'entreprise » d'UN propriétaire : `ownerId` vient de la SESSION ; sans propriétaire, rien n'est lu ni affiché. */
+export const connectionScope = (companyId, ownerId) => ({ companyId: String(companyId), userId: null, accountId: null, ownerId: ownerId ? String(ownerId) : null });
+const asScope = (s) => (s && typeof s === 'object' ? { userId: null, accountId: null, ownerId: null, ...s } : { companyId: String(s), userId: null, accountId: null, ownerId: null });
 const isMine = (s) => Boolean(s.userId);
 /** Filtre de portée de TOUTE requête sur les e-mails stockés : l'entreprise ne voit jamais un e-mail personnel, et inversement. */
 const scopeFilter = (s) => (isMine(s)
   ? { companyId: oid(s.companyId), ownerUserId: String(s.userId), accountId: oid(s.accountId) }
-  : { companyId: oid(s.companyId), ownerUserId: null, accountId: null });
-const connOpts = (s) => (isMine(s) ? { accountId: String(s.accountId) } : {});
+  : { companyId: oid(s.companyId), ownerUserId: null, accountId: null, connectionOwnerId: s.ownerId ? String(s.ownerId) : '__aucun_proprietaire__' }); // sans propriétaire : ne correspond à rien
+const connOpts = (s) => (isMine(s) ? { accountId: String(s.accountId) } : { ownerId: s.ownerId });
 const connect = (s, provider, fn) => withConnection(s.companyId, provider, fn, connOpts(s));
 
 /**
@@ -64,8 +68,9 @@ export const resetRefreshThrottle = () => attempts.clear();
  * Messagerie à lire : parmi les messageries connectées (le fournisseur choisi pour l'envoi s'il est actif, sinon toutes), la première qui a le scope de lecture.
  * @returns {Promise<{mailbox?: {provider: string, account: string}, canRead: boolean, error?: 'no_mailbox'|'needs_reauth'|'read_scope_missing'|'read_unavailable'}>}
  */
-export async function locateMailbox(companyId, preferred) {
-  const rows = await SecretariatConnection.find({ companyId: oid(companyId), provider: { $in: MAILBOX_PROVIDERS } }).select('provider accountEmail status scopes').lean();
+export async function locateMailbox(companyId, preferred, ownerId) {
+  // Seules les connexions DONT `ownerId` est propriétaire sont lues : jamais la boîte d'un autre membre.
+  const rows = (await SecretariatConnection.find({ companyId: oid(companyId), provider: { $in: MAILBOX_PROVIDERS } }).select('provider accountEmail status scopes connectedBy').lean()).filter((r) => ownsRow(r, ownerId));
   const active = rows.filter((r) => r.status === 'connected');
   if (!active.length) return { canRead: false, error: rows.some((r) => r.status === 'needs_reauth') ? 'needs_reauth' : 'no_mailbox' };
   const candidates = active.some((r) => r.provider === preferred) ? active.filter((r) => r.provider === preferred) : active;
@@ -96,23 +101,23 @@ async function mailboxSync(scope) {
   const companyId = s.companyId;
   const tools = mergedTools(await loadTools(companyId));
   if (tools.inbound.enabled !== true || tools.inbound.mailboxActions !== true) return { sync: false };
-  const found = await locateMailbox(companyId, tools.email.provider);
+  const found = await locateMailbox(companyId, tools.email.provider, s.ownerId);
   if (found.error === 'no_mailbox' || found.error === 'needs_reauth' || found.error === 'read_unavailable') throw new SecretariatError(found.error, ERRORS[found.error]);
   if (found.error || !found.canModify) throw new SecretariatError('write_scope_missing', ERRORS.write_scope_missing);
-  return { sync: true, provider: found.mailbox.provider };
+  return { sync: true, provider: found.mailbox.provider, ownerId: s.ownerId };
 }
 
 /**
  * Un appel d'écriture chez le fournisseur pour UN e-mail (`op` : 'trash' | 'archive' | 'unarchive'). Renvoie le nouvel identifiant du message s'il a changé
  * (Graph), sinon null. 404 = succès (géré par le fournisseur). Toute autre panne : provider_error (message sûr) ; needs_reauth conservé. Jamais de détail.
  */
-async function providerWrite(companyId, provider, doc, op) {
+async function providerWrite(companyId, provider, doc, op, ownerId) {
   if (provider === 'google') throw new SecretariatError('read_unavailable', ERRORS.read_unavailable); // jamais d'écriture Gmail
   if (doc.provider !== provider) throw new SecretariatError('no_mailbox', ERRORS.no_mailbox); // la messagerie a changé depuis la lecture
   try {
     const out = await withConnection(companyId, provider, (accessToken, http) => (op === 'trash'
       ? PROVIDERS[provider].trashMessage({ http, accessToken, id: doc.providerMessageId })
-      : PROVIDERS[provider].setArchived({ http, accessToken, id: doc.providerMessageId, archived: op === 'archive' })));
+      : PROVIDERS[provider].setArchived({ http, accessToken, id: doc.providerMessageId, archived: op === 'archive' })), { ownerId });
     return out?.id || null;
   } catch (error) {
     if (error instanceof SecretariatError && error.code === 'needs_reauth') throw error;
@@ -121,11 +126,11 @@ async function providerWrite(companyId, provider, doc, op) {
 }
 
 /** Applique `providerWrite` à plusieurs e-mails (5 en parallèle). @returns {Promise<Array<{doc, ok: boolean, newId: string|null}>>} */
-async function providerWriteMany(companyId, provider, docs, op) {
+async function providerWriteMany(companyId, provider, docs, op, ownerId) {
   const out = [];
   for (let i = 0; i < docs.length; i += 5) {
     out.push(...await Promise.all(docs.slice(i, i + 5).map(async (doc) => {
-      try { return { doc, ok: true, newId: await providerWrite(companyId, provider, doc, op) }; } catch { return { doc, ok: false, newId: null }; }
+      try { return { doc, ok: true, newId: await providerWrite(companyId, provider, doc, op, ownerId) }; } catch { return { doc, ok: false, newId: null }; }
     })));
   }
   return out;
@@ -144,7 +149,7 @@ async function requireReadAccess(scope) {
   const companyId = s.companyId;
   const tools = mergedTools(await loadTools(companyId));
   if (tools.inbound.enabled !== true) throw new SecretariatError('inbound_disabled', ERRORS.inbound_disabled);
-  const found = await locateMailbox(companyId, tools.email.provider);
+  const found = await locateMailbox(companyId, tools.email.provider, s.ownerId);
   if (found.error) throw new SecretariatError(found.error, ERRORS[found.error]);
   return { ...found.mailbox, lastSyncAt: tools.inbound.lastSyncAt };
 }
@@ -190,7 +195,9 @@ export async function inboundView(scope, view = 'active') {
   }
   const tools = mergedTools(await loadTools(s.companyId));
   const enabled = tools.inbound.enabled === true;
-  const [located, [rows, nw, handled, archived]] = await Promise.all([locateMailbox(s.companyId, tools.email.provider), counted(enabled)]);
+  const located = await locateMailbox(s.companyId, tools.email.provider, s.ownerId);
+  // Aucune boîte DONT cette personne est propriétaire (jamais connectée, déconnectée, ou celle d'un autre) : rien n'est listé, même d'anciennes métadonnées stockées à son nom.
+  const [rows, nw, handled, archived] = located.error === 'no_mailbox' ? [[], 0, 0, 0] : await counted(enabled);
   return { enabled, canRead: located.canRead, lastSyncAt: iso(tools.inbound.lastSyncAt), counts: { new: nw, handled, archived }, items: rows.map(toItem) };
 }
 
@@ -198,7 +205,7 @@ export async function inboundView(scope, view = 'active') {
 export async function refreshInbound(scope, now = Date.now()) {
   const s = asScope(scope);
   const access = await requireReadAccess(s);
-  const key = isMine(s) ? `mine:${s.accountId}` : String(s.companyId);
+  const key = isMine(s) ? `mine:${s.accountId}` : `${s.companyId}:${s.ownerId || ''}`;
   const lastSync = access.lastSyncAt ? new Date(access.lastSyncAt).getTime() : 0;
   if (now - Math.max(attempts.get(key) || 0, lastSync) < REFRESH_MIN_INTERVAL_MS) return inboundView(s); // trop tôt : état stocké, aucun appel fournisseur
   attempts.set(key, now);
@@ -215,7 +222,7 @@ export async function refreshInbound(scope, now = Date.now()) {
   for (const m of fetched.slice(0, PAGE_SIZE)) {
     await InboundEmail.updateOne(
       { ...fil, providerMessageId: m.id },
-      { $setOnInsert: { provider: access.provider, fromName: m.fromName, fromEmail: m.fromEmail, subject: m.subject, receivedAt: m.receivedAt, snippet: m.snippet, status: 'new', followUpIds: [], fetchedAt: new Date() } },
+      { $setOnInsert: { provider: access.provider, ...(isMine(s) ? {} : { connectionOwnerId: String(s.ownerId) }), fromName: m.fromName, fromEmail: m.fromEmail, subject: m.subject, receivedAt: m.receivedAt, snippet: m.snippet, status: 'new', followUpIds: [], fetchedAt: new Date() } },
       { upsert: true }
     );
   }
@@ -266,7 +273,7 @@ export async function markHandled(scope, id, body) {
     if (!current) throw new SecretariatError('not_found', 'E-mail introuvable.');
     const sync = await mailboxSync(s);
     if (sync.sync) {
-      const newId = await providerWrite(s.companyId, sync.provider, current, b.archived ? 'archive' : 'unarchive');
+      const newId = await providerWrite(s.companyId, sync.provider, current, b.archived ? 'archive' : 'unarchive', sync.ownerId);
       if (newId) $set.providerMessageId = newId;
       mailbox = 'synced';
     }
@@ -292,7 +299,7 @@ export async function deleteInbound(scope, id) {
   if (!doc) throw new SecretariatError('not_found', 'E-mail introuvable.');
   // Réglage + autorisation d'écriture : MISE À LA CORBEILLE chez le fournisseur AVANT l'effacement local ; échec (≠ 404) : rien n'est effacé.
   const sync = await mailboxSync(s);
-  if (sync.sync) await providerWrite(s.companyId, sync.provider, doc, 'trash');
+  if (sync.sync) await providerWrite(s.companyId, sync.provider, doc, 'trash', sync.ownerId);
   const res = await InboundEmail.updateOne(filter, { $set: DELETE_SET() });
   if (!res || !res.matchedCount) throw new SecretariatError('not_found', 'E-mail introuvable.');
   return { id: String(id), mailbox: sync.sync ? 'trashed' : 'app_only' };
@@ -328,7 +335,7 @@ export async function deleteManyInbound(scope, body) {
     return { deleted: res?.matchedCount ?? res?.modifiedCount ?? 0, mailbox: 'app_only' };
   }
   const docs = await InboundEmail.find(filter).select('provider providerMessageId').lean();
-  const results = await providerWriteMany(s.companyId, sync.provider, docs, 'trash');
+  const results = await providerWriteMany(s.companyId, sync.provider, docs, 'trash', sync.ownerId);
   const okIds = results.filter((r) => r.ok).map((r) => r.doc._id);
   const failed = results.length - okIds.length;
   if (failed > 0 && !okIds.length) throw new SecretariatError('provider_error', 'La messagerie est momentanément indisponible. Réessayez dans un instant.');
@@ -355,7 +362,7 @@ export async function archiveManyInbound(scope, body) {
     return { updated: res?.matchedCount ?? res?.modifiedCount ?? 0, mailbox: 'app_only' };
   }
   const docs = await InboundEmail.find(filter).select('provider providerMessageId').lean();
-  const results = await providerWriteMany(s.companyId, sync.provider, docs, archived ? 'archive' : 'unarchive');
+  const results = await providerWriteMany(s.companyId, sync.provider, docs, archived ? 'archive' : 'unarchive', sync.ownerId);
   const ok = results.filter((r) => r.ok);
   const failed = results.length - ok.length;
   if (failed > 0 && !ok.length) throw new SecretariatError('provider_error', 'La messagerie est momentanément indisponible. Réessayez dans un instant.');

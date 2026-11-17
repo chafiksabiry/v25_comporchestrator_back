@@ -5,7 +5,7 @@ import { canManage } from '../services/followUps.js';
 import { buildCalendarIcs } from '../services/ics.js';
 import { isVisioUrl } from '../services/visio.js';
 import { purgeInboundEmails } from '../services/inboundEmailStore.js';
-import { connectedProviders } from '../services/secretariatConnections.js';
+import { connectedProviders, mayConfigureInbound } from '../services/secretariatConnections.js';
 import {
   feedTokenMatches, feedUrlFor, hashFeedToken, isFeedTokenShape, loadTools, newFeedToken, toView, validateToolsPatch,
 } from '../services/secretariatTools.js';
@@ -40,7 +40,10 @@ export const secretariatToolsController = {
       // Les connexions ne sont lues que si le corps choisit un fournisseur externe (rien à vérifier sinon).
       const b = req.body && typeof req.body === 'object' ? req.body : {};
       const external = [b.email?.provider, b.agenda?.provider, b.visio?.provider].some((p) => typeof p === 'string' && !['platform', 'none', 'jitsi', 'custom'].includes(p));
-      const checked = validateToolsPatch(req.body, await loadTools(companyId), external ? await connectedProviders(companyId) : new Set());
+      // Lecture des e-mails entrants : se règle par la personne qui a connecté la boîte, jamais par un autre membre (titulaire compris) quand la boîte est celle d'un autre.
+      if (b.inbound !== undefined && !(await mayConfigureInbound(companyId, req.companyAccess.userId))) return fail(res, 403, 'Seule la personne qui a connecté la messagerie peut régler la lecture de ses e-mails entrants.');
+      // Fournisseur « connecté » = connecté PAR CETTE PERSONNE (Google / Microsoft) : on ne choisit pas la boîte d'un autre.
+      const checked = validateToolsPatch(req.body, await loadTools(companyId), external ? await connectedProviders(companyId, req.companyAccess.userId) : new Set());
       if (checked.error) return fail(res, 400, checked.error);
       const doc = await SecretariatTools.findOneAndUpdate({ companyId }, { $set: checked.set }, { upsert: true, new: true, setDefaultsOnInsert: true }).lean();
       // Désactivation des e-mails entrants : lecture arrêtée (réglage déjà écrit) puis purge immédiate de tous les e-mails stockés du centre.
