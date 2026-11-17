@@ -36,6 +36,7 @@ import { notifyCompany } from '../services/companyNotificationService.js';
 import { createVoiceToken, pushCredentialFor, VOICE_TOKEN_TTL_S } from '../services/voiceTokenService.js';
 import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
+import { insufficientInternationalMessages, outboundCreditFactor, outboundCreditDecision, recordCallDecision } from '../services/creditCoefficient.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket, MINUTES_INSUFFICIENT_CODE, MINUTES_INSUFFICIENT_MESSAGE, spokenLanguage, spokenRefusal, SPOKEN_REFUSALS } from '../services/browserOutbound.js';
 import { transferResult } from './callTransferController.js';
@@ -2397,10 +2398,13 @@ class PhoneNumberController {
         if (gate.blocked || (own && !usable && gate.enforced)) return send(spokenRefusal('line_not_assigned'));
         if (usable) callerLine = own;
       }
-      let decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording });
+      // Crédits débités par minute vers cette destination (1, ou N à l'international) : plafonne la durée à solde / N.
+      let credit = await outboundCreditDecision({ companyId, limits, to, lineNumber: callerLine?.phoneNumber });
+      let creditFactor = credit.factor;
+      let decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, creditFactor });
       if (!decision.ok) {
         console.warn(`[browser-outbound] refusé pour l'entreprise ${companyId} : ${decision.message}`);
-        return send(spokenRefusal(decision.key, spokenLanguage(callerLine?.phoneNumber)));
+        return send(spokenRefusal(decision.key, spokenLanguage(callerLine?.phoneNumber), { credits: decision.creditFactor }));
       }
       // Offre Accueil, règle datée active : une ligne = un appel à la fois. L'appel prend la première ligne LIBRE du centre (sinon « ligne occupée ») ;
       // elle est libérée à la fin de la numérotation (action du <Dial>). Règle inactive ou autre offre : rien de tout cela. Toute panne : l'appel passe comme avant.
@@ -2414,11 +2418,22 @@ class PhoneNumberController {
             return send(spokenRefusal('line_busy'));
           }
           callerLine = pool.find((l) => String(l._id) === String(taken.lineId));
-          decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, action: `https://${req.get('host')}${LINE_CALL_END_PATH}?t=${signLineCallEnd({ secret: config.twilioAuthToken, callSid: sidForLine })}` });
+          // La ligne réellement prise dans la réserve peut être d'un autre pays que la première : le facteur (donc le plafond) est recalculé avec elle.
+          credit = await outboundCreditDecision({ companyId, limits, to, lineNumber: callerLine?.phoneNumber });
+          creditFactor = credit.factor;
+          decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, creditFactor, action: `https://${req.get('host')}${LINE_CALL_END_PATH}?t=${signLineCallEnd({ secret: config.twilioAuthToken, callSid: sidForLine })}` });
         } catch (error) {
           console.error('[browser-outbound] contrôle de ligne ignoré :', error?.message || error);
         }
+        if (!decision.ok) {
+          // Le solde ne couvre pas le facteur de la ligne réellement prise : on libère la ligne et on refuse (jamais d'appel sans plafond valable).
+          try { await releaseCall(sidForLine); } catch (error) { console.warn('[browser-outbound] ligne non libérée :', error?.message || error); }
+          console.warn(`[browser-outbound] refusé pour l'entreprise ${companyId} : ${decision.message}`);
+          return send(spokenRefusal(decision.key, spokenLanguage(callerLine?.phoneNumber), { credits: decision.creditFactor }));
+        }
       }
+      // Trace de la décision (ligne retenue, zone, facteur) : le débit la relit au lieu de reclasser l'appel.
+      if (credit.coefficient > 1) await recordCallDecision({ sid: String(req.body?.CallSid || ''), companyId, factor: creditFactor, zone: credit.zone, line: callerLine?.phoneNumber || '' });
       console.log(`📞 Appel sortant du navigateur (entreprise ${companyId}) vers ${to.slice(0, 6)}… depuis ${callerLine.phoneNumber}${recording ? ' (enregistré)' : ''}`);
       return send(decision.twiml);
     } catch (error) {
@@ -2447,6 +2462,26 @@ class PhoneNumberController {
       return null;
     }
     const balance = Number(minutes);
+    // Destination internationale à N crédits la minute : le solde doit couvrir au moins une minute internationale entière.
+    let creditsPerMinute = 1;
+    if (to) {
+      let planLimits = null;
+      try { planLimits = await loadCompanyPlanLimits(companyId); } catch { planLimits = null; }
+      creditsPerMinute = await outboundCreditFactor({ companyId, limits: planLimits, to });
+    }
+    if (creditsPerMinute > 1) {
+      if (Number.isFinite(balance) && Math.floor(balance) >= creditsPerMinute) return null;
+      return {
+        success: false,
+        error: MINUTES_INSUFFICIENT_CODE,
+        code: MINUTES_INSUFFICIENT_CODE,
+        country: callingInfoOf(to).countryIso,
+        zone: 'international',
+        creditsPerMinute,
+        balance: Number.isFinite(balance) ? balance : 0,
+        ...insufficientInternationalMessages(creditsPerMinute),
+      };
+    }
     if (Number.isFinite(balance) && Math.floor(balance) >= 1) return null;
     return {
       success: false,

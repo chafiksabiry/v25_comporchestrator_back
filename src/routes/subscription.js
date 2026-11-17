@@ -21,9 +21,9 @@ router.get('/launch-offers', subscriptionController.getLaunchOffers);
 // Réservé aux personnes rattachées à l'entreprise (propriétaire, membre, agent employé) ou à un jeton de service de cette entreprise.
 router.get('/current/:companyId', authenticate, requireCompanyParam, subscriptionController.getCurrentSubscription);
 router.get('/checkout/config', subscriptionController.getCheckoutConfig);
-router.post('/checkout/init', subscriptionController.initPopupCheckout);
+router.post('/checkout/init', authenticate, subscriptionController.initPopupCheckout);
 router.post('/checkout/confirm', subscriptionController.confirmPopupCheckout);
-router.post('/checkout', subscriptionController.createCheckoutSession);
+router.post('/checkout', authenticate, subscriptionController.createCheckoutSession);
 router.post('/webhook', express.raw({type: 'application/json'}), subscriptionController.handleWebhook);
 
 export { router as subscriptionRoutes };
