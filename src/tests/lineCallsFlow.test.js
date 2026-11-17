@@ -24,6 +24,7 @@ const { PhoneNumber } = await import('../models/PhoneNumber.js');
 const { Subscription } = await import('../models/Subscription.js');
 const { markAvailable, clearPresence } = await import('../services/voicePresenceService.js');
 const { signOutboundTicket } = await import('../services/browserOutbound.js');
+const { signLineCallEnd } = await import('../services/lineCalls.js');
 const { phoneNumberService } = await import('../services/phoneNumberService.js');
 const { phoneNumberController: pc } = await import('../controllers/phoneNumberController.js');
 
@@ -84,7 +85,7 @@ after(() => { Object.assign(console, savedLog); });
 
 const rule = (from = PAST) => { process.env.LINE_ENFORCEMENT_FROM = from; };
 const hit = async (method, { body = {}, query = {} } = {}) => {
-  let out = null; const res = { type() { return this; }, status(c) { this.code = c; return this; }, json(x) { out = { code: this.code || 200, body: x }; return this; }, send(x) { out = x; return this; } };
+  let out = null; const res = { type() { return this; }, status(c) { this.code = c; return this; }, json(x) { out = { code: this.code || 200, body: x }; return this; }, send(x) { out = x; hit.lastCode = this.code; return this; } };
   await pc[method]({ body, query, get: () => 'orch.test', headers: { authorization: 'Bearer tok' }, user: { userId: 'owner' } }, res);
   return out;
 };
@@ -93,6 +94,7 @@ const outbound = (callSid, { companyId = C1, to = CALLER } = {}) => {
   const ticket = signOutboundTicket({ secret: process.env.TWILIO_AUTH_TOKEN, companyId, identity, secretary: true });
   return hit('handleBrowserOutbound', { body: { To: to, From: `client:${identity}`, CompanyId: companyId, Ticket: ticket, CallSid: callSid } });
 };
+const endCall = (callSid, token = signLineCallEnd({ secret: process.env.TWILIO_AUTH_TOKEN, callSid })) => hit('handleLineCallEnd', { body: { CallSid: callSid }, query: token === null ? {} : { t: token } });
 const callerIdOf = (twiml) => (String(twiml).match(/callerId="([^"]+)"/) || [])[1];
 const busy = (id) => Boolean(lines.find((l) => l._id === id).activeCall);
 
@@ -110,7 +112,8 @@ test('règle active, Accueil : deux appels sortants simultanés prennent deux li
   rule();
   const a = await outbound('CA1'); const b = await outbound('CA2');
   assert.deepEqual([callerIdOf(a), callerIdOf(b)], [L1, L2]);
-  assert.match(a, /action="https:\/\/orch\.test\/api\/phone-numbers\/webhooks\/twilio\/line-call-end"/);
+  assert.match(a, /action="https:\/\/orch\.test\/api\/phone-numbers\/webhooks\/twilio\/line-call-end\?t=[0-9a-f]{64}"/);
+  assert.ok(a.includes(`line-call-end?t=${signLineCallEnd({ secret: process.env.TWILIO_AUTH_TOKEN, callSid: 'CA1' })}`), 'jeton lié au CallSid de l\'appel');
   const c = await outbound('CA3');
   assert.match(c, /All lines are busy/); assert.match(c, /language="en-US"/); assert.ok(!c.includes('<Dial'));
   assert.deepEqual([busy('l1'), busy('l2')], [true, true]);
@@ -119,10 +122,10 @@ test('règle active, Accueil : deux appels sortants simultanés prennent deux li
 test('libération : fin d\'appel (action du <Dial>) libère la ligne, idempotente ; la ligne est de nouveau prenable', async () => {
   rule();
   await outbound('CA1'); await outbound('CA2');
-  const r = await hit('handleLineCallEnd', { body: { CallSid: 'CA1' } });
+  const r = await endCall('CA1');
   assert.match(r, /<Response\/>/);
   assert.deepEqual([busy('l1'), busy('l2')], [false, true]);
-  await hit('handleLineCallEnd', { body: { CallSid: 'CA1' } });
+  await endCall('CA1');
   assert.deepEqual([busy('l1'), busy('l2')], [false, true], 'deuxième livraison : sans effet');
   assert.equal(callerIdOf(await outbound('CA4')), L1);
 });
@@ -175,7 +178,7 @@ test('outbound-check : 409 LINE_BUSY (anglais) quand toutes les lignes sont occu
   assert.equal(r.code, 409);
   assert.deepEqual([r.body.code, r.body.error, r.body.success], ['LINE_BUSY', 'LINE_BUSY', false]);
   assert.match(r.body.message, /All lines are busy/);
-  await hit('handleLineCallEnd', { body: { CallSid: 'CA2' } });
+  await endCall('CA2');
   assert.equal((await check()).code, 200);
   assert.equal(lines[1].activeCall, undefined, 'outbound-check ne prend jamais de ligne');
 });
@@ -238,7 +241,7 @@ test('un appel sortant occupe la ligne pour les entrants, et un entrant pour les
   lines = lines.slice(0, 1);
   await outbound('CAOUT');
   assert.ok(!rings(await inbound(L1, 'CAIN')), 'sortant en cours : l\'entrant va au répondeur');
-  await hit('handleLineCallEnd', { body: { CallSid: 'CAOUT' } });
+  await endCall('CAOUT');
   assert.ok(rings(await inbound(L1, 'CAIN2')));
   assert.match(await outbound('CAOUT2'), /All lines are busy/, 'entrant en cours : le sortant est refusé');
 });
@@ -304,4 +307,16 @@ test('liste (responsable, Accueil) : busy / activeCallStartedAt additifs, jamais
   // bail expiré : la ligne apparaît libre
   lines[0].activeCall.expiresAt = new Date(Date.now() - 1000);
   assert.equal((await listAs('owner', 'accueil')).find((r) => r._id === 'l1').busy, false);
+});
+
+test('fin d\'appel : sans jeton, jeton d\'un autre appel ou jeton falsifié -> 403 et la ligne reste occupée ; jeton valide -> libérée', async () => {
+  rule();
+  await outbound('CA1'); await outbound('CA2');
+  for (const token of [null, '', 'x'.repeat(64), signLineCallEnd({ secret: process.env.TWILIO_AUTH_TOKEN, callSid: 'CA2' }), signLineCallEnd({ secret: 'autre', callSid: 'CA1' })]) {
+    const r = await endCall('CA1', token);
+    assert.match(r, /<Response\/>/); assert.equal(hit.lastCode, 403);
+    assert.deepEqual([busy('l1'), busy('l2')], [true, true], 'aucune libération sans jeton valide');
+  }
+  await endCall('CA1');
+  assert.deepEqual([busy('l1'), busy('l2')], [false, true]);
 });

@@ -127,6 +127,41 @@ export async function bundleBalances(companyId) {
   return { balances: { minutes: mins?.minutes ?? 0, tokens: toks?.tokens ?? 0 } };
 }
 
+/** Durée pendant laquelle un crédit réservé par un traitement reste son bien ; au-delà (processus mort), un autre peut reprendre. */
+export const FULFILL_LEASE_MS = 2 * 60 * 1000;
+
+/**
+ * Crédite un paiement UNE SEULE FOIS, même si plusieurs traitements arrivent en même temps (retour de paiement + fenêtre d'ouverture +
+ * webhook Stripe) : le crédit est réservé par une écriture conditionnelle atomique (`fulfilledAt` absent ET aucun bail récent) avant
+ * d'être appliqué ; le bail est rendu si le crédit échoue (reprise possible), `fulfilledAt` est posé à la fin.
+ * @returns {Promise<{fulfilled: boolean, skipped?: boolean, reason?: string, result?: object}>}
+ */
+export async function fulfillCompanyPaymentOnce(payment) {
+  const now = Date.now();
+  const claimed = await CompanyPayment.findOneAndUpdate(
+    { _id: payment._id, fulfilledAt: null, $or: [{ fulfillClaimedAt: null }, { fulfillClaimedAt: { $lt: new Date(now - FULFILL_LEASE_MS) } }] },
+    { $set: { fulfillClaimedAt: new Date(now) } },
+    { new: true }
+  );
+  if (!claimed) return { fulfilled: false, skipped: true, reason: 'already fulfilled or being fulfilled' };
+  try {
+    let result;
+    if (payment.purpose === 'wallet_deposit') result = await fulfillWalletDeposit(payment);
+    else if (payment.purpose === 'minutes_purchase') result = await fulfillMinutesPurchase(payment);
+    else if (payment.purpose === 'tokens_purchase') result = await fulfillTokensPurchase(payment);
+    else if (payment.purpose === 'bundle_purchase') result = await fulfillBundlePurchase(payment);
+    else {
+      await CompanyPayment.updateOne({ _id: payment._id }, { $unset: { fulfillClaimedAt: 1 } });
+      return { fulfilled: false, skipped: true, reason: `unknown purpose ${payment.purpose}` };
+    }
+    await CompanyPayment.updateOne({ _id: payment._id }, { $set: { fulfilledAt: new Date() }, $unset: { fulfillClaimedAt: 1 } });
+    return { fulfilled: true, result };
+  } catch (error) {
+    await CompanyPayment.updateOne({ _id: payment._id }, { $unset: { fulfillClaimedAt: 1 } }).catch(() => null);
+    throw error;
+  }
+}
+
 /**
  * Fulfill a one-shot Stripe Checkout Session (mode='payment') from a webhook.
  * Dispatches by `session.metadata.purpose`:
@@ -184,27 +219,16 @@ async function fulfillStripeCompanyPaymentSession(session) {
   payment.providerRef = session.id || payment.providerRef;
   await payment.save();
 
-  let result;
-  if (payment.purpose === 'wallet_deposit') {
-    result = await fulfillWalletDeposit(payment);
-  } else if (payment.purpose === 'minutes_purchase') {
-    result = await fulfillMinutesPurchase(payment);
-  } else if (payment.purpose === 'tokens_purchase') {
-    result = await fulfillTokensPurchase(payment);
-  } else if (payment.purpose === 'bundle_purchase') {
-    result = await fulfillBundlePurchase(payment);
-  } else {
-    console.warn(`[payments] Unknown CompanyPayment purpose '${payment.purpose}' for payment ${payment._id}`);
-    return { skipped: true, reason: `unknown purpose ${payment.purpose}` };
+  const outcome = await fulfillCompanyPaymentOnce(payment);
+  if (!outcome.fulfilled) {
+    if (/unknown purpose/.test(outcome.reason || '')) console.warn(`[payments] Unknown CompanyPayment purpose '${payment.purpose}' for payment ${payment._id}`);
+    return { skipped: true, reason: outcome.reason, paymentId: String(payment._id) };
   }
-
-  payment.fulfilledAt = new Date();
-  await payment.save();
 
   console.log(
     `✅ One-time Stripe payment fulfilled: payment=${payment._id} purpose=${payment.purpose} session=${session.id}`
   );
-  return { fulfilled: true, paymentId: String(payment._id), purpose: payment.purpose, result };
+  return { fulfilled: true, paymentId: String(payment._id), purpose: payment.purpose, result: outcome.result };
 }
 
 /**

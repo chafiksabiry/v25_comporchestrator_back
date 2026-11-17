@@ -50,7 +50,7 @@ function voicemailRecord(s, baseUrl, companyId, voicemailUrls, solo = false, lan
   const prompt = s.voicemailValidated && s.voicemailAudioVersion
     ? play(baseUrl, companyId, 'voicemail', s.voicemailAudioVersion)
     : say(s.voicemailText || (solo ? p.soloVoicemailPrompt : p.voicemailPrompt), s.voice, language);
-  return `${prompt}<Record maxLength="120" timeout="5" playBeep="true" trim="trim-silence" action="${xmlEscape(urls.done)}" method="POST" recordingStatusCallback="${xmlEscape(urls.recording)}" recordingStatusCallbackEvent="completed" recordingStatusCallbackMethod="POST"/>`;
+  return `${prompt}<Record maxLength="600" timeout="5" playBeep="true" trim="trim-silence" action="${xmlEscape(urls.done)}" method="POST" recordingStatusCallback="${xmlEscape(urls.recording)}" recordingStatusCallbackEvent="completed" recordingStatusCallbackMethod="POST"/>`;
 }
 
 /** Accepte des réglages bruts (document) ou déjà publics (toPublicSettings). */

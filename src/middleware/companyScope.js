@@ -60,6 +60,8 @@ export async function callerAccess(req) {
       companyId,
       companyIds,
       role,
+      /** Preuve positive du titulaire (le rôle « owner » est accordé par défaut si isOwner est absent) : à exiger pour les données financières. */
+      isOwner: !d.isAgent && d.isOwner === true,
       permissions: d.permissions && typeof d.permissions === 'object' ? d.permissions : {},
     };
     companyByUser.set(String(userId), { access, expires: Date.now() + CACHE_TTL_MS });
