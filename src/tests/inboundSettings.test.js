@@ -4,7 +4,7 @@ import { audioVersion, isMp3, toPublicSettings, validateSettingsInput } from '..
 
 // Valeurs par défaut sans document
 assert.deepEqual(toPublicSettings(null), {
-  greetingText: '', voicemailText: '', voice: 'nova', ringTimeoutSeconds: 30, voicemailEnabled: true, greetingEnabled: true, secretaryOutbound: true,
+  greetingText: '', voicemailText: '', voice: 'nova', ringTimeoutSeconds: 30, voicemailEnabled: true, greetingEnabled: true, secretaryOutbound: true, recording: { inbound: true, outbound: true },
   greetingValidated: false, voicemailValidated: false, greetingAudioVersion: null, voicemailAudioVersion: null, validatedAt: null,
 });
 
