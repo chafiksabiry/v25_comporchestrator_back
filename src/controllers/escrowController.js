@@ -23,6 +23,17 @@ import {
   isRepShareInRetraction,
 } from '../utils/retraction.js';
 import { clearExpiredRetractions, reverseSaleCommission } from '../services/retractionService.js';
+import { guardCompanyAccess } from '../middleware/companyGuard.js';
+import { guardAgentSelf } from '../middleware/agentGuard.js';
+
+const OWNER_ONLY = { ownerOnly: true };
+const OWN_COMPANY_OWNER = { ownerOnly: true, ownCompany: true };
+
+/** Identifiant fini et strictement positif, sinon null (un montant « abc » ou négatif ne passe plus). */
+function positiveAmount(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
 
 // 70/30 split enforced server-side. Single source of truth.
 const REP_SHARE = 0.7;
@@ -1363,6 +1374,7 @@ export const escrowController = {
 
   getWallet: async (req, res) => {
     const { companyId } = req.params;
+    if (!(await guardCompanyAccess(req, res, companyId))) return;
     if (!companyId) {
       return res.status(400).json({ error: 'companyId is required' });
     }
@@ -1409,6 +1421,7 @@ export const escrowController = {
   // Get transaction history
   getTransactions: async (req, res) => {
     const { companyId } = req.params;
+    if (!(await guardCompanyAccess(req, res, companyId))) return;
     if (!companyId) {
       return res.status(400).json({ error: 'companyId is required' });
     }
@@ -1424,75 +1437,41 @@ export const escrowController = {
   },
 
   // Deposit money — WalletCompany is the authoritative balance.
+  // FERMÉ : ce POST créditait n'importe quel portefeuille du montant demandé, sans aucune preuve de paiement (tout utilisateur connecté pouvait
+  // s'attribuer de l'argent). Le seul crédit légitime passe par /api/payments/checkout (paiement Stripe/PayPal vérifié).
   deposit: async (req, res) => {
-    const { companyId, amount, method, providerRef } = req.body;
-    if (!companyId || !amount || amount <= 0) {
-      return res.status(400).json({ error: 'companyId and positive amount are required' });
-    }
-
-    try {
-      const value = Number(parseFloat(amount).toFixed(2));
-      const wallet = await WalletCompany.findOneAndUpdate(
-        { companyId },
-        { $inc: { balance: value } },
-        { new: true, upsert: true, setDefaultsOnInsert: true }
-      );
-
-      const transaction = new EscrowTransaction({
-        companyId,
-        type: 'deposit',
-        amount: value,
-        status: 'completed',
-        credited: true
-      });
-      await transaction.save();
-
-      // Mirror into the WalletCompanyEntry ledger so the frontend can show
-      // the deposit history alongside the RepTransaction debits.
-      try {
-        await WalletCompanyEntry.create({
-          companyId,
-          type: 'deposit',
-          direction: 'credit',
-          amount: value,
-          balanceAfter: wallet.balance,
-          status: 'completed',
-          description: `Dépôt de ${value.toFixed(2)} €${method ? ` via ${method}` : ''}`,
-          meta: { method: method || null, providerRef: providerRef || null }
-        });
-      } catch (logErr) {
-        console.warn('WalletCompanyEntry log failed (escrow deposit):', logErr.message);
-      }
-
-      res.status(200).json({ success: true, data: wallet, transaction });
-    } catch (err) {
-      console.error('Error during deposit:', err);
-      res.status(500).json({ error: 'Failed to process deposit' });
-    }
+    return res.status(410).json({
+      error: 'Direct deposits are disabled: use the payment checkout.',
+      code: 'deposit_disabled',
+    });
   },
 
   // Withdraw from WalletCompany.balance
   withdraw: async (req, res) => {
     const { companyId, amount } = req.body;
-    if (!companyId || !amount || amount <= 0) {
+    const value = positiveAmount(amount);
+    if (!companyId || value === null) {
       return res.status(400).json({ error: 'companyId and positive amount are required' });
     }
+    if (!(await guardCompanyAccess(req, res, companyId, OWNER_ONLY))) return;
 
     try {
       await reconcilePendingTransactions(companyId);
-      const wallet = await WalletCompany.findOne({ companyId });
-      if (!wallet || wallet.balance < parseFloat(amount)) {
+      const rounded = Number(value.toFixed(2));
+      // Atomique : la condition de solde et la décrémentation sont UNE opération (deux retraits simultanés ne dépassent pas le solde).
+      const wallet = await WalletCompany.findOneAndUpdate(
+        { companyId, balance: { $gte: rounded } },
+        { $inc: { balance: -rounded } },
+        { new: true }
+      );
+      if (!wallet) {
         return res.status(400).json({ error: 'Insufficient balance' });
       }
-
-      const value = Number(parseFloat(amount).toFixed(2));
-      wallet.balance = Number((wallet.balance - value).toFixed(2));
-      await wallet.save();
 
       const transaction = new EscrowTransaction({
         companyId,
         type: 'withdrawal',
-        amount: value,
+        amount: rounded,
         status: 'completed'
       });
       await transaction.save();
@@ -1502,10 +1481,10 @@ export const escrowController = {
           companyId,
           type: 'withdrawal',
           direction: 'debit',
-          amount: value,
+          amount: rounded,
           balanceAfter: wallet.balance,
           status: 'completed',
-          description: `Retrait de ${value.toFixed(2)} €`
+          description: `Retrait de ${rounded.toFixed(2)} €`
         });
       } catch (logErr) {
         console.warn('WalletCompanyEntry log failed (escrow withdraw):', logErr.message);
@@ -1567,9 +1546,10 @@ export const escrowController = {
   // Lock funds under a new escrow contract
   lockFunds: async (req, res) => {
     const { companyId, amount, gigId, gigTitle, agentId, agentName, purpose } = req.body;
-    if (!companyId || !amount || amount <= 0) {
+    if (!companyId || positiveAmount(amount) === null) {
       return res.status(400).json({ error: 'companyId and positive amount are required' });
     }
+    if (!(await guardCompanyAccess(req, res, companyId, OWNER_ONLY))) return;
 
     try {
       await reconcilePendingTransactions(companyId);
@@ -1627,11 +1607,12 @@ export const escrowController = {
   // Release escrow funds to agent (disbursed/paid out)
   releaseFunds: async (req, res) => {
     const { contractId } = req.params;
-    const { companyId } = req.body;
+    const { companyId } = req.body || {};
 
     if (!contractId || !companyId) {
       return res.status(400).json({ error: 'contractId and companyId are required' });
     }
+    if (!(await guardCompanyAccess(req, res, companyId, OWNER_ONLY))) return;
 
     try {
       const wallet = await EscrowWallet.findOne({ companyId });
@@ -1670,11 +1651,12 @@ export const escrowController = {
   // Refund escrow funds back to company's available balance
   refundFunds: async (req, res) => {
     const { contractId } = req.params;
-    const { companyId } = req.body;
+    const { companyId } = req.body || {};
 
     if (!contractId || !companyId) {
       return res.status(400).json({ error: 'contractId and companyId are required' });
     }
+    if (!(await guardCompanyAccess(req, res, companyId, OWNER_ONLY))) return;
 
     try {
       const wallet = await EscrowWallet.findOne({ companyId });
@@ -1714,6 +1696,7 @@ export const escrowController = {
   // Get Gigs and Enrolled Representatives
   getGigsAndReps: async (req, res) => {
     const { companyId } = req.params;
+    if (!(await guardCompanyAccess(req, res, companyId))) return;
     if (!companyId) {
       return res.status(400).json({ error: 'companyId is required' });
     }
@@ -1808,6 +1791,7 @@ export const escrowController = {
   // Get calls and transactions for a company
   getCompanyCallsAndTransactions: async (req, res) => {
     const { companyId } = req.params;
+    if (!(await guardCompanyAccess(req, res, companyId))) return;
     if (!companyId) {
       return res.status(400).json({ error: 'companyId is required' });
     }
@@ -1943,11 +1927,12 @@ export const escrowController = {
   // Approve or refuse a call transaction
   approveOrRefuseCallTransaction: async (req, res) => {
     const { callId } = req.params;
-    const { companyId, action } = req.body; // action: 'approve' or 'refuse'
+    const { companyId, action } = req.body || {}; // action: 'approve' or 'refuse'
 
     if (!callId || !companyId || !action) {
       return res.status(400).json({ error: 'callId, companyId, and action are required' });
     }
+    if (!(await guardCompanyAccess(req, res, companyId, OWNER_ONLY))) return;
 
     try {
       const db = mongoose.connection.db;
@@ -1968,7 +1953,8 @@ export const escrowController = {
         ]
       });
 
-      if (!call) {
+      // L'appel doit appartenir à la société de l'appelant : celui d'une autre société est « introuvable » (rien n'est lu de plus ni écrit).
+      if (!call || String(call.companyId) !== String(companyId)) {
         return res.status(404).json({ error: 'Call not found' });
       }
 
@@ -2100,6 +2086,7 @@ export const escrowController = {
   getAgentTransactions: async (req, res) => {
     const { agentId } = req.params;
     if (!agentId) return res.status(400).json({ error: 'agentId is required' });
+    if (!guardAgentSelf(req, res, agentId)) return;
 
     try {
       const repId = mongoose.Types.ObjectId.isValid(agentId)
@@ -2197,6 +2184,7 @@ export const escrowController = {
   // Enriched with call / gig / rep info so the table is rendered in one trip.
   getCompanyRepTransactions: async (req, res) => {
     const { companyId } = req.params;
+    if (!(await guardCompanyAccess(req, res, companyId))) return;
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
 
     try {
@@ -2339,10 +2327,11 @@ export const escrowController = {
   // Award a manual bonus to a rep (tied to gig + company). Same 70/30 split,
   // same WalletCompany debit, fully idempotent on the provided bonusId.
   awardRepBonus: async (req, res) => {
-    const { agentId, companyId, gigId, amount, bonusId, description } = req.body;
-    if (!agentId || !companyId || !(Number(amount) > 0)) {
+    const { agentId, companyId, gigId, amount, bonusId, description } = req.body || {};
+    if (!agentId || !companyId || positiveAmount(amount) === null) {
       return res.status(400).json({ error: 'agentId, companyId and positive amount are required' });
     }
+    if (!(await guardCompanyAccess(req, res, companyId, OWNER_ONLY))) return;
 
     try {
       const repObjectId = mongoose.Types.ObjectId.isValid(agentId)
@@ -2384,6 +2373,7 @@ export const escrowController = {
   getAgentWallet: async (req, res) => {
     const { agentId } = req.params;
     if (!agentId) return res.status(400).json({ error: 'agentId is required' });
+    if (!guardAgentSelf(req, res, agentId)) return;
 
     try {
       await reconcileAgentRewards(agentId);
@@ -2398,6 +2388,7 @@ export const escrowController = {
   getAgentWithdrawals: async (req, res) => {
     const { agentId } = req.params;
     if (!agentId) return res.status(400).json({ error: 'agentId is required' });
+    if (!guardAgentSelf(req, res, agentId)) return;
 
     try {
       const withdrawals = await AgentWithdrawal.find({ agentId }).sort({ createdAt: -1 });
@@ -2410,10 +2401,11 @@ export const escrowController = {
 
   /** PAY-11: send a real, randomly-generated, short-lived SMS code before a withdrawal can be confirmed. */
   requestAgentWithdrawalOtp: async (req, res) => {
-    const { agentId } = req.body;
+    const { agentId } = req.body || {};
     if (!agentId) {
       return res.status(400).json({ error: 'agentId is required' });
     }
+    if (!guardAgentSelf(req, res, agentId)) return;
 
     try {
       const db = mongoose.connection.db;
@@ -2448,11 +2440,12 @@ export const escrowController = {
   },
 
   requestAgentWithdrawal: async (req, res) => {
-    const { agentId, amount, method, methodDetails, description, companyId, code } = req.body;
+    const { agentId, amount, method, methodDetails, description, companyId, code } = req.body || {};
     const MIN_WITHDRAWAL_AMOUNT = 1;
     if (!agentId || !amount || amount <= 0 || !method) {
       return res.status(400).json({ error: 'agentId, positive amount, and method are required' });
     }
+    if (!guardAgentSelf(req, res, agentId)) return;
 
     const parsedAmount = parseFloat(amount);
     if (Number.isNaN(parsedAmount) || parsedAmount < MIN_WITHDRAWAL_AMOUNT) {
@@ -2522,6 +2515,7 @@ export const escrowController = {
   // Company-side Agent Withdrawal Management
   getAgentWithdrawalsForCompany: async (req, res) => {
     const { companyId } = req.params;
+    if (!(await guardCompanyAccess(req, res, companyId))) return;
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
 
     try {
@@ -2555,26 +2549,31 @@ export const escrowController = {
 
   approveOrRefuseAgentWithdrawal: async (req, res) => {
     const { withdrawalId } = req.params;
-    const { action, companyId } = req.body; // action: 'approve' or 'refuse'
+    const { action } = req.body || {}; // action: 'approve' or 'refuse'
 
-    if (!withdrawalId || !action) {
-      return res.status(400).json({ error: 'withdrawalId and action are required' });
+    if (!withdrawalId || !mongoose.Types.ObjectId.isValid(withdrawalId) || !['approve', 'refuse'].includes(action)) {
+      return res.status(400).json({ error: "A valid withdrawalId and action ('approve' or 'refuse') are required" });
     }
+    // Propriétaire de la société de l'appelant uniquement ; le retrait est ensuite cherché DANS cette société (jamais celui d'une autre,
+    // jamais un retrait sans société enregistrée : propriété invérifiable).
+    const access = await guardCompanyAccess(req, res, null, OWN_COMPANY_OWNER);
+    if (!access) return;
 
     try {
-      const withdrawal = await AgentWithdrawal.findById(withdrawalId);
+      const companyObjectId = new mongoose.Types.ObjectId(String(access.companyId));
+      // Atomique : seul un retrait EN ATTENTE est traité, une seule fois (plus de ré-approbation ni de retournement refus <-> approuvé).
+      const withdrawal = await AgentWithdrawal.findOneAndUpdate(
+        { _id: withdrawalId, companyId: companyObjectId, status: 'pending' },
+        { $set: { status: action === 'approve' ? 'completed' : 'failed' } },
+        { new: true }
+      );
       if (!withdrawal) {
-        return res.status(404).json({ error: 'Withdrawal request not found' });
+        const own = await AgentWithdrawal.findOne({ _id: withdrawalId, companyId: companyObjectId });
+        return own
+          ? res.status(409).json({ error: `Withdrawal already ${own.status}` })
+          : res.status(404).json({ error: 'Withdrawal request not found' });
       }
-
-      if (action === 'approve') {
-        withdrawal.status = 'completed';
-        withdrawal.description = (withdrawal.description || '') + ' (Approuvé par la compagnie)';
-      } else {
-        withdrawal.status = 'failed';
-        withdrawal.description = (withdrawal.description || '') + ' (Refusé par la compagnie)';
-      }
-
+      withdrawal.description = (withdrawal.description || '') + (action === 'approve' ? ' (Approuvé par la compagnie)' : ' (Refusé par la compagnie)');
       await withdrawal.save();
 
       // Trigger reconciliation for the agent to update their wallet (moving pending to completed/removed)
@@ -2625,9 +2624,12 @@ export const escrowController = {
     if (!callId) {
       return res.status(400).json({ error: 'callId is required' });
     }
+    const access = await guardCompanyAccess(req, res, null, OWN_COMPANY_OWNER);
+    if (!access) return;
 
     try {
-      const repTx = await RepTransaction.findOne({ type: 'call_validated', sourceId: String(callId) });
+      // La commission doit être celle de la société de l'appelant : celle d'une autre société est « introuvable ».
+      const repTx = await RepTransaction.findOne({ type: 'call_validated', sourceId: String(callId), companyId: access.companyId });
       if (!repTx) {
         return res.status(404).json({ error: 'No call commission found for this call' });
       }
@@ -2638,23 +2640,28 @@ export const escrowController = {
         return res.status(410).json({ error: 'Cancellation window has expired for this call' });
       }
 
-      repTx.status = 'reversed';
-      repTx.companyDecision = 'contradicted';
-      repTx.meta = { ...(repTx.meta || {}), cancelledAt: new Date(), cancelReason: reason || 'Annulé par l\'entreprise' };
-      await repTx.save();
+      // Atomique : un seul appelant fait passer la commission à « annulée » et déclenche le crédit (plus de double crédit par requêtes simultanées).
+      const cancelled = await RepTransaction.findOneAndUpdate(
+        { _id: repTx._id, companyId: access.companyId, status: { $nin: ['reversed', 'refused'] } },
+        { $set: { status: 'reversed', companyDecision: 'contradicted', meta: { ...(repTx.meta || {}), cancelledAt: new Date(), cancelReason: reason || 'Annulé par l\'entreprise' } } },
+        { new: true }
+      );
+      if (!cancelled) {
+        return res.status(409).json({ error: 'Commission already cancelled' });
+      }
 
       await WalletCompany.findOneAndUpdate(
-        { companyId: repTx.companyId },
-        { $inc: { balance: repTx.amount } },
+        { companyId: cancelled.companyId },
+        { $inc: { balance: cancelled.amount } },
         { upsert: true, setDefaultsOnInsert: true }
       );
 
       // Void the 30% HARX cut that was booked alongside the credit.
       await HarxCommission.deleteOne({ type: 'call_commission', callId: String(callId) });
 
-      await reconcileAgentEarnings(repTx.repId);
+      await reconcileAgentEarnings(cancelled.repId);
 
-      res.status(200).json({ success: true, data: repTx });
+      res.status(200).json({ success: true, data: cancelled });
     } catch (err) {
       console.error('Error cancelling call commission:', err);
       res.status(500).json({ error: 'Failed to cancel call commission' });
@@ -2663,11 +2670,12 @@ export const escrowController = {
 
   retractSale: async (req, res) => {
     const { transactionId } = req.params;
-    const { companyId, reason } = req.body;
+    const { companyId, reason } = req.body || {};
 
-    if (!transactionId) {
-      return res.status(400).json({ error: 'transactionId is required' });
+    if (!transactionId || !companyId) {
+      return res.status(400).json({ error: 'transactionId and companyId are required' });
     }
+    if (!(await guardCompanyAccess(req, res, companyId, OWNER_ONLY))) return;
 
     try {
       const { repTx } = await reverseSaleCommission({
@@ -2692,6 +2700,7 @@ export const escrowController = {
   // for the login popup (cahier de recette VAL-01).
   getPendingReviews: async (req, res) => {
     const { companyId } = req.params;
+    if (!(await guardCompanyAccess(req, res, companyId))) return;
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
     try {
       const rows = await RepTransaction.find({ companyId, status: 'pending_review' })
@@ -2710,6 +2719,7 @@ export const escrowController = {
   // never actually decided).
   getAiAgreementRate: async (req, res) => {
     const { companyId } = req.params;
+    if (!(await guardCompanyAccess(req, res, companyId))) return;
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
     try {
       const data = await computeAiAgreementRate(companyId);
@@ -2724,6 +2734,7 @@ export const escrowController = {
   // threshold) or off.
   getAiDelegation: async (req, res) => {
     const { companyId } = req.params;
+    if (!(await guardCompanyAccess(req, res, companyId))) return;
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
     try {
       const rate = await computeAiAgreementRate(companyId);
@@ -2745,6 +2756,7 @@ export const escrowController = {
 
   setAiDelegation: async (req, res) => {
     const { companyId } = req.params;
+    if (!(await guardCompanyAccess(req, res, companyId, OWNER_ONLY))) return;
     const { enabled } = req.body;
     if (!companyId || typeof enabled !== 'boolean') {
       return res.status(400).json({ error: 'companyId and a boolean enabled are required' });
@@ -2780,6 +2792,7 @@ export const escrowController = {
   // VAL-03: this company's currently flagged audit rows, to review.
   getAiAudits: async (req, res) => {
     const { companyId } = req.params;
+    if (!(await guardCompanyAccess(req, res, companyId))) return;
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
     try {
       const rows = await RepTransaction.find({ companyId, auditFlag: true, companyDecision: { $exists: false } })
@@ -2797,13 +2810,16 @@ export const escrowController = {
   // auto-disables AI delegation.
   respondToAiAudit: async (req, res) => {
     const { repTransactionId } = req.params;
-    const { confirm } = req.body; // true = agrees with the AI, false = contradicts
+    const { confirm } = req.body || {}; // true = agrees with the AI, false = contradicts
     if (!repTransactionId || typeof confirm !== 'boolean') {
       return res.status(400).json({ error: 'repTransactionId and a boolean confirm are required' });
     }
+    const access = await guardCompanyAccess(req, res, null, OWN_COMPANY_OWNER);
+    if (!access) return;
     try {
       const repTx = await RepTransaction.findById(repTransactionId);
-      if (!repTx || !repTx.auditFlag) {
+      // La ligne doit appartenir à la société de l'appelant : celle d'une autre société est « introuvable ».
+      if (!repTx || !repTx.auditFlag || String(repTx.companyId) !== String(access.companyId)) {
         return res.status(404).json({ error: 'Audit row not found' });
       }
       if (repTx.companyDecision) {
@@ -2836,13 +2852,16 @@ export const escrowController = {
   /** APL-09: company approves/refuses a REP-declared callback/appointment held as pending_review. */
   approveOrRefuseCallCommission: async (req, res) => {
     const { repTransactionId } = req.params;
-    const { action } = req.body; // 'approve' or 'refuse'
+    const { action } = req.body || {}; // 'approve' or 'refuse'
     if (!repTransactionId || (action !== 'approve' && action !== 'refuse')) {
       return res.status(400).json({ error: 'repTransactionId and action ("approve"|"refuse") are required' });
     }
+    const access = await guardCompanyAccess(req, res, null, OWN_COMPANY_OWNER);
+    if (!access) return;
     try {
       const repTx = await RepTransaction.findById(repTransactionId);
-      if (!repTx || repTx.type !== 'call_validated') {
+      // La commission doit être celle de la société de l'appelant : celle d'une autre société est « introuvable ».
+      if (!repTx || repTx.type !== 'call_validated' || String(repTx.companyId) !== String(access.companyId)) {
         return res.status(404).json({ error: 'Call commission not found' });
       }
       if (repTx.status !== 'pending_review') {
@@ -2857,7 +2876,13 @@ export const escrowController = {
     }
   },
 
+  // Commissions de la PLATEFORME (toutes sociétés) : aucune société n'y a droit. Réservé aux identifiants listés dans HARX_ADMIN_USER_IDS
+  // (virgules) ; variable absente ou vide : fermé pour tout le monde (aucun appelant connu dans les fronts lus).
   getHarxCommissions: async (req, res) => {
+    const uid = req.user && (req.user.userId || req.user.id);
+    const admins = String(process.env.HARX_ADMIN_USER_IDS || '').split(',').map((v) => v.trim()).filter(Boolean);
+    if (!uid) return res.status(401).json({ error: 'Authentication required', code: 'AUTH_REQUIRED' });
+    if (!admins.includes(String(uid))) return res.status(403).json({ error: 'Forbidden', code: 'forbidden' });
     try {
       const commissions = await HarxCommission.find({}).sort({ createdAt: -1 });
       res.status(200).json({ success: true, data: commissions });
