@@ -3,7 +3,7 @@ import { createRateLimiter } from '../whatsapp/rateLimit.js';
 import { buildStaticPrompt, buildDynamicPrompt } from './prompt.js';
 import { checkReply } from './guards.js';
 import { TERMINAL_TOOLS } from './tools.js';
-import { extractEmail, parseWebhookPayload } from './payload.js';
+import { extractEmail, parseWebhookPayload, payloadShape } from './payload.js';
 
 const SIGNATURE = "L'équipe HARX";
 
@@ -40,6 +40,12 @@ const langOf = (text) => {
 };
 
 const signed = (text) => `${String(text).trim()}\n\n${SIGNATURE}`;
+
+/**
+ * Transfert à un opérateur. SalesIQ rejette un `forward` sans texte (« No proper response in messagehandler ») :
+ * le visiteur reçoit donc toujours le message d'attente fixe, signé, avec le transfert.
+ */
+export const forwardResponse = (lang = 'fr') => ({ action: 'forward', replies: [signed(MESSAGES[lang].hold)] });
 
 export function createAgent({ cfg, claude, zoho, tools, knowledge, logger = console, now = () => Date.now() }) {
   const limiter = createRateLimiter({ perMinute: cfg.rateLimitPerMinute, perDay: cfg.rateLimitPerDay });
@@ -159,10 +165,11 @@ export function createAgent({ cfg, claude, zoho, tools, knowledge, logger = cons
   function handleWebhookBody(body) {
     const evt = parseWebhookPayload(body);
     const quiet = { response: { action: 'reply', replies: [] }, done: Promise.resolve() };
+    if (cfg.logPayloadShape) logger.info?.('[salesiq] payload shape', JSON.stringify(payloadShape(body)));
     if (cfg.logPayloadShape) logger.info?.('[salesiq] payload received', JSON.stringify({ handler: evt.handler, operation: evt.operation, hasRequestId: Boolean(evt.requestId), hasConversationId: Boolean(evt.conversationId), hasEmail: Boolean(evt.visitorEmail) }));
     if (evt.handler && evt.handler !== 'message') return quiet;
 
-    const forward = (done = Promise.resolve()) => ({ response: { action: 'forward' }, done });
+    const forward = (done = Promise.resolve()) => ({ response: forwardResponse(evt.text.trim() ? langOf(evt.text) : 'fr'), done });
     if (cfg.mode === 'off') return forward();
     const text = evt.text.trim().slice(0, cfg.maxInboundChars);
     if (!text) return forward();

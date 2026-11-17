@@ -15,6 +15,11 @@ import { loadKnowledge } from '../salesiq/knowledge.js';
 const quiet = { log() {}, info() {}, warn() {}, error() {} };
 const knowledge = loadKnowledge();
 const cfgOf = (env = {}) => getSalesIqConfig({ SALESIQ_MODE: 'live', SALESIQ_WEBHOOK_KEY: 'k', ZOHO_CLIENT_ID: 'i', ZOHO_CLIENT_SECRET: 's', ZOHO_REFRESH_TOKEN: 'r', ANTHROPIC_API_KEY: 'a', ...env });
+const assertForward = (resp) => {
+  assert.equal(resp.action, 'forward');
+  assert.equal(resp.replies.length, 1, 'un forward sans texte est rejeté par SalesIQ');
+  assert.match(resp.replies[0], /L'équipe HARX$/);
+};
 const tick = () => new Promise((r) => setImmediate(r));
 
 function fakeZoho({ deals = [], failCallback = false } = {}) {
@@ -141,7 +146,7 @@ assert.equal(stepFromStage('Onboarding'), null);
 {
   const { agent, claude } = build({ env: { SALESIQ_MODE: 'off' } });
   const r = agent.handleWebhookBody(body('Bonjour'));
-  assert.deepEqual(r.response, { action: 'forward' });
+  assertForward(r.response);
   assert.equal(claude.calls.length, 0);
 }
 
@@ -226,7 +231,7 @@ assert.equal(stepFromStage('Onboarding'), null);
   const { agent } = build({ zoho, script: [use('send_reply', { text: 'Bonjour, voici la réponse.' })] });
   const b = body('Question'); delete b.request.request_id;
   const r = agent.handleWebhookBody(b);
-  assert.deepEqual(r.response, { action: 'forward' });
+  assertForward(r.response);
   await r.done;
   assert.equal(zoho.calls.callbacks.length, 0);
   assert.match(zoho.calls.notes[0].text, /^BROUILLON CLAUDE/);
@@ -237,18 +242,29 @@ assert.equal(stepFromStage('Onboarding'), null);
   const zoho = fakeZoho();
   const { agent } = build({ env: { SALESIQ_MODE: 'shadow' }, zoho, script: [use('send_reply', { text: 'Bonjour, voici la réponse proposée.' })] });
   const r = agent.handleWebhookBody(body('Question'));
-  assert.deepEqual(r.response, { action: 'forward' });
+  assertForward(r.response);
   await r.done;
   assert.equal(zoho.calls.callbacks.length, 0);
   assert.match(zoho.calls.notes[0].text, /^BROUILLON CLAUDE : Bonjour, voici la réponse proposée\./);
+}
+
+// --- Identifiant de conversation non numérique (session visiteur) : la conversation est retrouvée par l'API ---
+{
+  assert.equal(parseWebhookPayload(body('x', { top: { chat: { id: 'a1b2-uuid' } } })).conversationId, null);
+  assert.equal(parseWebhookPayload(body('x', { top: { chat: { id: '848837000002087001' } } })).conversationId, '848837000002087001');
+  const zoho = fakeZoho();
+  const { agent } = build({ env: { SALESIQ_MODE: 'shadow' }, zoho, script: [use('send_reply', { text: 'Bonjour, voici la réponse proposée.' })] });
+  await agent.handleWebhookBody(body('Question', { top: { chat: { id: 'a1b2-uuid' } } })).done;
+  assert.equal(zoho.calls.notes.length, 1, 'note écrite malgré un identifiant de session');
+  assert.equal(zoho.calls.notes[0].id, '848837000002087001');
 }
 
 // --- Limite de débit et message vide ---
 {
   const { agent } = build({ env: { SALESIQ_RATE_LIMIT_PER_MINUTE: '2' } });
   for (let i = 0; i < 2; i += 1) assert.equal(agent.handleWebhookBody(body('Bonjour')).response.action, 'reply');
-  assert.deepEqual(agent.handleWebhookBody(body('Bonjour')).response, { action: 'forward' });
-  assert.deepEqual(build().agent.handleWebhookBody(body('   ')).response, { action: 'forward' });
+  assertForward(agent.handleWebhookBody(body('Bonjour')).response);
+  assertForward(build().agent.handleWebhookBody(body('   ')).response);
   assert.deepEqual(build().agent.handleWebhookBody({ handler: 'trigger' }).response, { action: 'reply', replies: [] });
 }
 
