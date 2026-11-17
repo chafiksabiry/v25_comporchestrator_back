@@ -1,16 +1,20 @@
+import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import SecretariatConnection from '../models/SecretariatConnection.js';
+import OAuthPending, { PENDING_TTL_SECONDS } from '../models/OAuthPending.js';
 import SecretariatSharedAccount from '../models/SecretariatSharedAccount.js';
 import SecretariatTools from '../models/SecretariatTools.js';
 import { config } from '../config/env.js';
 import { decryptJson, encryptJson, integrationsEnabled, loadKey } from '../integrations/crypto.js';
 import { defaultHttp } from '../integrations/http.js';
 import { oauthStatus } from '../integrations/oauth.js';
-import { call, GOOGLE_MAILBOX_ACCESS_REFUSED, hasReadScope, hasWriteScope, isProviderId, PROVIDER_IDS, PROVIDER_LABEL, SecretariatError } from './secretariatProviders/common.js';
+import { call, GOOGLE_MAILBOX_WRITE_UNAVAILABLE, hasReadScope, hasWriteScope, isProviderId, PROVIDER_IDS, PROVIDER_LABEL, SecretariatError } from './secretariatProviders/common.js';
 import { purgeInboundEmails, purgePersonalInbox } from './inboundEmailStore.js';
 import { PROVIDERS } from './secretariatProviders/index.js';
+import { googleDelegationEnabled, googleDelegationError } from './googleDelegation.js';
 import { isValidTenant, tenantOf } from './secretariatProviders/microsoft.js';
+import { isMailProvider, isOwnerless, mayTakeOver, ownerOf, ownsRow } from './mailOwnership.js';
 
 /**
  * Connexions du secrétariat à Google, Microsoft 365 et Zoom (OAuth « application HARX »).
@@ -53,6 +57,9 @@ export const messages = {
   /** Compte partagé à reconnecter par le titulaire (la secrétaire ne le peut pas). Jamais de repli sur un autre compte. */
   /** Messagerie personnelle d'une secrétaire à reconnecter par elle-même. */
   personalNeedsReauth: () => 'La connexion de votre messagerie professionnelle a expiré ou a été révoquée : reconnectez-la depuis votre profil. Aucun autre compte n’est utilisé à sa place.',
+  /** Connexion Google / Microsoft d'une autre personne : ni son adresse ni son identité ne sont révélées. */
+  ownedByOther: (p) => `Une connexion ${PROVIDER_LABEL[p]} existe déjà, connectée par un autre membre de l’entreprise : une boîte mail n’est utilisable que par la personne qui l’a connectée. Connectez votre propre messagerie depuis votre profil.`,
+  notOwner: () => 'Seule la personne qui a connecté cette messagerie peut la gérer.',
   sharedNeedsReauth: (label) => `La connexion du compte « ${label || 'partagé'} » a expiré ou a été révoquée : le titulaire doit la reconnecter dans Paramétrage > Outils. Aucun autre compte n’est utilisé à sa place.`,
 };
 
@@ -96,15 +103,15 @@ const stateSecret = () => {
 };
 
 /** Adresse d'autorisation du fournisseur, avec un état signé (10 min) lié au centre, à l'utilisateur, au fournisseur et à la page de retour. */
-export function startAuthorization({ companyId, userId, provider, returnTo, shared, read = false, write = false }, env = process.env) {
+export function startAuthorization({ companyId, userId, provider, returnTo, shared, read = false, write = false, pend = false }, env = process.env) {
   const cfg = providerConfig(provider, env);
   if (!cfg) throw new SecretariatError('unavailable', messages.unavailable(provider));
-  // GOOGLE : refus inconditionnel de la lecture et de l'écriture de la boîte (aucun scope restreint n'est jamais demandé), quel que soit l'appelant.
-  if (provider === 'google' && (read || write)) throw new SecretariatError('invalid_request', GOOGLE_MAILBOX_ACCESS_REFUSED);
+  // GOOGLE : la lecture (gmail.readonly) est demandée comme pour Microsoft ; l'écriture (gmail.modify) jamais, quel que soit l'appelant.
+  if (provider === 'google' && write) throw new SecretariatError('invalid_request', GOOGLE_MAILBOX_WRITE_UNAVAILABLE);
   // `read` : demande EN PLUS le scope (optionnel) de lecture de la boîte de réception (e-mails entrants). Les scopes obtenus sont lus au callback.
   if (read && !PROVIDERS[provider].readScope) throw new SecretariatError('invalid_request', 'La lecture des e-mails n’est pas disponible pour ce fournisseur.');
   if (write && !PROVIDERS[provider].writeScope) throw new SecretariatError('invalid_request', 'La gestion de la messagerie n’est pas disponible pour ce fournisseur.');
-  const state = jwt.sign({ purpose: STATE_PURPOSE, companyId: String(companyId), userId: String(userId), provider, returnTo, ...(shared ? { shared } : {}) }, stateSecret(), { expiresIn: STATE_TTL_SECONDS, algorithm: 'HS256' });
+  const state = jwt.sign({ purpose: STATE_PURPOSE, companyId: String(companyId), userId: String(userId), provider, returnTo, ...(pend ? { pend: true } : {}), ...(shared ? { shared } : {}) }, stateSecret(), { expiresIn: STATE_TTL_SECONDS, algorithm: 'HS256' });
   const P = PROVIDERS[provider];
   const q = new URLSearchParams({
     client_id: cfg.clientId, redirect_uri: cfg.redirectUri, response_type: 'code', state,
@@ -113,13 +120,67 @@ export function startAuthorization({ companyId, userId, provider, returnTo, shar
   return `${P.authorizeUrl(env)}?${q}`;
 }
 
+/**
+ * LIAISON DE L'AUTORISATION À L'UTILISATEUR AUTHENTIFIÉ (contre la liaison de compte par un tiers : un membre ne peut pas faire consentir quelqu'un d'autre à son nom).
+ * Pas de cookie (portail et API sont sur des domaines différents) : finalisation authentifiée en deux temps.
+ *  1. `beginAuthorization` (route AUTHENTIFIÉE) marque l'état signé `pend`. Au retour du fournisseur, le callback (public, dans le navigateur de la personne qui consent)
+ *     échange le code puis met les jetons CHIFFRÉS en attente (`stashAuthorization`, modèle OAuthPending : identifiant aléatoire à usage unique, TTL 10 min, lié à
+ *     `state.userId` et à la société) et redirige vers le portail avec `?pending=<identifiant>&provider=<fournisseur>` ; RIEN n'est enregistré.
+ *  2. Le portail appelle `POST /connections/:société/:fournisseur/complete { pendingId }` avec le Bearer de l'utilisateur : `finishAuthorization` consomme l'attente
+ *     (supprimée dans tous les cas) et ne finalise que si l'utilisateur authentifié est celui qui a démarré (sinon `wrong_user`).
+ * Un tiers qui fait consentir un collègue n'obtient rien : l'identifiant part dans le navigateur de la victime, qui n'a pas le jeton du démarreur.
+ * Interrupteur de secours : OAUTH_BROWSER_BINDING=off (états sans `pend` : enregistrement direct au callback, comme avant).
+ */
+export const browserBindingEnabled = (env = process.env) => String(env.OAUTH_BROWSER_BINDING || '').trim().toLowerCase() !== 'off';
+const hashPending = (id) => crypto.createHash('sha256').update(String(id)).digest('hex');
+const pendingContext = (companyId, idHash) => `secretariat-pending:${companyId}:${idHash}`;
+export const PENDING_ID_RE = /^[0-9a-f]{64}$/;
+
+/** Démarre une autorisation depuis une route AUTHENTIFIÉE : l'état signé demandera la finalisation authentifiée (sauf interrupteur de secours). */
+export function beginAuthorization(params, env = process.env) {
+  return startAuthorization({ ...params, ...(browserBindingEnabled(env) ? { pend: true } : {}) }, env);
+}
+
+/** Met en attente l'autorisation échangée (jetons chiffrés). @returns {Promise<string>} identifiant à usage unique (en clair seulement ici et dans la redirection) */
+export async function stashAuthorization({ state, accountEmail, secrets, scopes }, { env = process.env } = {}) {
+  const id = crypto.randomBytes(32).toString('hex');
+  const idHash = hashPending(id);
+  await OAuthPending.create({
+    idHash, companyId: oid(state.companyId), userId: String(state.userId), provider: state.provider, returnTo: state.returnTo, shared: state.shared || null,
+    accountEmail, scopes, secretsEnc: encryptJson(secrets, { context: pendingContext(state.companyId, idHash), key: loadKey(env) }), createdAt: new Date(),
+  });
+  return id;
+}
+
+/**
+ * Finalise une attente pour l'utilisateur AUTHENTIFIÉ `userId`. L'attente est consommée (supprimée) dès la lecture : inconnue, expirée, forgée, rejouée, d'une autre
+ * société ou d'un autre fournisseur = `pending_not_found` ; d'un autre utilisateur = `wrong_user` (et elle est détruite). Sinon : même enregistrement qu'au callback direct
+ * (contrôle de propriété `mayTakeOver`, écriture conditionnelle).
+ * @returns {Promise<{provider: string, personal?: boolean, shared?: boolean, read?: boolean}>}
+ */
+export async function finishAuthorization({ pendingId, userId, companyId, provider, mayStore = () => true }, { env = process.env } = {}) {
+  if (typeof pendingId !== 'string' || !PENDING_ID_RE.test(pendingId)) throw new SecretariatError('invalid_request', 'Identifiant d’autorisation invalide.', { status: 400 });
+  const idHash = hashPending(pendingId);
+  const row = await OAuthPending.findOneAndDelete({ idHash, companyId: oid(companyId), provider }).lean();
+  const gone = () => new SecretariatError('pending_not_found', 'Cette autorisation n’existe plus ou a expiré : recommencez la connexion.', { status: 404 });
+  if (!row || Date.now() - new Date(row.createdAt).getTime() > PENDING_TTL_SECONDS * 1000) throw gone();
+  if (String(row.userId) !== String(userId || '')) throw new SecretariatError('wrong_user', 'Cette autorisation a été démarrée par une autre personne : elle a été annulée. Recommencez la connexion depuis votre compte.', { status: 403 });
+  const state = { companyId: String(companyId), userId: String(row.userId), provider, returnTo: row.returnTo, ...(row.shared ? { shared: row.shared } : {}) };
+  if (!mayStore(state)) throw new SecretariatError('forbidden', 'Vous n’avez plus le droit de connecter ce compte.', { status: 403 }); // droits revérifiés à la finalisation
+  // Délégation Google suspendue (googleDelegation.js), revérifiée à la finalisation : un compte PARTAGÉ Google n'est jamais enregistré (les jetons en attente sont jetés).
+  if (state.shared && state.shared.personal !== true && provider === 'google' && !googleDelegationEnabled()) throw googleDelegationError(409);
+  const secrets = decryptJson(row.secretsEnc, { context: pendingContext(companyId, idHash), key: loadKey(env) });
+  const done = await storeAuthorization({ state, accountEmail: row.accountEmail, secrets, scopes: row.scopes || [], env });
+  return { provider, ...(done?.personal ? { personal: true, ...(done.read ? { read: true } : {}) } : done?.accountId ? { shared: true } : {}) };
+}
+
 /** Lit un état OAuth : charge utile valide, ou null (expiré, falsifié, autre fournisseur, forme inattendue). */
 export function readState(state, provider) {
   try {
     const s = jwt.verify(String(state), stateSecret(), { algorithms: ['HS256'] });
     if (s.purpose !== STATE_PURPOSE || s.provider !== provider || !isProviderId(provider)) return null;
     if (!/^[0-9a-fA-F]{24}$/.test(String(s.companyId)) || typeof s.userId !== 'string' || !s.userId || !RETURN_PATHS[s.returnTo]) return null;
-    const base = { companyId: String(s.companyId), userId: s.userId, provider, returnTo: s.returnTo };
+    const base = { companyId: String(s.companyId), userId: s.userId, provider, returnTo: s.returnTo, ...(s.pend === true ? { pend: true } : {}) };
     if (s.shared === undefined) return base;
     // Compte partagé : seuls Google et Microsoft ; libellé et droits revalidés (jamais de confiance aveugle dans la charge utile).
     const sh = s.shared;
@@ -128,7 +189,8 @@ export function readState(state, provider) {
     if (sh.personal !== undefined && sh.personal !== true) return null;
     // `read` (consentement de LECTURE de sa boîte de réception) n'existe que pour la messagerie personnelle ; jamais d'écriture.
     if (sh.read !== undefined && (sh.read !== true || sh.personal !== true)) return null;
-    if (sh.read !== undefined && provider === 'google') return null; // Google : jamais de consentement de lecture
+    // Délégation Google suspendue : un état « compte PARTAGÉ Google » (démarré avant la suspension, ou forgé) n'aboutit jamais.
+    if (sh.personal !== true && provider === 'google' && !googleDelegationEnabled()) return null;
     if (sh.personal === true) {
       if (sh.accountId !== undefined) return null;
       return { ...base, shared: { label: PERSONAL_LABEL, ownerName: trim(sh.ownerName).slice(0, SHARED_LABEL_MAX), send: true, calendar: true, personal: true, ...(sh.read === true ? { read: true } : {}) } };
@@ -158,8 +220,8 @@ async function postToken(P, cfg, form, http) {
  * Callback : échange le code (l'état doit déjà être validé par `readState`), lit l'e-mail du compte et enregistre les jetons CHIFFRÉS
  * (remplace une connexion existante). Les erreurs portent un code court (exchange_failed, no_refresh_token, missing_permissions, no_account…).
  */
-export async function completeConnection({ state, code }, { http = httpImpl, env = process.env } = {}) {
-  const { companyId, userId, provider } = state;
+export async function exchangeAuthorization({ state, code }, { http = httpImpl, env = process.env } = {}) {
+  const { provider } = state;
   const cfg = providerConfig(provider, env);
   if (!cfg) throw new SecretariatError('unavailable', messages.unavailable(provider));
   if (typeof code !== 'string' || !code || code.length > 2048) throw new SecretariatError('invalid_request', 'Réponse du fournisseur invalide.');
@@ -176,16 +238,40 @@ export async function completeConnection({ state, code }, { http = httpImpl, env
   const secrets = { accessToken: token.accessToken, refreshToken: token.refreshToken, expiresAt: token.expiresAt };
   // Consentement de lecture de la messagerie personnelle : le scope de lecture doit avoir été réellement accordé (sinon rien n'est enregistré, le compte existant est intact).
   if (state.shared?.read === true && !hasReadScope(provider, token.scopes)) throw new SecretariatError('missing_permissions', 'Toutes les autorisations demandées n’ont pas été accordées.');
-  if (state.shared) return storeSharedAccount({ state, accountEmail, secrets, scopes: token.scopes.length ? token.scopes : P.scopes, env });
+  return { accountEmail, secrets, scopes: token.scopes.length ? token.scopes : P.scopes };
+}
+
+/** Enregistrement des jetons CHIFFRÉS (contrôle de propriété, écriture conditionnelle). `state` = état validé ; l'utilisateur de l'état est celui qui devient propriétaire. */
+export async function storeAuthorization({ state, accountEmail, secrets, scopes, env = process.env }) {
+  const { companyId, userId, provider } = state;
+  if (state.shared) return storeSharedAccount({ state, accountEmail, secrets, scopes, env });
   const credentialsEnc = encryptJson(secrets, { context: context(companyId, provider), key: loadKey(env) });
-  await SecretariatConnection.findOneAndUpdate(
-    { companyId: oid(companyId), provider },
-    { $set: { accountEmail, credentialsEnc, scopes: token.scopes.length ? token.scopes : P.scopes, status: 'connected', connectedAt: new Date(), connectedBy: userId } },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
-  );
+  const set = { accountEmail, credentialsEnc, scopes, status: 'connected', connectedAt: new Date(), connectedBy: userId };
+  if (isMailProvider(provider)) {
+    // Boîte mail : seul son propriétaire la remplace. Aucune ligne ou ligne ORPHELINE : la personne connectée en devient propriétaire.
+    const existing = await SecretariatConnection.findOne({ companyId: oid(companyId), provider }).select('connectedBy ownerless').lean();
+    if (!mayTakeOver(existing, userId)) throw new SecretariatError('not_owner', messages.ownedByOther(provider), { status: 403 });
+    if (existing && isOwnerless(existing)) await purgeInboundEmails(companyId, null); // reprise d'une orpheline : seulement les anciens e-mails stockés sans propriétaire
+    // Écriture conditionnelle : si la ligne a changé de propriétaire entre la lecture et l'écriture, l'insertion échoue sur l'index unique (jamais d'écrasement).
+    const where = { companyId: oid(companyId), provider, connectedBy: isOwnerless(existing) && existing ? { $in: ['', null] } : String(userId) };
+    try {
+      await SecretariatConnection.findOneAndUpdate(where, { $set: { ...set, ownerless: false } }, { upsert: true, new: true, setDefaultsOnInsert: true });
+    } catch (error) {
+      if (error?.code === 11000) throw new SecretariatError('not_owner', messages.ownedByOther(provider), { status: 403 });
+      throw error;
+    }
+  } else {
+    await SecretariatConnection.findOneAndUpdate({ companyId: oid(companyId), provider }, { $set: set }, { upsert: true, new: true, setDefaultsOnInsert: true });
+  }
   await adoptAsEmailProvider(companyId, provider);
   await adoptAgendaAndVisio(companyId, provider);
   return { companyId, provider, accountEmail };
+}
+
+
+/** Callback direct (sans finalisation en attente : interrupteur de secours ou état sans `pend`) : échange puis enregistrement. */
+export async function completeConnection({ state, code }, { http = httpImpl, env = process.env } = {}) {
+  return storeAuthorization({ state, ...(await exchangeAuthorization({ state, code }, { http, env })), env });
 }
 
 /** Nombre maximum de comptes partagés par société (garde-fou). */
@@ -208,12 +294,14 @@ async function storeSharedAccount({ state, accountEmail, secrets, scopes, env })
     if (doc && String(doc.accountEmail).toLowerCase() !== email) throw new SecretariatError('wrong_account', 'Ce n’est pas la même adresse que celle déjà connectée : déconnectez d’abord votre messagerie, puis reconnectez-la.');
     if (!doc && (await SecretariatSharedAccount.findOne({ companyId: oid(companyId), provider, accountEmail: email }).select('_id').lean())) throw taken();
   } else if (shared.accountId) {
-    doc = await SecretariatSharedAccount.findOne({ _id: oid(shared.accountId), companyId: oid(companyId), provider, personalUserId: null }).select('accountEmail').lean();
+    doc = await SecretariatSharedAccount.findOne({ _id: oid(shared.accountId), companyId: oid(companyId), provider, personalUserId: null }).select('accountEmail connectedBy ownerless').lean();
     if (!doc) throw new SecretariatError('invalid_request', 'Compte introuvable.');
+    if (!mayTakeOver(doc, userId)) throw new SecretariatError('not_owner', messages.notOwner(), { status: 403 }); // seul son propriétaire le reconnecte (un compte orphelin : celui qui prouve l'accès à la boîte)
     if (String(doc.accountEmail).toLowerCase() !== email) throw new SecretariatError('wrong_account', 'Ce n’est pas le même compte que celui à reconnecter.');
   } else {
-    doc = await SecretariatSharedAccount.findOne({ companyId: oid(companyId), provider, accountEmail: email }).select('accountEmail personalUserId').lean();
+    doc = await SecretariatSharedAccount.findOne({ companyId: oid(companyId), provider, accountEmail: email }).select('accountEmail personalUserId connectedBy ownerless').lean();
     if (doc?.personalUserId) throw taken(); // jamais d'écrasement de la messagerie d'une secrétaire
+    if (doc && !mayTakeOver(doc, userId)) throw taken(); // jamais d'écrasement du compte d'une autre personne
     if (!doc && (await SecretariatSharedAccount.countDocuments({ companyId: oid(companyId), personalUserId: null })) >= MAX_SHARED_ACCOUNTS) throw new SecretariatError('too_many_accounts', 'Nombre maximum de comptes partagés atteint.');
   }
   const accountId = doc ? String(doc._id) : String(new mongoose.Types.ObjectId());
@@ -227,7 +315,7 @@ async function storeSharedAccount({ state, accountEmail, secrets, scopes, env })
   const credentialsEnc = encryptJson(secrets, { context: sharedContext(companyId, accountId), key: loadKey(env) });
   await SecretariatSharedAccount.findOneAndUpdate(
     { _id: oid(accountId), companyId: oid(companyId) },
-    { $set: { provider, label: shared.label, ownerName: shared.ownerName, accountEmail: email, credentialsEnc, scopes, status: 'connected', connectedAt: new Date(), connectedBy: userId, ...(shared.personal ? { personalUserId: String(userId), 'inbound.readEnabled': readEnabled } : {}), 'permissions.send': shared.send, 'permissions.calendar': shared.calendar } },
+    { $set: { provider, label: shared.label, ownerName: shared.ownerName, accountEmail: email, credentialsEnc, scopes, status: 'connected', connectedAt: new Date(), connectedBy: userId, ownerless: false, ...(shared.personal ? { personalUserId: String(userId), 'inbound.readEnabled': readEnabled } : {}), 'permissions.send': shared.send, 'permissions.calendar': shared.calendar } },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
   return { companyId, provider, accountEmail: email, accountId, ...(shared.personal ? { personal: true, ...(shared.read ? { read: true } : {}) } : {}) };
@@ -295,13 +383,14 @@ async function releaseEmailProvider(companyId, provider) {
 }
 
 /**
- * Messagerie d'envoi des e-mails du secrétariat. `preferred` = `email.provider` des réglages.
+ * Messagerie d'envoi des e-mails du secrétariat DE `userId` (connexion dont il est propriétaire). `preferred` = `email.provider` des réglages.
  * 1) le fournisseur choisi (google / microsoft) si sa connexion est active ; 2) sinon l'unique messagerie active ;
  * 3) sinon une erreur : `needs_reauth` si une connexion est à refaire, `not_connected` sinon.
  * @returns {Promise<{provider: 'google'|'microsoft', account: string} | {error: 'not_connected'|'needs_reauth', provider: string|null}>}
  */
-export async function resolveMailbox(companyId, preferred) {
-  const rows = await SecretariatConnection.find({ companyId: oid(companyId), provider: { $in: MAILBOX_PROVIDERS } }).select('provider accountEmail status').lean();
+export async function resolveMailbox(companyId, preferred, userId) {
+  // SEULES les connexions DONT `userId` est propriétaire comptent (sans identifiant : aucune). Une connexion d'un autre n'est ni utilisée, ni signalée.
+  const rows = (await SecretariatConnection.find({ companyId: oid(companyId), provider: { $in: MAILBOX_PROVIDERS } }).select('provider accountEmail status connectedBy').lean()).filter((r) => ownsRow(r, userId));
   const active = rows.filter((r) => r.status === 'connected');
   const pick = (r) => ({ provider: r.provider, account: r.accountEmail });
   const chosen = active.find((r) => r.provider === preferred);
@@ -319,8 +408,9 @@ export async function resolveMailbox(companyId, preferred) {
  * 3) sinon une erreur : `needs_reauth` si le choix explicite (ou à défaut une connexion) est à refaire, `not_connected` sinon (on ne devine pas).
  * @returns {Promise<{provider: 'google_meet'|'teams'|'zoom', account: string} | {error: 'not_connected'|'needs_reauth', account: string|null}>}
  */
-export async function resolveVisio(companyId, preferred) {
-  const rows = await SecretariatConnection.find({ companyId: oid(companyId), provider: { $in: Object.keys(VISIO_OF) } }).select('provider status').lean();
+export async function resolveVisio(companyId, preferred, userId) {
+  // Meet / Teams passent par une boîte Google / Microsoft : seulement celles DONT `userId` est propriétaire. Zoom (pas une boîte mail) reste celui de l'entreprise.
+  const rows = (await SecretariatConnection.find({ companyId: oid(companyId), provider: { $in: Object.keys(VISIO_OF) } }).select('provider status connectedBy').lean()).filter((r) => !isMailProvider(r.provider) || ownsRow(r, userId));
   const active = rows.filter((r) => r.status === 'connected');
   const chosen = active.find((r) => VISIO_OF[r.provider] === preferred);
   if (chosen) return { provider: preferred, account: chosen.provider };
@@ -338,14 +428,16 @@ const inFlight = new Map();
  * Jeton d'accès valide (marge de 60 s). Rafraîchit au plus UNE fois par appel ; si le fournisseur refuse (révoqué) la connexion passe
  * en `needs_reauth` et l'erreur le dit en français. Une panne temporaire du fournisseur ne change pas l'état. Jamais de boucle.
  */
-export function getAccessToken(companyId, provider, { force = false, http = httpImpl, env = process.env, accountId = null } = {}) {
-  const key = `${companyId}:${provider}:${accountId || ''}`;
+export function getAccessToken(companyId, provider, { force = false, http = httpImpl, env = process.env, accountId = null, ownerId = null } = {}) {
+  // Connexion d'entreprise Google / Microsoft : le propriétaire est OBLIGATOIRE (la clé de partage de requête en vol l'inclut : un autre n'hérite jamais d'un jeton).
+  const key = `${companyId}:${provider}:${accountId || ''}:${!accountId && isMailProvider(provider) ? String(ownerId || '') : ''}`;
   const where = slot(companyId, provider, accountId);
   const reauth = (conn) => new SecretariatError('needs_reauth', accountId ? sharedReauthMessage(conn) : messages.needsReauth(provider), { status: null });
   if (inFlight.has(key) && !force) return inFlight.get(key);
   const run = (async () => {
     const conn = await where.Model.findOne(where.filter).select('+credentialsEnc');
     if (!conn) throw new SecretariatError('not_connected', accountId ? 'Ce compte n’est plus connecté.' : messages.notConnected(provider));
+    if (!accountId && isMailProvider(provider) && !ownsRow(conn, ownerId)) throw new SecretariatError('not_connected', messages.notConnected(provider)); // la boîte d'un autre n'existe pas pour lui
     if (conn.status === 'needs_reauth') throw reauth(conn);
     let key32;
     try { key32 = loadKey(env); } catch { throw new SecretariatError('unavailable', messages.unavailable(provider)); }
@@ -381,8 +473,8 @@ export function getAccessToken(companyId, provider, { force = false, http = http
  * Exécute `fn(accessToken)`. Un 401 du fournisseur (jeton annulé avant son échéance) provoque UN rafraîchissement forcé puis UN second
  * essai ; un nouveau 401 passe la connexion en `needs_reauth`. @template T @param {(token: string, http: Function) => Promise<T>} fn @returns {Promise<T>}
  */
-export async function withConnection(companyId, provider, fn, { http = httpImpl, env = process.env, accountId = null } = {}) {
-  const opts = { http, env, accountId };
+export async function withConnection(companyId, provider, fn, { http = httpImpl, env = process.env, accountId = null, ownerId = null } = {}) {
+  const opts = { http, env, accountId, ownerId };
   let token = await getAccessToken(companyId, provider, opts);
   try {
     return await fn(token, http);
@@ -404,29 +496,60 @@ export async function withConnection(companyId, provider, fn, { http = httpImpl,
 }
 
 /** Adresse du compte connecté (utile à l'expéditeur Gmail). Lève `not_connected` / `needs_reauth` si la connexion n'est pas active. */
-export async function connectedAccount(companyId, provider) {
-  const row = await SecretariatConnection.findOne({ companyId: oid(companyId), provider }).select('accountEmail status').lean();
-  if (!row) throw new SecretariatError('not_connected', messages.notConnected(provider));
+export async function connectedAccount(companyId, provider, userId) {
+  const row = await SecretariatConnection.findOne({ companyId: oid(companyId), provider }).select('accountEmail status connectedBy').lean();
+  if (!row || (isMailProvider(provider) && !ownsRow(row, userId))) throw new SecretariatError('not_connected', messages.notConnected(provider));
   if (row.status !== 'connected') throw new SecretariatError('needs_reauth', messages.needsReauth(provider));
   return row.accountEmail;
 }
 
-/** Fournisseurs actuellement connectés (jamais `needs_reauth`) : sert à valider les réglages. */
-export async function connectedProviders(companyId) {
-  const rows = await SecretariatConnection.find({ companyId: oid(companyId), status: 'connected' }).select('provider').lean();
-  return new Set(rows.map((r) => r.provider));
+/** Fournisseurs actuellement connectés (jamais `needs_reauth`) POUR `userId` : ses boîtes Google / Microsoft (dont il est propriétaire) et Zoom (entreprise). Sert à valider les réglages. */
+export async function connectedProviders(companyId, userId) {
+  const rows = await SecretariatConnection.find({ companyId: oid(companyId), status: 'connected' }).select('provider connectedBy').lean();
+  return new Set(rows.filter((r) => !isMailProvider(r.provider) || ownsRow(r, userId)).map((r) => r.provider));
+}
+
+/** `userId` est-il propriétaire d'au moins une boîte Google / Microsoft de l'entreprise ? (droit de régler la lecture des e-mails entrants.) */
+export async function ownsMailConnection(companyId, userId) {
+  const rows = await SecretariatConnection.find({ companyId: oid(companyId), provider: { $in: MAILBOX_PROVIDERS } }).select('provider connectedBy').lean();
+  return rows.some((r) => ownsRow(r, userId));
+}
+
+/**
+ * Messagerie d'envoi PERSONNELLE de `userId` pour les e-mails automatiques : 1) la connexion Google / Microsoft dont il est propriétaire (réglage `preferred` d'abord) ;
+ * 2) sinon SA messagerie personnelle (compte `personalUserId`). Jamais la boîte d'une autre personne ; sans identifiant : rien.
+ * @returns {Promise<{kind: 'connection'|'personal', provider: string, account: string, accountId?: string} | {error: 'not_connected'|'needs_reauth', provider: string|null}>}
+ */
+export async function resolveUserMailbox(companyId, userId, preferred) {
+  const u = String(userId ?? '').trim();
+  if (!u || u === 'system') return { error: 'not_connected', provider: null };
+  const own = await resolveMailbox(companyId, preferred, u);
+  if (!own.error) return { kind: 'connection', ...own };
+  const rows = await SecretariatSharedAccount.find({ companyId: oid(companyId), personalUserId: u, provider: { $in: MAILBOX_PROVIDERS } }).select('provider accountEmail status').lean();
+  const usable = rows.filter((r) => r.status === 'connected');
+  const pick = usable.find((r) => r.provider === preferred) || usable[0];
+  if (pick) return { kind: 'personal', provider: pick.provider, account: pick.accountEmail, accountId: String(pick._id) };
+  if (own.error === 'needs_reauth' || rows.some((r) => r.status === 'needs_reauth')) return { error: 'needs_reauth', provider: own.provider || rows.find((r) => r.status === 'needs_reauth')?.provider || null };
+  return own;
 }
 
 /** Réponse de GET /connections : jamais de jeton ni de nom de variable. */
-export async function connectionsView(companyId, env = process.env) {
-  const rows = await SecretariatConnection.find({ companyId: oid(companyId) }).select('provider accountEmail status connectedAt scopes').lean();
+export async function connectionsView(companyId, viewer = {}, env = process.env) {
+  const rows = await SecretariatConnection.find({ companyId: oid(companyId) }).select('provider accountEmail status connectedAt scopes connectedBy').lean();
   const out = {};
   for (const p of PROVIDER_IDS) {
-    const row = rows.find((r) => r.provider === p);
+    const found = rows.find((r) => r.provider === p);
+    // Boîte Google / Microsoft : statut, adresse et droits visibles de son SEUL propriétaire ; les autres voient « non connecté ». Le titulaire de la
+    // société voit seulement QU'UNE connexion orpheline existe (`orphan`, sans adresse) pour pouvoir la retirer.
+    const hidden = isMailProvider(p) && found && !ownsRow(found, viewer.userId);
+    const row = hidden ? null : found;
     out[p] = {
       available: isAvailable(p, env),
       connected: row?.status === 'connected',
       needsReauth: row?.status === 'needs_reauth',
+      // Additif, booléen seul (ni adresse, ni identité, ni statut) : la boîte de ce fournisseur appartient à un AUTRE membre (« Connecter » répondrait 409 connection_owned).
+      ...(hidden && !isOwnerless(found) ? { ownedByOther: true } : {}),
+      ...(isMailProvider(p) && found && viewer.titulaire === true && !ownsRow(found, viewer.userId) && (isOwnerless(found) || (typeof viewer.ownerGone === 'function' && (await viewer.ownerGone(ownerOf(found))))) ? { orphan: true } : {}), // additif : seulement pour le titulaire ; connexion sans propriétaire OU dont le propriétaire a quitté la société (jamais d'adresse)
       /** Le scope (optionnel) de lecture de la boîte de réception est-il accordé ? (e-mails entrants) */
       canRead: row?.status === 'connected' && hasReadScope(p, row.scopes),
       /** Le scope (optionnel, séparé) d'écriture est-il accordé ? (corbeille / archivage répercutés dans la messagerie) */
@@ -439,10 +562,12 @@ export async function connectionsView(companyId, env = process.env) {
 }
 
 /** Révoque chez le fournisseur au mieux (un échec est toléré) puis supprime les jetons. */
-export async function disconnect(companyId, provider, { http = httpImpl, env = process.env } = {}) {
-  // Les e-mails entrants stockés sont purgés AVANT la suppression des jetons : en cas d'échec rien n'est perdu et la déconnexion peut être rejouée.
-  if (MAILBOX_PROVIDERS.includes(provider)) await purgeInboundEmails(companyId);
+export async function disconnect(companyId, provider, { http = httpImpl, env = process.env, userId = null, titulaire = false, ownerGone = false } = {}) {
   const conn = await SecretariatConnection.findOne({ companyId: oid(companyId), provider }).select('+credentialsEnc');
+  // Boîte Google / Microsoft : son propriétaire la déconnecte ; une connexion ORPHELINE ne peut être retirée que par le titulaire de la société. Contrôle AVANT toute purge.
+  if (conn && isMailProvider(provider) && !(ownsRow(conn, userId) || (titulaire === true && (isOwnerless(conn) || ownerGone === true)))) throw new SecretariatError('not_owner', messages.notOwner(), { status: 403 });
+  // Les e-mails entrants stockés sont purgés AVANT la suppression des jetons : en cas d'échec rien n'est perdu et la déconnexion peut être rejouée.
+  if (conn && MAILBOX_PROVIDERS.includes(provider)) await purgeInboundEmails(companyId, ownerOf(conn));
   if (!conn) { await releaseEmailProvider(companyId, provider); await releaseAgendaAndVisio(companyId, provider); return false; }
   try {
     const cfg = providerConfig(provider, env);
@@ -452,7 +577,7 @@ export async function disconnect(companyId, provider, { http = httpImpl, env = p
   } catch {
     // Révocation au mieux : les jetons sont supprimés dans tous les cas.
   }
-  await SecretariatConnection.deleteOne({ companyId: oid(companyId), provider });
+  await SecretariatConnection.deleteOne({ companyId: oid(companyId), provider, connectedBy: isOwnerless(conn) ? { $in: ['', null] } : ownerOf(conn) });
   await releaseEmailProvider(companyId, provider);
   await releaseAgendaAndVisio(companyId, provider);
   return true;
@@ -460,7 +585,7 @@ export async function disconnect(companyId, provider, { http = httpImpl, env = p
 
 /**
  * Révoque au mieux, chez le fournisseur, le jeton d'une connexion d'entreprise (`kind: 'connection'`) ou d'un compte partagé / personnel
- * (`kind: 'shared'`) SANS le supprimer. Lève en cas d'échec (l'appelant décide). Sert à la migration « Google sans lecture ».
+ * (`kind: 'shared'`) SANS le supprimer. Lève en cas d'échec (l'appelant décide). Servait à l'ancienne migration « Google sans lecture » (désormais sans effet).
  */
 export async function revokeStoredGrant(kind, doc, { http = httpImpl, env = process.env } = {}) {
   const provider = doc.provider;
@@ -475,10 +600,12 @@ export async function revokeStoredGrant(kind, doc, { http = httpImpl, env = proc
 }
 
 /** Supprime un compte PARTAGÉ : révocation chez le fournisseur au mieux, puis suppression des jetons. Les réglages de la société ne bougent pas. */
-export async function disconnectSharedAccount(companyId, accountId, { http = httpImpl, env = process.env, owner } = {}) {
+export async function disconnectSharedAccount(companyId, accountId, { http = httpImpl, env = process.env, owner, connectedBy } = {}) {
   const where = slot(companyId, null, accountId);
   // `owner` : null = compte PARTAGÉ uniquement (jamais une messagerie personnelle) ; chaîne = messagerie personnelle de CET utilisateur seulement.
   if (owner !== undefined) where.filter = { ...where.filter, personalUserId: owner === null ? null : String(owner) };
+  // `connectedBy` : seulement le compte DONT cet utilisateur est propriétaire ('' = compte orphelin, retiré par le titulaire).
+  if (connectedBy !== undefined) where.filter = { ...where.filter, connectedBy: String(connectedBy) === '' ? { $in: ['', null] } : String(connectedBy) };
   const conn = await SecretariatSharedAccount.findOne(where.filter).select('+credentialsEnc');
   if (!conn) return false;
   // Messagerie personnelle : ses e-mails stockés sont purgés AVANT la suppression des jetons (échec = rien n'est perdu, la déconnexion peut être rejouée).

@@ -24,7 +24,13 @@ const schema = new mongoose.Schema(
       calendar: { type: Boolean, default: false },
     },
     connectedAt: { type: Date, default: Date.now },
+    /**
+     * PROPRIÉTAIRE du compte : l'utilisateur qui l'a connecté. Lui seul le voit en gestion, le modifie, le reconnecte, le supprime et l'utilise sans restriction ;
+     * un autre membre (titulaire et responsables compris) ne l'utilise que dans le cadre de `permissions`, explicitement délégué par ce propriétaire.
+     * Vide = ancien compte sans propriétaire (`ownerless`) : inutilisable ; seul le titulaire de la société peut le retirer, ou son connecteur le reconnecter.
+     */
     connectedBy: { type: String, default: '' },
+    ownerless: { type: Boolean, default: false },
     /** Messagerie PERSONNELLE d'une secrétaire : identifiant de son propriétaire (null = compte partagé par le titulaire). Jamais visible d'un autre. */
     personalUserId: { type: String, default: null },
     /**

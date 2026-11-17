@@ -15,7 +15,13 @@ const schema = new mongoose.Schema(
     scopes: { type: [String], default: [] },
     status: { type: String, enum: ['connected', 'needs_reauth'], default: 'connected' },
     connectedAt: { type: Date, default: Date.now },
+    /**
+     * PROPRIÉTAIRE de la connexion : l'utilisateur qui l'a connectée (identifiant de la session OAuth). Pour Google et Microsoft, SEUL le propriétaire
+     * peut l'utiliser (envoi, agenda, lecture), la reconnecter ou la déconnecter (services/mailOwnership.js). Zoom n'est pas une boîte mail : inchangé.
+     * Vide = connexion ANCIENNE sans propriétaire : inutilisable jusqu'à reconnexion (`ownerless`, posé par la migration, jamais rattachée au hasard).
+     */
     connectedBy: { type: String, default: '' },
+    ownerless: { type: Boolean, default: false },
   },
   { timestamps: true, collection: 'secretariat_connections' }
 );
