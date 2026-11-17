@@ -1,5 +1,6 @@
 import { phoneNumberService } from '../services/phoneNumberService.js';
 import { callerAccess, ScopeError, scopeToCompany } from '../middleware/companyScope.js';
+import { guardCompanyAccess } from '../middleware/companyGuard.js';
 import { AssignmentError, LINE_NOT_ASSIGNED, LINE_NOT_ASSIGNED_MESSAGE, agentLineStatus, inboundRingFilter, enforcementSettings, lineStatusView, agentCapacity, assertAgentCanHaveLine, assertReleasable, assignAgent, assignmentFields, offerKind, oldestOf, resolvePurchaseAssignment, unassignAgent, withCenterLock } from '../services/lineAssignment.js';
 import { listLinesFor } from '../services/phoneNumberList.js';
 import { callingInfoOf } from '../services/outboundDestinations.js';
@@ -71,6 +72,8 @@ const recordingPlanFor = async ({ companyId, callSid, baseUrl, from, language = 
 
 /** In-memory status for live test-call monitoring (popup). */
 const testCallSessions = new Map();
+/** Sessions des appels de test en cours (exposées pour les tests uniquement). */
+export const testCallSessionsForTests = testCallSessions;
 
 const toE164 = (value) => {
   let s = String(value || '').trim().replace(/[\s()-]/g, '');
@@ -1842,6 +1845,7 @@ class PhoneNumberController {
         const callId = call.sid;
         const mapped = mapTwilioCallStatus(call.status);
         upsertTestCallSession(callId, {
+          companyId: String(companyId), // propriétaire de l'appel de test : seule cette société le suit ou le raccroche
           provider: 'twilio',
           status: mapped.status,
           outcome: mapped.outcome,
@@ -1897,6 +1901,7 @@ class PhoneNumberController {
         throw Object.assign(new Error("L'appel n'a pas pu être démarré (identifiant manquant)."), { code: 'CALL_ID_MISSING' });
       }
       upsertTestCallSession(callId, {
+        companyId: String(companyId), // propriétaire de l'appel de test : seule cette société le suit ou le raccroche
         provider: 'telnyx',
         status: 'connecting',
         outcome: null,
@@ -1920,9 +1925,25 @@ class PhoneNumberController {
     }
   }
 
+  /**
+   * Un appel de test n'est suivi ou raccroché que par la société qui l'a lancé (session enregistrée au lancement). Sans session (redémarrage du serveur) ou
+   * d'une autre société : 404, SANS appel à l'opérateur (avant : tout utilisateur connecté pouvait lire l'état de n'importe quel appel du compte, ou le raccrocher).
+   */
+  async ownTestCall(req, res, callId) {
+    const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+    if (!access) return null;
+    const session = testCallSessions.get(callId);
+    if (!session || !session.companyId || String(session.companyId) !== String(access.companyId)) {
+      res.status(404).json({ error: 'Not Found', message: 'Test call not found' });
+      return null;
+    }
+    return access;
+  }
+
   async getTestCallStatus(req, res) {
     try {
       const callId = String(req.params.callId || '').trim();
+      if (callId && !(await this.ownTestCall(req, res, callId))) return;
       const provider = String(req.query.provider || req.body?.provider || '').toLowerCase();
       if (!callId) {
         return res.status(400).json({ error: 'Bad Request', message: 'callId is required' });
@@ -1995,6 +2016,7 @@ class PhoneNumberController {
   async hangupTestCall(req, res) {
     try {
       const callId = String(req.params.callId || '').trim();
+      if (callId && !(await this.ownTestCall(req, res, callId))) return;
       const provider = String(
         req.body?.provider || req.query?.provider || testCallSessions.get(callId)?.provider || ''
       ).toLowerCase();
