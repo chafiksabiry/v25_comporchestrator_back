@@ -79,9 +79,11 @@ export const secretaryOutboundAllowed = (settings) => settings?.secretaryOutboun
  * Durée maximale (secondes) d'un appel pour ce solde de minutes : minutes entières × 60, 4 h au plus ; 0 si le solde ne
  * couvre pas une minute entière (toute minute commencée est facturée en entier).
  */
-export function maxSecondsForBalance(minutes, creditFactor = 1) {
+export function maxSecondsForBalance(minutes, options) {
   const whole = Math.floor(Number(minutes));
-  // `creditFactor` : crédits débités par minute (appel international : coefficient N ; sinon 1). Minutes entières affordables = solde / N.
+  // `options.creditFactor` : crédits débités par minute (appel international : coefficient N ; sinon 1). Minutes entières affordables = solde / N.
+  // Un objet d'options (et non un nombre) pour rester sûr avec `.map(maxSecondsForBalance)`, qui passe l'indice en second argument.
+  const creditFactor = typeof options?.creditFactor === 'number' ? options.creditFactor : 1;
   const affordable = creditFactor > 1 ? Math.floor(whole / creditFactor) : whole;
   return affordable >= 1 ? Math.min(affordable * 60, MAX_CALL_SECONDS) : 0;
 }
@@ -163,7 +165,7 @@ export function decideOutboundCall({ to, line, subscribed, minutes, recording = 
   if (!line) return { ok: false, message: 'Aucune ligne disponible pour appeler.', key: 'no_line' };
   // Toute minute commencée est facturée en entier : il faut au moins une minute entière, et l'appel est coupé quand
   // les minutes entières du solde sont écoulées, pour que le solde ne passe jamais sous zéro.
-  const maxSeconds = maxSecondsForBalance(minutes, creditFactor);
+  const maxSeconds = maxSecondsForBalance(minutes, { creditFactor });
   if (!maxSeconds) {
     // Appel international à N crédits la minute : le solde ne couvre pas une minute internationale (message clair avec N).
     return creditFactor > 1

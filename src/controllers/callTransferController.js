@@ -102,7 +102,7 @@ export const callTransferController = {
         number = normalizeOutboundDestination(entry.phone);
         if (!number) return fail(res, 422, `Le numéro de ${entry.name} n’est pas une destination autorisée.`, { code: 'destination_not_allowed' });
         const creditFactor = await deps.creditFactor(access.companyId, number);
-        maxSeconds = maxSecondsForBalance(await deps.minutes(access.companyId), creditFactor);
+        maxSeconds = maxSecondsForBalance(await deps.minutes(access.companyId), { creditFactor });
         if (!maxSeconds) return fail(res, 402, creditFactor > 1 ? `Solde insuffisant pour un appel international (1 minute = ${creditFactor} crédits) : proposez à l’appelant de laisser un message.` : 'Solde de minutes insuffisant pour passer cet appel : proposez à l’appelant de laisser un message.', { code: 'no_minutes', ...(creditFactor > 1 ? { creditsPerMinute: creditFactor } : {}) });
       }
 

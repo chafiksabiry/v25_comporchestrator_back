@@ -98,15 +98,16 @@ test('crédits d\'un appel : minute entamée arrondie PUIS multipliée (61 s int
 // --- Plafond de durée et refus --------------------------------------------------------------------------------------------
 test('durée maximale : solde / coefficient pour une destination internationale, comme avant sinon', () => {
   assert.equal(maxSecondsForBalance(10), 600, 'inchangé');
-  assert.equal(maxSecondsForBalance(10, 1), 600);
-  assert.equal(maxSecondsForBalance(10, 4), 120, '10 crédits = 2 minutes internationales entières');
-  assert.equal(maxSecondsForBalance(8, 4), 120);
-  assert.equal(maxSecondsForBalance(7.9, 4), 60, 'minutes entières du solde puis division entière');
-  assert.equal(maxSecondsForBalance(3, 4), 0, 'moins d\'une minute internationale');
-  assert.equal(maxSecondsForBalance(4, 4), 60);
-  assert.equal(maxSecondsForBalance(0, 4), 0); assert.equal(maxSecondsForBalance(-5, 4), 0);
-  assert.equal(maxSecondsForBalance(100000, 4), 14400, 'plafond de Twilio');
+  assert.equal(maxSecondsForBalance(10, { creditFactor: 1 }), 600);
+  assert.equal(maxSecondsForBalance(10, { creditFactor: 4 }), 120, '10 crédits = 2 minutes internationales entières');
+  assert.equal(maxSecondsForBalance(8, { creditFactor: 4 }), 120);
+  assert.equal(maxSecondsForBalance(7.9, { creditFactor: 4 }), 60, 'minutes entières du solde puis division entière');
+  assert.equal(maxSecondsForBalance(3, { creditFactor: 4 }), 0, 'moins d\'une minute internationale');
+  assert.equal(maxSecondsForBalance(4, { creditFactor: 4 }), 60);
+  assert.equal(maxSecondsForBalance(0, { creditFactor: 4 }), 0); assert.equal(maxSecondsForBalance(-5, { creditFactor: 4 }), 0);
+  assert.equal(maxSecondsForBalance(100000, { creditFactor: 4 }), 14400, 'plafond de Twilio');
   assert.equal(maxSecondsForBalance(0.5), 0);
+  assert.deepEqual([0, 1, 2.5, 5, 30, 240, -1, 0.5, NaN].map(maxSecondsForBalance), [0, 60, 120, 300, 1800, 14400, 0, 0, 0], '.map(maxSecondsForBalance) : l\'indice n\'est pas un coefficient');
 });
 
 test('decideOutboundCall : durée = solde / coefficient ; refus clair « 1 minute = N crédits »', () => {

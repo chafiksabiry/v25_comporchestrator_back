@@ -177,7 +177,7 @@ export const voicemailController = {
       // Crédits par minute vers ce numéro (1, ou N à l'international) : durée maximale = solde / N.
       let creditFactor = 1;
       try { creditFactor = await outboundCreditFactor({ companyId: String(vm.companyId), limits: await loadCompanyPlanLimits(String(vm.companyId)), to }); } catch { creditFactor = 1; }
-      const maxSeconds = maxSecondsForBalance(minutes, creditFactor);
+      const maxSeconds = maxSecondsForBalance(minutes, { creditFactor });
       if (!maxSeconds) return send(buildRefusalTwiml(creditFactor > 1 ? `Solde insuffisant pour un appel international : 1 minute = ${creditFactor} crédits.` : 'Solde de minutes insuffisant.'));
       return send(buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds }));
     } catch (error) {
