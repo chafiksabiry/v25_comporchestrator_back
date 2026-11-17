@@ -66,10 +66,15 @@ export async function authenticateUpgrade(req, { lookup = callerAccess, env = pr
   const companyIds = [a.companyId, ...(a.companyIds || [])].filter(Boolean).map(String);
   // Fiches agent liées au compte : la fiche a son PROPRE `_id` (service d'inscription : `agents.insertOne({ userId, … })`), c'est lui le `repId` des évènements.
   let ownAgentIds = [];
-  if (a.role === 'agent') {
+  // Un agent (employé d'un centre) OU un rep freelance (sans société, que callerAccess ne marque pas « agent ») : ses fiches décident.
+  if (a.role === 'agent' || !a.companyId) {
     try { ownAgentIds = [...(await agentIds(String(a.userId || userId)))]; } catch { ownAgentIds = []; }
   }
-  if (a.role !== 'agent' && !a.companyId) return { ok: false, code: 403, message: 'Forbidden' };
+  let role = a.role;
+  if (a.role !== 'agent' && !a.companyId) {
+    if (!ownAgentIds.length) return { ok: false, code: 403, message: 'Forbidden' };
+    role = 'agent'; // rep freelance : ne reçoit que les évènements de SES fiches
+  }
   return {
     ok: true,
     access: {
@@ -77,7 +82,7 @@ export async function authenticateUpgrade(req, { lookup = callerAccess, env = pr
       agentIds: ownAgentIds,
       companyId: a.companyId ? String(a.companyId) : null,
       companyIds: [...new Set(companyIds)],
-      role: a.role,
+      role,
       isOwner: a.isOwner === true,
       exp: typeof decoded.exp === 'number' ? decoded.exp : null,
     },
@@ -126,6 +131,14 @@ export function setupEscrowWebSocket(server, options = {}) {
   wss.on('connection', (ws, req) => {
     // Objet = appelant vérifié ; null = connexion héritée sans jeton (ESCROW_WS_AUTH_REQUIRED=false) ; undefined = ne reçoit rien.
     ws.escrowAccess = req.escrowAccess;
+    // Fiches agent : relues toutes les minutes (une fiche créée ou rattachée après la connexion est prise en compte sans reconnexion).
+    if (ws.escrowAccess && ws.escrowAccess.role === 'agent') {
+      const refresh = setInterval(async () => {
+        try { ws.escrowAccess = { ...ws.escrowAccess, agentIds: [...(await (options.agentIds || agentIdsOfUser)(ws.escrowAccess.userId))] }; } catch { /* on garde la liste précédente jusqu'à la prochaine lecture */ }
+      }, options.refreshMs || 60000);
+      if (refresh.unref) refresh.unref();
+      ws.on('close', () => clearInterval(refresh));
+    }
     const exp = ws.escrowAccess?.exp;
     if (exp) {
       const ms = exp * 1000 - Date.now();
