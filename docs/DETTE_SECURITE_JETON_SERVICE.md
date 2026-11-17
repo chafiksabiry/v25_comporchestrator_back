@@ -2,6 +2,8 @@
 
 État vérifié dans `origin/recette` (après #148, #150, #152, #153, #166 et les PR fermant `reconcile`, `call-analysis-*` et le WebSocket).
 
+**Périmètre.** Ce document ne couvre que les appels serveur-à-serveur émis par `dash_calls` (lectures de solde internes, `charge-call`). Le contrôle de gig et `configure-voice` restent ouverts pour le copilote REP, dans l'attente d'une décision du propriétaire ; ils ne sont pas traités ici.
+
 ## Déjà traité (ne plus considérer comme dette)
 | Sujet | État dans `recette` |
 |---|---|
@@ -16,7 +18,7 @@
 | `GET /api/internal/companies/:companyId/minutes-balance` | `src/routes/internal.js:15` (`getMinutesInternal`) | `dash_calls` portillon avant appel, **sans jeton**, ouvert si échec | lecture du solde de minutes et de l'historique de crédits de toute société |
 | `GET /api/internal/companies/:companyId/wallet-balance` | `internal.js:19` | `dash_calls`, sans jeton | lecture du solde du portefeuille |
 | `GET /api/internal/companies/:companyId/tokens-balance` | `internal.js:22` | `dash_calls` (`voiceMenuAi`), sans jeton | lecture du solde de jetons IA |
-| `POST /api/minutes-company/charge-call` | `src/routes/minutesCompany.js:13` | `dash_calls` | pas d'authentification ; risque borné par #142 (idempotent, durée et société relues en base), mais déclenchable en boucle |
+| `POST /api/minutes-company/charge-call` | `src/routes/minutesCompany.js:16` | `dash_calls` | pas d'authentification ; risque borné par #142 (idempotent, durée et société relues en base), mais déclenchable en boucle |
 | `POST /api/tokens-company/charge-usage` | `src/routes/tokensCompany.js:17` | `dash_calls` | **un appelant sans identité reste accepté tant que `TOKENS_CHARGE_USAGE_ENFORCE_AUTH` n'est pas activée** ; les quantités restent déclarées par l'appelant |
 
 ## À activer (configuration, aucun code)
