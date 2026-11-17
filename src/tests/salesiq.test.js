@@ -384,4 +384,79 @@ assert.equal(stepFromStage('Onboarding'), null);
   assert.deepEqual(claude.calls[0].tools.map((x) => x.name), ['lookup_candidate', 'send_reply', 'flag_for_team']);
 }
 
+// --- Réponse directe quand Claude est rapide, « pending » + rappel quand il est lent ---
+{
+  const slow = (ms, script) => { const c = fakeClaude(script); const orig = c.createMessage; c.createMessage = async (p) => { await new Promise((r) => setTimeout(r, ms)); return orig(p); }; return c; };
+  const make = (claude, zoho) => createAgent({ cfg: cfgOf(), claude, zoho, tools: createToolRunner({ zoho, logger: quiet }), knowledge, logger: quiet });
+  const answer = { text: 'Bonjour, voici la réponse de Claude.' };
+
+  // rapide : la réponse part dans la réponse HTTP, sans rappel
+  let zoho = fakeZoho();
+  let r = await make(fakeClaude([use('send_reply', answer)]), zoho).handleWebhook(body('Comment fonctionne HARX ?', { visitor: { id: 'sync-1' } }), 500);
+  assert.equal(r.response.action, 'reply');
+  assert.match(r.response.replies[0], /^Bonjour, voici la réponse de Claude\.\n\nL'équipe HARX$/);
+  await r.done;
+  assert.equal(zoho.calls.callbacks.length, 0, 'aucun rappel quand la réponse part en direct');
+  assert.match(zoho.calls.notes[0].text, /^RÉPONSE CLAUDE \(envoyée\)/);
+
+  // lent : « pending » tout de suite, puis livraison par rappel (une seule fois)
+  zoho = fakeZoho();
+  r = await make(slow(120, [use('send_reply', answer)]), zoho).handleWebhook(body('Comment fonctionne HARX ?', { visitor: { id: 'sync-2' } }), 20);
+  assert.equal(r.response.action, 'pending');
+  await r.done;
+  assert.equal(zoho.calls.callbacks.length, 1);
+  assert.match(zoho.calls.callbacks[0].payload.replies[0], /voici la réponse de Claude/);
+  assert.equal(zoho.calls.notes.length, 1);
+
+  // les chemins sans question (salutation, trigger, off) passent inchangés
+  assert.equal((await make(fakeClaude([]), fakeZoho()).handleWebhook(body('Bonjour', { visitor: { id: 'sync-3' } }), 500)).response.action, 'reply');
+  assert.match((await make(fakeClaude([]), fakeZoho()).handleWebhook({ handler: 'trigger', visitor: { language: 'fr' } }, 500)).response.replies[0], /^Bonjour et bienvenue/);
+}
+
+// --- Rappel SalesIQ : trois formes essayées, corps d'erreur journalisé sans identifiant ---
+{
+  const bodies = [];
+  const infos = [];
+  const mk = (okFrom) => async (url, init = {}) => {
+    if (String(url).includes('/oauth/v2/token')) return { ok: true, status: 200, json: async () => ({ access_token: 'T', expires_in: 3600 }), text: async () => JSON.stringify({ access_token: 'T', expires_in: 3600 }) };
+    bodies.push(JSON.parse(init.body));
+    const ok = bodies.length >= okFrom;
+    return { ok, status: ok ? 200 : 400, text: async () => (ok ? '{}' : '{"code":"INVALID_DATA","message":"replies must be objects"}') };
+  };
+  const longId = 'a'.repeat(64);
+  // la forme « texte simple » est refusée, la forme objet est acceptée
+  let z = createZohoClient({ cfg: cfgOf(), fetchImpl: mk(2), logger: { ...quiet, info: (m) => infos.push(m) } });
+  await z.callbackResponse(longId, { action: 'reply', replies: ['Salut'] });
+  assert.deepEqual(bodies.map((b) => b.replies[0]), ['Salut', { text: 'Salut' }]);
+  assert.match(infos.at(-1), /callback delivered \(format text-objects\)/);
+  // aucune forme acceptée : l'erreur donne les trois corps de réponse et masque l'identifiant
+  bodies.length = 0;
+  z = createZohoClient({ cfg: cfgOf(), fetchImpl: mk(99), logger: quiet });
+  await assert.rejects(() => z.callbackResponse(longId, { action: 'reply', replies: ['Salut'] }), (e) => {
+    assert.equal(bodies.length, 3);
+    assert.match(e.message, /strings: Zoho POST \/api\/v2\/harxtechnologiesinc\/callbacks\/<id>\/response -> 400: \{"code":"INVALID_DATA"/);
+    assert.match(e.message, /typed-objects:/);
+    assert.ok(!e.message.includes(longId), 'identifiant de requête masqué');
+    return true;
+  });
+}
+
+// --- HTTP : une question rapide reçoit directement sa réponse ---
+{
+  const zoho = fakeZoho();
+  const cfg = cfgOf();
+  const agent = createAgent({ cfg, claude: fakeClaude([use('send_reply', { text: 'Réponse directe de Claude.' })]), zoho, tools: createToolRunner({ zoho, logger: quiet }), knowledge, logger: quiet });
+  const app = express();
+  app.use('/api/salesiq', createSalesIqRouter({ agent, cfg, logger: quiet }));
+  const server = http.createServer(app);
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const res = await fetch(`http://127.0.0.1:${server.address().port}/api/salesiq/webhook?key=k`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body('Comment fonctionne HARX ?', { visitor: { id: 'http-sync' } })) });
+  const j = await res.json();
+  assert.equal(j.action, 'reply');
+  assert.match(j.replies[0], /Réponse directe de Claude\./);
+  await tick(); await tick();
+  assert.equal(zoho.calls.callbacks.length, 0);
+  await new Promise((r) => server.close(r));
+}
+
 console.log('salesiq tests: OK');
