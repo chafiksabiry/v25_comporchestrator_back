@@ -355,6 +355,14 @@ export function extractStripeProductLimits(product) {
   if (minutes != null) out.communicationMinutes = Math.round(minutes);
   if (localNumbers != null) out.activeLocalNumbers = Math.round(localNumbers);
 
+  // Minutes hors forfait (offre Multi-clients) : tarifs par minute et plafond par période, en centimes. Absents = aucun dépassement.
+  const overageNational = parseMetaNumber(metaGet(meta, 'overage_national_cents'));
+  const overageInternational = parseMetaNumber(metaGet(meta, 'overage_international_cents'));
+  const overageCap = parseMetaNumber(metaGet(meta, 'overage_cap_cents'));
+  if (overageNational != null) out.overageNationalCents = Math.round(overageNational);
+  if (overageInternational != null) out.overageInternationalCents = Math.round(overageInternational);
+  if (overageCap != null) out.overageCapCents = Math.round(overageCap);
+
   const aiEntry = metaFind(meta, 'AI TOKEN (Million)', 'AI TOKEN');
   if (aiEntry && String(aiEntry.value ?? '').trim()) {
     out.aiToken = String(aiEntry.value).trim();

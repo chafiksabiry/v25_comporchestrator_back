@@ -23,6 +23,7 @@ import {
   isRepShareInRetraction,
 } from '../utils/retraction.js';
 import { clearExpiredRetractions, reverseSaleCommission } from '../services/retractionService.js';
+import { settleCompanyCalls } from '../services/minutesOverage.js';
 
 // 70/30 split enforced server-side. Single source of truth.
 const REP_SHARE = 0.7;
@@ -890,6 +891,10 @@ export async function chargeCallMinutes(companyId, call) {
   const callKey = String(call.sid || call._id || '');
   if (!callKey) return false;
 
+  // Offre Multi-clients avec tarifs de dépassement : seules les minutes encore incluses sont débitées, le reste est enregistré en dépassement.
+  const overage = await settleCompanyCalls(companyId, [call]);
+  if (overage) return overage.charged.length > 0;
+
   // Ensure wallet exists first (avoids upsert collisions on unique companyId)
   let wallet = await MinutesCompany.findOne({ companyId });
   if (!wallet) {
@@ -946,8 +951,11 @@ export async function syncMinutesFromCalls(companyId) {
         // Les appels de test du centre ne consomment pas de minutes.
         isTest: { $ne: true }
       },
-      { projection: { sid: 1, duration: 1 } }
+      { projection: { sid: 1, duration: 1, direction: 1, to: 1, from: 1, startTime: 1, createdAt: 1 } }
     ).toArray();
+
+    // Offre Multi-clients avec tarifs de dépassement : débit des minutes incluses seulement + enregistrement du dépassement (appel par appel, atomique).
+    if (await settleCompanyCalls(companyId, calls.filter((c) => !alreadyCharged.has(String(c.sid || c._id || ''))))) return;
 
     // Billing rule: each call is billed at the ceiling of its duration in
     // minutes (10s → 1 min, 1m02s → 2 min). We aggregate the per-call ceiling

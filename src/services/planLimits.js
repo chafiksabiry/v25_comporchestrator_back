@@ -2,6 +2,7 @@ import { Subscription } from '../models/Subscription.js';
 import { stripeService } from './stripeService.js';
 import { CALLCENTER_TIER_LINES, callcenterTierFromMetadata } from './callcenterTier.js';
 import { phoneLinePriceCentsFromMetadata } from './phoneLineSubscription.js';
+import { overageConfigFromMetadata, periodKeyOf } from './minutesOverage.js';
 
 function numberOrNull(value) {
   const n = Number(value);
@@ -40,6 +41,10 @@ export async function loadCompanyPlanLimits(companyId) {
     callcenterTier: callcenterTierFromMetadata(metadata),
     /** Prix mensuel d'une ligne supplémentaire (metadata `phone_line_price_cents`, centimes) ; null = prix par défaut. */
     phoneLinePriceCents: phoneLinePriceCentsFromMetadata(metadata),
+    /** Minutes hors forfait de l'offre Multi-clients : { nationalCents, internationalCents, capCents } ; null = aucun dépassement (autres forfaits, métadonnées absentes). */
+    overage: overageConfigFromMetadata(metadata),
+    /** Période de facturation courante (clé de rattachement des minutes hors forfait). */
+    periodKey: periodKeyOf(subscription),
     maxGigs: numberOrNull(fromMeta.maxGigs) ?? numberOrNull(plan.maxGigs),
     maxReps: numberOrNull(fromMeta.maxReps) ?? numberOrNull(plan.maxReps),
     communicationMinutes: numberOrNull(fromMeta.communicationMinutes) ?? numberOrNull(plan.communicationMinutes),

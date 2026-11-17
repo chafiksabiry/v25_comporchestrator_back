@@ -1,6 +1,8 @@
 import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
+import { settleCompanyCalls } from '../services/minutesOverage.js';
+import mongoose from 'mongoose';
 
 export const minutesCompanyController = {
   getMinutes: async (req, res) => {
@@ -103,6 +105,30 @@ export const minutesCompanyController = {
       let wallet = await MinutesCompany.findOne({ companyId });
       if (!wallet) {
         wallet = await MinutesCompany.create({ companyId, minutes: 0 });
+      }
+
+      // Offre Multi-clients avec tarifs de dépassement : minutes incluses débitées, reste enregistré en dépassement. Cette route n'est pas
+      // authentifiée (service à service) et un dépassement est FACTURABLE : on ne croit donc rien du corps. L'appel doit exister dans la
+      // collection calls pour CETTE entreprise ; durée, sens et numéros sont ceux de ce document (la lecture du solde reprend de toute façon
+      // les appels réels).
+      let stored = null;
+      try { stored = await mongoose.connection.db.collection('calls').findOne({ sid: String(callSid) }, { projection: { companyId: 1, duration: 1, direction: 1, to: 1, from: 1, startTime: 1, isTest: 1 } }); } catch { stored = null; }
+      const storedForCompany = stored && String(stored.companyId) === String(companyId) && Number(stored.duration) > 0 && stored.isTest !== true ? stored : null;
+      const overage = await settleCompanyCalls(companyId, storedForCompany ? [{
+        sid: String(callSid), duration: Number(storedForCompany.duration),
+        direction: storedForCompany.direction, to: storedForCompany.to, from: storedForCompany.from, startTime: storedForCompany.startTime,
+      }] : []);
+      if (overage && !storedForCompany) {
+        return res.status(200).json({ success: true, charged: false, reason: 'Unknown call', data: { minutes: wallet.minutes } });
+      }
+      if (overage) {
+        const fresh = await MinutesCompany.findOne({ companyId });
+        return res.status(200).json({
+          success: true,
+          charged: overage.charged.length > 0,
+          ...(overage.charged.length ? {} : { reason: 'Already charged' }),
+          data: { minutes: fresh?.minutes ?? wallet.minutes, overageMinutes: overage.overageMinutes },
+        });
       }
 
       // Billing rule: any started minute is billed in full (10s → 1 min, 1m02s → 2 min).
