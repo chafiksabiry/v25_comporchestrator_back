@@ -40,13 +40,14 @@ const N = await import('../services/messageNotify.js');
 const R = await import('../services/messageReminders.js');
 const Mig = await import('../services/mailOwnershipMigration.js');
 const Member = await import('../services/mailOwnerMembership.js');
-const { encryptJson, loadKey } = await import('../integrations/crypto.js');
+const { decryptJson, encryptJson, loadKey } = await import('../integrations/crypto.js');
 const { default: SecretariatConnection } = await import('../models/SecretariatConnection.js');
 const { default: SecretariatSharedAccount } = await import('../models/SecretariatSharedAccount.js');
 const { default: SecretariatTools } = await import('../models/SecretariatTools.js');
 const { default: InboundEmail } = await import('../models/InboundEmail.js');
 const { default: FollowUpItem } = await import('../models/FollowUpItem.js');
 const { default: EmailLog } = await import('../models/EmailLog.js');
+const { default: OAuthPending } = await import('../models/OAuthPending.js');
 const { default: ReceptionDirectory } = await import('../models/ReceptionDirectory.js');
 const { secretariatToolsRoutes } = await import('../routes/secretariatTools.js');
 const { emailRoutes } = await import('../routes/emails.js');
@@ -54,7 +55,7 @@ const { followUpRoutes } = await import('../routes/followUps.js');
 const { clearCompanyCache } = await import('../middleware/companyScope.js');
 
 // ---------- faux modèles (une mini-base en mémoire)
-const conns = []; const accounts = []; const toolsDocs = []; const inbox = []; const items = []; const emailLogs = [];
+const pendings = []; const conns = []; const accounts = []; const toolsDocs = []; const inbox = []; const items = []; const emailLogs = [];
 let seq = 0;
 const getPath = (o, p) => p.split('.').reduce((a, k) => (a == null ? undefined : a[k]), o);
 const setPath = (d, path, val) => { const keys = path.split('.'); const last = keys.pop(); keys.reduce((a, k) => (a[k] = a[k] || {}), d)[last] = val; };
@@ -129,6 +130,8 @@ FollowUpItem.create = async (doc) => {
 };
 FollowUpItem.exists = async () => false;
 FollowUpItem.findOne = async (f) => items.find((d) => String(d._id) === String(f._id)) || null;
+OAuthPending.create = async (d) => { pendings.push(JSON.parse(JSON.stringify(d))); return d; };
+OAuthPending.findOneAndDelete = (f) => { const i = pendings.findIndex((x) => x.idHash === f.idHash && String(x.companyId) === String(f.companyId) && x.provider === f.provider); const d = i >= 0 ? pendings.splice(i, 1)[0] : null; return { lean: async () => d }; };
 EmailLog.create = async (row) => { const d = { _id: `log${(seq += 1)}`, createdAt: new Date(), ...row }; emailLogs.push(d); return d; };
 EmailLog.countDocuments = async () => 0;
 EmailLog.find = () => chain(emailLogs, false);
@@ -155,7 +158,7 @@ const putShared = (id, over = {}, name = 'SHARED') => {
   };
   accounts.push(row); return row;
 };
-const resetDb = () => { for (const a of [conns, accounts, toolsDocs, inbox, items, emailLogs]) a.length = 0; httpCalls.length = 0; handlers = []; clearCompanyCache(); };
+const resetDb = () => { for (const a of [conns, accounts, toolsDocs, inbox, items, emailLogs, pendings]) a.length = 0; httpCalls.length = 0; handlers = []; clearCompanyCache(); };
 
 // ---------- faux réseau fournisseurs
 const httpCalls = []; let handlers = [];
@@ -621,13 +624,13 @@ try {
   // =========================================================================================================
   resetDb(); std();
   const everyone = ['owner1', 'mgrA', 'mgrB', 'sec'].map((id) => ({ id, name: id, kind: 'member' }));
-  const directoryWithout = (gone) => async () => everyone.filter((p) => p.id !== gone);
+  const directoryWithout = (gone) => async () => ({ complete: true, people: everyone.filter((p) => p.id !== gone) });
   putConn('microsoft', { connectedBy: 'mgrA' }); putShared(SA1, { connectedBy: 'mgrA', permissions: { send: true, calendar: true } }, 'S');
   inbox.push({ _id: 'g1', companyId: C1, ownerUserId: null, accountId: null, connectionOwnerId: 'mgrA', providerMessageId: 'z', provider: 'microsoft' });
   // annuaire illisible / vide : « inconnu » = encore rattaché : aucun retrait
   Member.setDirectoryLoader(async () => { throw new Error('indisponible'); });
   assert.equal((await sec('DELETE', `/connections/${C1}/microsoft`, { user: 'owner1' })).status, 403); assert.equal(conns.length, 1);
-  Member.setDirectoryLoader(async () => []);
+  Member.setDirectoryLoader(async () => ({ complete: true, people: [] }));
   assert.equal((await sec('DELETE', `/connections/${C1}/microsoft`, { user: 'owner1' })).status, 403, 'annuaire vide : inconnu, jamais un retrait'); assert.equal(conns.length, 1);
   // propriétaire encore rattaché : refus
   Member.setDirectoryLoader(directoryWithout('personne'));
@@ -640,7 +643,7 @@ try {
   assert.equal((await sec('DELETE', `/connections/${C1}/microsoft`, { user: 'mgrB' })).status, 403, 'un responsable ne retire pas'); assert.equal(conns.length, 1);
   assert.equal((await sec('DELETE', `/accounts/${C1}/${SA1}`, { user: 'mgrB' })).status, 404, 'compte partagé : un responsable ne retire pas'); assert.equal(accounts.length, 1);
   r = await sec('DELETE', `/connections/${C1}/microsoft`, { user: 'owner1' }); assert.equal(r.status, 200); assert.ok(!r.text.includes(BOSS_EMAIL)); assert.equal(conns.length, 0); assert.equal(inbox.length, 0, 'e-mails stockés du propriétaire parti purgés');
-  Member.setDirectoryLoader(async () => []);
+  Member.setDirectoryLoader(async () => ({ complete: true, people: [] }));
   assert.equal((await sec('DELETE', `/accounts/${C1}/${SA1}`, { user: 'owner1' })).status, 404, 'compte partagé : annuaire inconnu, pas de retrait');
   Member.setDirectoryLoader(directoryWithout('mgrA'));
   assert.equal((await sec('DELETE', `/accounts/${C1}/${SA1}`, { user: 'owner1' })).status, 200, 'compte partagé d’un propriétaire parti : retiré par le titulaire'); assert.equal(accounts.length, 0);
@@ -659,52 +662,119 @@ try {
   s = await CS.syncAppointment(evt(), { op: 'update', token: 'T' }); assert.equal(s.status, 'not_connected', 'connexion à refaire : not_connected sans erreur'); assert.equal(httpCalls.length, 0);
   conns[0].status = 'connected'; conns[0].connectedBy = 'owner1';
   s = await CS.syncAppointment(evt(), { op: 'update', token: 'T' }); assert.equal(s.status, 'not_connected', 'le calendrier mémorisé n’est plus celui de la connexion actuelle : jamais écrit'); assert.equal(httpCalls.length, 0);
+  // lecture PARTIELLE de l'annuaire (une seule liste lue) : jamais « parti »
+  Member.setDirectoryLoader(async () => ({ complete: false, people: everyone.filter((p) => p.id !== 'mgrA') }));
+  httpCalls.length = 0; conns[0].connectedBy = 'mgrA'; s = await CS.syncAppointment(evt(), { op: 'update', token: 'T' });
+  assert.equal(s.status, 'synced', 'annuaire partiel : le propriétaire n’est pas considéré comme parti'); assert.deepEqual(httpCalls.filter((c) => c.method === 'PATCH').map(bearer), ['ACCESS_MGRA']);
+  assert.equal(await Member.ownerHasLeft(C1, 'mgrA', 'T'), false);
+  Member.setDirectoryLoader(async () => ({ complete: true, people: everyone.filter((p) => p.id !== 'mgrA') })); assert.equal(await Member.ownerHasLeft(C1, 'mgrA', 'T'), true);
+  // une seule liste refusée / en échec chez le service d'inscription : lecture réelle de l'annuaire = partielle
+  Member.setDirectoryLoader(null);
+  const { loadDirectoryComplete } = await import('../services/followUpDirectory.js');
+  const fetchKeep = globalThis.fetch;
+  for (const broken of ['/api/company-members?', '/call-center/agents']) {
+    globalThis.fetch = async (url, init) => {
+      const u = String(url);
+      if (u.includes(broken)) { if (broken === '/call-center/agents') throw new Error('timeout'); return { ok: false, status: 403, json: async () => ({}) }; }
+      if (u.includes('/api/company-members?')) return { ok: true, json: async () => ({ data: [{ userId: 'mgrB', fullName: 'B', isOwner: false }] }) };
+      if (u.includes('/call-center/agents')) return { ok: true, json: async () => ({ data: [{ userId: 'sec', fullName: 'S' }] }) };
+      return fetchKeep(url, init);
+    };
+    const dir = await loadDirectoryComplete({ companyId: C1, token: 'T' });
+    assert.equal(dir.complete, false, `liste ${broken} en échec : lecture partielle`);
+    assert.equal(await Member.ownerHasLeft(C1, 'mgrA', 'T'), false, 'jamais « parti » sur lecture partielle');
+  }
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.includes('/api/company-members?')) return { ok: true, json: async () => ({ data: [{ userId: 'mgrB', fullName: 'B', isOwner: false }] }) };
+    if (u.includes('/call-center/agents')) return { ok: true, json: async () => ({ data: [{ userId: 'sec', fullName: 'S' }] }) };
+    return fetchKeep(url, init);
+  };
+  assert.equal((await loadDirectoryComplete({ companyId: C1, token: 'T' })).complete, true);
+  assert.equal(await Member.ownerHasLeft(C1, 'mgrA', 'T'), true, 'les deux listes lues et la personne absente des deux : parti');
+  assert.equal(await Member.ownerHasLeft(C1, 'sec', 'T'), false, 'un agent présent n’est pas parti'); assert.equal(await Member.ownerHasLeft(C1, 'mgrB', 'T'), false);
+  globalThis.fetch = fetchKeep;
+  // réglage d'agenda passé à « none » après la création : l'événement existant se modifie / s'annule encore chez le fournisseur mémorisé
+  Member.setDirectoryLoader(directoryWithout('personne')); toolsDocs[0].agenda.provider = 'none'; httpCalls.length = 0;
+  s = await CS.syncAppointment(evt(), { op: 'update', token: 'T' }); assert.equal(s.status, 'synced', 'agenda « none » : l’événement existant est quand même mis à jour'); assert.deepEqual(httpCalls.filter((c) => c.method === 'PATCH').map(bearer), ['ACCESS_MGRA']);
+  httpCalls.length = 0; s = await CS.syncAppointment(evt({ assignee: { id: 'mgrA' }, calendarExternalId: null, calendarOwnerId: '' })); assert.equal(s.status, 'not_connected', 'création avec agenda « none » : rien'); assert.equal(eventsBy().length, 0);
+  toolsDocs[0].agenda.provider = 'microsoft';
   Member.setDirectoryLoader(null);
 
   // =========================================================================================================
-  // 8 ter. LIAISON DE L'AUTORISATION AU NAVIGATEUR (anti liaison de compte par un tiers) : nonce signé, usage unique, expiration courte
+  // 8 ter. FINALISATION AUTHENTIFIÉE EN DEUX TEMPS (anti liaison de compte par un tiers) : le callback n'enregistre rien, seul le démarreur authentifié finalise
   // =========================================================================================================
   resetDb(); std();
-  const startAs = async (user) => {
-    const rs = await sec('POST', `/connections/${C1}/microsoft/start`, { user, body: {} });
-    assert.equal(rs.status, 200, rs.text);
-    const ck = rs.cookies.find((c) => /^harx_oauth_/.test(c)); assert.ok(ck, 'cookie de liaison posé'); assert.match(ck, /HttpOnly/); assert.match(ck, /SameSite=Lax/); assert.match(ck, /Max-Age=600/);
-    const state = new URL(rs.body.data.url).searchParams.get('state');
-    const nb = S.readState(state, 'microsoft').nb; assert.match(nb, /^[0-9a-f]{64}$/);
-    assert.ok(!rs.body.data.url.includes(ck.split('=')[1].split(';')[0]), 'le secret n’est jamais dans l’URL (seulement son empreinte dans l’état)');
-    return { state, cookie: ck.split(';')[0] };
+  const startVia = async (user, path = `/connections/${C1}/microsoft/start`, body = {}) => {
+    const rs = await sec('POST', path, { user, body }); assert.equal(rs.status, 200, rs.text);
+    assert.equal(rs.cookies.length, 0, 'aucun cookie');
+    const state = new URL(rs.body.data.url).searchParams.get('state'); assert.equal(S.readState(state, 'microsoft').pend, true, 'état marqué « finalisation authentifiée »');
+    return state;
   };
-  const callbackWith = (state, cookie) => req('GET', `/oauth/microsoft/callback?${new URLSearchParams({ code: 'CODE_123', state })}`, { headers: cookie ? { Cookie: cookie } : {} });
+  const callbackPending = async (state) => {
+    httpCalls.length = 0; const rc = await cb('microsoft', state);
+    const loc = new URL(rc.location); return { loc, pendingId: loc.searchParams.get('pending'), error: loc.searchParams.get('error') };
+  };
+  const completeAs = (user, pendingId, provider = 'microsoft', company = C1) => sec('POST', `/connections/${company}/${provider}/complete`, { user, body: { pendingId } });
   oauthMicrosoft('mgra@acme.test', 'MGRA');
-  const X = await startAs('mgrB');        // l'attaquant démarre
-  const V = await startAs('mgrA');        // une autre personne démarre de son côté
-  // la victime ouvre l'URL de l'attaquant : pas de cookie correspondant -> refus AVANT tout échange de code
-  httpCalls.length = 0;
-  r = await callbackWith(X.state);
-  assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=browser_mismatch'); assert.equal(httpCalls.length, 0, 'aucun échange de code'); assert.equal(conns.length, 0);
-  r = await callbackWith(X.state, V.cookie); assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=browser_mismatch', 'cookie d’une autre autorisation'); assert.equal(conns.length, 0);
-  r = await callbackWith(X.state, `${X.cookie.split('=')[0]}=${'0'.repeat(64)}`); assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=browser_mismatch', 'secret forgé'); assert.equal(httpCalls.length, 0);
-  r = await callbackWith(X.state, `${X.cookie.split('=')[0]}=zz`); assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=browser_mismatch', 'secret mal formé');
-  // le secret de l'attaquant est lié à SON identité : recopié dans un état forgé pour un autre utilisateur, il ne passe pas
-  const forgedState = jwt.sign({ purpose: 'secretariat-oauth', companyId: C1, userId: 'mgrA', provider: 'microsoft', returnTo: 'tools', nb: S.readState(X.state, 'microsoft').nb }, process.env.JWT_SECRET, { expiresIn: 600 });
-  r = await callbackWith(forgedState, X.cookie); assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=browser_mismatch', 'état forgé pour un autre utilisateur'); assert.equal(conns.length, 0);
-  // état altéré / expiré : refusé comme avant
-  r = await callbackWith(`${X.state.slice(0, -3)}abc`, X.cookie); assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=invalid_state');
-  r = await callbackWith(jwt.sign({ purpose: 'secretariat-oauth', companyId: C1, userId: 'mgrB', provider: 'microsoft', returnTo: 'tools', nb: S.readState(X.state, 'microsoft').nb }, process.env.JWT_SECRET, { expiresIn: -5 }), X.cookie); assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=invalid_state', 'état expiré');
-  // le bon navigateur : accepté, cookie effacé ; rejouer le même retour est refusé (usage unique)
-  r = await callbackWith(V.state, V.cookie);
-  assert.equal(r.location, 'https://portal.test/telephony/app/tools?connected=microsoft'); assert.equal(conns[0].connectedBy, 'mgrA'); assert.ok(r.cookies.some((c) => /^harx_oauth_.*Max-Age=0/.test(c)), 'cookie consommé');
-  httpCalls.length = 0; const encNow = conns[0].credentialsEnc;
-  r = await callbackWith(V.state, V.cookie); assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=browser_mismatch', 'rejeu refusé'); assert.equal(httpCalls.length, 0); assert.equal(conns[0].credentialsEnc, encNow);
-  // les autres routes qui démarrent une autorisation posent aussi la liaison (comptes partagés, messagerie personnelle)
-  r = await sec('POST', `/accounts/${C1}/mine/microsoft/start`, { user: 'mgrB', body: {} }); assert.ok(r.cookies.some((c) => /^harx_oauth_/.test(c)));
-  r = await sec('POST', `/accounts/${C1}/microsoft/start`, { user: 'mgrB', body: { label: 'Equipe', ownerName: '' } }); assert.ok(r.cookies.some((c) => /^harx_oauth_/.test(c)));
-  // interrupteur de secours
-  process.env.OAUTH_BROWSER_BINDING = 'off';
+  // le démarreur (attaquant mgrB) envoie l'URL à une victime (mgrA) qui consent : le callback s'exécute dans le navigateur de la victime
+  const stX = await startVia('mgrB');
+  let cp = await callbackPending(stX);
+  assert.equal(cp.loc.origin + cp.loc.pathname, 'https://portal.test/telephony/app/tools'); assert.match(cp.pendingId, /^[0-9a-f]{64}$/); assert.equal(cp.loc.searchParams.get('provider'), 'microsoft'); assert.equal(cp.loc.searchParams.get('connected'), null, 'pas de « connected » : rien n’est enregistré');
+  assert.equal(conns.length, 0, 'le callback n’enregistre RIEN'); assert.equal(pendings.length, 1);
+  assert.ok(!JSON.stringify(pendings).includes('ACCESS_MGRA') && !JSON.stringify(pendings).includes('REFRESH_MGRA') && !JSON.stringify(pendings).includes(cp.pendingId), 'jetons chiffrés, identifiant jamais stocké en clair');
+  assert.equal(pendings[0].userId, 'mgrB'); assert.equal(String(pendings[0].companyId), C1);
+  // la victime (authentifiée) ne peut pas finaliser : refus, attente détruite, rien n'est lié
+  r = await completeAs('mgrA', cp.pendingId); assert.equal(r.status, 403); assert.equal(r.body.code, 'wrong_user'); assert.equal(conns.length, 0); assert.equal(pendings.length, 0, 'attente détruite');
+  r = await completeAs('mgrB', cp.pendingId); assert.equal(r.status, 404); assert.equal(r.body.code, 'pending_not_found', 'même le démarreur ne peut plus la finaliser après une tentative d\u2019un autre'); assert.equal(conns.length, 0);
+  // personne non authentifiée
+  cp = await callbackPending(await startVia('mgrB'));
+  r = await sec('POST', `/connections/${C1}/microsoft/complete`, { body: { pendingId: cp.pendingId } }); assert.equal(r.status, 401); assert.equal(conns.length, 0); assert.equal(pendings.length, 1, 'intacte');
+  // identifiant forgé / mal formé / d'un autre fournisseur / d'une autre société
+  r = await completeAs('mgrB', 'f'.repeat(64)); assert.equal(r.status, 404); assert.equal(r.body.code, 'pending_not_found');
+  r = await completeAs('mgrB', 'zz'); assert.equal(r.status, 400); assert.equal(r.body.code, 'invalid_request');
+  r = await sec('POST', `/connections/${C1}/microsoft/complete`, { user: 'mgrB', body: {} }); assert.equal(r.status, 400);
+  r = await completeAs('mgrB', cp.pendingId, 'google'); assert.equal(r.status, 404, 'autre fournisseur'); assert.equal(pendings.length, 1, 'une attente d’un autre fournisseur n’est pas consommée');
+  r = await completeAs('other1', cp.pendingId, 'microsoft', C2); assert.equal(r.status, 404, 'autre société'); assert.equal(pendings.length, 1);
+  r = await completeAs('other1', cp.pendingId, 'microsoft', C1); assert.equal(r.status, 403, 'autre société : refus par le contrôle d’appartenance'); assert.equal(pendings.length, 1);
+  // expirée : refusée (et détruite), même si l'index TTL n'est pas encore passé
+  pendings[0].createdAt = new Date(Date.now() - 11 * 60_000);
+  r = await completeAs('mgrB', cp.pendingId); assert.equal(r.status, 404); assert.equal(r.body.code, 'pending_not_found'); assert.equal(conns.length, 0); assert.equal(pendings.length, 0);
+  // le démarreur légitime finalise : enregistrement à son nom ; rejeu refusé
+  cp = await callbackPending(await startVia('mgrB'));
+  r = await completeAs('mgrB', cp.pendingId); assert.equal(r.status, 200, r.text); assert.deepEqual(r.body, { success: true, data: { connected: 'microsoft' } });
+  assert.equal(conns.length, 1); assert.equal(conns[0].connectedBy, 'mgrB'); assert.equal(conns[0].accountEmail, 'mgra@acme.test'); assert.equal(decryptJson(conns[0].credentialsEnc, { context: `secretariat:${C1}:microsoft`, key: loadKey() }).accessToken, 'ACCESS_MGRA');
+  const encNow = conns[0].credentialsEnc;
+  r = await completeAs('mgrB', cp.pendingId); assert.equal(r.status, 404, 'rejeu refusé'); assert.equal(conns[0].credentialsEnc, encNow);
+  // contrôle de propriété à la finalisation : la connexion appartient à mgrB, owner1 démarre et finalise : refusé (not_owner), attente consommée
+  conns[0].connectedBy = 'mgrB';
+  const stOwn = new URL((await sec('POST', `/connections/${C1}/microsoft/start`, { user: 'mgrB', body: {} })).body.data.url).searchParams.get('state'); conns[0].connectedBy = 'owner1';
+  cp = await callbackPending(stOwn); assert.ok(cp.pendingId);
+  r = await completeAs('mgrB', cp.pendingId); assert.equal(r.status, 403); assert.equal(r.body.code, 'not_owner'); assert.equal(conns[0].connectedBy, 'owner1', 'jamais d’écrasement'); assert.equal(pendings.length, 0);
+  assert.ok(!r.text.includes('owner1') && !r.text.includes(BOSS_EMAIL));
+  // droits revérifiés à la finalisation : un membre sans accès au module ne finalise pas
+  conns.length = 0; cp = await callbackPending(await startVia('mgrB'));
+  directory.mgrB.permissions = { 'calls.view': false }; r = await completeAs('mgrB', cp.pendingId); directory.mgrB.permissions = { 'calls.view': true };
+  assert.equal(r.status, 403); assert.equal(conns.length, 0);
+  // comptes partagés et messagerie personnelle : même finalisation (compte partagé : démarré par mgrA, finalisé par mgrA seul)
+  r = await sec('POST', `/accounts/${C1}/microsoft/start`, { user: 'mgrA', body: { label: 'Equipe', ownerName: '' } });
+  cp = await callbackPending(new URL(r.body.data.url).searchParams.get('state')); assert.ok(cp.pendingId); assert.equal(accounts.length, 0);
+  r = await completeAs('mgrB', cp.pendingId); assert.equal(r.status, 403); assert.equal(r.body.code, 'wrong_user'); assert.equal(accounts.length, 0);
+  r = await sec('POST', `/accounts/${C1}/microsoft/start`, { user: 'mgrA', body: { label: 'Equipe', ownerName: '' } });
+  cp = await callbackPending(new URL(r.body.data.url).searchParams.get('state'));
+  r = await completeAs('mgrA', cp.pendingId); assert.equal(r.status, 200); assert.deepEqual(r.body.data, { connected: 'microsoft', shared: true }); assert.equal(accounts[0].connectedBy, 'mgrA');
+  oauthMicrosoft('sec@acme.test', 'SEC');
+  r = await sec('POST', `/accounts/${C1}/mine/microsoft/start`, { user: 'sec', body: {} });
+  cp = await callbackPending(new URL(r.body.data.url).searchParams.get('state'));
+  r = await completeAs('sec', cp.pendingId); assert.equal(r.status, 200, r.text); assert.deepEqual(r.body.data, { connected: 'microsoft', personal: true }); assert.ok(accounts.some((a) => a.personalUserId === 'sec'));
+  // erreurs du fournisseur au callback : inchangées (?error=), et rien n'est mis en attente
+  pendings.length = 0; on('POST', /login\.microsoftonline\.com\/common\/oauth2\/v2\.0\/token/, () => ({ status: 400, json: { error: 'invalid_grant' } }));
+  cp = await callbackPending(await startVia('mgrB')); assert.equal(cp.error, 'exchange_failed'); assert.equal(pendings.length, 0);
+  // interrupteur de secours : enregistrement direct au callback (états sans `pend`)
+  oauthMicrosoft('mgrb@acme.test', 'MGRB'); process.env.OAUTH_BROWSER_BINDING = 'off';
   try {
-    conns.length = 0; r = await sec('POST', `/connections/${C1}/microsoft/start`, { user: 'mgrB', body: {} });
-    assert.equal(r.cookies.length, 0); const stOff = new URL(r.body.data.url).searchParams.get('state'); assert.equal(S.readState(stOff, 'microsoft').nb, undefined);
-    oauthMicrosoft('mgrb@acme.test', 'MGRB'); assert.equal((await callbackWith(stOff)).location, 'https://portal.test/telephony/app/tools?connected=microsoft');
+    conns.length = 0; const stOff = new URL((await sec('POST', `/connections/${C1}/microsoft/start`, { user: 'mgrB', body: {} })).body.data.url).searchParams.get('state'); assert.equal(S.readState(stOff, 'microsoft').pend, undefined);
+    assert.equal((await cb('microsoft', stOff)).location, 'https://portal.test/telephony/app/tools?connected=microsoft'); assert.equal(conns[0].connectedBy, 'mgrB');
   } finally { delete process.env.OAUTH_BROWSER_BINDING; }
 
   // =========================================================================================================

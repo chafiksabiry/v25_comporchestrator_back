@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import SecretariatConnection from '../models/SecretariatConnection.js';
+import OAuthPending, { PENDING_TTL_SECONDS } from '../models/OAuthPending.js';
 import SecretariatSharedAccount from '../models/SecretariatSharedAccount.js';
 import SecretariatTools from '../models/SecretariatTools.js';
 import { config } from '../config/env.js';
@@ -101,7 +102,7 @@ const stateSecret = () => {
 };
 
 /** Adresse d'autorisation du fournisseur, avec un état signé (10 min) lié au centre, à l'utilisateur, au fournisseur et à la page de retour. */
-export function startAuthorization({ companyId, userId, provider, returnTo, shared, read = false, write = false, nb }, env = process.env) {
+export function startAuthorization({ companyId, userId, provider, returnTo, shared, read = false, write = false, pend = false }, env = process.env) {
   const cfg = providerConfig(provider, env);
   if (!cfg) throw new SecretariatError('unavailable', messages.unavailable(provider));
   // GOOGLE : refus inconditionnel de la lecture et de l'écriture de la boîte (aucun scope restreint n'est jamais demandé), quel que soit l'appelant.
@@ -109,7 +110,7 @@ export function startAuthorization({ companyId, userId, provider, returnTo, shar
   // `read` : demande EN PLUS le scope (optionnel) de lecture de la boîte de réception (e-mails entrants). Les scopes obtenus sont lus au callback.
   if (read && !PROVIDERS[provider].readScope) throw new SecretariatError('invalid_request', 'La lecture des e-mails n’est pas disponible pour ce fournisseur.');
   if (write && !PROVIDERS[provider].writeScope) throw new SecretariatError('invalid_request', 'La gestion de la messagerie n’est pas disponible pour ce fournisseur.');
-  const state = jwt.sign({ purpose: STATE_PURPOSE, companyId: String(companyId), userId: String(userId), provider, returnTo, ...(nb ? { nb } : {}), ...(shared ? { shared } : {}) }, stateSecret(), { expiresIn: STATE_TTL_SECONDS, algorithm: 'HS256' });
+  const state = jwt.sign({ purpose: STATE_PURPOSE, companyId: String(companyId), userId: String(userId), provider, returnTo, ...(pend ? { pend: true } : {}), ...(shared ? { shared } : {}) }, stateSecret(), { expiresIn: STATE_TTL_SECONDS, algorithm: 'HS256' });
   const P = PROVIDERS[provider];
   const q = new URLSearchParams({
     client_id: cfg.clientId, redirect_uri: cfg.redirectUri, response_type: 'code', state,
@@ -119,43 +120,55 @@ export function startAuthorization({ companyId, userId, provider, returnTo, shar
 }
 
 /**
- * LIAISON DE L'AUTORISATION AU NAVIGATEUR de la personne qui l'a démarrée (contre la liaison de compte par un tiers : un membre ne peut pas faire consentir
- * quelqu'un d'autre à son nom). `beginAuthorization` (appelée par une route AUTHENTIFIÉE) tire un secret aléatoire à usage unique, le dépose dans un cookie
- * HttpOnly / SameSite=Lax de 10 minutes et met dans l'état signé seulement son empreinte (liée à l'utilisateur de la session). Au retour OAuth, le cookie doit
- * correspondre à l'état (`checkBrowserBinding`) : sinon l'autorisation est refusée AVANT tout échange de code. Le portail doit appeler les routes « start » avec
- * les identifiants (`credentials: 'include'`) ; CORS les autorise déjà. Interrupteur de secours : OAUTH_BROWSER_BINDING=off (états sans liaison).
+ * LIAISON DE L'AUTORISATION À L'UTILISATEUR AUTHENTIFIÉ (contre la liaison de compte par un tiers : un membre ne peut pas faire consentir quelqu'un d'autre à son nom).
+ * Pas de cookie (portail et API sont sur des domaines différents) : finalisation authentifiée en deux temps.
+ *  1. `beginAuthorization` (route AUTHENTIFIÉE) marque l'état signé `pend`. Au retour du fournisseur, le callback (public, dans le navigateur de la personne qui consent)
+ *     échange le code puis met les jetons CHIFFRÉS en attente (`stashAuthorization`, modèle OAuthPending : identifiant aléatoire à usage unique, TTL 10 min, lié à
+ *     `state.userId` et à la société) et redirige vers le portail avec `?pending=<identifiant>&provider=<fournisseur>` ; RIEN n'est enregistré.
+ *  2. Le portail appelle `POST /connections/:société/:fournisseur/complete { pendingId }` avec le Bearer de l'utilisateur : `finishAuthorization` consomme l'attente
+ *     (supprimée dans tous les cas) et ne finalise que si l'utilisateur authentifié est celui qui a démarré (sinon `wrong_user`).
+ * Un tiers qui fait consentir un collègue n'obtient rien : l'identifiant part dans le navigateur de la victime, qui n'a pas le jeton du démarreur.
+ * Interrupteur de secours : OAUTH_BROWSER_BINDING=off (états sans `pend` : enregistrement direct au callback, comme avant).
  */
-const BINDING_PREFIX = 'harx_oauth_';
-const usedNonces = new Map();
 export const browserBindingEnabled = (env = process.env) => String(env.OAUTH_BROWSER_BINDING || '').trim().toLowerCase() !== 'off';
-const bindHash = (nonce, userId) => crypto.createHash('sha256').update(`${nonce}:${userId}`).digest('hex');
-const cookieName = (nb) => `${BINDING_PREFIX}${nb.slice(0, 16)}`;
-const readCookie = (header, name) => {
-  for (const part of String(header || '').split(';')) { const i = part.indexOf('='); if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim(); }
-  return '';
-};
-export function beginAuthorization(params, res, env = process.env) {
-  if (!browserBindingEnabled(env) || !res || typeof res.append !== 'function') return startAuthorization(params, env);
-  const nonce = crypto.randomBytes(32).toString('hex');
-  const nb = bindHash(nonce, params.userId);
-  const url = startAuthorization({ ...params, nb }, env);
-  const secure = res.req?.secure || String(res.req?.headers?.['x-forwarded-proto'] || '').split(',')[0].trim() === 'https' ? '; Secure' : '';
-  res.append('Set-Cookie', `${cookieName(nb)}=${nonce}; Max-Age=${STATE_TTL_SECONDS}; Path=/; HttpOnly; SameSite=Lax${secure}`);
-  return url;
+const hashPending = (id) => crypto.createHash('sha256').update(String(id)).digest('hex');
+const pendingContext = (companyId, idHash) => `secretariat-pending:${companyId}:${idHash}`;
+export const PENDING_ID_RE = /^[0-9a-f]{64}$/;
+
+/** Démarre une autorisation depuis une route AUTHENTIFIÉE : l'état signé demandera la finalisation authentifiée (sauf interrupteur de secours). */
+export function beginAuthorization(params, env = process.env) {
+  return startAuthorization({ ...params, ...(browserBindingEnabled(env) ? { pend: true } : {}) }, env);
 }
-/** Vrai si le retour OAuth vient du navigateur qui a démarré l'autorisation (ou si l'état n'a pas de liaison). Usage unique : le cookie est consommé. */
-export function checkBrowserBinding(state, req, res, env = process.env) {
-  if (!state?.nb || !browserBindingEnabled(env)) return true;
-  const name = cookieName(state.nb);
-  const nonce = readCookie(req?.headers?.cookie, name);
-  if (typeof res?.append === 'function') res.append('Set-Cookie', `${name}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`);
-  const now = Date.now();
-  for (const [k, t] of usedNonces) if (t < now) usedNonces.delete(k);
-  if (!/^[0-9a-f]{64}$/.test(nonce) || usedNonces.has(state.nb)) return false;
-  const a = Buffer.from(bindHash(nonce, state.userId)); const b = Buffer.from(state.nb);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
-  usedNonces.set(state.nb, now + STATE_TTL_SECONDS * 1000);
-  return true;
+
+/** Met en attente l'autorisation échangée (jetons chiffrés). @returns {Promise<string>} identifiant à usage unique (en clair seulement ici et dans la redirection) */
+export async function stashAuthorization({ state, accountEmail, secrets, scopes }, { env = process.env } = {}) {
+  const id = crypto.randomBytes(32).toString('hex');
+  const idHash = hashPending(id);
+  await OAuthPending.create({
+    idHash, companyId: oid(state.companyId), userId: String(state.userId), provider: state.provider, returnTo: state.returnTo, shared: state.shared || null,
+    accountEmail, scopes, secretsEnc: encryptJson(secrets, { context: pendingContext(state.companyId, idHash), key: loadKey(env) }), createdAt: new Date(),
+  });
+  return id;
+}
+
+/**
+ * Finalise une attente pour l'utilisateur AUTHENTIFIÉ `userId`. L'attente est consommée (supprimée) dès la lecture : inconnue, expirée, forgée, rejouée, d'une autre
+ * société ou d'un autre fournisseur = `pending_not_found` ; d'un autre utilisateur = `wrong_user` (et elle est détruite). Sinon : même enregistrement qu'au callback direct
+ * (contrôle de propriété `mayTakeOver`, écriture conditionnelle).
+ * @returns {Promise<{provider: string, personal?: boolean, shared?: boolean, read?: boolean}>}
+ */
+export async function finishAuthorization({ pendingId, userId, companyId, provider, mayStore = () => true }, { env = process.env } = {}) {
+  if (typeof pendingId !== 'string' || !PENDING_ID_RE.test(pendingId)) throw new SecretariatError('invalid_request', 'Identifiant d’autorisation invalide.', { status: 400 });
+  const idHash = hashPending(pendingId);
+  const row = await OAuthPending.findOneAndDelete({ idHash, companyId: oid(companyId), provider }).lean();
+  const gone = () => new SecretariatError('pending_not_found', 'Cette autorisation n’existe plus ou a expiré : recommencez la connexion.', { status: 404 });
+  if (!row || Date.now() - new Date(row.createdAt).getTime() > PENDING_TTL_SECONDS * 1000) throw gone();
+  if (String(row.userId) !== String(userId || '')) throw new SecretariatError('wrong_user', 'Cette autorisation a été démarrée par une autre personne : elle a été annulée. Recommencez la connexion depuis votre compte.', { status: 403 });
+  const state = { companyId: String(companyId), userId: String(row.userId), provider, returnTo: row.returnTo, ...(row.shared ? { shared: row.shared } : {}) };
+  if (!mayStore(state)) throw new SecretariatError('forbidden', 'Vous n’avez plus le droit de connecter ce compte.', { status: 403 }); // droits revérifiés à la finalisation
+  const secrets = decryptJson(row.secretsEnc, { context: pendingContext(companyId, idHash), key: loadKey(env) });
+  const done = await storeAuthorization({ state, accountEmail: row.accountEmail, secrets, scopes: row.scopes || [], env });
+  return { provider, ...(done?.personal ? { personal: true, ...(done.read ? { read: true } : {}) } : done?.accountId ? { shared: true } : {}) };
 }
 
 /** Lit un état OAuth : charge utile valide, ou null (expiré, falsifié, autre fournisseur, forme inattendue). */
@@ -164,7 +177,7 @@ export function readState(state, provider) {
     const s = jwt.verify(String(state), stateSecret(), { algorithms: ['HS256'] });
     if (s.purpose !== STATE_PURPOSE || s.provider !== provider || !isProviderId(provider)) return null;
     if (!/^[0-9a-fA-F]{24}$/.test(String(s.companyId)) || typeof s.userId !== 'string' || !s.userId || !RETURN_PATHS[s.returnTo]) return null;
-    const base = { companyId: String(s.companyId), userId: s.userId, provider, returnTo: s.returnTo, ...(typeof s.nb === 'string' && /^[0-9a-f]{64}$/.test(s.nb) ? { nb: s.nb } : {}) };
+    const base = { companyId: String(s.companyId), userId: s.userId, provider, returnTo: s.returnTo, ...(s.pend === true ? { pend: true } : {}) };
     if (s.shared === undefined) return base;
     // Compte partagé : seuls Google et Microsoft ; libellé et droits revalidés (jamais de confiance aveugle dans la charge utile).
     const sh = s.shared;
@@ -203,8 +216,8 @@ async function postToken(P, cfg, form, http) {
  * Callback : échange le code (l'état doit déjà être validé par `readState`), lit l'e-mail du compte et enregistre les jetons CHIFFRÉS
  * (remplace une connexion existante). Les erreurs portent un code court (exchange_failed, no_refresh_token, missing_permissions, no_account…).
  */
-export async function completeConnection({ state, code }, { http = httpImpl, env = process.env } = {}) {
-  const { companyId, userId, provider } = state;
+export async function exchangeAuthorization({ state, code }, { http = httpImpl, env = process.env } = {}) {
+  const { provider } = state;
   const cfg = providerConfig(provider, env);
   if (!cfg) throw new SecretariatError('unavailable', messages.unavailable(provider));
   if (typeof code !== 'string' || !code || code.length > 2048) throw new SecretariatError('invalid_request', 'Réponse du fournisseur invalide.');
@@ -221,9 +234,15 @@ export async function completeConnection({ state, code }, { http = httpImpl, env
   const secrets = { accessToken: token.accessToken, refreshToken: token.refreshToken, expiresAt: token.expiresAt };
   // Consentement de lecture de la messagerie personnelle : le scope de lecture doit avoir été réellement accordé (sinon rien n'est enregistré, le compte existant est intact).
   if (state.shared?.read === true && !hasReadScope(provider, token.scopes)) throw new SecretariatError('missing_permissions', 'Toutes les autorisations demandées n’ont pas été accordées.');
-  if (state.shared) return storeSharedAccount({ state, accountEmail, secrets, scopes: token.scopes.length ? token.scopes : P.scopes, env });
+  return { accountEmail, secrets, scopes: token.scopes.length ? token.scopes : P.scopes };
+}
+
+/** Enregistrement des jetons CHIFFRÉS (contrôle de propriété, écriture conditionnelle). `state` = état validé ; l'utilisateur de l'état est celui qui devient propriétaire. */
+export async function storeAuthorization({ state, accountEmail, secrets, scopes, env = process.env }) {
+  const { companyId, userId, provider } = state;
+  if (state.shared) return storeSharedAccount({ state, accountEmail, secrets, scopes, env });
   const credentialsEnc = encryptJson(secrets, { context: context(companyId, provider), key: loadKey(env) });
-  const set = { accountEmail, credentialsEnc, scopes: token.scopes.length ? token.scopes : P.scopes, status: 'connected', connectedAt: new Date(), connectedBy: userId };
+  const set = { accountEmail, credentialsEnc, scopes, status: 'connected', connectedAt: new Date(), connectedBy: userId };
   if (isMailProvider(provider)) {
     // Boîte mail : seul son propriétaire la remplace. Aucune ligne ou ligne ORPHELINE : la personne connectée en devient propriétaire.
     const existing = await SecretariatConnection.findOne({ companyId: oid(companyId), provider }).select('connectedBy ownerless').lean();
@@ -243,6 +262,12 @@ export async function completeConnection({ state, code }, { http = httpImpl, env
   await adoptAsEmailProvider(companyId, provider);
   await adoptAgendaAndVisio(companyId, provider);
   return { companyId, provider, accountEmail };
+}
+
+
+/** Callback direct (sans finalisation en attente : interrupteur de secours ou état sans `pend`) : échange puis enregistrement. */
+export async function completeConnection({ state, code }, { http = httpImpl, env = process.env } = {}) {
+  return storeAuthorization({ state, ...(await exchangeAuthorization({ state, code }, { http, env })), env });
 }
 
 /** Nombre maximum de comptes partagés par société (garde-fou). */

@@ -94,7 +94,7 @@ async function agendaProviderOf(companyId, userId, preferred) {
  */
 registerCompanyCalendarResolver(async (companyId, hint) => {
   const agenda = mergedTools(await loadTools(companyId)).agenda.provider;
-  if (agenda !== 'google' && agenda !== 'microsoft') return null;
+  // Modification / annulation d'un événement existant : toujours chez le fournisseur mémorisé, même si le réglage d'agenda est passé à « none » depuis la création.
   if ((hint.op === 'update' || hint.op === 'remove') && hint.hasExternalId && isMailProvider(hint.provider)) {
     // Rendez-vous antérieur à la règle (propriétaire du calendrier non mémorisé) : on ne devine PAS (le propriétaire actuel de la connexion peut avoir un autre calendrier) : `not_connected`.
     const ownerId = String(hint.ownerId || '').trim();
@@ -104,6 +104,7 @@ registerCompanyCalendarResolver(async (companyId, hint) => {
     if (!conn || conn.status !== 'connected' || !ownsRow(conn, ownerId) || (await ownerHasLeft(companyId, ownerId, hint.token))) return { id: hint.provider, unavailable: true };
     return calendarAdapter(companyId, hint.provider, ownerId);
   }
+  if (agenda !== 'google' && agenda !== 'microsoft') return null; // création : « none » = aucun agenda
   for (const userId of [...new Set((hint.userIds || []).map((u) => String(u || '').trim()).filter(Boolean))]) {
     const provider = await agendaProviderOf(companyId, userId, agenda);
     if (provider) return calendarAdapter(companyId, provider, userId);

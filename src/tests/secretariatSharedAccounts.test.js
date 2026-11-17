@@ -470,7 +470,7 @@ try {
   assert.equal(r.status, 200, 'la route « mine » n’est pas capturée par /:provider/start'); assert.match(r.body.data.url, /^https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth\?/);
   assert.equal(new URL(r.body.data.url).searchParams.get('scope'), 'openid email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.events'); assert.ok(!/readonly/.test(r.body.data.url), 'aucune lecture de boîte');
   const stP = S.readState(stateFrom(r.body.data.url), 'google');
-  assert.match(stP.nb, /^[0-9a-f]{64}$/); delete stP.nb;
+  assert.equal(stP.pend, true); delete stP.pend;
   assert.deepEqual(stP, { companyId: C1, userId: 'sophie', provider: 'google', returnTo: 'profile', shared: { label: 'Ma messagerie', ownerName: 'Sophie Martin', send: true, calendar: true, personal: true } }, 'identité tirée de la session, jamais du corps');
   r = await req('POST', `/accounts/${C1}/mine/microsoft/start`, { user: 'sophie', body: { returnTo: 'profile' } }); assert.equal(r.status, 200);
   const forgeP = (shared) => jwt.sign({ purpose: 'secretariat-oauth', companyId: C1, userId: 'sophie', provider: 'google', returnTo: 'profile', shared }, process.env.JWT_SECRET, { expiresIn: 600 });

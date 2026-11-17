@@ -62,7 +62,7 @@ export const secretariatAccountsController = {
       const v = validateAccountInput(req.body);
       if (v.error) return fail(res, 400, v.error);
       if (!isAvailable(provider)) return fail(res, 409, messages.unavailable(provider));
-      const url = beginAuthorization({ companyId: a.companyId, userId: a.userId, provider, returnTo: 'tools', shared: { label: v.value.label, ownerName: v.value.ownerName, send: v.value.send, calendar: v.value.calendar } }, res);
+      const url = beginAuthorization({ companyId: a.companyId, userId: a.userId, provider, returnTo: 'tools', shared: { label: v.value.label, ownerName: v.value.ownerName, send: v.value.send, calendar: v.value.calendar } });
       res.json({ success: true, data: { url } });
     } catch (error) { answer(res, error, 'start'); }
   },
@@ -78,7 +78,7 @@ export const secretariatAccountsController = {
       // Seul le propriétaire reconnecte son compte ; un compte orphelin se reconnecte par celui qui prouve l'accès à la boîte (même adresse obligatoire au retour). Autre : introuvable.
       if (!d || !mayTakeOver(d, a.userId)) return fail(res, 404, 'Compte introuvable.', 'account_not_found');
       if (!isAvailable(d.provider)) return fail(res, 409, messages.unavailable(d.provider));
-      const url = beginAuthorization({ companyId: a.companyId, userId: a.userId, provider: d.provider, returnTo: 'tools', shared: { label: d.label, ownerName: d.ownerName || '', send: d.permissions?.send === true, calendar: d.permissions?.calendar === true, accountId: String(d._id) } }, res);
+      const url = beginAuthorization({ companyId: a.companyId, userId: a.userId, provider: d.provider, returnTo: 'tools', shared: { label: d.label, ownerName: d.ownerName || '', send: d.permissions?.send === true, calendar: d.permissions?.calendar === true, accountId: String(d._id) } });
       res.json({ success: true, data: { url } });
     } catch (error) { answer(res, error, 'reconnect'); }
   },
@@ -101,7 +101,7 @@ export const secretariatAccountsController = {
       const prev = await SecretariatSharedAccount.findOne({ companyId: a.companyId, provider, personalUserId: String(a.userId) }).select('inbound').lean();
       // Google : jamais de lecture (même si un ancien consentement subsiste) : la reconnexion se fait sans lecture et sans erreur.
       const read = provider !== 'google' && prev?.inbound?.readEnabled === true;
-      const url = beginAuthorization({ companyId: a.companyId, userId: a.userId, provider, returnTo, read, shared: { personal: true, ownerName, ...(read ? { read: true } : {}) } }, res);
+      const url = beginAuthorization({ companyId: a.companyId, userId: a.userId, provider, returnTo, read, shared: { personal: true, ownerName, ...(read ? { read: true } : {}) } });
       res.json({ success: true, data: { url } });
     } catch (error) { answer(res, error, 'startMine'); }
   },
