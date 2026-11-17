@@ -28,6 +28,7 @@ const TokensCompany = (await import('../models/TokensCompany.js')).default;
 const CompanyNotification = (await import('../models/CompanyNotification.js')).default;
 
 const COMPANY = '64b0000000000000000000a1';
+let callerCompany; let callerIsOwner;
 const token = jwt.sign({ userId: 'u1' }, process.env.JWT_SECRET, { expiresIn: '5m' });
 
 let country;
@@ -42,12 +43,13 @@ function mockRes() {
 }
 // `guarded` : routes protégées par `authenticate` (numéros) qui posent déjà req.user ; les routes de paiement ponctuel n'ont pas ce garde.
 function reqOf(body = {}, query = {}, withToken = true, guarded = false) {
-  return { body, query, headers: withToken ? { authorization: `Bearer ${token}` } : {}, user: guarded ? { userId: 'u1' } : undefined };
+  return { body, query, headers: withToken ? { authorization: `Bearer ${token}` } : {}, user: guarded || withToken ? { userId: 'u1' } : undefined };
 }
 const lineReq = (body = {}, query = {}) => reqOf(body, query, true, true);
 
 beforeEach(() => {
   clearCompanyCache();
+  callerCompany = COMPANY; callerIsOwner = true;
   country = 'FR';
   registrationDown = false;
   stripeCalls.length = 0;
@@ -56,7 +58,7 @@ beforeEach(() => {
   created = null;
   global.fetch = async () => {
     if (registrationDown) throw new Error('registration down');
-    return { ok: true, json: async () => ({ success: true, data: { company: { profile: { country } } } }) };
+    return { ok: true, json: async () => ({ success: true, data: { companyId: callerCompany, isOwner: callerIsOwner, company: { profile: { country } } } }) };
   };
   stripeService.isConfigured = () => true;
   stripeService.createOneShotCheckoutSession = async (opts) => { stripeCalls.push(opts); return { id: 'cs_test_1', url: 'https://stripe.test/pay' }; };
@@ -175,17 +177,33 @@ test('payments/checkout/init : jetons IA et pack combiné suivent aussi le pays'
   }
 });
 
-test('payments/checkout/init : sans jeton ou pays illisible -> EUR (repli), PayPal reçoit la devise en majuscules', async () => {
+test('payments/checkout/init : sans jeton 401, inscription indisponible 503 (jamais ouvert), pays illisible -> EUR, PayPal reçoit la devise en majuscules', async () => {
   country = 'GB';
   let res = mockRes();
   await paymentCheckoutController.initCheckout(reqOf(checkoutBody({ purpose: 'minutes_purchase', minutes: 150 }), {}, false), res);
-  assert.equal(res.body.currency, 'EUR');
+  assert.equal(res.statusCode, 401); assert.equal(stripeCalls.length, 0, 'aucune session créée sans jeton');
   registrationDown = true;
   clearCompanyCache();
   res = mockRes();
   await paymentCheckoutController.initCheckout(reqOf(checkoutBody({ purpose: 'minutes_purchase', minutes: 150, provider: 'paypal' })), res);
+  assert.equal(res.statusCode, 503); assert.equal(paypalCalls.length, 0, 'aucune commande créée si la société de l\'appelant est invérifiable');
+  registrationDown = false; clearCompanyCache(); country = '';
+  res = mockRes();
+  await paymentCheckoutController.initCheckout(reqOf(checkoutBody({ purpose: 'minutes_purchase', minutes: 150, provider: 'paypal' })), res);
   assert.equal(res.body.currency, 'EUR');
   assert.equal(paypalCalls[0].currency, 'EUR');
+});
+
+test('payments/checkout/init : on ne paie que pour SA société (propriétaire) : autre société, membre, agent -> 403, aucune session ni commande', async () => {
+  for (const [label, company, owner, agent] of [['autre société', '64b0000000000000000000a2', true, false], ['membre', COMPANY, false, false], ['agent', COMPANY, false, true]]) {
+    callerCompany = company; callerIsOwner = owner; clearCompanyCache();
+    const prevFetch = global.fetch;
+    if (agent) global.fetch = async () => ({ ok: true, json: async () => ({ success: true, data: { companyId: COMPANY, isAgent: true } }) });
+    const res = mockRes();
+    await paymentCheckoutController.initCheckout(reqOf(checkoutBody({ purpose: 'wallet_deposit', amountEuros: 500 })), res);
+    global.fetch = prevFetch;
+    assert.equal(res.statusCode, 403, label); assert.equal(stripeCalls.length + paypalCalls.length, 0, label);
+  }
 });
 
 test('payments/checkout/init : le dépôt portefeuille reste en EUR (registre des commissions)', async () => {
