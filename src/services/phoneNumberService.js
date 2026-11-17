@@ -9,6 +9,7 @@ import twilio from 'twilio';
 import axios from 'axios';
 import FormData from 'form-data';
 import mongoose from 'mongoose';
+import { heldNumbers } from './inventoryHolders.js';
 
 /** Nom convivial donné par la plateforme aux numéros qu'elle achète : sert à reconnaître l'inventaire proposable. */
 export const INVENTORY_FRIENDLY_PREFIX = 'Gig Number:';
@@ -605,12 +606,40 @@ class PhoneNumberService {
     return !(config.twilioInventoryExclude || []).includes(e164);
   }
 
-  /** Parmi des numéros possédés, ceux qu'aucune entreprise ne détient dans la base HARX (surchargé dans les tests). */
+  /**
+   * Parmi des numéros possédés, ceux qu'aucune entreprise ne détient dans la base HARX (surchargé dans les tests).
+   * Une fiche dont la ligne est libérée / résiliée, ou dont l'entreprise n'existe plus, ne retient pas le numéro (inventoryHolders.js).
+   */
   async unassignedAmong(owned) {
     if (!owned.length) return [];
-    const docs = await PhoneNumber.find({ phoneNumber: { $in: owned.map((n) => n.phoneNumber) } }).select('phoneNumber').lean();
-    const taken = new Set(docs.map((d) => d.phoneNumber));
+    const docs = await PhoneNumber.find({ phoneNumber: { $in: owned.map((n) => n.phoneNumber) } })
+      .select('phoneNumber companyId status billingStatus').lean();
+    const taken = await heldNumbers(docs);
     return owned.filter((n) => !taken.has(n.phoneNumber));
+  }
+
+  /**
+   * Numéro d'inventaire repris par une nouvelle entreprise : retire l'ancienne fiche (ligne libérée ou entreprise disparue) pour que
+   * la nouvelle puisse être créée sans conflit sur l'index unique `phoneNumber`. Suppression conditionnelle (fiche inchangée depuis
+   * la lecture) : si elle a bougé entre-temps, le numéro est refusé. Renvoie la fiche retirée (à remettre si la création échoue).
+   * Ne touche jamais au numéro chez Twilio.
+   */
+  async takeOverStaleHolder(phoneNumber) {
+    const stale = await PhoneNumber.findOne({ phoneNumber }).lean();
+    if (!stale) return null;
+    const free = await this.unassignedAmong([{ phoneNumber }]);
+    const removed = free.length
+      ? await PhoneNumber.collection.findOneAndDelete({ _id: stale._id, updatedAt: stale.updatedAt ?? null })
+      : null;
+    const doc = removed && Object.prototype.hasOwnProperty.call(removed, 'value') ? removed.value : removed;
+    if (!doc) {
+      const err = new Error('Ce numéro n’est pas disponible.');
+      err.code = 'NUMBER_NOT_AVAILABLE';
+      err.status = 409;
+      throw err;
+    }
+    console.log(`[telephony] ${phoneNumber} repris du stock : ancienne fiche ${doc._id} (entreprise ${doc.companyId}, statut ${doc.status}/${doc.billingStatus || 'n/a'}) retirée.`);
+    return doc;
   }
 
   async listClaimableInventory({ countryCode, limit = 50 } = {}) {
@@ -653,6 +682,7 @@ class PhoneNumberService {
     console.log(`🛒 Attempting to purchase number: ${phoneNumber} for gig: ${gigId}`);
 
     let purchasedNumber;
+    let inventoryClaimed = false;
     try {
       // Numéro déjà dans l'inventaire Twilio : on le prend sans le racheter ; s'il est possédé mais pas proposable (déjà détenu par une entreprise,
       // sans voix ou exclu par la configuration), on refuse plutôt que de tenter un achat qui échouerait.
@@ -697,6 +727,7 @@ class PhoneNumberService {
       try {
         if (inventory?.claimable) {
           purchasedNumber = inventory.number;
+          inventoryClaimed = true;
           console.log(`📦 Numéro pris dans l'inventaire Twilio : ${phoneNumber}`);
         } else {
           purchasedNumber = await this.twilioClient.incomingPhoneNumbers.create(purchaseOptions);
@@ -798,9 +829,28 @@ class PhoneNumberService {
       }
     };
 
+    // Numéro repris du stock : l'ancienne fiche (ligne libérée ou entreprise disparue) laisse la place, trace gardée dans metadata.
+    const previous = inventoryClaimed ? await this.takeOverStaleHolder(purchasedNumber.phoneNumber) : null;
+    if (previous) {
+      phoneNumberData.metadata.previousHolder = {
+        phoneNumberId: String(previous._id),
+        companyId: previous.companyId ? String(previous.companyId) : null,
+        status: previous.status || null,
+        billingStatus: previous.billingStatus || null,
+        releasedAt: new Date(),
+      };
+    }
+
     // Save to database
     const newPhoneNumber = new PhoneNumber(phoneNumberData);
-    await newPhoneNumber.save();
+    try {
+      await newPhoneNumber.save();
+    } catch (saveErr) {
+      if (previous) {
+        await PhoneNumber.collection.insertOne(previous).catch((restoreErr) => console.error(`[telephony] fiche ${previous._id} non restaurée:`, restoreErr.message));
+      }
+      throw saveErr;
+    }
 
     console.log("newPhoneNumber", newPhoneNumber);
     return newPhoneNumber;
