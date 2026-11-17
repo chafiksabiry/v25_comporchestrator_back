@@ -72,3 +72,42 @@ test('+1 : États-Unis et Canada domestiques entre eux (un seul indicatif), limi
   assert.equal(Z.classifyZone({ to: '+14155550123', companyCountry: '+1' }).zone, 'domestic');
 });
 
+
+// --- Revue : territoires distingués par pays (callingInfoOf), numéro de ligne complet --------------------------------------------
+const US_LINE = '+14155550123'; const CA_LINE = '+14165550123'; const JM = '+18765550123'; const BS = '+12425550123'; const PR = '+17875550123'; const DO = '+18095550123'; const TT = '+18685550123';
+test('NANP : États-Unis et Canada seulement domestiques entre eux ; Jamaïque, Bahamas, Porto Rico, Rép. dominicaine, Trinité-et-Tobago internationaux pour une entreprise +1', () => {
+  assert.equal(Z.classifyZone({ to: CA_LINE, companyCountry: US_LINE }).zone, 'domestic', 'US → CA');
+  assert.equal(Z.classifyZone({ to: US_LINE, companyCountry: CA_LINE }).zone, 'domestic', 'CA → US');
+  assert.equal(Z.classifyZone({ to: '+12125550123', companyCountry: US_LINE }).zone, 'domestic', 'US → US');
+  for (const to of [JM, BS, PR, DO, TT]) {
+    assert.equal(Z.classifyZone({ to, companyCountry: US_LINE }).zone, 'international', `US → ${to}`);
+    assert.equal(Z.classifyZone({ to, companyCountry: CA_LINE }).zone, 'international', `CA → ${to}`);
+  }
+  assert.equal(Z.classifyZone({ to: US_LINE, companyCountry: JM }).zone, 'international', 'Jamaïque → États-Unis');
+  assert.equal(Z.classifyZone({ to: JM, companyCountry: '+18765550999' }).zone, 'domestic', 'Jamaïque → Jamaïque');
+  assert.equal(Z.classifyZone({ to: FR, companyCountry: US_LINE }).zone, 'international');
+});
+
+test('+7 et +44 : pays distingués quand le numéro le permet', () => {
+  assert.equal(Z.classifyZone({ to: '+77012345678', companyCountry: '+79123456789' }).zone, 'international', 'Russie → Kazakhstan');
+  assert.equal(Z.classifyZone({ to: '+79123456780', companyCountry: '+79123456789' }).zone, 'domestic', 'Russie → Russie');
+  assert.equal(Z.classifyZone({ to: '+447911123456', companyCountry: '+442071234567' }).zone, 'domestic', 'Royaume-Uni (+44 indivisible)');
+});
+
+test('+262 : La Réunion et Mayotte restent la France (domestiques pour l\'UE) ; destination sans pays identifiable => domestique par prudence + avertissement', () => {
+  assert.equal(Z.classifyZone({ to: '+262692123456', companyCountry: '+33612345678' }).zone, 'domestic');
+  assert.equal(Z.classifyZone({ to: '+262639123456', companyCountry: '+33612345678' }).zone, 'domestic');
+  const w = []; const orig = console.warn; console.warn = (...a) => w.push(a.join(' '));
+  try {
+    assert.equal(Z.classifyZone({ to: '+999123456789', companyCountry: '+33612345678' }).zone, 'domestic');
+    assert.ok(w.some((x) => /sans pays identifiable|non identifiable/.test(x)));
+    w.length = 0;
+    assert.equal(Z.classifyZone({ to: '+14005550123', companyCountry: '+1' }).zone, 'domestic', 'préfixe seul : même indicatif, pays non identifiable');
+  } finally { console.warn = orig; }
+});
+
+test('l\'entreprise peut être donnée par un indicatif seul ou par un numéro de ligne complet', () => {
+  assert.equal(Z.classifyZone({ to: DE, companyCountry: '+33' }).euZone, true);
+  assert.equal(Z.classifyZone({ to: DE, companyCountry: '+33612345678' }).euZone, true);
+  assert.equal(Z.classifyZone({ to: DE, companyCountry: US_LINE }).euZone, false);
+});

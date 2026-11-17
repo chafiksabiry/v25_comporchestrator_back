@@ -141,6 +141,9 @@ export const SPOKEN_REFUSALS = Object.freeze({
 });
 const SPOKEN_VOICES = Object.freeze({ en: ['en-US', 'Polly.Joanna'], fr: ['fr-FR', 'Polly.Lea'], es: ['es-ES', 'Polly.Lucia'] });
 
+/** Texte unique (par langue) du refus « solde insuffisant pour un appel international : 1 minute = N crédits », pour TOUS les canaux. */
+export const internationalInsufficientText = (lang, credits) => (SPOKEN_REFUSALS[lang] || SPOKEN_REFUSALS.en).insufficient_minutes_international.replace('{credits}', String(credits ?? ''));
+
 /** Langue parlée du refus d'après le numéro de la ligne appelante : fr / es si c'est celle de son pays, sinon anglais (ligne absente ou illisible comprise). */
 export function spokenLanguage(linePhone) {
   const lang = languageForPhone(linePhone, 'en');
@@ -169,7 +172,7 @@ export function decideOutboundCall({ to, line, subscribed, minutes, recording = 
   if (!maxSeconds) {
     // Appel international à N crédits la minute : le solde ne couvre pas une minute internationale (message clair avec N).
     return creditFactor > 1
-      ? { ok: false, message: `Solde insuffisant pour un appel international : 1 minute = ${creditFactor} crédits.`, key: 'insufficient_minutes_international', creditFactor }
+      ? { ok: false, message: internationalInsufficientText('fr', creditFactor), key: 'insufficient_minutes_international', creditFactor }
       : { ok: false, message: 'Solde de minutes insuffisant.', key: 'insufficient_minutes' };
   }
   return { ok: true, maxSeconds, twiml: buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds, recording, action }) };

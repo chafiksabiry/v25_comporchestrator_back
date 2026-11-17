@@ -126,11 +126,9 @@ export const minutesCompanyController = {
         wallet = await MinutesCompany.create({ companyId, minutes: 0 });
       }
 
-      // Crédits par minute selon la zone (1, ou N pour un appel international). Forfait illisible : rien n'est débité, la lecture du solde reprend l'appel.
+      // Crédits par minute selon la zone (1, ou N pour un appel international ; classement d'après la ligne de l'appel stocké). Forfait ou
+      // lignes illisibles : 1 crédit, comme avant (le débit normal n'est jamais sauté).
       const factor = await creditFactorForCall({ companyId, call: stored });
-      if (factor === null) {
-        return res.status(200).json({ success: true, charged: false, reason: 'Plan unavailable', data: { minutes: wallet.minutes } });
-      }
 
       // Billing rule: any started minute is billed in full (10s → 1 min, 1m02s → 2 min), then multiplied by the credits of the zone.
       const durationMinutes = Math.ceil(durationSeconds / 60) * factor;

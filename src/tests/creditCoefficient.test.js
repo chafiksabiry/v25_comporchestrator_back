@@ -65,13 +65,28 @@ test('crédits : coefficient absent (1) => 1 partout, sans même lire le pays', 
   assert.equal(C.callCreditFactor(out(GB), { coefficient: 1, companyCountry: '' }), 1);
 });
 
-test('entrants : coefficient national (1) sauf provenance internationale lisible', () => {
+test('ENTRANTS : toujours 1 crédit par minute, quelle que soit la provenance (le périmètre ne porte que sur les sortants)', () => {
   const inb = (from) => ({ direction: 'inbound', from, to: '+33411112222', duration: 60 });
-  assert.equal(C.callCreditFactor(inb(GB), { coefficient: 4, companyCountry: '+33' }), 4);
-  assert.equal(C.callCreditFactor(inb(DE), { coefficient: 4, companyCountry: '+33' }), 1, 'UE');
-  assert.equal(C.callCreditFactor(inb(FR), { coefficient: 4, companyCountry: '+33' }), 1);
-  assert.equal(C.callCreditFactor(inb('anonymous'), { coefficient: 4, companyCountry: '+33' }), 1, 'provenance masquée');
-  assert.equal(C.callCreditFactor({ direction: 'inbound', duration: 60 }, { coefficient: 4, companyCountry: '+33' }), 1, 'provenance absente');
+  for (const from of [GB, '+14155550123', DE, FR, 'anonymous', undefined]) assert.equal(C.callCreditFactor(inb(from), { coefficient: 4, companyCountry: '+33' }), 1, String(from));
+  assert.equal(C.callCredits(inb(GB), { coefficient: 4, companyCountry: '+33' }), 1);
+});
+
+test('SORTANTS classés d\'après la ligne réellement utilisée (from de l\'appel stocké), repli sur le pays de l\'entreprise', () => {
+  const o = (to, from) => ({ direction: 'outbound', to, from, duration: 60 });
+  // entreprise française dont l'appel est passé depuis une ligne britannique : la destination britannique est domestique
+  assert.equal(C.callCreditFactor(o(GB, '+442071230000'), { coefficient: 4, companyCountry: '+33612345678' }), 1);
+  assert.equal(C.callCreditFactor(o(FR, '+442071230000'), { coefficient: 4, companyCountry: '+33612345678' }), 4, 'ligne britannique → France');
+  assert.equal(C.callCreditFactor(o(GB, '+33411112222'), { coefficient: 4, companyCountry: '+442071230000' }), 4, 'ligne française → Royaume-Uni');
+  // from illisible ou absent : repli documenté sur le pays de l'entreprise
+  for (const from of ['client:cc-sec1', 'anonymous', '', undefined]) {
+    assert.equal(C.callCreditFactor(o(GB, from), { coefficient: 4, companyCountry: '+33612345678' }), 4, String(from));
+    assert.equal(C.callCreditFactor(o(DE, from), { coefficient: 4, companyCountry: '+33612345678' }), 1, String(from));
+  }
+  // indépendant de l'instant de la synchro : le pays de l'entreprise n'est même pas lu quand la ligne est lisible
+  assert.equal(C.callCreditFactor(o(GB, '+442071230000'), { coefficient: 4, companyCountry: '' }), 1);
+  // NANP : Jamaïque internationale pour une ligne américaine
+  assert.equal(C.callCreditFactor(o('+18765550123', '+14155550123'), { coefficient: 4, companyCountry: '' }), 4);
+  assert.equal(C.callCreditFactor(o('+14165550123', '+14155550123'), { coefficient: 4, companyCountry: '' }), 1, 'US → Canada');
 });
 
 test('pays de l\'entreprise inconnu (aucune ligne) : 1 crédit + avertissement (comportement historique)', () => {
@@ -135,7 +150,7 @@ test('refus parlé : message avec le nombre de crédits (en / fr / es)', () => {
 test('message de refus du pré-contrôle : clair, avec N', () => {
   const m = C.insufficientInternationalMessages(4);
   assert.match(m.message, /international call/i); assert.match(m.message, /1 minute = 4 credits/);
-  assert.match(m.messageFr, /1 minute = 4 crédits/);
+  assert.match(m.messageFr, /1 minute = 4 crédits/); assert.match(m.messageEs, /1 minuto = 4 créditos/);
 });
 
 // --- Choix des crédits pour un lot d'appels ----------------------------------------------------------------------------------
@@ -152,14 +167,15 @@ test('lot d\'appels : coefficient 4 => facteurs par appel', async () => {
   assert.equal(plan.factorOf(intlCall('A', GB)), 4); assert.equal(plan.factorOf(intlCall('B', DE)), 1); assert.equal(plan.deferred.size, 0);
 });
 
-test('forfait illisible : appels de type international différés, les autres débités à 1 ; pays illisible : on interrompt', async () => {
+test('A4 : forfait ou pays illisible => facteur 1 (comportement d\'avant), jamais de report ni d\'interruption', async () => {
   const w = warns();
   try {
-    const calls = [intlCall('I', GB), intlCall('D', DE), { sid: 'N', direction: 'inbound', from: GB, to: FR, duration: 60 }];
-    const plan = await C.planCreditCharging({ companyId: 'C1', calls, loadLimits: async () => { throw new Error('mongo down'); }, country: async () => '+33' });
-    assert.deepEqual([...plan.deferred].sort(), ['I', 'N']); assert.equal(plan.factorOf(intlCall('D', DE)), 1);
-    await assert.rejects(C.planCreditCharging({ companyId: 'C1', calls, loadLimits: async () => { throw new Error('mongo down'); }, country: async () => { throw new Error('mongo down'); } }));
-    await assert.rejects(C.planCreditCharging({ companyId: 'C1', calls, loadLimits: async () => ({ internationalCoefficient: 4 }), country: async () => { throw new Error('mongo down'); } }));
+    const calls = [intlCall('I', GB), intlCall('D', DE)];
+    const noPlan = await C.planCreditCharging({ companyId: 'C1', calls, loadLimits: async () => { throw new Error('mongo down'); }, country: async () => '+33' });
+    assert.equal(noPlan.factorOf(intlCall('I', GB)), 1); assert.equal(noPlan.deferred?.size ?? 0, 0);
+    const noCountry = await C.planCreditCharging({ companyId: 'C1', calls, loadLimits: async () => ({ internationalCoefficient: 4 }), country: async () => { throw new Error('mongo down'); } });
+    assert.equal(noCountry.factorOf(intlCall('I', GB)), 1);
+    assert.ok(w.w.length >= 2, 'avertissements');
   } finally { w.restore(); }
 });
 
@@ -173,8 +189,12 @@ test('sans abonnement lisible (limits null) : coefficient de l\'environnement ou
   } finally { if (was === undefined) delete process.env.INTERNATIONAL_MINUTE_CREDITS; else process.env.INTERNATIONAL_MINUTE_CREDITS = was; }
 });
 
-test('facteur d\'un appel pour charge-call : null si le forfait est illisible (rien débité), sinon facteur', async () => {
-  assert.equal(await C.creditFactorForCall({ companyId: 'C1', call: intlCall('A', GB), loadLimits: async () => { throw new Error('x'); }, country: async () => '+33' }), null);
+test('facteur d\'un appel pour charge-call : 1 si le forfait ou le pays est illisible, sinon facteur', async () => {
+  const w = warns();
+  try {
+    assert.equal(await C.creditFactorForCall({ companyId: 'C1', call: intlCall('A', GB), loadLimits: async () => { throw new Error('x'); }, country: async () => '+33' }), 1);
+    assert.equal(await C.creditFactorForCall({ companyId: 'C1', call: intlCall('A', GB), loadLimits: async () => ({ internationalCoefficient: 4 }), country: async () => { throw new Error('x'); } }), 1);
+  } finally { w.restore(); }
   assert.equal(await C.creditFactorForCall({ companyId: 'C1', call: intlCall('A', GB), loadLimits: async () => ({ internationalCoefficient: 4 }), country: async () => '+33' }), 4);
   assert.equal(await C.creditFactorForCall({ companyId: 'C1', call: intlCall('A', DE), loadLimits: async () => ({ internationalCoefficient: 4 }), country: async () => '+33' }), 1);
   assert.equal(await C.creditFactorForCall({ companyId: 'C1', call: intlCall('A', GB), loadLimits: async () => ({ internationalCoefficient: 1 }), country: async () => { throw new Error('jamais lu'); } }), 1);
@@ -184,10 +204,12 @@ test('facteur d\'un appel sortant à venir : 1 en cas de pays illisible (jamais 
   const w = warns();
   try {
     assert.equal(await C.outboundCreditFactor({ companyId: 'C1', limits: { internationalCoefficient: 4 }, to: GB, country: async () => '+33' }), 4);
+    assert.equal(await C.outboundCreditFactor({ companyId: 'C1', limits: { internationalCoefficient: 4 }, to: GB, lineNumber: '+442071230000', country: async () => '+33' }), 1, 'ligne réellement utilisée');
+    assert.equal(await C.outboundCreditFactor({ companyId: 'C1', limits: { internationalCoefficient: 4 }, to: FR, lineNumber: '+442071230000', country: async () => '+33' }), 4);
     assert.equal(await C.outboundCreditFactor({ companyId: 'C1', limits: { internationalCoefficient: 4 }, to: DE, country: async () => '+33' }), 1);
     assert.equal(await C.outboundCreditFactor({ companyId: 'C1', limits: { internationalCoefficient: 1 }, to: GB, country: async () => { throw new Error('x'); } }), 1);
     assert.equal(await C.outboundCreditFactor({ companyId: 'C1', limits: { internationalCoefficient: 4 }, to: GB, country: async () => { throw new Error('x'); } }), 1);
-    assert.equal(await C.outboundCreditFactor({ companyId: 'C1', limits: null, to: GB, country: async () => '+33' }), 1);
+    assert.equal(await C.outboundCreditFactor({ companyId: 'C1', limits: null, to: GB, country: async () => '+33' }), 1, 'limits null, sans environnement');
   } finally { w.restore(); }
 });
 
@@ -197,4 +219,49 @@ test('vue du solde : crédits restants, coefficient appliqué, minutes internati
   const one = C.buildCreditsOverview({ minutes: 10, planMinutesIncluded: 0, coefficient: { coefficient: 1, source: 'default', invalid: false }, companyCountry: '' });
   assert.equal(one.internationalCreditsPerMinute, 1); assert.equal(one.internationalMinutesEquivalent, 10); assert.equal(one.zone.euZone, null);
   assert.equal(C.buildCreditsOverview({ minutes: -3, planMinutesIncluded: 0, coefficient: { coefficient: 4, source: 'env' }, companyCountry: '+33' }).internationalMinutesEquivalent, 0);
+});
+
+// --- A5 : un seul point de résolution (environnement compris, y compris limits null) --------------------------------------------
+test('A5 : coefficientOf — limits du forfait, sinon environnement, sinon 1 ; limits null utilise l\'environnement partout', async () => {
+  const was = process.env.INTERNATIONAL_MINUTE_CREDITS;
+  try {
+    delete process.env.INTERNATIONAL_MINUTE_CREDITS;
+    assert.deepEqual(C.coefficientOf(null), { coefficient: 1, source: 'default' });
+    assert.deepEqual(C.coefficientOf({ internationalCoefficient: 3, internationalCoefficientSource: 'plan' }), { coefficient: 3, source: 'plan' });
+    process.env.INTERNATIONAL_MINUTE_CREDITS = '4';
+    assert.deepEqual(C.coefficientOf(null), { coefficient: 4, source: 'env' });
+    assert.deepEqual(C.coefficientOf({}), { coefficient: 4, source: 'env' });
+    assert.equal(await C.outboundCreditFactor({ companyId: 'C1', limits: null, to: GB, country: async () => '+33' }), 4);
+    assert.equal(await C.creditFactorForCall({ companyId: 'C1', call: intlCall('A', GB), loadLimits: async () => null, country: async () => '+33' }), 4);
+    assert.equal((await C.planCreditCharging({ companyId: 'C1', calls: [], loadLimits: async () => null, country: async () => '+33' })).factorOf(intlCall('A', GB)), 4);
+  } finally { if (was === undefined) delete process.env.INTERNATIONAL_MINUTE_CREDITS; else process.env.INTERNATIONAL_MINUTE_CREDITS = was; }
+});
+
+test('A4 : lecture du forfait mise en cache brièvement (au plus une lecture par société), vidable', async () => {
+  let reads = 0;
+  const loader = async () => { reads += 1; return { internationalCoefficient: 4 }; };
+  C.clearCoefficientCache();
+  const a = await C.cachedPlanLimits('C1', { load: loader, now: () => 1000 });
+  const b = await C.cachedPlanLimits('C1', { load: loader, now: () => 1000 + 5000 });
+  assert.equal(reads, 1); assert.equal(a.internationalCoefficient, 4); assert.equal(b.internationalCoefficient, 4);
+  await C.cachedPlanLimits('C1', { load: loader, now: () => 1000 + C.COEFFICIENT_CACHE_MS + 1 });
+  assert.equal(reads, 2);
+  C.clearCoefficientCache(); await C.cachedPlanLimits('C1', { load: loader, now: () => 1000 });
+  assert.equal(reads, 3);
+  // une erreur n'est jamais mise en cache
+  C.clearCoefficientCache(); let fail = true;
+  const flaky = async () => { if (fail) throw new Error('x'); return { internationalCoefficient: 2 }; };
+  await assert.rejects(C.cachedPlanLimits('C2', { load: flaky, now: () => 1 })); fail = false;
+  assert.equal((await C.cachedPlanLimits('C2', { load: flaky, now: () => 2 })).internationalCoefficient, 2);
+});
+
+// --- M1 : messages d'insuffisance identiques en en / fr / es sur tous les canaux --------------------------------------------------
+test('M1 : un seul texte par langue pour « 1 minute = N crédits » (parlé, pré-contrôle, transfert, décision)', () => {
+  const m = C.insufficientInternationalMessages(4);
+  assert.equal(m.message, SPOKEN_REFUSALS.en.insufficient_minutes_international.replace('{credits}', '4'));
+  assert.equal(m.messageFr, SPOKEN_REFUSALS.fr.insufficient_minutes_international.replace('{credits}', '4'));
+  assert.equal(m.messageEs, SPOKEN_REFUSALS.es.insufficient_minutes_international.replace('{credits}', '4'));
+  const d = decideOutboundCall({ to: GB, line: { phoneNumber: '+33411112222' }, subscribed: true, minutes: 3, creditFactor: 4 });
+  assert.equal(d.message, m.messageFr);
+  assert.match(m.messageEs, /1 minuto = 4 créditos/);
 });

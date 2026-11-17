@@ -3,7 +3,7 @@ import { callerAccess, ScopeError } from '../middleware/companyScope.js';
 import { syncMinutesFromCalls } from './escrowController.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { loadCompanyPlanLimits } from '../services/planLimits.js';
-import { buildCreditsOverview, companyCountryOf } from '../services/creditCoefficient.js';
+import { buildCreditsOverview, coefficientOf, companyHomeOf } from '../services/creditCoefficient.js';
 
 const fail = (res, status, code, message) => res.status(status).json({ success: false, code, message });
 
@@ -18,7 +18,7 @@ export function createCreditsHandlers(deps = {}) {
   const sync = deps.sync || syncMinutesFromCalls;
   const readWallet = deps.readWallet || ((companyId) => MinutesCompany.findOne({ companyId }).lean());
   const loadLimits = deps.loadLimits || loadCompanyPlanLimits;
-  const country = deps.country || companyCountryOf;
+  const country = deps.country || companyHomeOf;
 
   return {
     async getCredits(req, res) {
@@ -37,7 +37,7 @@ export function createCreditsHandlers(deps = {}) {
         try { planMinutesIncluded = (await grant(access.companyId))?.allowance || 0; } catch (error) { console.warn('[credits] octroi ignoré :', error?.message || error); }
         await sync(access.companyId);
         const [wallet, limits, companyCountry] = await Promise.all([readWallet(access.companyId), loadLimits(access.companyId), country(access.companyId)]);
-        const coefficient = { coefficient: limits?.internationalCoefficient ?? 1, source: limits?.internationalCoefficientSource ?? 'default' };
+        const coefficient = coefficientOf(limits);
         return res.json({ success: true, data: { companyId: String(access.companyId), ...buildCreditsOverview({ minutes: wallet?.minutes, planMinutesIncluded, coefficient, companyCountry }) } });
       } catch (error) {
         console.error('[credits] lecture impossible :', error?.message || error);

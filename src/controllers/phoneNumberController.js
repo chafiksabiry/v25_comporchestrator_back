@@ -2350,7 +2350,7 @@ class PhoneNumberController {
         if (usable) callerLine = own;
       }
       // Crédits débités par minute vers cette destination (1, ou N à l'international) : plafonne la durée à solde / N.
-      const creditFactor = await outboundCreditFactor({ companyId, limits, to });
+      const creditFactor = await outboundCreditFactor({ companyId, limits, to, lineNumber: callerLine?.phoneNumber });
       let decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, creditFactor });
       if (!decision.ok) {
         console.warn(`[browser-outbound] refusé pour l'entreprise ${companyId} : ${decision.message}`);
@@ -2404,7 +2404,9 @@ class PhoneNumberController {
     // Destination internationale à N crédits la minute : le solde doit couvrir au moins une minute internationale entière.
     let creditsPerMinute = 1;
     if (to) {
-      try { creditsPerMinute = await outboundCreditFactor({ companyId, limits: await loadCompanyPlanLimits(companyId), to }); } catch { creditsPerMinute = 1; }
+      let planLimits = null;
+      try { planLimits = await loadCompanyPlanLimits(companyId); } catch { planLimits = null; }
+      creditsPerMinute = await outboundCreditFactor({ companyId, limits: planLimits, to });
     }
     if (creditsPerMinute > 1) {
       if (Number.isFinite(balance) && Math.floor(balance) >= creditsPerMinute) return null;

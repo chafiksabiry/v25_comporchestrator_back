@@ -158,7 +158,7 @@ setTransferDeps({ minutes: async () => 30 });
 // destination internationale à 4 crédits la minute : solde insuffisant pour une minute internationale => refus clair avec le coefficient
 setTransferDeps({ minutes: async () => 3, creditFactor: async () => 4 });
 r = await call(ctl.transfer, { body: { callSid: SID_CHILD, entryId: E_ONE } });
-assert.equal(r.code, 402); assert.equal(r.body.code, 'no_minutes'); assert.equal(r.body.creditsPerMinute, 4); assert.match(r.body.message, /1 minute = 4 crédits/);
+assert.equal(r.code, 402); assert.equal(r.body.code, 'no_minutes'); assert.equal(r.body.creditsPerMinute, 4); assert.match(r.body.message, /1 minute = 4 crédits/); assert.match(r.body.messageEn, /1 minute = 4 credits/); assert.match(r.body.messageEs, /1 minuto = 4 créditos/);
 assert.equal(calls[0].transfer.startedAt, null, 'rien n’est consigné');
 setTransferDeps({ minutes: async () => 30, creditFactor: async () => 1 });
 

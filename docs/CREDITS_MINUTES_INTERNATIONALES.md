@@ -15,20 +15,21 @@ Ordre de lecture : **métadonnée Stripe `international_minute_credits` du produ
 
 **Déploiement sans changement** : sans métadonnée ni variable, N = 1 et **tout est strictement inchangé** (testé pour les 4 offres). On passe ensuite à la valeur voulue en configuration (par exemple `INTERNATIONAL_MINUTE_CREDITS=4`, ou la métadonnée sur le produit d'une offre). Le coefficient est relu à chaque comptage (pas de cache applicatif propre à cette fonction ; un changement d'environnement demande un redémarrage, un changement de métadonnée passe par la synchronisation des forfaits existante).
 
-## Classification (réutilisée de la PR #143)
+## Classification
 
-- Pays de l'entreprise = indicatif de sa **première ligne lisible** (même règle que `outboundPolicy`, lu même quand le titulaire a personnalisé ses pays activés).
-- **Domestique** : pays de l'entreprise ; si l'entreprise est dans l'UE, les 27 pays de l'UE (`src/services/euCountries.js`, codes ISO, Royaume-Uni absent) ; régions françaises d'outre-mer **+262, +590, +594, +596 traitées comme la France**. Limite connue : Saint-Barthélemy (hors UE) et la partie française de Saint-Martin partagent +590 avec la Guadeloupe, indistinguables par l'indicatif.
-- **International** : tout le reste (Royaume-Uni, Suisse, Norvège, États-Unis… ; entreprise hors UE appelant l'UE comprise).
-- **+1** : États-Unis et Canada (un seul indicatif) sont domestiques entre eux, limite connue.
-- **Entreprise sans ligne lisible** : zone inconnue, jamais supposée dans l'UE → **1 crédit** (comportement historique) + avertissement `pays de l'entreprise inconnu`.
-- **Entrants** : classés sur la **provenance** (numéro appelant) : provenance internationale lisible (E.164, hors de la zone de l'entreprise) → N ; provenance **masquée, absente ou illisible → 1**. Choix : un entrant se juge sur le pays d'où il vient, comme un sortant sur le pays où il va ; sans provenance lisible on ne facture pas plus que le national.
+- **Sortants** : zone de la destination, jugée depuis la **ligne réellement utilisée** par l'appel (champ `from` de l'appel stocké ; au moment de décider, la ligne qui va passer l'appel). Si `from` n'est pas un numéro lisible (par exemple `client:…`), **repli documenté** sur la première ligne lisible de l'entreprise. Le résultat ne dépend donc pas de l'instant de la synchro.
+- **Domestique** : même pays ; États-Unis ↔ Canada ; pour une entreprise de l'UE, les 27 pays de l'UE (`src/services/euCountries.js`, codes ISO, Royaume-Uni absent) ; régions françaises d'outre-mer **+262, +590, +594, +596 traitées comme la France** (limite connue : Saint-Barthélemy, hors UE, et la partie française de Saint-Martin partagent +590 avec la Guadeloupe).
+- **International** : tout le reste (Royaume-Uni, Suisse, Norvège… ; entreprise hors UE appelant l'UE comprise).
+- **Territoires** : le pays est identifié par `callingInfoOf` (`outboundDestinations.js`) à partir du numéro complet : pour une entreprise +1, seuls les **États-Unis et le Canada sont domestiques entre eux** ; Jamaïque, Bahamas, Porto Rico, République dominicaine, Trinité-et-Tobago… sont **internationaux** ; +7 distingue Russie et Kazakhstan ; +262 distingue La Réunion et Mayotte (toutes deux la France). `+44` n'est pas subdivisé par la table (Jersey, Guernesey, île de Man comptent comme le Royaume-Uni).
+- **Aucun pays identifiable** (indicatif absent de la table, ou indicatif partagé fourni seul sans numéro complet) : **domestique par prudence** (aucun surcoût sur une donnée inconnue), avec avertissement `[zone]`.
+- **Entreprise sans ligne lisible et appel sans `from` lisible** : zone inconnue, jamais supposée dans l'UE → **1 crédit** + avertissement.
+- **ENTRANTS : toujours 1 crédit par minute**, quelle que soit la provenance. Décision par défaut du propriétaire : le périmètre voulu ne porte que sur les appels **sortants** vers l'international ; un débit appliqué après coup à un entrant, sans pré-contrôle possible, pourrait rendre le solde négatif sans décision. La lecture de la provenance est donc désactivée.
 
 ## Où le coefficient s'applique
 
 | Point | Effet |
 | --- | --- |
-| Lecture du solde (`syncMinutesFromCalls`) | crédits de chaque appel = minutes arrondies × facteur de zone ; secondes réelles inchangées |
+| Lecture du solde (`syncMinutesFromCalls`) | crédits de chaque appel sortant = minutes arrondies × facteur de zone ; entrants ×1 ; secondes réelles inchangées |
 | `POST /minutes-company/charge-call` | durée relue de l'appel stocké (comme #142), facteur selon l'appel stocké |
 | Webhook du clavier navigateur | durée maximale = solde / N pour une destination internationale (`maxSecondsForBalance(solde, N)`) |
 | Pré-contrôle (jeton, vérification de destination) | 402 `MINUTES_INSUFFICIENT_FOR_DESTINATION` avec `creditsPerMinute` et message « Insufficient balance for an international call: 1 minute = N credits. » (+ `messageFr`) si le solde ne couvre pas une minute internationale |
@@ -36,7 +37,13 @@ Ordre de lecture : **métadonnée Stripe `international_minute_credits` du produ
 
 Refus parlé du webhook (en/fr/es) : « Solde insuffisant pour un appel international : 1 minute = N crédits. » Un appel qui traverse le solde reste possible (solde négatif toléré comme aujourd'hui).
 
-**Erreur de lecture** : forfait illisible pendant le comptage → les appels de type international sont **différés** (jamais débités à 1 à tort, repris à la lecture suivante), les autres sont débités ; si le pays est lui aussi illisible, le comptage est interrompu (mieux vaut retarder que mal débiter). `charge-call` ne débite rien si le forfait est illisible (la lecture du solde reprend l'appel). Pour décider d'un appel à venir, une lecture impossible donne 1 (jamais de blocage) ; le débit réel reclasse l'appel.
+**Un seul point de résolution du coefficient** (`coefficientOf`, `creditCoefficient.js`) pour le débit, `charge-call`, le webhook, le pré-contrôle, le rappel, le transfert et la lecture Facturation : forfait (métadonnée → environnement → 1), et **sans forfait lisible (`limits` null) : l'environnement, sinon 1**.
+
+**Aucun accès ni dépendance nouvelle par défaut** : à N = 1 (rien configuré), le pays de l'entreprise et les lignes ne sont **jamais** lus. La lecture du forfait, seule nécessaire pour savoir si la métadonnée existe, est réutilisée **30 s par société** (au plus une lecture), et seulement quand des appels sont à débiter. **Toute lecture impossible (forfait, lignes) retombe sur 1 crédit par minute, comme avant** : jamais de report ni d'interruption du débit normal (compromis assumé : un appel international compté pendant une panne de lecture est alors débité à 1).
+
+**Messages d'insuffisance identiques en en / fr / es sur tous les canaux** (un seul texte par langue, `SPOKEN_REFUSALS.*.insufficient_minutes_international`) : refus parlé du webhook et du rappel (langue de la ligne), pré-contrôle (`message`, `messageFr`, `messageEs`), transfert (`message` en français, `messageEn`, `messageEs`), décision d'appel.
+
+**Dépassement possible** : le solde peut passer sous zéro de quelques crédits (jusqu'à N − 1 par appel, davantage si plusieurs appels internationaux partent simultanément avec le même solde, ou si un appel est compté après coup) ; comme aujourd'hui pour le solde en minutes, aucun blocage rétroactif.
 
 ## Lecture pour l'écran Facturation
 
@@ -48,6 +55,6 @@ Refus parlé du webhook (en/fr/es) : « Solde insuffisant pour un appel internat
 
 ## Limites connues / non couvert
 
-- Le rappel de messagerie vocale reprend la même logique que le webhook mais n'a pas de test dédié (le contrôleur n'est pas testable sans simulations lourdes) ; la durée maximale et le refus passent par `maxSecondsForBalance(…, N)` testé.
+- Le rappel de messagerie vocale reprend la même logique que le webhook (ligne du rappel, refus parlé en/fr/es) mais n'a pas de test dédié (le contrôleur n'est pas testable sans simulations lourdes) ; la durée maximale et le refus passent par `maxSecondsForBalance(…, N)` testé.
 - Plafond « mou » : plusieurs appels simultanés lancés avec le même solde peuvent le dépasser ensemble (comme avant).
 - Front (affichage du coefficient, écran Facturation) et `dash_calls` hors périmètre.

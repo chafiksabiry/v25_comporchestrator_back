@@ -1,5 +1,6 @@
 import { classifyZone } from './callZone.js';
-import { toStrictE164 } from './outboundDestinations.js';
+import { countryPrefixOf, toStrictE164 } from './outboundDestinations.js';
+import { internationalInsufficientText } from './browserOutbound.js';
 
 /**
  * Un crédit minute INTERNATIONAL = N crédits minute nationale. UN SEUL solde de minutes (MinutesCompany, packs et achats existants
@@ -10,9 +11,11 @@ import { toStrictE164 } from './outboundDestinations.js';
  * d'environnement `INTERNATIONAL_MINUTE_CREDITS`, sinon 1 (= comportement actuel inchangé : on déploie sans rien changer, puis on passe à
  * la valeur voulue en configuration). Borne : entier entre 1 et 100 ; une valeur invalide donne 1 et un avertissement.
  *
- * Classification (callZone.js) : sortant = zone de la destination ; entrant = coefficient national (1) SAUF provenance internationale
- * lisible (numéro appelant en E.164 d'un pays hors de la zone de l'entreprise) — choix documenté : un entrant se juge sur le pays d'où il
- * vient, comme un sortant sur le pays où il va ; provenance masquée ou illisible : 1. Pays de l'entreprise inconnu : 1 (historique).
+ * Classification (callZone.js) : sortant = zone de la destination, jugée depuis la ligne RÉELLEMENT utilisée (champ `from` de l'appel
+ * stocké ; repli documenté sur la première ligne de l'entreprise si `from` n'est pas un numéro lisible, par exemple « client:… ») : le
+ * résultat ne dépend donc pas de l'instant de la synchro. ENTRANTS : toujours 1 (décision du propriétaire : le périmètre ne porte que sur
+ * les appels sortants vers l'international ; un débit après coup, sans pré-contrôle, pourrait rendre le solde négatif sans décision).
+ * Pays de l'entreprise inconnu : 1 (historique). Toute lecture impossible (forfait, lignes) : 1, comme avant (jamais de report ni de blocage).
  */
 export const COEFFICIENT_METADATA_KEY = 'international_minute_credits';
 export const COEFFICIENT_ENV = 'INTERNATIONAL_MINUTE_CREDITS';
@@ -59,12 +62,29 @@ export function resolveInternationalCoefficient({ metadata, env = process.env } 
 
 const isInbound = (call) => call?.direction === 'inbound';
 
-/** Crédits débités par minute pour cet appel : 1, ou le coefficient pour un appel de zone internationale. Ne lit rien d'autre. */
+/**
+ * Un SEUL point de résolution du coefficient (débit, webhook, pré-contrôle, rappel, transfert, lecture Facturation) : celui du forfait
+ * (`limits.internationalCoefficient`, déjà résolu métadonnée → environnement → 1) ; sans forfait lisible (`limits` null) : environnement,
+ * sinon 1.
+ * @returns {{coefficient: number, source: string}}
+ */
+export function coefficientOf(limits) {
+  if (typeof limits?.internationalCoefficient === 'number') return { coefficient: limits.internationalCoefficient, source: limits.internationalCoefficientSource || 'plan' };
+  const { coefficient, source } = resolveInternationalCoefficient({});
+  return { coefficient, source };
+}
+
+/**
+ * Crédits débités par minute pour cet appel : 1, ou le coefficient pour un appel SORTANT de zone internationale. Entrant : 1.
+ * Zone : depuis la ligne réellement utilisée (`call.from`) si c'est un numéro lisible, sinon depuis `companyCountry` (première ligne de
+ * l'entreprise). Ne lit rien d'autre.
+ */
 export function callCreditFactor(call, { coefficient = 1, companyCountry = '' } = {}) {
-  if (!(coefficient > 1)) return 1;
-  const remote = isInbound(call) ? call?.from : call?.to;
-  if (!toStrictE164(remote)) return 1;
-  const { zone } = classifyZone({ to: remote, companyCountry });
+  if (!(coefficient > 1) || isInbound(call)) return 1;
+  if (!toStrictE164(call?.to)) return 1;
+  const line = toStrictE164(call?.from);
+  const home = line || companyCountry;
+  const { zone } = classifyZone({ to: call.to, companyCountry: home });
   if (zone === 'unknown') {
     console.warn("[credits] pays de l'entreprise inconnu (aucune ligne lisible) : 1 crédit par minute (comportement historique)");
     return 1;
@@ -75,84 +95,85 @@ export function callCreditFactor(call, { coefficient = 1, companyCountry = '' } 
 /** Crédits d'un appel : minute entamée arrondie à la minute supérieure, puis multipliée. */
 export const callCredits = (call, options) => Math.ceil(Number(call?.duration || 0) / 60) * callCreditFactor(call, options);
 
-const callKey = (c) => String(c?.sid || c?._id || '');
-
-/** Pays de l'entreprise (indicatif de sa première ligne lisible), même règle que outboundPolicy ; '' si inconnu. */
-export async function companyCountryOf(companyId, options) {
-  const { resolveCompanyCountry } = await import('./outboundPolicy.js');
-  return resolveCompanyCountry(companyId, options);
+/** Numéro de la première ligne lisible de l'entreprise (permet de distinguer les territoires d'un même indicatif) ; '' si inconnu. */
+export async function companyHomeOf(companyId, options) {
+  const { resolveCompanyHome } = await import('./outboundPolicy.js');
+  return resolveCompanyHome(companyId, options);
 }
 
-async function defaultLoadLimits(companyId) {
-  const { loadCompanyPlanLimits } = await import('./planLimits.js');
-  return loadCompanyPlanLimits(companyId);
+/** Durée pendant laquelle le forfait lu d'une société est réutilisé (une lecture au plus par société) : limite l'accès supplémentaire. */
+export const COEFFICIENT_CACHE_MS = 30 * 1000;
+const limitsCache = new Map();
+export const clearCoefficientCache = () => limitsCache.clear();
+
+/** Forfait de la société (loadCompanyPlanLimits), réutilisé brièvement. Une erreur n'est jamais mise en cache. */
+export async function cachedPlanLimits(companyId, { load, now = () => Date.now() } = {}) {
+  const key = String(companyId);
+  const hit = limitsCache.get(key);
+  if (hit && now() - hit.at < COEFFICIENT_CACHE_MS && now() >= hit.at) return hit.limits;
+  const loader = load || (async (id) => (await import('./planLimits.js')).loadCompanyPlanLimits(id));
+  const limits = await loader(companyId);
+  limitsCache.set(key, { at: now(), limits });
+  return limits;
 }
+
+const defaultLoadLimits = (companyId) => cachedPlanLimits(companyId);
 
 /**
- * Prépare le débit d'un lot d'appels : { factorOf(appel), deferred }.
- *  - coefficient 1 (cas par défaut) : aucune lecture du pays, facteur 1 : comportement actuel ;
- *  - coefficient > 1 : facteur par appel d'après la zone ;
- *  - forfait illisible : le coefficient est INCONNU : les appels de type international sont différés (repris à la prochaine lecture,
- *    jamais débités à tort à 1), les autres débités normalement ; si le pays est lui aussi illisible, l'erreur remonte (on interrompt :
- *    mieux vaut retarder que mal débiter).
+ * Prépare le débit d'un lot d'appels : { factorOf(appel) }. Coefficient 1 (cas par défaut) : aucune lecture du pays, facteur 1 :
+ * comportement actuel. Coefficient > 1 : facteur par appel d'après la zone. Forfait ou lignes illisibles : facteur 1, comme avant
+ * (jamais de report ni d'interruption : le débit normal n'est jamais sauté).
  */
-export async function planCreditCharging({ companyId, calls, loadLimits = defaultLoadLimits, country = companyCountryOf }) {
+export async function planCreditCharging({ companyId, calls, loadLimits = defaultLoadLimits, country = companyHomeOf }) {
+  void calls;
   let limits = null;
-  let known = true;
   try {
     limits = await loadLimits(companyId);
   } catch (error) {
-    known = false;
-    console.warn('[credits] forfait illisible, appels de type international différés :', error?.message || error);
+    console.warn('[credits] forfait illisible, 1 crédit par minute (comportement d\'avant) :', error?.message || error);
+    return { factorOf: () => 1, deferred: new Set(), coefficient: 1 };
   }
-  const coefficient = known ? (limits?.internationalCoefficient ?? resolveInternationalCoefficient({}).coefficient) : null;
-  if (known && !(coefficient > 1)) return { factorOf: () => 1, deferred: new Set(), coefficient: 1 };
-  const home = await country(companyId);
-  if (!known) {
-    const deferred = new Set();
-    for (const c of calls || []) {
-      const remote = isInbound(c) ? c.from : c.to;
-      if (callKey(c) && toStrictE164(remote) && classifyZone({ to: remote, companyCountry: home }).zone === 'international') deferred.add(callKey(c));
-    }
-    return { factorOf: () => 1, deferred, coefficient: null };
+  const { coefficient } = coefficientOf(limits);
+  if (!(coefficient > 1)) return { factorOf: () => 1, deferred: new Set(), coefficient: 1 };
+  let home = '';
+  try {
+    home = await country(companyId);
+  } catch (error) {
+    console.warn('[credits] lignes illisibles, 1 crédit par minute (comportement d\'avant) :', error?.message || error);
+    return { factorOf: () => 1, deferred: new Set(), coefficient };
   }
   return { factorOf: (call) => callCreditFactor(call, { coefficient, companyCountry: home }), deferred: new Set(), coefficient };
 }
 
-/** Crédits par minute d'un appel déjà enregistré (charge-call) ; null si le forfait est illisible (rien n'est débité, la lecture du solde reprend). */
-export async function creditFactorForCall({ companyId, call, loadLimits = defaultLoadLimits, country = companyCountryOf }) {
-  let limits;
-  try {
-    limits = await loadLimits(companyId);
-  } catch (error) {
-    console.warn('[credits] forfait illisible, appel laissé à la lecture du solde :', error?.message || error);
-    return null;
-  }
-  const coefficient = limits?.internationalCoefficient ?? resolveInternationalCoefficient({}).coefficient;
-  if (!(coefficient > 1)) return 1;
-  return callCreditFactor(call, { coefficient, companyCountry: await country(companyId) });
+/** Crédits par minute d'un appel déjà enregistré (charge-call) : 1 si le forfait ou les lignes sont illisibles (comme avant). */
+export async function creditFactorForCall({ companyId, call, loadLimits = defaultLoadLimits, country = companyHomeOf }) {
+  const plan = await planCreditCharging({ companyId, calls: [call], loadLimits, country });
+  return plan.factorOf(call);
 }
 
 /**
- * Crédits par minute d'un appel sortant à venir vers `to` (webhook, rappel, transfert, pré-contrôle). `limits` : forfait déjà chargé.
- * Ne bloque jamais sur une lecture impossible : 1 (le débit réel, lui, reclasse l'appel à la lecture du solde).
+ * Crédits par minute d'un appel sortant à venir vers `to` (webhook, rappel, transfert, pré-contrôle). `limits` : forfait déjà chargé
+ * (peut être null). `lineNumber` : ligne qui passera l'appel (sinon première ligne de l'entreprise). Ne bloque jamais sur une lecture
+ * impossible : 1 (le débit réel reclasse l'appel à la lecture du solde).
  */
-export async function outboundCreditFactor({ companyId, limits, to, country = companyCountryOf }) {
-  const coefficient = limits?.internationalCoefficient ?? 1;
+export async function outboundCreditFactor({ companyId, limits, to, lineNumber = '', country = companyHomeOf }) {
+  const { coefficient } = coefficientOf(limits);
   if (!(coefficient > 1)) return 1;
   try {
-    return callCreditFactor({ direction: 'outbound', to }, { coefficient, companyCountry: await country(companyId) });
+    const line = toStrictE164(lineNumber);
+    return callCreditFactor({ direction: 'outbound', to, from: line || undefined }, { coefficient, companyCountry: line ? '' : await country(companyId) });
   } catch (error) {
-    console.warn('[credits] pays de l\'entreprise illisible, 1 crédit par minute :', error?.message || error);
+    console.warn("[credits] lignes illisibles, 1 crédit par minute :", error?.message || error);
     return 1;
   }
 }
 
-/** Messages (anglais par défaut, français additif) du refus « solde insuffisant pour un appel international ». */
+/** Messages du refus « solde insuffisant pour un appel international : 1 minute = N crédits » : un seul texte par langue, tous canaux. */
 export function insufficientInternationalMessages(credits) {
   return {
-    message: `Insufficient balance for an international call: 1 minute = ${credits} credits.`,
-    messageFr: `Solde insuffisant pour un appel international : 1 minute = ${credits} crédits.`,
+    message: internationalInsufficientText('en', credits),
+    messageFr: internationalInsufficientText('fr', credits),
+    messageEs: internationalInsufficientText('es', credits),
   };
 }
 
@@ -167,6 +188,6 @@ export function buildCreditsOverview({ minutes, planMinutesIncluded = 0, coeffic
     internationalCreditsPerMinute: n,
     coefficientSource: coefficient?.source || 'default',
     internationalMinutesEquivalent: Math.max(0, Math.floor(Math.floor(credits) / n)),
-    zone: { companyCountry: companyCountry || '', euZone: zone.euZone },
+    zone: { companyCountry: countryPrefixOf(companyCountry) || '', euZone: zone.euZone },
   };
 }

@@ -19,6 +19,7 @@ const { loadCompanyPlanLimits } = await import('../services/planLimits.js');
 const { syncMinutesFromCalls } = await import('../controllers/escrowController.js');
 const { minutesCompanyController } = await import('../controllers/minutesCompanyController.js');
 const { createCreditsHandlers } = await import('../controllers/minutesCreditsController.js');
+const { clearCoefficientCache } = await import('../services/creditCoefficient.js');
 const { minutesCompanyRoutes } = await import('../routes/minutesCompany.js');
 const { phoneNumberController: pc } = await import('../controllers/phoneNumberController.js');
 const { phoneNumberService } = await import('../services/phoneNumberService.js');
@@ -26,7 +27,7 @@ const { phoneNumberService } = await import('../services/phoneNumberService.js')
 const C1 = '64b0000000000000000000c1';
 const BASE = { harx_product: 'callcenter', callcenter_tier: 'full_scope' };
 const GB = '+442071234567'; const DE = '+4915112345678'; const FR = '+33612345678'; const DOM = '+262692123456';
-let meta; let N; let CALLS; let lines;
+let meta; let N; let CALLS; let lines; let lineReads; let planReads;
 const clone = (v) => (v === null || v === undefined ? v : structuredClone(v));
 const thenable = (get) => ({ lean: async () => clone(get()), select() { return this; }, sort() { return this; }, limit() { return this; }, then(r, j) { return Promise.resolve(clone(get())).then(r, j); } });
 const wallet = (minutes) => ({ companyId: C1, minutes, consumedSeconds: 0, chargedCallSids: [], planGrantKeys: [], credits: [], purchasedMinutes: 0, planMinutesGranted: 0 });
@@ -36,12 +37,12 @@ const saved = { log: console.log, warn: console.warn, error: console.error };
 let warnings;
 beforeEach(() => {
   console.log = () => {}; console.error = () => {}; warnings = []; console.warn = (...a) => warnings.push(a.join(' '));
-  delete process.env.INTERNATIONAL_MINUTE_CREDITS;
+  delete process.env.INTERNATIONAL_MINUTE_CREDITS; clearCoefficientCache(); lineReads = 0; planReads = 0;
   meta = { ...BASE }; N = wallet(0); CALLS = [];
   lines = [{ _id: 'l1', companyId: C1, phoneNumber: '+33611110001', provider: 'twilio', twilioId: 'PN1', status: 'active', billingStatus: 'active', createdAt: new Date('2026-01-01') }];
-  PhoneNumber.find = () => thenable(() => lines);
+  PhoneNumber.find = () => { lineReads += 1; return thenable(() => lines); };
   PhoneNumber.findOne = () => thenable(() => lines[0] || null);
-  Subscription.findOne = () => ({ populate: async () => subscription() });
+  Subscription.findOne = () => { planReads += 1; return { populate: async () => subscription() }; };
   // Pays activés : France, Royaume-Uni, Allemagne (sinon la destination est refusée avant toute question de minutes).
   InboundSettings.findOne = () => thenable(() => ({ secretaryOutbound: true, outboundPrefixes: ['+33', '+44', '+49'] }));
   MinutesCompany.findOne = () => thenable(() => N);
@@ -69,17 +70,17 @@ after(() => { Object.assign(console, saved); delete process.env.INTERNATIONAL_MI
 const callDoc = (sid, duration, over = {}) => ({ sid, duration, direction: 'outbound', to: FR, startTime: new Date('2026-11-10T10:00:00Z'), companyId: C1, ...over });
 
 // --- Débit (lecture du solde) ------------------------------------------------------------------------------------------------
-test('lecture du solde, coefficient 4 (environnement) : FR→FR 2, FR→DE 1, FR→GB 8, FR→DOM 1, entrant GB 4, entrant masqué 1', async () => {
+test('lecture du solde, coefficient 4 (environnement) : FR→FR 2, FR→DE 1, FR→GB 8, FR→DOM 1, ENTRANTS toujours 1 (même provenance internationale)', async () => {
   process.env.INTERNATIONAL_MINUTE_CREDITS = '4';
   N = wallet(100);
   CALLS = [callDoc('FRA', 61, { to: FR }), callDoc('EU', 60, { to: DE }), callDoc('INT', 61, { to: GB }), callDoc('DOM', 60, { to: DOM }),
     callDoc('IN1', 60, { direction: 'inbound', from: GB, to: FR }), callDoc('IN2', 60, { direction: 'inbound', from: 'anonymous', to: FR })];
   await syncMinutesFromCalls(C1);
-  assert.equal(N.minutes, 100 - 2 - 1 - 8 - 1 - 4 - 1);
+  assert.equal(N.minutes, 100 - 2 - 1 - 8 - 1 - 1 - 1, 'entrant GB = 1 crédit');
   assert.equal(N.consumedSeconds, 362, 'les secondes réelles restent celles des appels');
   assert.equal(N.chargedCallSids.length, 6);
   await syncMinutesFromCalls(C1); // idempotence : même clé par appel
-  assert.equal(N.minutes, 83); assert.equal(N.consumedSeconds, 362);
+  assert.equal(N.minutes, 86); assert.equal(N.consumedSeconds, 362);
 });
 
 test('coefficient du forfait (métadonnée Stripe) prioritaire sur l\'environnement', async () => {
@@ -95,12 +96,13 @@ test('coefficient absent : comportement actuel INCHANGÉ pour les 4 offres (1 cr
     CALLS = [callDoc('INT', 61, { to: GB }), callDoc('IN', 60, { direction: 'inbound', from: GB, to: FR })];
     await syncMinutesFromCalls(C1);
     assert.equal(N.minutes, 100 - 2 - 1, tier);
+    assert.equal(lineReads, 0, 'coefficient 1 : les lignes ne sont pas lues');
   }
 });
 
 test('coefficient invalide : 1 + avertissement', async () => {
   for (const bad of ['0', '101', 'abc', '2.5']) {
-    meta = { ...BASE, international_minute_credits: bad }; N = wallet(100); CALLS = [callDoc('INT', 61, { to: GB })]; warnings.length = 0;
+    clearCoefficientCache(); meta = { ...BASE, international_minute_credits: bad }; N = wallet(100); CALLS = [callDoc('INT', 61, { to: GB })]; warnings.length = 0;
     await syncMinutesFromCalls(C1);
     assert.equal(N.minutes, 98, bad); assert.ok(warnings.some((w) => /international_minute_credits/.test(w)), bad);
   }
@@ -124,15 +126,48 @@ test('pays de l\'entreprise lu des lignes même si le titulaire a personnalisé 
   assert.equal(N.minutes, 96);
 });
 
-test('forfait illisible : appels de type international différés (jamais débités à 1), les autres débités ; repris ensuite à N', async () => {
+test('A4 : forfait illisible => 1 crédit par minute (comme avant), le débit normal n\'est jamais sauté ni reporté', async () => {
   process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(100);
   CALLS = [callDoc('INT', 60, { to: GB }), callDoc('DOM', 60, { to: DE })];
   Subscription.findOne = () => { throw new Error('mongo down'); };
   await syncMinutesFromCalls(C1);
-  assert.equal(N.minutes, 99); assert.deepEqual(N.chargedCallSids, ['DOM']);
-  Subscription.findOne = () => ({ populate: async () => subscription() });
+  assert.equal(N.minutes, 98); assert.deepEqual(N.chargedCallSids.sort(), ['DOM', 'INT']);
+});
+
+test('A4 : lignes illisibles (coefficient > 1) => 1 crédit par minute, débit normal', async () => {
+  process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(100); CALLS = [callDoc('INT', 60, { to: GB })];
+  PhoneNumber.find = () => { throw new Error('mongo down'); };
   await syncMinutesFromCalls(C1);
-  assert.equal(N.minutes, 95); assert.deepEqual(N.chargedCallSids.sort(), ['DOM', 'INT']);
+  assert.equal(N.minutes, 99);
+});
+
+test('A4 : coefficient absent ou 1 => aucune lecture des lignes ; forfait lu au plus une fois par société sur deux lectures successives (cache)', async () => {
+  N = wallet(100); CALLS = [callDoc('A', 60, { to: GB })];
+  await syncMinutesFromCalls(C1);
+  CALLS.push(callDoc('B', 60, { to: GB }));
+  await syncMinutesFromCalls(C1);
+  assert.equal(lineReads, 0); assert.equal(planReads, 1); assert.equal(N.minutes, 98);
+});
+
+test('A2 : sortant classé d\'après la ligne réellement utilisée (from), repli sur la première ligne de l\'entreprise', async () => {
+  process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(100);
+  CALLS = [
+    callDoc('UKLINE', 60, { to: GB, from: '+442071230000' }),            // ligne britannique → Royaume-Uni : domestique, 1
+    callDoc('UKLINE_FR', 60, { to: FR, from: '+442071230000' }),         // ligne britannique → France : international, 4
+    callDoc('FRLINE', 60, { to: GB, from: '+33411112222' }),             // ligne française → Royaume-Uni : international, 4
+    callDoc('CLIENT', 60, { to: GB, from: 'client:cc-sec1' }),           // from illisible : première ligne (France) → 4
+    callDoc('NOFROM', 60, { to: DE }),                                   // pas de from : première ligne (France) → UE : 1
+  ];
+  await syncMinutesFromCalls(C1);
+  assert.equal(N.minutes, 100 - 1 - 4 - 4 - 4 - 1);
+});
+
+test('A2 : la classification ne dépend pas de l\'instant de la synchro (première ligne changée entre-temps)', async () => {
+  process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(100);
+  lines = [{ ...lines[0], phoneNumber: '+442071230000' }]; // la première ligne de l'entreprise est devenue britannique
+  CALLS = [callDoc('FRLINE', 60, { to: GB, from: '+33411112222' })];
+  await syncMinutesFromCalls(C1);
+  assert.equal(N.minutes, 96, 'jugé d\'après la ligne de l\'appel (France → Royaume-Uni)');
 });
 
 // --- charge-call -----------------------------------------------------------------------------------------------------------------
@@ -152,14 +187,14 @@ test('charge-call : durée relue de l\'appel stocké, crédits selon la zone, id
   assert.equal(N.minutes, 90, 'la lecture du solde ne redébite pas');
 });
 
-test('charge-call : coefficient absent => comme aujourd\'hui ; forfait illisible => rien débité', async () => {
+test('charge-call : coefficient absent => comme aujourd\'hui ; forfait illisible => 1 crédit (comme avant), débit jamais sauté', async () => {
   N = wallet(100); CALLS = [callDoc('INT', 61, { to: GB })];
   await charge({ companyId: C1, callSid: 'INT', duration: 61 });
   assert.equal(N.minutes, 98);
   process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(100); CALLS = [callDoc('X', 61, { to: GB })];
   Subscription.findOne = () => { throw new Error('mongo down'); };
   const r = await charge({ companyId: C1, callSid: 'X', duration: 61 });
-  assert.equal(r.code, 200); assert.equal(r.body.charged, false); assert.equal(r.body.reason, 'Plan unavailable'); assert.equal(N.minutes, 100); assert.deepEqual(N.chargedCallSids, []);
+  assert.equal(r.code, 200); assert.equal(r.body.charged, true); assert.equal(N.minutes, 98); assert.deepEqual(N.chargedCallSids, ['X']);
 });
 
 // --- Décision de l'appel sortant ---------------------------------------------------------------------------------------------
@@ -202,7 +237,7 @@ test('pré-contrôle : 402 avec N pour un solde insuffisant à l\'international 
   process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(3);
   const refused = await pc.minutesShortfall(C1, GB);
   assert.equal(refused.code, 'MINUTES_INSUFFICIENT_FOR_DESTINATION'); assert.equal(refused.creditsPerMinute, 4); assert.equal(refused.zone, 'international');
-  assert.match(refused.message, /1 minute = 4 credits/); assert.match(refused.messageFr, /1 minute = 4 crédits/);
+  assert.match(refused.message, /1 minute = 4 credits/); assert.match(refused.messageFr, /1 minute = 4 crédits/); assert.match(refused.messageEs, /1 minuto = 4 créditos/);
   N = wallet(4); assert.equal(await pc.minutesShortfall(C1, GB), null);
   N = wallet(3); assert.equal(await pc.minutesShortfall(C1, DE), null, 'UE'); assert.equal(await pc.minutesShortfall(C1), null, 'jeton sans destination');
   N = wallet(0); assert.equal((await pc.minutesShortfall(C1, DE)).code, 'MINUTES_INSUFFICIENT_FOR_DESTINATION');
@@ -232,6 +267,12 @@ test('endpoint : crédits restants, coefficient appliqué, minutes international
   assert.deepEqual(r.body.data, { companyId: C1, credits: 10, includedMinutes: 30, internationalCreditsPerMinute: 4, coefficientSource: 'plan', internationalMinutesEquivalent: 2, zone: { companyCountry: '+33', euZone: true } });
   const one = (await get(handlers({ loadLimits: async () => ({ internationalCoefficient: 1, internationalCoefficientSource: 'default' }) }))).body.data;
   assert.equal(one.internationalCreditsPerMinute, 1); assert.equal(one.internationalMinutesEquivalent, 10);
+});
+
+test('A5 : lecture Facturation avec forfait illisible (limits null) : coefficient de l\'environnement', async () => {
+  process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(10);
+  const d = (await get(handlers({ loadLimits: async () => null }))).body.data;
+  assert.equal(d.internationalCreditsPerMinute, 4); assert.equal(d.coefficientSource, 'env'); assert.equal(d.internationalMinutesEquivalent, 2);
 });
 
 test('endpoint : titulaire de CETTE entreprise seulement, lecture seule, route GET authentifiée', async () => {
