@@ -12,13 +12,13 @@ const MESSAGES = {
   fr: {
     welcome: 'Bonjour et bienvenue chez HARX ! Comment puis-je vous aider ?',
     greeting: "Bonjour et bienvenue chez HARX ! Comment puis-je vous aider ? Si votre question concerne votre compte ou votre candidature, pouvez-vous m'indiquer l'email utilisé lors de votre inscription ?",
-    hold: "Merci pour votre message. Je transmets votre demande à un membre de l'équipe, qui vous répondra directement.",
+    ack: "Merci pour votre message. Je n'ai pas toutes les informations pour répondre précisément à cette question dans ce chat ; votre demande a été enregistrée pour l'équipe HARX.",
     pending: 'Un instant, je regarde cela pour vous.',
   },
   en: {
     welcome: 'Hello and welcome to HARX! How can I help you?',
     greeting: 'Hello and welcome to HARX! How can I help you? If your question is about your account or your application, could you share the email you used to sign up?',
-    hold: 'Thank you for your message. I am passing your request to a member of the team, who will get back to you directly.',
+    ack: 'Thank you for your message. I do not have all the information needed to answer this question precisely in this chat; your request has been recorded for the HARX team.',
     pending: 'One moment, I am looking into this for you.',
   },
 };
@@ -44,10 +44,10 @@ const langOf = (text) => {
 const signed = (text) => `${String(text).trim()}\n\n${SIGNATURE}`;
 
 /**
- * Transfert à un opérateur. SalesIQ rejette un `forward` sans texte (« No proper response in messagehandler ») :
- * le visiteur reçoit donc toujours le message d'attente fixe, signé, avec le transfert.
+ * Réponse de repli (mode off, panne, limite de débit, message vide) : un texte honnête, jamais un transfert.
+ * SalesIQ rejette une réponse sans texte (« No proper response in messagehandler »).
  */
-export const forwardResponse = (lang = 'fr') => ({ action: 'forward', replies: [signed(MESSAGES[lang].hold)] });
+export const ackResponse = (lang = 'fr') => ({ action: 'reply', replies: [signed(MESSAGES[lang].ack)] });
 
 export function createAgent({ cfg, claude, zoho, tools, knowledge, logger = console, now = () => Date.now() }) {
   const limiter = createRateLimiter({ perMinute: cfg.rateLimitPerMinute, perDay: cfg.rateLimitPerDay });
@@ -65,13 +65,14 @@ export function createAgent({ cfg, claude, zoho, tools, knowledge, logger = cons
     return s;
   }
 
-  // Le message d'attente proposé par Claude passe aussi par les garde-fous ; sinon on utilise le texte fixe.
-  const handoff = (lang, { reason, urgency = 'normal', summary = '', visitorMessage = null, meta = {} }) => ({
-    kind: 'handoff', reason, urgency, summary, meta,
-    text: signed(visitorMessage && checkReply(visitorMessage).ok ? visitorMessage : MESSAGES[lang].hold),
+  // Demande que Claude ne peut pas traiter seul : réponse honnête au visiteur + note pour l'équipe, AUCUN transfert.
+  // Le message proposé par Claude passe aussi par les garde-fous ; sinon on utilise le texte fixe.
+  const flagForTeam = (lang, { reason, urgency = 'normal', summary = '', visitorMessage = null, meta = {} }) => ({
+    kind: 'flag', reason, urgency, summary, meta,
+    text: signed(visitorMessage && checkReply(visitorMessage).ok ? visitorMessage : MESSAGES[lang].ack),
   });
 
-  /** Décision de Claude : { kind: 'reply'|'handoff', ... }. Ne lève jamais : toute erreur devient un transfert à un humain. */
+  /** Décision de Claude : { kind: 'reply'|'flag', ... }. Ne lève jamais : toute erreur devient une réponse honnête et une note pour l'équipe. */
   async function decide(evt, text) {
     const lang = langOf(text);
     const s = session(keyOf(evt));
@@ -88,14 +89,14 @@ export function createAgent({ cfg, claude, zoho, tools, knowledge, logger = cons
       ];
       for (let round = 0; round <= cfg.maxToolRounds; round += 1) {
         const res = await claude.createMessage({ system, messages: msgs, tools: tools.definitions });
-        if (res.stop_reason === 'refusal') return handoff(lang, { reason: 'refus du modèle', meta });
+        if (res.stop_reason === 'refusal') return flagForTeam(lang, { reason: 'refus du modèle', meta });
         msgs.push({ role: 'assistant', content: res.content });
         const uses = (res.content || []).filter((b) => b.type === 'tool_use');
         const terminal = uses.find((u) => TERMINAL_TOOLS.has(u.name));
         if (terminal?.name === 'send_reply') return { kind: 'reply', text: String(terminal.input?.text || ''), meta };
-        if (terminal?.name === 'hand_off') {
+        if (terminal?.name === 'flag_for_team') {
           const i = terminal.input || {};
-          return handoff(lang, {
+          return flagForTeam(lang, {
             reason: String(i.reason || 'non précisé'),
             urgency: ['priority', 'enterprise_prospect'].includes(i.urgency) ? i.urgency : 'normal',
             summary: String(i.internal_summary || ''), visitorMessage: i.visitor_message ? String(i.visitor_message) : null, meta,
@@ -103,7 +104,7 @@ export function createAgent({ cfg, claude, zoho, tools, knowledge, logger = cons
         }
         if (!uses.length) {
           const plain = (res.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
-          return plain ? { kind: 'reply', text: plain, meta } : handoff(lang, { reason: 'réponse vide du modèle', meta });
+          return plain ? { kind: 'reply', text: plain, meta } : flagForTeam(lang, { reason: 'réponse vide du modèle', meta });
         }
         const results = await Promise.all(uses.map(async (u) => {
           const out = await tools.execute(u.name, u.input);
@@ -112,10 +113,10 @@ export function createAgent({ cfg, claude, zoho, tools, knowledge, logger = cons
         }));
         msgs.push({ role: 'user', content: results });
       }
-      return handoff(lang, { reason: "trop d'appels d'outils", meta });
+      return flagForTeam(lang, { reason: "trop d'appels d'outils", meta });
     } catch (e) {
       logger.error('[salesiq] Claude decision failed:', e.message);
-      return handoff(lang, { reason: `erreur technique (${e.message})`.slice(0, 200), meta });
+      return flagForTeam(lang, { reason: `erreur technique (${e.message})`.slice(0, 200), meta });
     }
   }
 
@@ -126,7 +127,7 @@ export function createAgent({ cfg, claude, zoho, tools, knowledge, logger = cons
     const check = checkReply(decision.text);
     if (!check.ok) {
       logger.warn(`[salesiq] reply blocked by guard: ${check.reason}`);
-      return handoff(lang, { reason: `garde-fou : ${check.reason}`, summary: `Réponse proposée bloquée : ${decision.text}`.slice(0, 1500), meta: decision.meta });
+      return flagForTeam(lang, { reason: `garde-fou : ${check.reason}`, summary: `Réponse proposée bloquée : ${decision.text}`.slice(0, 1500), meta: decision.meta });
     }
     return { ...decision, text: signed(decision.text) };
   }
@@ -141,9 +142,9 @@ export function createAgent({ cfg, claude, zoho, tools, knowledge, logger = cons
 
   function noteText(decision, mode, delivered = true) {
     const crm = `Étape CRM : ${decision.meta?.crm || 'non consultée'}.`;
-    if (decision.kind === 'handoff') {
+    if (decision.kind === 'flag') {
       const head = ['A TRAITER PAR UN HUMAIN', urgencyLabel[decision.urgency], decision.reason].filter(Boolean).join(' - ');
-      const sent = mode === 'shadow' ? "Message d'attente proposé (non envoyé)" : delivered ? "Message d'attente envoyé" : "Message d'attente NON livré";
+      const sent = mode === 'shadow' ? 'Réponse proposée (non envoyée)' : delivered ? 'Réponse envoyée au visiteur (aucun transfert)' : 'Réponse NON livrée au visiteur';
       return `${head}\n${decision.summary || ''}\n${crm}\n${sent} : ${decision.text}`.trim();
     }
     if (mode === 'shadow') return `BROUILLON CLAUDE : ${decision.text}\n\n${crm} Action : brouillon uniquement, rien envoyé.`;
@@ -185,18 +186,18 @@ export function createAgent({ cfg, claude, zoho, tools, knowledge, logger = cons
     }
     if (evt.handler && evt.handler !== 'message') return quiet;
 
-    const forward = (done = Promise.resolve()) => ({ response: forwardResponse(evt.text.trim() ? langOf(evt.text) : 'fr'), done });
-    if (cfg.mode === 'off') return forward();
+    const ack = (done = Promise.resolve()) => ({ response: ackResponse(evt.text.trim() ? langOf(evt.text) : 'fr'), done });
+    if (cfg.mode === 'off') return ack();
     const text = evt.text.trim().slice(0, cfg.maxInboundChars);
-    if (!text) return forward();
+    if (!text) return ack();
     if (!limiter.check(keyOf(evt)).allowed) {
-      logger.warn('[salesiq] rate limit reached: forwarding to a human');
-      return forward();
+      logger.warn('[salesiq] rate limit reached: sending the fallback reply');
+      return ack();
     }
     if (cfg.logMessageText) logger.info?.('[salesiq-inbox]', JSON.stringify({ visitor: keyOf(evt), text }));
 
     if (cfg.mode === 'shadow') {
-      return forward((async () => {
+      return ack((async () => {
         const decision = finalize(await decide(evt, text), text);
         remember(evt, text, decision);
         await writeNote(evt, decision, 'shadow');
@@ -212,10 +213,10 @@ export function createAgent({ cfg, claude, zoho, tools, knowledge, logger = cons
         done: (async () => { remember(evt, text, decision); await writeNote(evt, decision, 'live'); })(),
       };
     }
-    // Sans identifiant de requête, impossible de livrer une réponse différée : on transfère et on laisse un brouillon.
+    // Sans identifiant de requête, impossible de livrer une réponse différée : réponse de repli et brouillon en note.
     if (!evt.requestId) {
-      logger.warn('[salesiq] no request id in payload: cannot answer asynchronously, forwarding (draft note only)');
-      return forward((async () => {
+      logger.warn('[salesiq] no request id in payload: cannot answer asynchronously, sending the fallback reply (draft note only)');
+      return ack((async () => {
         const decision = finalize(await decide(evt, text), text);
         remember(evt, text, decision);
         await writeNote(evt, decision, 'shadow');
@@ -226,9 +227,7 @@ export function createAgent({ cfg, claude, zoho, tools, knowledge, logger = cons
       done: (async () => {
         const decision = finalize(await decide(evt, text), text);
         remember(evt, text, decision);
-        const payload = decision.kind === 'reply'
-          ? { action: 'reply', replies: [decision.text] }
-          : { action: 'forward', replies: [decision.text] };
+        const payload = { action: 'reply', replies: [decision.text] }; // jamais de transfert : Claude répond seul
         let delivered = true;
         try {
           await zoho.callbackResponse(evt.requestId, payload);
