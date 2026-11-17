@@ -9,7 +9,7 @@ import { loadUserName } from '../services/followUpDirectory.js';
 import { loadTools, mergedTools } from '../services/secretariatTools.js';
 import { voiceIdentity } from '../services/voicePresenceService.js';
 import { normalizeOutboundDestination, maxSecondsForBalance } from '../services/browserOutbound.js';
-import { resolveOutboundBalance } from '../services/internationalMinutes.js';
+import { internationalPackApplies, resolveOutboundBalance } from '../services/internationalMinutes.js';
 import { languageForPhone, phrasesFor } from '../services/companyLanguage.js';
 import {
   buildTransferMessageTwiml, buildTransferResultTwiml, buildTransferTwiml, CALL_SID, entryAvailability, isReachableNow, resultOfDial,
@@ -40,7 +40,7 @@ const deps = {
     const { loadCompanyPlanLimits } = await import('../services/planLimits.js');
     try {
       const limits = await loadCompanyPlanLimits(companyId);
-      if (limits?.internationalPack) return await resolveOutboundBalance({ companyId, limits, to, nationalMinutes });
+      if (internationalPackApplies(limits)) return await resolveOutboundBalance({ companyId, limits, to, nationalMinutes });
     } catch { /* solde normal */ }
     return { kind: 'national', minutes: nationalMinutes };
   },

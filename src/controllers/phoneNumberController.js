@@ -34,7 +34,7 @@ import { notifyCompany } from '../services/companyNotificationService.js';
 import { createVoiceToken, pushCredentialFor, VOICE_TOKEN_TTL_S } from '../services/voiceTokenService.js';
 import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
-import { INTERNATIONAL_PACK_CODE, internationalPackRefusal, resolveOutboundBalance } from '../services/internationalMinutes.js';
+import { INTERNATIONAL_PACK_CODE, internationalPackApplies, internationalPackRefusal, resolveOutboundBalance } from '../services/internationalMinutes.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket, MINUTES_INSUFFICIENT_CODE, MINUTES_INSUFFICIENT_MESSAGE, spokenLanguage, spokenRefusal, SPOKEN_REFUSALS } from '../services/browserOutbound.js';
 import { transferResult } from './callTransferController.js';
@@ -2350,7 +2350,7 @@ class PhoneNumberController {
         if (usable) callerLine = own;
       }
       // Offre concernée par le pack de minutes internationales : un appel international n'utilise QUE le solde international (jamais le solde normal).
-      const balance = limits?.internationalPack ? await resolveOutboundBalance({ companyId, limits, to, nationalMinutes: minutes }) : { kind: 'national', minutes };
+      const balance = internationalPackApplies(limits) ? await resolveOutboundBalance({ companyId, limits, to, nationalMinutes: minutes }) : { kind: 'national', minutes };
       let decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes: balance.minutes, balanceKind: balance.kind, recording });
       if (!decision.ok) {
         console.warn(`[browser-outbound] refusé pour l'entreprise ${companyId} : ${decision.message}`);
@@ -2404,7 +2404,7 @@ class PhoneNumberController {
     if (to) {
       try {
         const limits = await loadCompanyPlanLimits(companyId);
-        if (limits?.internationalPack) {
+        if (internationalPackApplies(limits)) {
           const chosen = await resolveOutboundBalance({ companyId, limits, to, nationalMinutes: minutes });
           if (chosen.kind === 'international') {
             const intlBalance = Number(chosen.minutes);

@@ -65,9 +65,17 @@ function buildPricingSnapshot(doc) {
       ? doc.tokensCustomRateCents
       : DEFAULT_TOKENS_CUSTOM_RATE_CENTS;
 
+  // Tarif de la minute INTERNATIONALE (achat à la minute vers le solde international) : lu de la configuration, aucune valeur par défaut.
+  // Absent ou non positif : l'achat à la minute internationale n'est pas disponible.
+  const internationalRate =
+    typeof doc?.internationalMinutesCustomRateCents === 'number' && doc.internationalMinutesCustomRateCents > 0
+      ? doc.internationalMinutesCustomRateCents
+      : null;
+
   return {
     minutePacks,
     minutesCustomRateCents: customRate,
+    internationalMinutesCustomRateCents: internationalRate,
     tokenPacks,
     tokensCustomRateCents: tokensCustomRate,
     phoneLineSetupFeeCents:
@@ -86,6 +94,12 @@ async function loadPricingDoc() {
   const db = mongoose.connection.db;
   if (!db) return null;
   return db.collection('platformpricings').findOne({ key: 'default' });
+}
+
+/** Vide le cache de lecture (tests). */
+export function resetPlatformPricingCache() {
+  cache = null;
+  cacheAt = 0;
 }
 
 export async function getPlatformPricing() {

@@ -9,6 +9,7 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 't';
 process.env.TELNYX_API_KEY = process.env.TELNYX_API_KEY || 'x';
 process.env.TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || 'ACtest';
 process.env.TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || 'x';
+process.env.INTERNATIONAL_MINUTES_ENFORCED = 'true'; // interrupteur global ; les cas « coupé » le basculent explicitement
 
 const EU = await import('../services/euCountries.js');
 const Z = await import('../services/callZone.js');
@@ -144,7 +145,7 @@ test('crédit d\'un pack : solde international seulement, idempotent par paiemen
   await assert.rejects(M.creditInternationalPack({ companyId: 'C1', minutes: 10, paymentId: '', store }));
 });
 
-const LIMITS_ON = { internationalPack: true };
+const LIMITS_ON = { product: 'callcenter', callcenterTier: 'full_scope' };
 const call = (sid, seconds, over = {}) => ({ sid, duration: seconds, direction: 'outbound', to: GB, startTime: new Date('2026-11-10T10:00:00Z'), ...over });
 
 test('débit : appel sortant international débité du solde international seul, idempotent ; les autres appels laissés au solde normal', async () => {
@@ -158,11 +159,16 @@ test('débit : appel sortant international débité du solde international seul,
   assert.equal(store.w.minutes, 5, 'aucun second débit');
 });
 
-test('débit : offre non concernée => aucun appel pris en charge (tout reste au solde normal, comme avant)', async () => {
+test('débit : offre non concernée ou interrupteur coupé => aucun appel pris en charge (tout reste au solde normal, comme avant)', async () => {
   const store = new MemStore(10);
-  for (const limits of [null, {}, { internationalPack: false }, { overage: { nationalCents: 15 } }]) {
+  for (const limits of [null, {}, { product: 'taas', callcenterTier: null }]) {
     assert.equal((await M.settleInternationalCalls({ companyId: 'C1', calls: [call('INT1', 130)], limits, store, country: async () => '+33' })).size, 0);
   }
+  assert.equal(store.w.minutes, 10);
+  process.env.INTERNATIONAL_MINUTES_ENFORCED = 'false';
+  try {
+    assert.equal((await M.settleInternationalCalls({ companyId: 'C1', calls: [call('INT1', 130)], limits: LIMITS_ON, store, country: async () => '+33' })).size, 0);
+  } finally { process.env.INTERNATIONAL_MINUTES_ENFORCED = 'true'; }
   assert.equal(store.w.minutes, 10);
 });
 
@@ -182,7 +188,9 @@ test('appel sortant : international => solde international (jamais le solde norm
   assert.deepEqual(await run(FR, 0), { kind: 'national', minutes: 0, zone: 'domestic', euZone: true });
   assert.equal((await run(FR, 5, LIMITS_ON, '+44')).kind, 'international', 'entreprise britannique appelant la France');
   // offre non concernée : jamais d'accès au solde international
-  for (const limits of [null, {}, { internationalPack: false }]) assert.deepEqual(await run(GB, 4, limits), { kind: 'national', minutes: 4, zone: null, euZone: null });
+  for (const limits of [null, {}, { product: 'taas' }]) assert.deepEqual(await run(GB, 4, limits), { kind: 'national', minutes: 4, zone: null, euZone: null });
+  process.env.INTERNATIONAL_MINUTES_ENFORCED = '';
+  try { assert.deepEqual(await run(GB, 4), { kind: 'national', minutes: 4, zone: null, euZone: null }, 'interrupteur coupé'); } finally { process.env.INTERNATIONAL_MINUTES_ENFORCED = 'true'; }
 });
 
 test('appel sortant international sans pack : solde nul => durée 0 ; durée = minutes entières du solde international', async () => {
@@ -228,10 +236,10 @@ test('refus parlés et messages : pack de minutes internationales requis (en / f
 test('vue des deux soldes : séparés, jamais mélangés', () => {
   const v = M.buildBalancesOverview({ limits: LIMITS_ON, national: { minutes: 12, planMinutesIncluded: 30 }, international: { minutes: 45, purchasedMinutes: 100, consumedSeconds: 600 }, companyCountry: '+33', packs: [{ id: 'price_p1', minutes: 60, amountCents: 1234, currency: 'eur', label: 'Pack Intl' }] });
   assert.deepEqual(v.national, { minutes: 12, includedMinutes: 30 });
-  assert.deepEqual(v.international, { applies: true, packsAvailable: true, minutes: 45, purchasedMinutes: 100, consumedSeconds: 600 });
+  assert.deepEqual(v.international, { applies: true, enforced: true, purchasable: true, packsAvailable: true, minuteRateCents: null, minutes: 45, purchasedMinutes: 100, consumedSeconds: 600 });
   assert.deepEqual(v.zone, { companyCountry: '+33', euZone: true });
   assert.equal(v.packs.length, 1);
-  const off = M.buildBalancesOverview({ limits: {}, national: { minutes: 12, planMinutesIncluded: 30 }, international: { minutes: 0, purchasedMinutes: 0, consumedSeconds: 0 }, companyCountry: '+33', packs: [] });
+  const off = M.buildBalancesOverview({ limits: { product: 'taas' }, national: { minutes: 12, planMinutesIncluded: 30 }, international: { minutes: 0, purchasedMinutes: 0, consumedSeconds: 0 }, companyCountry: '+33', packs: [] });
   assert.equal(off.international.applies, false);
   assert.equal(off.national.minutes, 12);
 });
@@ -263,10 +271,10 @@ test('pays de l\'entreprise inconnu : solde normal (comportement historique), ri
   const warns = []; const warn = console.warn; console.warn = (...a) => warns.push(a.join(' '));
   try {
     const store = new MemStore(5);
-    const b = await M.resolveOutboundBalance({ companyId: 'C1', limits: { internationalPack: true }, to: GB, nationalMinutes: 4, store, country: async () => '' });
+    const b = await M.resolveOutboundBalance({ companyId: 'C1', limits: LIMITS_ON, to: GB, nationalMinutes: 4, store, country: async () => '' });
     assert.deepEqual(b, { kind: 'national', minutes: 4, zone: 'unknown', euZone: null });
     assert.ok(warns.some((w) => /pays de l'entreprise inconnu/.test(w)));
-    const h = await M.settleInternationalCalls({ companyId: 'C1', calls: [{ sid: 'X', duration: 60, direction: 'outbound', to: GB }], limits: { internationalPack: true }, store, country: async () => '' });
+    const h = await M.settleInternationalCalls({ companyId: 'C1', calls: [{ sid: 'X', duration: 60, direction: 'outbound', to: GB }], limits: LIMITS_ON, store, country: async () => '' });
     assert.equal(h.size, 0); assert.equal(store.w.minutes, 5);
   } finally { console.warn = warn; }
 });
@@ -274,7 +282,7 @@ test('pays de l\'entreprise inconnu : solde normal (comportement historique), ri
 test('rejeu : un appel international déjà traité n\'est pas redébité ni réécrit à chaque lecture (filtre sur le second solde)', async () => {
   const store = new MemStore(10); let debits = 0; const real = store.debit.bind(store); store.debit = async (...a) => { debits += 1; return real(...a); };
   const calls = [{ sid: 'I1', duration: 60, direction: 'outbound', to: GB }];
-  const args = { companyId: 'C1', calls, limits: { internationalPack: true }, store, country: async () => '+33' };
+  const args = { companyId: 'C1', calls, limits: LIMITS_ON, store, country: async () => '+33' };
   await M.settleInternationalCalls(args); await M.settleInternationalCalls(args); await M.settleInternationalCalls(args);
   assert.equal(debits, 1); assert.equal(store.w.minutes, 9);
   assert.deepEqual([...(await M.settleInternationalCalls(args))], ['I1'], 'toujours écarté du solde normal');
@@ -291,7 +299,7 @@ test('vue des soldes : packsAvailable distingue « aucun pack » (false) d\'une 
   assert.equal(M.buildBalancesOverview({ ...base, packs: [{ id: 'p' }], packsError: false }).international.packsAvailable, true);
   assert.equal(M.buildBalancesOverview({ ...base, packs: [], packsError: false }).international.packsAvailable, false);
   assert.equal(M.buildBalancesOverview({ ...base, packs: [], packsError: true }).international.packsAvailable, null);
-  assert.equal(M.buildBalancesOverview({ ...base, limits: {}, packs: [], packsError: false }).international.packsAvailable, null, 'offre non concernée : sans objet');
+  assert.equal(M.buildBalancesOverview({ ...base, limits: { product: 'taas' }, packs: [], packsError: false }).international.packsAvailable, null, 'offre non concernée : sans objet');
 });
 
 test('catalogue : erreur de lecture distinguée de « aucun pack »', async () => {
@@ -307,4 +315,33 @@ test('catalogue : erreur de lecture distinguée de « aucun pack »', async () =
 test('message de refus : renvoie vers l\'achat et le support', () => {
   const r = M.internationalPackRefusal({ euZone: true });
   assert.match(r.message, /support/i); assert.match(r.messageFr, /support/i);
+});
+
+// --- Interrupteur global et offres concernées ---------------------------------------------------------------------------------
+test('interrupteur : coupé par défaut ; actif seulement pour INTERNATIONAL_MINUTES_ENFORCED vrai', () => {
+  const was = process.env.INTERNATIONAL_MINUTES_ENFORCED;
+  try {
+    for (const v of [undefined, '', 'false', '0', 'no', 'off', 'maybe']) { if (v === undefined) delete process.env.INTERNATIONAL_MINUTES_ENFORCED; else process.env.INTERNATIONAL_MINUTES_ENFORCED = v; assert.equal(M.internationalEnforced(), false, String(v)); assert.equal(M.internationalPackApplies(LIMITS_ON), false); }
+    for (const v of ['true', 'TRUE', '1', 'yes', ' on ']) { process.env.INTERNATIONAL_MINUTES_ENFORCED = v; assert.equal(M.internationalEnforced(), true, v); }
+  } finally { if (was === undefined) delete process.env.INTERNATIONAL_MINUTES_ENFORCED; else process.env.INTERNATIONAL_MINUTES_ENFORCED = was; }
+});
+
+test('les 4 offres Call Centre sont concernées, sans métadonnée d\'offre ; autres forfaits et absence d\'abonnement non', () => {
+  for (const tier of ['nomad_solo', 'accueil', 'full_scope', 'multi_clients']) {
+    assert.equal(M.internationalPackApplies({ product: 'callcenter', callcenterTier: tier }), true, tier);
+    assert.equal(M.internationalOfferEligible({ callcenterTier: tier }), true, tier);
+  }
+  assert.equal(M.internationalPackApplies(null), false);
+  assert.equal(M.internationalPackApplies({ product: 'taas', callcenterTier: null }), false);
+  assert.equal(M.internationalPackApplies({}), false);
+  assert.equal(M.internationalOfferEligible({ product: 'taas' }), false);
+});
+
+test('vue des soldes : interrupteur coupé => applies:false mais achat possible (purchasable) et tarif à la minute exposé', () => {
+  process.env.INTERNATIONAL_MINUTES_ENFORCED = 'false';
+  try {
+    const v = M.buildBalancesOverview({ limits: LIMITS_ON, national: { minutes: 3 }, international: { minutes: 10 }, companyCountry: '+33', packs: [{ id: 'p' }], packsError: false, minuteRateCents: 25 });
+    assert.equal(v.international.applies, false); assert.equal(v.international.enforced, false); assert.equal(v.international.purchasable, true);
+    assert.equal(v.international.minuteRateCents, 25); assert.equal(v.international.packsAvailable, true); assert.equal(v.packs.length, 1);
+  } finally { process.env.INTERNATIONAL_MINUTES_ENFORCED = 'true'; }
 });

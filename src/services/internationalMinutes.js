@@ -5,24 +5,27 @@ import { toStrictE164 } from './outboundDestinations.js';
 /**
  * Second solde de minutes INTERNATIONALES, séparé du solde normal.
  *
- * Une offre est concernée quand le PRODUIT Stripe de l'offre porte la métadonnée `international_pack` (true / 1 / yes / required) :
- * lue dans loadCompanyPlanLimits (`limits.internationalPack`). Aucune offre n'est écrite dans le code ; absente, TOUT reste comme
- * avant (un seul solde, appels internationaux débités du solde normal, aucun accès au second solde).
- * Pour une offre concernée :
+ * Il s'applique aux 4 offres Call Centre (Nomad Solo, Accueil, Full Scope, Multi-clients) de la même manière : aucune métadonnée par
+ * offre. Il est alimenté de deux façons, au choix du client : un pack Stripe (internationalPacks.js) ou l'achat à la minute au tarif
+ * international de la configuration (platformPricingService). Seul le tarif varie.
+ *
+ * INTERRUPTEUR GLOBAL `INTERNATIONAL_MINUTES_ENFORCED` (variable d'environnement, coupé par défaut). Tant qu'il est coupé,
+ * le comportement actuel est strictement inchangé pour tout le monde (l'appel international consomme le solde unique) ; les achats
+ * fonctionnent et alimentent déjà le solde international. Une fois actif, pour une offre Call Centre :
  *   - un appel sortant INTERNATIONAL (voir callZone.js) est plafonné au solde international et débité de lui seul ;
  *   - solde nul : refus « pack de minutes internationales requis », jamais de débit du solde normal ;
  *   - appels sortants domestiques et entrants : solde normal, inchangé.
  */
 export const INTERNATIONAL_PACK_CODE = 'INTERNATIONAL_PACK_REQUIRED';
 
-export const internationalPackApplies = (limits) => limits?.internationalPack === true;
+/** Interrupteur global (lu à chaque appel) : coupé sauf valeur explicite true / 1 / yes / on. */
+export const internationalEnforced = () => ['true', '1', 'yes', 'on'].includes(String(process.env.INTERNATIONAL_MINUTES_ENFORCED ?? '').trim().toLowerCase());
 
-/** Valeur de la métadonnée `international_pack` d'un produit d'offre. */
-export function internationalPackFromMetadata(metadata) {
-  const entries = !metadata ? [] : metadata instanceof Map ? [...metadata.entries()] : typeof metadata === 'object' ? Object.entries(metadata) : [];
-  const entry = entries.find(([k]) => String(k).trim().toLowerCase().replace(/[\s-]+/g, '_') === 'international_pack');
-  return ['true', '1', 'yes', 'oui', 'required'].includes(String(entry?.[1] ?? '').trim().toLowerCase());
-}
+/** Offre Call Centre (produit `callcenter` ou palier reconnu) : seule éligible au solde international, au pack et à l'achat à la minute. */
+export const internationalOfferEligible = (limits) => Boolean(limits) && (limits.product === 'callcenter' || Boolean(limits.callcenterTier));
+
+/** La règle (plafond au solde international, refus à solde nul) s'applique : interrupteur actif ET offre Call Centre. */
+export const internationalPackApplies = (limits) => internationalEnforced() && internationalOfferEligible(limits);
 
 /** Messages du refus (anglais par défaut, français additif). Entreprise de l'UE : rappelle que l'UE est incluse dans le solde normal. */
 export function internationalPackRefusal({ euZone = false } = {}) {
@@ -138,15 +141,22 @@ export async function resolveOutboundBalance({ companyId, limits, to, nationalMi
 }
 
 /** Vue en lecture seule des deux soldes (écran Facturation). */
-export function buildBalancesOverview({ limits, national, international, companyCountry, packs, packsError = false }) {
+export function buildBalancesOverview({ limits, national, international, companyCountry, packs, packsError = false, minuteRateCents = null }) {
   const zone = classifyZone({ to: '', companyCountry });
   const applies = internationalPackApplies(limits);
+  const purchasable = internationalOfferEligible(limits);
   return {
     national: { minutes: national?.minutes ?? 0, includedMinutes: national?.planMinutesIncluded ?? 0 },
     international: {
+      /** La règle est active : interrupteur global actif ET offre Call Centre. */
       applies,
-      /** true : au moins un pack achetable ; false : offre marquée mais aucun pack configuré dans Stripe ; null : lecture Stripe en erreur (ou offre non concernée). */
-      packsAvailable: !applies ? null : packsError ? null : (packs || []).length > 0,
+      enforced: internationalEnforced(),
+      /** L'offre peut acheter des minutes internationales (même interrupteur coupé : on peut s'approvisionner avant la bascule). */
+      purchasable,
+      /** true : au moins un pack achetable ; false : aucun pack configuré dans Stripe ; null : lecture Stripe en erreur (ou offre non éligible). */
+      packsAvailable: !purchasable ? null : packsError ? null : (packs || []).length > 0,
+      /** Tarif de la minute internationale (centimes) de la configuration ; null = achat à la minute non configuré. */
+      minuteRateCents: minuteRateCents > 0 ? minuteRateCents : null,
       minutes: international?.minutes ?? 0,
       purchasedMinutes: international?.purchasedMinutes ?? 0,
       consumedSeconds: international?.consumedSeconds ?? 0,

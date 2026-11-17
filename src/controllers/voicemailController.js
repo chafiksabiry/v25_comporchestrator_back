@@ -12,7 +12,7 @@ import { syncMinutesFromCalls } from './escrowController.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { isPremiumRate, MESSAGES as DESTINATION_MESSAGES } from '../services/outboundDestinations.js';
 import { freshMinutesBalance, maxSecondsForBalance, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed } from '../services/browserOutbound.js';
-import { resolveOutboundBalance } from '../services/internationalMinutes.js';
+import { internationalPackApplies, resolveOutboundBalance } from '../services/internationalMinutes.js';
 import { loadCompanyPlanLimits } from '../services/planLimits.js';
 import InboundSettings from '../models/InboundSettings.js';
 import { callerAccess } from '../middleware/companyScope.js';
@@ -178,7 +178,7 @@ export const voicemailController = {
       let balance = { kind: 'national', minutes };
       try {
         const limits = await loadCompanyPlanLimits(String(vm.companyId));
-        if (limits?.internationalPack) balance = await resolveOutboundBalance({ companyId: String(vm.companyId), limits, to, nationalMinutes: minutes });
+        if (internationalPackApplies(limits)) balance = await resolveOutboundBalance({ companyId: String(vm.companyId), limits, to, nationalMinutes: minutes });
       } catch { balance = { kind: 'national', minutes }; }
       const maxSeconds = maxSecondsForBalance(balance.minutes);
       if (!maxSeconds) return send(buildRefusalTwiml(balance.kind === 'international' ? 'Un pack de minutes internationales est requis.' : 'Solde de minutes insuffisant.'));

@@ -4,7 +4,8 @@ import { callerAccess, ScopeError } from '../middleware/companyScope.js';
 import { syncMinutesFromCalls } from './escrowController.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { loadCompanyPlanLimits } from '../services/planLimits.js';
-import { buildBalancesOverview, companyCountryOf, internationalPackApplies } from '../services/internationalMinutes.js';
+import { buildBalancesOverview, companyCountryOf, internationalEnforced, internationalOfferEligible } from '../services/internationalMinutes.js';
+import { getPlatformPricing } from '../services/platformPricingService.js';
 import { listInternationalPacksChecked } from '../services/internationalPacks.js';
 
 const fail = (res, status, code, message) => res.status(status).json({ success: false, code, message });
@@ -23,6 +24,7 @@ export function createBalancesHandlers(deps = {}) {
   const loadLimits = deps.loadLimits || loadCompanyPlanLimits;
   const country = deps.country || companyCountryOf;
   const listPacks = deps.listPacks || listInternationalPacksChecked;
+  const readRate = deps.readRate || (async () => (await getPlatformPricing()).internationalMinutesCustomRateCents);
 
   return {
     async getBalances(req, res) {
@@ -41,19 +43,21 @@ export function createBalancesHandlers(deps = {}) {
         try { planMinutesIncluded = (await grant(access.companyId))?.allowance || 0; } catch (error) { console.warn('[balances] octroi ignoré :', error?.message || error); }
         await sync(access.companyId);
         const limits = await loadLimits(access.companyId);
-        const applies = internationalPackApplies(limits);
-        const [national, international, companyCountry, catalog] = await Promise.all([
+        const eligible = internationalOfferEligible(limits);
+        const [national, international, companyCountry, catalog, minuteRateCents] = await Promise.all([
           readNational(access.companyId),
           readInternational(access.companyId),
           country(access.companyId),
-          applies ? listPacks() : { packs: [], error: false },
+          eligible ? listPacks() : { packs: [], error: false },
+          eligible ? readRate() : null,
         ]);
-        // Offre marquée mais rien à acheter : avertissement explicite (la lecture en erreur n'est pas confondue avec « aucun pack »).
-        if (applies && catalog.error) console.warn(`[international] lecture des packs Stripe en erreur (entreprise ${access.companyId}) : packsAvailable inconnu`);
-        else if (applies && !catalog.packs.length) console.warn(`[international] offre marquée international_pack SANS aucun pack Stripe configuré (entreprise ${access.companyId}) : les appels internationaux sont refusés sans moyen d'acheter`);
+        // Règle active mais rien à acheter (ni pack, ni tarif à la minute) : avertissement explicite. Une lecture Stripe en erreur n'est pas
+        // confondue avec « aucun pack ».
+        if (eligible && catalog.error) console.warn(`[international] lecture des packs Stripe en erreur (entreprise ${access.companyId}) : packsAvailable inconnu`);
+        else if (eligible && internationalEnforced() && !catalog.packs.length && !(minuteRateCents > 0)) console.warn(`[international] règle active SANS aucun pack Stripe ni tarif à la minute configuré (entreprise ${access.companyId}) : les appels internationaux sont refusés sans moyen d'acheter`);
         return res.json({
           success: true,
-          data: { companyId: String(access.companyId), ...buildBalancesOverview({ limits, national: { minutes: national?.minutes, planMinutesIncluded }, international, companyCountry, packs: catalog.packs, packsError: catalog.error }) },
+          data: { companyId: String(access.companyId), ...buildBalancesOverview({ limits, national: { minutes: national?.minutes, planMinutesIncluded }, international, companyCountry, packs: catalog.packs, packsError: catalog.error, minuteRateCents }) },
         });
       } catch (error) {
         console.error('[balances] lecture impossible :', error?.message || error);

@@ -5,7 +5,7 @@ import { paypalService } from '../services/paypalService.js';
 import { stripeService } from '../services/stripeService.js';
 import { bundleBalances, fulfillBundlePurchase, fulfillInternationalMinutesPurchase, fulfillMinutesPurchase, fulfillTokensPurchase, fulfillWalletDeposit } from '../services/paymentFulfillment.js';
 import { getInternationalPack, listInternationalPacks, packAmountFor } from '../services/internationalPacks.js';
-import { internationalPackApplies } from '../services/internationalMinutes.js';
+import { internationalOfferEligible } from '../services/internationalMinutes.js';
 import { loadCompanyPlanLimits } from '../services/planLimits.js';
 import { bundleAmountCents, bundleLabel, parseBundleQuantities } from '../services/bundlePurchase.js';
 import { config } from '../config/env.js';
@@ -177,6 +177,9 @@ export const paymentCheckoutController = {
           tokensCustomRateEuros: pricing.tokensCustomRateCents / 100,
           // Packs de minutes internationales : lus de Stripe (produit + prix), liste vide si aucun n'est configuré.
           internationalPacks: await listInternationalPacks(),
+          // Tarif de la minute internationale (achat à la minute vers le solde international) ; null si non configuré.
+          internationalMinutesCustomRateCents: pricing.internationalMinutesCustomRateCents,
+          internationalMinutesCustomRateEuros: pricing.internationalMinutesCustomRateCents == null ? null : pricing.internationalMinutesCustomRateCents / 100,
         }
       });
     } catch (error) {
@@ -201,23 +204,34 @@ export const paymentCheckoutController = {
         return res.status(400).json({ error: "provider must be 'stripe' or 'paypal'" });
       }
 
-      // Pack de minutes internationales : Stripe uniquement ; contenu, prix et devise relus du produit / prix Stripe (rien n'est cru du client).
+      // Minutes internationales (second solde) : Stripe uniquement, offres Call Centre. Deux façons d'acheter : un pack (identifiant de prix
+      // Stripe, contenu et prix relus de Stripe) ou N minutes au tarif international de la configuration. Rien n'est cru du client.
       let pack = null;
+      let perMinute = null;
       if (purpose === 'international_minutes_purchase') {
         if (provider !== 'stripe') {
           return res.status(400).json({ error: "international_minutes_purchase is only available with provider 'stripe'" });
         }
-        if (!req.body.packId) {
-          return res.status(400).json({ error: 'packId (Stripe price id of the international minutes pack) is required' });
-        }
         let planLimits = null;
         try { planLimits = await loadCompanyPlanLimits(companyId); } catch { planLimits = null; }
-        if (!internationalPackApplies(planLimits)) {
-          return res.status(409).json({ error: 'International minutes pack is not available for this plan', code: 'international_pack_not_applicable' });
+        if (!internationalOfferEligible(planLimits)) {
+          return res.status(409).json({ error: 'International minutes are not available for this plan', code: 'international_pack_not_applicable' });
         }
-        pack = await getInternationalPack(req.body.packId);
-        if (!pack) {
-          return res.status(404).json({ error: 'International minutes pack not found', code: 'international_pack_not_found' });
+        if (req.body.packId) {
+          pack = await getInternationalPack(req.body.packId);
+          if (!pack) {
+            return res.status(404).json({ error: 'International minutes pack not found', code: 'international_pack_not_found' });
+          }
+        } else {
+          const qty = Number(minutes);
+          if (!Number.isInteger(qty) || qty <= 0) {
+            return res.status(400).json({ error: 'packId, or minutes (positive integer), is required' });
+          }
+          const rateCents = (await getPlatformPricing()).internationalMinutesCustomRateCents;
+          if (!rateCents) {
+            return res.status(409).json({ error: 'International minute rate is not configured', code: 'international_rate_not_configured' });
+          }
+          perMinute = { minutes: qty, rateCents, amountCents: Math.round(qty * rateCents) };
         }
       }
 
@@ -225,6 +239,8 @@ export const paymentCheckoutController = {
       let amountCents;
       if (pack) {
         ({ amountCents, currency } = packAmountFor(pack, currency));
+      } else if (perMinute) {
+        amountCents = perMinute.amountCents;
       } else {
         amountCents = await computeAmountCents(purpose, { amountEuros, minutes, tokens });
       }
@@ -235,6 +251,8 @@ export const paymentCheckoutController = {
       const quantity =
         pack
           ? pack.minutes
+          : perMinute
+          ? perMinute.minutes
           : purpose === 'minutes_purchase'
           ? Number(minutes)
           : purpose === 'tokens_purchase'
@@ -249,11 +267,12 @@ export const paymentCheckoutController = {
         amount: amountCents,
         currency,
         quantity:
-          purpose === 'minutes_purchase' || purpose === 'tokens_purchase' || pack
+          purpose === 'minutes_purchase' || purpose === 'tokens_purchase' || pack || perMinute
             ? quantity
             : undefined,
         ...(bundle ? { meta: { minutes: bundle.minutes, tokens: bundle.tokens } } : {}),
         ...(pack ? { meta: { priceId: pack.id, productId: pack.productId } } : {}),
+        ...(perMinute ? { meta: { mode: 'per_minute', rateCents: perMinute.rateCents } } : {}),
         status: 'pending'
       });
 
@@ -331,6 +350,8 @@ export const paymentCheckoutController = {
             ? `HARX — Crédit portefeuille ${formatAmountLabel(amountCents, currency)}`
             : pack
               ? `HARX — ${pack.label} (${pack.minutes} minutes internationales)`
+            : perMinute
+              ? `HARX — ${perMinute.minutes} minutes internationales`
             : purpose === 'bundle_purchase'
               ? bundleLabel(bundle)
               : purpose === 'tokens_purchase'

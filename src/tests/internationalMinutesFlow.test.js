@@ -34,12 +34,14 @@ const { stripeService } = await import('../services/stripeService.js');
 const { paypalService } = await import('../services/paypalService.js');
 const { clearCompanyCache } = await import('../middleware/companyScope.js');
 const { listInternationalPacks } = await import('../services/internationalPacks.js');
+const { resetPlatformPricingCache } = await import('../services/platformPricingService.js');
 
 const C1 = '64b0000000000000000000c1';
 const PLAN = { harx_product: 'callcenter', callcenter_tier: 'full_scope' };
-const PLAN_ON = { ...PLAN, international_pack: 'true' };
+const PLAN_ON = PLAN; // plus de métadonnée d'offre : les 4 offres Call Centre sont concernées quand l'interrupteur global est actif
+const TAAS = { harx_product: 'taas' };
 const GB = '+442071234567'; const DE = '+4915112345678'; const FR = '+33612345678';
-let meta; let N; let I; let CALLS; let who; let payments; let stripeCalls; let notifications;
+let pricingDoc; let meta; let N; let I; let CALLS; let who; let payments; let stripeCalls; let notifications;
 const clone = (v) => (v === null || v === undefined ? v : structuredClone(v));
 const thenable = (get) => ({ lean: async () => clone(get()), select() { return this; }, sort() { return this; }, limit() { return this; }, then(r, j) { return Promise.resolve(clone(get())).then(r, j); } });
 const nat = (minutes) => ({ companyId: C1, minutes, consumedSeconds: 0, chargedCallSids: [], planGrantKeys: [], credits: [], purchasedMinutes: 0, planMinutesGranted: 0 });
@@ -63,6 +65,7 @@ const saved = { log: console.log, warn: console.warn, error: console.error };
 beforeEach(() => {
   console.log = () => {}; console.warn = () => {}; console.error = () => {};
   clearCompanyCache();
+  process.env.INTERNATIONAL_MINUTES_ENFORCED = 'true'; resetPlatformPricingCache(); pricingDoc = null;
   meta = { ...PLAN_ON }; N = nat(0); I = null; CALLS = []; who = 'owner'; payments = []; stripeCalls = []; notifications = [];
   const row = () => ({ _id: 'l1', companyId: C1, phoneNumber: '+33611110001', provider: 'twilio', twilioId: 'PN1', status: 'active', billingStatus: 'active', createdAt: new Date('2026-01-01') });
   PhoneNumber.find = () => thenable(() => [row()]);
@@ -88,9 +91,9 @@ beforeEach(() => {
   global.fetch = async (url) => ({ ok: true, json: async () => ({ success: true, data: { companyId: C1, isOwner: who === 'owner', isAgent: who === 'agent', company: { profile: { country: 'FR' } } } }) });
   mongoose.models.VoiceSigningKey.findOne = () => thenable(() => ({ sid: 'SK00000000000000000000000000000000', secret: 'secret' }));
   phoneNumberService.twilioClient = {};
-  const db = { collection: () => ({
+  const db = { collection: (name) => ({
     find: () => ({ toArray: async () => clone(CALLS), sort() { return this; }, limit() { return this; }, next: async () => null }),
-    findOne: async (q) => clone(CALLS.find((c) => c.sid === q?.sid) || null),
+    findOne: async (q) => (name === 'platformpricings' ? clone(pricingDoc) : clone(CALLS.find((c) => c.sid === q?.sid) || null)),
   }) };
   Object.defineProperty(mongoose.connection, 'db', { get: () => db, configurable: true });
 });
@@ -110,9 +113,9 @@ test('lecture du solde : appel international débité du solde international SEU
   assert.equal(I.minutes, 2); assert.equal(N.minutes, 6);
 });
 
-test('offre non concernée : TOUS les appels débités du solde normal comme avant, second solde jamais touché ni créé', async () => {
-  for (const patch of [PLAN, { ...PLAN, international_pack: 'false' }, { harx_product: 'taas' }]) {
-    meta = patch; N = nat(10); I = null;
+test('interrupteur coupé ou forfait non Call Centre : TOUS les appels débités du solde normal comme avant, second solde jamais touché ni créé', async () => {
+  for (const [enforced, patch] of [['false', PLAN], ['', { ...PLAN, callcenter_tier: 'accueil' }], ['true', TAAS]]) {
+    process.env.INTERNATIONAL_MINUTES_ENFORCED = enforced; meta = patch; N = nat(10); I = null;
     CALLS = [callDoc('INT', 130, { to: GB }), callDoc('EU', 60, { to: DE })];
     await syncMinutesFromCalls(C1);
     assert.equal(N.minutes, 6, JSON.stringify(patch)); assert.equal(I, null);
@@ -135,7 +138,7 @@ test('charge-call (service à service) : appel international réel d\'une offre 
   r = res(); await minutesCompanyController.chargeCall({ body: { companyId: C1, callSid: 'CA3', duration: 60 } }, r);
   assert.equal(r.body.charged, false); assert.equal(N.minutes, 8); assert.equal(I.minutes, 2);
   // offre non concernée : inchangé, même pour un appel international
-  meta = PLAN; N = nat(10); I = intl(5); CALLS = [callDoc('CA4', 130, { to: GB })];
+  process.env.INTERNATIONAL_MINUTES_ENFORCED = 'false'; N = nat(10); I = intl(5); CALLS = [callDoc('CA4', 130, { to: GB })];
   r = res(); await minutesCompanyController.chargeCall({ body: { companyId: C1, callSid: 'CA4', duration: 130 } }, r);
   assert.equal(N.minutes, 7); assert.equal(I.minutes, 5);
 });
@@ -175,8 +178,14 @@ test('webhook : appel national et UE (entreprise française) gardent exactement 
   assert.equal(said(await webhook(FR)), 'Solde de minutes insuffisant.');
 });
 
-test('webhook : offre non concernée — appel international comme aujourd\'hui (solde normal, aucun accès au pack)', async () => {
-  meta = PLAN; I = intl(100);
+test('webhook : interrupteur coupé — appel international comme aujourd\'hui (solde normal, aucun accès au pack), pour les 4 offres', async () => {
+  process.env.INTERNATIONAL_MINUTES_ENFORCED = 'false'; I = intl(100);
+  for (const tier of ['nomad_solo', 'accueil', 'full_scope', 'multi_clients']) {
+    meta = { ...PLAN, callcenter_tier: tier };
+    N = nat(4); assert.equal(timeLimit(await webhook(GB)), 240, tier);
+    N = nat(0); assert.equal(said(await webhook(GB)), 'Solde de minutes insuffisant.', tier);
+  }
+  meta = PLAN;
   N = nat(4); assert.equal(timeLimit(await webhook(GB)), 240);
   N = nat(0); assert.equal(said(await webhook(GB)), 'Solde de minutes insuffisant.');
 });
@@ -193,15 +202,16 @@ test('pré-contrôle (jeton / vérification) : 402 INTERNATIONAL_PACK_REQUIRED p
   N = nat(0);
   assert.equal((await pc.minutesShortfall(C1, DE)).code, 'MINUTES_INSUFFICIENT_FOR_DESTINATION', 'domestique : message historique');
   assert.equal((await pc.minutesShortfall(C1)).code, 'MINUTES_INSUFFICIENT_FOR_DESTINATION', 'jeton sans destination : historique');
-  meta = PLAN; I = intl(0);
-  assert.equal((await pc.minutesShortfall(C1, GB)).code, 'MINUTES_INSUFFICIENT_FOR_DESTINATION', 'offre non concernée');
+  process.env.INTERNATIONAL_MINUTES_ENFORCED = 'false'; I = intl(0);
+  assert.equal((await pc.minutesShortfall(C1, GB)).code, 'MINUTES_INSUFFICIENT_FOR_DESTINATION', 'interrupteur coupé');
 });
 
-test('limites du forfait : internationalPack lu de la métadonnée du produit de l\'offre', async () => {
-  assert.equal((await loadCompanyPlanLimits(C1)).internationalPack, true);
-  for (const v of ['1', 'yes', 'required', 'TRUE']) { meta = { ...PLAN, international_pack: v }; assert.equal((await loadCompanyPlanLimits(C1)).internationalPack, true, v); }
-  for (const v of ['false', '0', '', 'no']) { meta = { ...PLAN, international_pack: v }; assert.equal((await loadCompanyPlanLimits(C1)).internationalPack, false, v); }
-  meta = PLAN; assert.equal((await loadCompanyPlanLimits(C1)).internationalPack, false);
+test('les 4 offres Call Centre sont soumises à la règle quand l\'interrupteur est actif (webhook), aucune métadonnée d\'offre requise', async () => {
+  N = nat(500); I = intl(0);
+  for (const tier of ['nomad_solo', 'accueil', 'full_scope', 'multi_clients']) {
+    meta = { harx_product: 'callcenter', callcenter_tier: tier };
+    assert.match(said(await webhook(GB)), /pack de minutes internationales/i, tier);
+  }
 });
 
 // --- Achat d'un pack et crédit ----------------------------------------------------------------------------------------
@@ -217,12 +227,12 @@ test('achat : contenu et prix du pack lus de Stripe (jamais du client), paiement
   assert.match(stripeCalls[0].productName, /Pack Intl/);
 });
 
-test('achat : refusé pour un pack inconnu, sans pack, via PayPal, ou pour une offre non concernée', async () => {
+test('achat : refusé pour un pack inconnu, sans pack, via PayPal, ou pour un forfait non Call Centre', async () => {
   const base = { companyId: C1, purpose: 'international_minutes_purchase', provider: 'stripe' };
   assert.equal((await init({ ...base, packId: 'price_nope' })).code, 404);
   assert.equal((await init({ ...base })).code, 400);
   assert.equal((await init({ ...base, provider: 'paypal', packId: 'price_p1' })).code, 400);
-  meta = PLAN;
+  meta = TAAS;
   const off = await init({ ...base, packId: 'price_p1' });
   assert.equal(off.code, 409); assert.equal(off.body.code, 'international_pack_not_applicable');
   assert.equal(payments.length, 0); assert.equal(stripeCalls.length, 0);
@@ -262,7 +272,7 @@ const get = async (h, over = {}) => {
   await h.getBalances({ params: { companyId: C1 }, headers: {}, user: { userId: 'u1' }, ...over }, res);
   return out;
 };
-const handlers = (over = {}) => createBalancesHandlers({ getAccess: async () => ({ companyId: C1, role: 'owner' }), grant: async () => ({ allowance: 30 }), sync: async () => {}, readNational: async () => clone(N), readInternational: async () => clone(I), loadLimits: async () => ({ internationalPack: true }), country: async () => '+33', listPacks: async () => ({ packs: [{ id: 'price_p1', minutes: 60, amountCents: 1234, currency: 'eur', label: 'Pack Intl' }], error: false }), ...over });
+const handlers = (over = {}) => createBalancesHandlers({ getAccess: async () => ({ companyId: C1, role: 'owner' }), grant: async () => ({ allowance: 30 }), sync: async () => {}, readNational: async () => clone(N), readInternational: async () => clone(I), loadLimits: async () => ({ product: 'callcenter', callcenterTier: 'full_scope' }), country: async () => '+33', readRate: async () => 25, listPacks: async () => ({ packs: [{ id: 'price_p1', minutes: 60, amountCents: 1234, currency: 'eur', label: 'Pack Intl' }], error: false }), ...over });
 
 test('endpoint : les deux soldes séparés, zone de l\'entreprise, packs disponibles', async () => {
   N = nat(12); I = { ...intl(45), purchasedMinutes: 100, consumedSeconds: 600 };
@@ -271,7 +281,7 @@ test('endpoint : les deux soldes séparés, zone de l\'entreprise, packs disponi
   assert.deepEqual(r.body.data, {
     companyId: C1,
     national: { minutes: 12, includedMinutes: 30 },
-    international: { applies: true, packsAvailable: true, minutes: 45, purchasedMinutes: 100, consumedSeconds: 600 },
+    international: { applies: true, enforced: true, purchasable: true, packsAvailable: true, minuteRateCents: 25, minutes: 45, purchasedMinutes: 100, consumedSeconds: 600 },
     zone: { companyCountry: '+33', euZone: true },
     packs: [{ id: 'price_p1', minutes: 60, amountCents: 1234, currency: 'eur', label: 'Pack Intl' }],
   });
@@ -279,8 +289,8 @@ test('endpoint : les deux soldes séparés, zone de l\'entreprise, packs disponi
 
 test('endpoint : offre non concernée => applies:false, aucun pack proposé ; accès titulaire de CETTE entreprise ; lecture seule', async () => {
   N = nat(12); I = null;
-  const off = (await get(handlers({ loadLimits: async () => ({ internationalPack: false }) }))).body.data;
-  assert.equal(off.international.applies, false); assert.deepEqual(off.packs, []); assert.equal(off.national.minutes, 12);
+  const off = (await get(handlers({ loadLimits: async () => ({ product: 'taas' }) }))).body.data;
+  assert.equal(off.international.applies, false); assert.equal(off.international.purchasable, false); assert.deepEqual(off.packs, []); assert.equal(off.national.minutes, 12);
   assert.equal((await get(handlers({ getAccess: async () => ({ companyId: C1, role: 'agent' }) }))).code, 403);
   assert.equal((await get(handlers(), { params: { companyId: '64b0000000000000000000c2' } })).code, 403);
   assert.equal((await get(handlers({ getAccess: async () => ({ companyId: null, role: 'owner' }) }))).code, 404);
@@ -345,10 +355,10 @@ test('pays de l\'entreprise : lu des LIGNES même si le titulaire a personnalis�
   assert.equal(N.minutes, 7, 'débité du solde normal comme avant'); assert.equal(I.minutes, 5);
 });
 
-test('endpoint : offre marquée sans pack => packsAvailable:false + avertissement ; erreur Stripe => null + avertissement distinct', async () => {
+test('endpoint : règle active sans pack ni tarif => packsAvailable:false + avertissement ; erreur Stripe => null + avertissement distinct', async () => {
   const warns = []; console.warn = (...a) => warns.push(a.join(' '));
   N = nat(1); I = null;
-  let d = (await get(handlers({ listPacks: async () => ({ packs: [], error: false }) }))).body.data;
+  let d = (await get(handlers({ readRate: async () => null, listPacks: async () => ({ packs: [], error: false }) }))).body.data;
   assert.equal(d.international.packsAvailable, false); assert.deepEqual(d.packs, []);
   assert.ok(warns.some((w) => /SANS aucun pack Stripe/.test(w)));
   warns.length = 0;
@@ -363,4 +373,54 @@ test('refus international : message renvoyant vers l\'achat et le support', asyn
   N = nat(500); I = intl(0);
   const r = await pc.minutesShortfall(C1, GB);
   assert.match(r.message, /contact support/i); assert.match(r.messageFr, /support/i);
+});
+
+// --- Interrupteur coupé : achat et crédit fonctionnent, comportement des appels inchangé ---------------------------------------
+test('interrupteur coupé : le pack peut être acheté et alimente le solde international, sans effet sur les appels', async () => {
+  process.env.INTERNATIONAL_MINUTES_ENFORCED = 'false';
+  const r = await init({ companyId: C1, purpose: 'international_minutes_purchase', provider: 'stripe', packId: 'price_p1' });
+  assert.equal(r.code, 201);
+  N = nat(7); I = null;
+  await fulfillInternationalMinutesPurchase({ _id: 'pay1', companyId: C1, quantity: 60 });
+  assert.equal(I.minutes, 60); assert.equal(N.minutes, 7);
+  N = nat(4); assert.equal(timeLimit(await webhook(GB)), 240, 'l\'appel international continue d\'utiliser le solde normal');
+  CALLS = [callDoc('INT', 130, { to: GB })]; await syncMinutesFromCalls(C1);
+  assert.equal(N.minutes, 1); assert.equal(I.minutes, 60, 'solde international intact');
+});
+
+// --- Achat à la minute au tarif international (tarif lu de la configuration, jamais en dur) -----------------------------------
+test('achat à la minute : montant = minutes × tarif international de la configuration, crédité au solde international', async () => {
+  pricingDoc = { key: 'default', internationalMinutesCustomRateCents: 25 };
+  const r = await init({ companyId: C1, purpose: 'international_minutes_purchase', provider: 'stripe', minutes: 40, amountEuros: 0.01, amount: 1 });
+  assert.equal(r.code, 201); assert.equal(r.body.amount, 1000); assert.equal(r.body.quantity, 40);
+  assert.equal(payments[0].amount, 1000); assert.equal(payments[0].quantity, 40); assert.deepEqual(payments[0].meta, { mode: 'per_minute', rateCents: 25 });
+  assert.equal(stripeCalls[0].amountCents, 1000); assert.match(stripeCalls[0].productName, /40/);
+  // un autre tarif de configuration => un autre montant (rien en dur)
+  resetPlatformPricingCache(); pricingDoc = { key: 'default', internationalMinutesCustomRateCents: 7 }; payments = [];
+  assert.equal((await init({ companyId: C1, purpose: 'international_minutes_purchase', provider: 'stripe', minutes: 40 })).body.amount, 280);
+  N = nat(3); I = null;
+  await fulfillInternationalMinutesPurchase({ _id: 'pay5', companyId: C1, quantity: 40 });
+  assert.equal(I.minutes, 40); assert.equal(N.minutes, 3, 'jamais crédité au solde national');
+});
+
+test('achat à la minute : sans tarif configuré => 409 ; quantité invalide => 400 ; Stripe seul ; forfait non Call Centre => 409', async () => {
+  const base = { companyId: C1, purpose: 'international_minutes_purchase', provider: 'stripe', minutes: 10 };
+  const none = await init(base);
+  assert.equal(none.code, 409); assert.equal(none.body.code, 'international_rate_not_configured');
+  pricingDoc = { key: 'default', internationalMinutesCustomRateCents: 25 }; resetPlatformPricingCache();
+  for (const minutes of [0, -5, 1.5, 'abc', undefined]) assert.equal((await init({ ...base, minutes })).code, 400, String(minutes));
+  assert.equal((await init({ ...base, provider: 'paypal' })).code, 400);
+  meta = TAAS; assert.equal((await init(base)).code, 409);
+  assert.equal(payments.length, 0); assert.equal(stripeCalls.length, 0);
+  meta = PLAN; pricingDoc = { key: 'default', internationalMinutesCustomRateCents: 0 }; resetPlatformPricingCache();
+  assert.equal((await init(base)).code, 409, 'tarif nul = non configuré');
+});
+
+test('configuration publique : tarif international à la minute exposé (null si non configuré)', async () => {
+  let body; const res = { json(b) { body = b; }, status() { return this; } };
+  await paymentCheckoutController.getConfig({ query: {}, headers: {} }, res);
+  assert.equal(body.pricing.internationalMinutesCustomRateCents, null);
+  pricingDoc = { key: 'default', internationalMinutesCustomRateCents: 25 }; resetPlatformPricingCache();
+  await paymentCheckoutController.getConfig({ query: {}, headers: {} }, res);
+  assert.equal(body.pricing.internationalMinutesCustomRateCents, 25); assert.equal(body.pricing.internationalMinutesCustomRateEuros, 0.25);
 });
