@@ -4,7 +4,7 @@ import { archiveManyInbound, connectionScope, deleteInbound, deleteManyInbound, 
 import { scopeToCompany } from '../middleware/companyScope.js';
 import { loadUserName } from '../services/followUpDirectory.js';
 import SecretariatSharedAccount from '../models/SecretariatSharedAccount.js';
-import { isAvailable, messages, ownsMailConnection, startAuthorization } from '../services/secretariatConnections.js';
+import { isAvailable, messages, ownsMailConnection, beginAuthorization } from '../services/secretariatConnections.js';
 import { loadTools, mergedTools } from '../services/secretariatTools.js';
 import { GOOGLE_MAILBOX_ACCESS_REFUSED, SecretariatError } from '../services/secretariatProviders/common.js';
 
@@ -141,7 +141,7 @@ export const mineInboundController = {
     if (acc.provider === 'google') return fail(res, 409, 'read_unavailable', GOOGLE_MAILBOX_ACCESS_REFUSED); // aucun consentement de lecture Gmail ne démarre jamais
     if (!isAvailable(acc.provider)) return fail(res, 409, 'unavailable', messages.unavailable(acc.provider));
     const ownerName = String((await loadUserName(scope.userId)) || '').replace(/[\u0000-\u001F\u007F<>"\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
-    const url = startAuthorization({ companyId: scope.companyId, userId: scope.userId, provider: acc.provider, returnTo: 'profile', read: true, shared: { personal: true, ownerName, read: true } });
+    const url = beginAuthorization({ companyId: scope.companyId, userId: scope.userId, provider: acc.provider, returnTo: 'profile', read: true, shared: { personal: true, ownerName, read: true } }, res);
     res.json({ success: true, data: { url } });
   }, 'enable'),
   /** Arrête la lecture, purge immédiatement les métadonnées stockées de cette messagerie. */

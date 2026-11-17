@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import { scopeToCompany } from '../middleware/companyScope.js';
 import { loadUserName } from '../services/followUpDirectory.js';
 import { canManage, canUse } from '../services/followUps.js';
-import { isAvailable, messages, PERSONAL_RETURN_TO, startAuthorization } from '../services/secretariatConnections.js';
+import { isAvailable, messages, PERSONAL_RETURN_TO, beginAuthorization } from '../services/secretariatConnections.js';
 import { SecretariatError } from '../services/secretariatProviders/common.js';
 import {
   createAccountEvent, isManager, listAccountEvents, listAccounts, managerView, parseRange, removeAccount, removePersonalAccount, requireAccount, updateAccount,
@@ -10,6 +10,7 @@ import {
 } from '../services/secretariatSharedAccounts.js';
 import SecretariatSharedAccount from '../models/SecretariatSharedAccount.js';
 import { mayTakeOver } from '../services/mailOwnership.js';
+import { ownerHasLeft } from '../services/mailOwnerMembership.js';
 
 /**
  * Comptes connectés partagés avec les collègues (boîte et agenda d'un patron / collègue). Le contrôle d'accès est ici et dans
@@ -61,7 +62,7 @@ export const secretariatAccountsController = {
       const v = validateAccountInput(req.body);
       if (v.error) return fail(res, 400, v.error);
       if (!isAvailable(provider)) return fail(res, 409, messages.unavailable(provider));
-      const url = startAuthorization({ companyId: a.companyId, userId: a.userId, provider, returnTo: 'tools', shared: { label: v.value.label, ownerName: v.value.ownerName, send: v.value.send, calendar: v.value.calendar } });
+      const url = beginAuthorization({ companyId: a.companyId, userId: a.userId, provider, returnTo: 'tools', shared: { label: v.value.label, ownerName: v.value.ownerName, send: v.value.send, calendar: v.value.calendar } }, res);
       res.json({ success: true, data: { url } });
     } catch (error) { answer(res, error, 'start'); }
   },
@@ -77,7 +78,7 @@ export const secretariatAccountsController = {
       // Seul le propriétaire reconnecte son compte ; un compte orphelin se reconnecte par celui qui prouve l'accès à la boîte (même adresse obligatoire au retour). Autre : introuvable.
       if (!d || !mayTakeOver(d, a.userId)) return fail(res, 404, 'Compte introuvable.', 'account_not_found');
       if (!isAvailable(d.provider)) return fail(res, 409, messages.unavailable(d.provider));
-      const url = startAuthorization({ companyId: a.companyId, userId: a.userId, provider: d.provider, returnTo: 'tools', shared: { label: d.label, ownerName: d.ownerName || '', send: d.permissions?.send === true, calendar: d.permissions?.calendar === true, accountId: String(d._id) } });
+      const url = beginAuthorization({ companyId: a.companyId, userId: a.userId, provider: d.provider, returnTo: 'tools', shared: { label: d.label, ownerName: d.ownerName || '', send: d.permissions?.send === true, calendar: d.permissions?.calendar === true, accountId: String(d._id) } }, res);
       res.json({ success: true, data: { url } });
     } catch (error) { answer(res, error, 'reconnect'); }
   },
@@ -100,7 +101,7 @@ export const secretariatAccountsController = {
       const prev = await SecretariatSharedAccount.findOne({ companyId: a.companyId, provider, personalUserId: String(a.userId) }).select('inbound').lean();
       // Google : jamais de lecture (même si un ancien consentement subsiste) : la reconnexion se fait sans lecture et sans erreur.
       const read = provider !== 'google' && prev?.inbound?.readEnabled === true;
-      const url = startAuthorization({ companyId: a.companyId, userId: a.userId, provider, returnTo, read, shared: { personal: true, ownerName, ...(read ? { read: true } : {}) } });
+      const url = beginAuthorization({ companyId: a.companyId, userId: a.userId, provider, returnTo, read, shared: { personal: true, ownerName, ...(read ? { read: true } : {}) } }, res);
       res.json({ success: true, data: { url } });
     } catch (error) { answer(res, error, 'startMine'); }
   },
@@ -132,7 +133,7 @@ export const secretariatAccountsController = {
       const a = access(req, res, { manage: true });
       if (!a) return;
       // Propriétaire : son compte. Titulaire de la société : seulement un compte ORPHELIN. Tout autre : introuvable.
-      if (!(await removeAccount(a.companyId, req.params.accountId, { userId: a.userId, titulaire: a.role === 'owner' }))) return fail(res, 404, 'Compte introuvable.', 'account_not_found');
+      if (!(await removeAccount(a.companyId, req.params.accountId, { userId: a.userId, titulaire: a.role === 'owner', ownerGone: (ownerId) => ownerHasLeft(a.companyId, ownerId, req.headers?.authorization?.split(' ')[1]) }))) return fail(res, 404, 'Compte introuvable.', 'account_not_found');
       res.json({ success: true, data: { accounts: await listAccounts(a.companyId, a) } });
     } catch (error) { answer(res, error, 'remove'); }
   },

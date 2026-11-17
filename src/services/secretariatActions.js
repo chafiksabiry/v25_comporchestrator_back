@@ -3,6 +3,7 @@ import SecretariatConnection from '../models/SecretariatConnection.js';
 import { connectedAccount, messages, resolveVisio, withConnection } from './secretariatConnections.js';
 import { isMailProvider, isOwnerless, ownerOf, ownsRow } from './mailOwnership.js';
 import { sendFromAccount } from './secretariatSharedAccounts.js';
+import { ownerHasLeft } from './mailOwnerMembership.js';
 import { SecretariatError } from './secretariatProviders/common.js';
 import { PROVIDERS } from './secretariatProviders/index.js';
 import { loadTools, mergedTools, VISIO_NEEDS } from './secretariatTools.js';
@@ -100,7 +101,11 @@ registerCompanyCalendarResolver(async (companyId, hint) => {
       const row = await SecretariatConnection.findOne({ companyId, provider: hint.provider }).select('connectedBy').lean();
       ownerId = row && !isOwnerless(row) ? ownerOf(row) : '';
     }
-    return ownerId ? calendarAdapter(companyId, hint.provider, ownerId) : null;
+    if (!ownerId) return null;
+    // Agir dans le calendrier de son propriétaire mémorisé seulement s'il est encore rattaché à la société ET que sa connexion est valide ; sinon `not_connected` sans erreur.
+    const conn = await SecretariatConnection.findOne({ companyId, provider: hint.provider }).select('status connectedBy').lean();
+    if (!conn || conn.status !== 'connected' || !ownsRow(conn, ownerId) || (await ownerHasLeft(companyId, ownerId, hint.token))) return { id: hint.provider, unavailable: true };
+    return calendarAdapter(companyId, hint.provider, ownerId);
   }
   for (const userId of [...new Set((hint.userIds || []).map((u) => String(u || '').trim()).filter(Boolean))]) {
     const provider = await agendaProviderOf(companyId, userId, agenda);

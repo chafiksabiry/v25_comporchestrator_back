@@ -47,15 +47,31 @@ Les lignes qui ont un `connectedBy` gardent ce propriétaire. Aucun changement d
 - **Rendez-vous** : synchronisés seulement avec l'agenda d'une personne qui a connecté une boîte ; sinon `not_connected`.
 - **Comptes partagés** : un responsable ne voit plus ceux des autres sans délégation ; `permissions.send` / `permissions.calendar` s'appliquent désormais aux responsables.
 - **Connexion orpheline** (anciennes lignes sans `connectedBy`) : inutilisable jusqu'à reconnexion.
-- **Limite connue** : si le propriétaire a quitté la société, sa connexion reste (non orpheline) et personne d'autre ne peut la déconnecter ni connecter la même boîte à sa place (index unique société + fournisseur) ; à traiter, par exemple retrait par le titulaire quand l'ancien propriétaire n'est plus membre — décision à prendre.
 
 ## Non vérifié
 Migration sur une base réelle (pas de MongoDB dans l'environnement : base simulée) ; Google / Microsoft réels (réseau simulé : routes de l'API non rejouées contre les fournisseurs) ; comportement de l'upsert conditionnel et de l'index unique sur un vrai MongoDB (simulé par le test) ; l'interface du portail (cette PR ne modifie que l'API).
 
-## Points ouverts (relecture adverse) — décisions à prendre
-1. **État OAuth non lié au navigateur** (hors périmètre, existant) : un membre peut démarrer `/start` et faire consentir un tiers ; la boîte consentie serait alors à son nom. Correctif possible : nonce en cookie HttpOnly vérifié au callback.
-2. **Modification / annulation d'un rendez-vous** par un autre responsable : l'événement est modifié dans le calendrier de son propriétaire mémorisé (jeton du propriétaire). Choix retenu : maintenance de l'événement créé par le système ; alternative stricte : refuser (`failed`) si l'éditeur n'est pas ce propriétaire.
-3. **`inbound.*` est un réglage de société** : tout propriétaire d'une boîte peut le régler (pas seulement celui du fournisseur visé).
-4. **Agenda automatique** : seules les connexions d'entreprise comptent ; la messagerie personnelle sert via l'agenda délégué (`calendarAccountId`).
-5. **Index unique `InboundEmail`** sans `connectionOwnerId` : purge à la reprise d'une orpheline ; index à revoir si plusieurs propriétaires de fournisseurs différents.
-6. **Journal d'envoi** (`GET /emails`) : l'adresse de la boîte (`from`) n'est montrée qu'à l'expéditeur ; destinataires et objet restent visibles du titulaire / responsables (inchangé).
+## Liaison de l'autorisation au navigateur (anti liaison de compte par un tiers)
+Avant : un membre pouvait démarrer une connexion et faire consentir quelqu'un d'autre ; la boîte consentie était enregistrée à son nom.
+Maintenant, toutes les routes qui démarrent une autorisation (`/connections/.../start`, `/accounts/.../start`, `/accounts/.../:id/reconnect`, `/accounts/.../mine/.../start`, activation de la lecture) sont authentifiées et posent un cookie `harx_oauth_<empreinte>` (HttpOnly, SameSite=Lax, 10 min, `Secure` en https) contenant un secret aléatoire à usage unique ; l'état signé n'en porte que l'empreinte, **liée à l'utilisateur de la session**. Au retour (`/oauth/:provider/callback`) le cookie doit correspondre : sinon `?error=browser_mismatch`, **avant tout échange de code**, rien n'est écrit. Le cookie est consommé (un rejeu est refusé) ; expiration : 10 min (celle de l'état).
+- **Prérequis portail** : appeler les routes « start » avec `credentials: 'include'` (CORS autorise déjà les identifiants). Sans cela le navigateur ne conserve pas le cookie et la connexion revient en `browser_mismatch`.
+- Interrupteur de secours (rollback sans redéploiement de code) : variable `OAUTH_BROWSER_BINDING=off` (pas de cookie, états sans liaison) — à ne garder que le temps d'adapter le portail.
+
+## Connexions sans `connectedBy` (anciennes) : impacts et reconnexion
+Impacts : inutilisables par tous dès le déploiement (envoi, agenda, lecture, e-mails d'accueil et relances, rendez-vous) ; ni adresse ni statut visibles pour personne (le titulaire voit seulement `orphan: true`).
+Ce que voit le client : l'écran Outils affiche « non connecté » ; un envoi manuel répond `409 mailbox_not_connected` (« Connectez votre messagerie (Gmail ou Outlook) dans Paramétrage > Outils pour envoyer des e-mails. ») ; e-mails d'accueil / relances : alerte dans l'application seulement ; rendez-vous : `not_connected`.
+Procédure :
+1. Le responsable qui doit utiliser la boîte ouvre **Paramétrage > Outils** et clique **Connecter** (idéalement avec la même adresse) puis consent : il devient propriétaire (`connectedBy`), la ligne n'est plus orpheline, les anciens e-mails stockés ont été purgés et sont relus pour lui.
+2. Compte partagé orphelin : **Reconnecter** (même adresse obligatoire) par un responsable, qui devient propriétaire ; il redéfinit alors la délégation.
+3. Boîte à ne plus utiliser : le **titulaire** voit `orphan: true` et clique **Déconnecter** (jetons supprimés, révocation chez le fournisseur au mieux).
+4. Chaque autre membre qui veut envoyer connecte sa propre messagerie (profil, « Ma messagerie ») ou reçoit une délégation.
+
+## Propriétaire parti de la société
+Le **titulaire** peut déconnecter la connexion (ou retirer le compte partagé) d'un propriétaire qui n'est plus dans l'annuaire de la société (membres + agents, lu chez le service d'inscription avec le jeton du titulaire) ; `GET /connections` lui montre alors `orphan: true`, sans adresse ni jeton. Annuaire illisible ou vide : « inconnu », aucun retrait. Un rendez-vous n'écrit plus dans le calendrier d'un propriétaire parti ni dans celui d'une connexion à refaire : `not_connected`, sans erreur, identifiants conservés.
+
+## Points ouverts
+1. `inbound.*` est un réglage de société : tout propriétaire d'une boîte peut le régler (pas seulement celui du fournisseur visé).
+2. Agenda automatique : seules les connexions d'entreprise de la personne comptent ; la messagerie personnelle sert via l'agenda délégué (`calendarAccountId`).
+3. Index unique `InboundEmail` sans `connectionOwnerId` : purge à la reprise d'une orpheline ; à revoir si plusieurs propriétaires de fournisseurs différents.
+4. Journal d'envoi (`GET /emails`) : l'adresse de la boîte (`from`) n'est montrée qu'à l'expéditeur ; destinataires et objet restent visibles du titulaire / responsables (inchangé).
+5. La liaison au navigateur suppose que le portail envoie les identifiants (voir plus haut) ; non testable ici avec un vrai navigateur.

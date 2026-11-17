@@ -2,10 +2,11 @@ import mongoose from 'mongoose';
 import SecretariatConnection from '../models/SecretariatConnection.js';
 import { canManage } from '../services/followUps.js';
 import {
-  completeConnection, connectionsView, disconnect, isAvailable, messages, readState, returnUrl, startAuthorization,
+  completeConnection, connectionsView, disconnect, isAvailable, messages, readState, returnUrl, beginAuthorization, checkBrowserBinding,
 } from '../services/secretariatConnections.js';
 import { GOOGLE_MAILBOX_ACCESS_REFUSED, isProviderId, SecretariatError } from '../services/secretariatProviders/common.js';
-import { isMailProvider, mayTakeOver } from '../services/mailOwnership.js';
+import { isMailProvider, isOwnerless, mayTakeOver, ownerOf, ownsRow } from '../services/mailOwnership.js';
+import { ownerHasLeft } from '../services/mailOwnerMembership.js';
 
 const fail = (res, status, message) => res.status(status).json({ success: false, error: message, message });
 const NOT_ALLOWED = 'Seuls le titulaire et les membres autorisés à gérer les appels peuvent connecter ou déconnecter un compte. Une boîte mail n’est gérée que par la personne qui l’a connectée.';
@@ -13,10 +14,11 @@ const RETURN_TO = ['tools', 'onboarding'];
 const companyOid = (req) => (mongoose.Types.ObjectId.isValid(req.params.companyId) ? new mongoose.Types.ObjectId(req.params.companyId) : null);
 const mayWrite = (req) => Boolean(req.companyAccess) && canManage(req.companyAccess);
 /** Qui regarde : l'identité de la session ; seul le titulaire de la société (rôle `owner`) peut voir qu'une connexion orpheline existe. */
-const viewerOf = (req) => ({ userId: req.companyAccess?.userId || '', titulaire: req.companyAccess?.role === 'owner' });
+const bearer = (req) => req.headers?.authorization?.split(' ')[1];
+const viewerOf = (req) => ({ userId: req.companyAccess?.userId || '', titulaire: req.companyAccess?.role === 'owner', ownerGone: (ownerId) => ownerHasLeft(req.params.companyId, ownerId, bearer(req)) });
 
 /** Codes courts renvoyés au portail (?error=…) : aucun détail technique. */
-const ERROR_CODES = new Set(['invalid_state', 'invalid_request', 'access_denied', 'unavailable', 'exchange_failed', 'no_refresh_token', 'missing_permissions', 'no_account', 'storage_failed', 'wrong_account', 'too_many_accounts', 'email_in_use', 'not_owner']);
+const ERROR_CODES = new Set(['invalid_state', 'invalid_request', 'access_denied', 'unavailable', 'exchange_failed', 'no_refresh_token', 'missing_permissions', 'no_account', 'storage_failed', 'wrong_account', 'too_many_accounts', 'email_in_use', 'not_owner', 'browser_mismatch']);
 
 export const secretariatConnectionsController = {
   /**
@@ -59,7 +61,7 @@ export const secretariatConnectionsController = {
       if (typeof write !== 'boolean') return fail(res, 400, 'Le champ « write » doit être vrai ou faux.');
       if (write && provider === 'google') return fail(res, 400, GOOGLE_MAILBOX_ACCESS_REFUSED); // idem pour l'écriture (corbeille / archivage)
       if (write && provider !== 'microsoft') return fail(res, 400, 'La gestion de la messagerie n’est pas disponible pour ce fournisseur.');
-      const url = startAuthorization({ companyId: String(companyId), userId: req.companyAccess.userId, provider, returnTo, read, write });
+      const url = beginAuthorization({ companyId: String(companyId), userId: req.companyAccess.userId, provider, returnTo, read, write }, res);
       res.json({ success: true, data: { url } });
     } catch (error) {
       if (error instanceof SecretariatError) return fail(res, error.code === 'unavailable' ? 409 : 500, error.message);
@@ -84,6 +86,8 @@ export const secretariatConnectionsController = {
     const { provider } = req.params;
     const state = isProviderId(provider) ? readState(req.query?.state, provider) : null;
     if (!state) return done('tools', { error: 'invalid_state' });
+    // L'autorisation doit revenir du navigateur qui l'a démarrée (cookie à usage unique lié à l'utilisateur) : sinon refus avant tout échange de code.
+    if (!checkBrowserBinding(state, req, res)) { console.error(`secretariat oauth callback (${provider}): browser_mismatch`); return done(state.returnTo, { error: 'browser_mismatch' }); }
     try {
       if (req.query?.error !== undefined) return done(state.returnTo, { error: 'access_denied' }); // refus de l'utilisateur chez le fournisseur
       if (!isAvailable(provider)) return done(state.returnTo, { error: 'unavailable' });
@@ -104,7 +108,14 @@ export const secretariatConnectionsController = {
       if (!mayWrite(req)) return fail(res, 403, NOT_ALLOWED);
       const { provider } = req.params;
       if (!isProviderId(provider)) return fail(res, 400, 'Fournisseur inconnu.');
-      await disconnect(companyId, provider, { userId: req.companyAccess.userId, titulaire: req.companyAccess.role === 'owner' });
+      // Le titulaire retire aussi la connexion d'un propriétaire qui a quitté la société (annuaire lu avec son jeton) ; jamais l'adresse ni les jetons.
+      const titulaire = req.companyAccess.role === 'owner';
+      let ownerGone = false;
+      if (titulaire && isMailProvider(provider)) {
+        const row = await SecretariatConnection.findOne({ companyId, provider }).select('connectedBy ownerless').lean();
+        if (row && !isOwnerless(row) && !ownsRow(row, req.companyAccess.userId)) ownerGone = await ownerHasLeft(String(companyId), ownerOf(row), bearer(req));
+      }
+      await disconnect(companyId, provider, { userId: req.companyAccess.userId, titulaire, ownerGone });
       res.json({ success: true, data: await connectionsView(companyId, viewerOf(req)) });
     } catch (error) {
       if (error instanceof SecretariatError && error.code === 'not_owner') return res.status(403).json({ success: false, code: 'not_owner', error: 'not_owner', message: error.message });

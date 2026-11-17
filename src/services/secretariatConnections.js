@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import SecretariatConnection from '../models/SecretariatConnection.js';
@@ -100,7 +101,7 @@ const stateSecret = () => {
 };
 
 /** Adresse d'autorisation du fournisseur, avec un état signé (10 min) lié au centre, à l'utilisateur, au fournisseur et à la page de retour. */
-export function startAuthorization({ companyId, userId, provider, returnTo, shared, read = false, write = false }, env = process.env) {
+export function startAuthorization({ companyId, userId, provider, returnTo, shared, read = false, write = false, nb }, env = process.env) {
   const cfg = providerConfig(provider, env);
   if (!cfg) throw new SecretariatError('unavailable', messages.unavailable(provider));
   // GOOGLE : refus inconditionnel de la lecture et de l'écriture de la boîte (aucun scope restreint n'est jamais demandé), quel que soit l'appelant.
@@ -108,7 +109,7 @@ export function startAuthorization({ companyId, userId, provider, returnTo, shar
   // `read` : demande EN PLUS le scope (optionnel) de lecture de la boîte de réception (e-mails entrants). Les scopes obtenus sont lus au callback.
   if (read && !PROVIDERS[provider].readScope) throw new SecretariatError('invalid_request', 'La lecture des e-mails n’est pas disponible pour ce fournisseur.');
   if (write && !PROVIDERS[provider].writeScope) throw new SecretariatError('invalid_request', 'La gestion de la messagerie n’est pas disponible pour ce fournisseur.');
-  const state = jwt.sign({ purpose: STATE_PURPOSE, companyId: String(companyId), userId: String(userId), provider, returnTo, ...(shared ? { shared } : {}) }, stateSecret(), { expiresIn: STATE_TTL_SECONDS, algorithm: 'HS256' });
+  const state = jwt.sign({ purpose: STATE_PURPOSE, companyId: String(companyId), userId: String(userId), provider, returnTo, ...(nb ? { nb } : {}), ...(shared ? { shared } : {}) }, stateSecret(), { expiresIn: STATE_TTL_SECONDS, algorithm: 'HS256' });
   const P = PROVIDERS[provider];
   const q = new URLSearchParams({
     client_id: cfg.clientId, redirect_uri: cfg.redirectUri, response_type: 'code', state,
@@ -117,13 +118,53 @@ export function startAuthorization({ companyId, userId, provider, returnTo, shar
   return `${P.authorizeUrl(env)}?${q}`;
 }
 
+/**
+ * LIAISON DE L'AUTORISATION AU NAVIGATEUR de la personne qui l'a démarrée (contre la liaison de compte par un tiers : un membre ne peut pas faire consentir
+ * quelqu'un d'autre à son nom). `beginAuthorization` (appelée par une route AUTHENTIFIÉE) tire un secret aléatoire à usage unique, le dépose dans un cookie
+ * HttpOnly / SameSite=Lax de 10 minutes et met dans l'état signé seulement son empreinte (liée à l'utilisateur de la session). Au retour OAuth, le cookie doit
+ * correspondre à l'état (`checkBrowserBinding`) : sinon l'autorisation est refusée AVANT tout échange de code. Le portail doit appeler les routes « start » avec
+ * les identifiants (`credentials: 'include'`) ; CORS les autorise déjà. Interrupteur de secours : OAUTH_BROWSER_BINDING=off (états sans liaison).
+ */
+const BINDING_PREFIX = 'harx_oauth_';
+const usedNonces = new Map();
+export const browserBindingEnabled = (env = process.env) => String(env.OAUTH_BROWSER_BINDING || '').trim().toLowerCase() !== 'off';
+const bindHash = (nonce, userId) => crypto.createHash('sha256').update(`${nonce}:${userId}`).digest('hex');
+const cookieName = (nb) => `${BINDING_PREFIX}${nb.slice(0, 16)}`;
+const readCookie = (header, name) => {
+  for (const part of String(header || '').split(';')) { const i = part.indexOf('='); if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim(); }
+  return '';
+};
+export function beginAuthorization(params, res, env = process.env) {
+  if (!browserBindingEnabled(env) || !res || typeof res.append !== 'function') return startAuthorization(params, env);
+  const nonce = crypto.randomBytes(32).toString('hex');
+  const nb = bindHash(nonce, params.userId);
+  const url = startAuthorization({ ...params, nb }, env);
+  const secure = res.req?.secure || String(res.req?.headers?.['x-forwarded-proto'] || '').split(',')[0].trim() === 'https' ? '; Secure' : '';
+  res.append('Set-Cookie', `${cookieName(nb)}=${nonce}; Max-Age=${STATE_TTL_SECONDS}; Path=/; HttpOnly; SameSite=Lax${secure}`);
+  return url;
+}
+/** Vrai si le retour OAuth vient du navigateur qui a démarré l'autorisation (ou si l'état n'a pas de liaison). Usage unique : le cookie est consommé. */
+export function checkBrowserBinding(state, req, res, env = process.env) {
+  if (!state?.nb || !browserBindingEnabled(env)) return true;
+  const name = cookieName(state.nb);
+  const nonce = readCookie(req?.headers?.cookie, name);
+  if (typeof res?.append === 'function') res.append('Set-Cookie', `${name}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`);
+  const now = Date.now();
+  for (const [k, t] of usedNonces) if (t < now) usedNonces.delete(k);
+  if (!/^[0-9a-f]{64}$/.test(nonce) || usedNonces.has(state.nb)) return false;
+  const a = Buffer.from(bindHash(nonce, state.userId)); const b = Buffer.from(state.nb);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+  usedNonces.set(state.nb, now + STATE_TTL_SECONDS * 1000);
+  return true;
+}
+
 /** Lit un état OAuth : charge utile valide, ou null (expiré, falsifié, autre fournisseur, forme inattendue). */
 export function readState(state, provider) {
   try {
     const s = jwt.verify(String(state), stateSecret(), { algorithms: ['HS256'] });
     if (s.purpose !== STATE_PURPOSE || s.provider !== provider || !isProviderId(provider)) return null;
     if (!/^[0-9a-fA-F]{24}$/.test(String(s.companyId)) || typeof s.userId !== 'string' || !s.userId || !RETURN_PATHS[s.returnTo]) return null;
-    const base = { companyId: String(s.companyId), userId: s.userId, provider, returnTo: s.returnTo };
+    const base = { companyId: String(s.companyId), userId: s.userId, provider, returnTo: s.returnTo, ...(typeof s.nb === 'string' && /^[0-9a-f]{64}$/.test(s.nb) ? { nb: s.nb } : {}) };
     if (s.shared === undefined) return base;
     // Compte partagé : seuls Google et Microsoft ; libellé et droits revalidés (jamais de confiance aveugle dans la charge utile).
     const sh = s.shared;
@@ -486,7 +527,7 @@ export async function connectionsView(companyId, viewer = {}, env = process.env)
       available: isAvailable(p, env),
       connected: row?.status === 'connected',
       needsReauth: row?.status === 'needs_reauth',
-      ...(isMailProvider(p) && found && isOwnerless(found) && viewer.titulaire === true ? { orphan: true } : {}), // additif : seulement pour le titulaire, seulement si une connexion orpheline existe
+      ...(isMailProvider(p) && found && viewer.titulaire === true && !ownsRow(found, viewer.userId) && (isOwnerless(found) || (typeof viewer.ownerGone === 'function' && (await viewer.ownerGone(ownerOf(found))))) ? { orphan: true } : {}), // additif : seulement pour le titulaire ; connexion sans propriétaire OU dont le propriétaire a quitté la société (jamais d'adresse)
       /** Le scope (optionnel) de lecture de la boîte de réception est-il accordé ? (e-mails entrants) */
       canRead: row?.status === 'connected' && hasReadScope(p, row.scopes),
       /** Le scope (optionnel, séparé) d'écriture est-il accordé ? (corbeille / archivage répercutés dans la messagerie) */
@@ -499,10 +540,10 @@ export async function connectionsView(companyId, viewer = {}, env = process.env)
 }
 
 /** Révoque chez le fournisseur au mieux (un échec est toléré) puis supprime les jetons. */
-export async function disconnect(companyId, provider, { http = httpImpl, env = process.env, userId = null, titulaire = false } = {}) {
+export async function disconnect(companyId, provider, { http = httpImpl, env = process.env, userId = null, titulaire = false, ownerGone = false } = {}) {
   const conn = await SecretariatConnection.findOne({ companyId: oid(companyId), provider }).select('+credentialsEnc');
   // Boîte Google / Microsoft : son propriétaire la déconnecte ; une connexion ORPHELINE ne peut être retirée que par le titulaire de la société. Contrôle AVANT toute purge.
-  if (conn && isMailProvider(provider) && !(ownsRow(conn, userId) || (isOwnerless(conn) && titulaire === true))) throw new SecretariatError('not_owner', messages.notOwner(), { status: 403 });
+  if (conn && isMailProvider(provider) && !(ownsRow(conn, userId) || (titulaire === true && (isOwnerless(conn) || ownerGone === true)))) throw new SecretariatError('not_owner', messages.notOwner(), { status: 403 });
   // Les e-mails entrants stockés sont purgés AVANT la suppression des jetons : en cas d'échec rien n'est perdu et la déconnexion peut être rejouée.
   if (conn && MAILBOX_PROVIDERS.includes(provider)) await purgeInboundEmails(companyId, ownerOf(conn));
   if (!conn) { await releaseEmailProvider(companyId, provider); await releaseAgendaAndVisio(companyId, provider); return false; }

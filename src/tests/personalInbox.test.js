@@ -213,7 +213,8 @@ try {
   const q = qs(r.body.data.url);
   assert.equal(q.scope, `${SEND_M.join(' ')} Mail.Read`, 'envoi + agenda + lecture seule');
   assert.ok(!q.scope.includes(WRITE_SCOPE.microsoft), 'aucun périmètre d’écriture');
-  assert.deepEqual(S.readState(q.state, 'microsoft'), { companyId: C1, userId: 'sophie', provider: 'microsoft', returnTo: 'profile', shared: { label: 'Ma messagerie', ownerName: 'Sophie Martin', send: true, calendar: true, personal: true, read: true } }, 'personal + read, identité = session');
+  const stR = S.readState(q.state, 'microsoft'); assert.match(stR.nb, /^[0-9a-f]{64}$/); delete stR.nb;
+  assert.deepEqual(stR, { companyId: C1, userId: 'sophie', provider: 'microsoft', returnTo: 'profile', shared: { label: 'Ma messagerie', ownerName: 'Sophie Martin', send: true, calendar: true, personal: true, read: true } }, 'personal + read, identité = session');
   seedMine({ _id: ACC_MS, provider: 'microsoft', accountEmail: 'sophie@contoso.test', scopes: SEND_M });
   r = await req('POST', `${mine(ACC_MS)}/enable`, { user: 'sophie' });
   assert.equal(r.status, 200); assert.match(qs(r.body.data.url).scope, / Mail\.Read$/); assert.ok(!/Mail\.ReadWrite\b(?!.*Calendars)/.test(qs(r.body.data.url).scope.replace('Calendars.ReadWrite', '').replace('OnlineMeetings.ReadWrite', '')), 'pas de Mail.ReadWrite');

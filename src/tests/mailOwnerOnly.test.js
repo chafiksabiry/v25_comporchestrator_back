@@ -39,6 +39,7 @@ const CS = await import('../services/calendarSync.js');
 const N = await import('../services/messageNotify.js');
 const R = await import('../services/messageReminders.js');
 const Mig = await import('../services/mailOwnershipMigration.js');
+const Member = await import('../services/mailOwnerMembership.js');
 const { encryptJson, loadKey } = await import('../integrations/crypto.js');
 const { default: SecretariatConnection } = await import('../models/SecretariatConnection.js');
 const { default: SecretariatSharedAccount } = await import('../models/SecretariatSharedAccount.js');
@@ -204,12 +205,12 @@ globalThis.fetch = async (url, init) => {
 };
 const sign = (userId) => jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: 60 });
 const responses = [];
-const req = async (method, path, { user, body, root = `${origin}/api/secretariat` } = {}) => {
+const req = async (method, path, { user, body, headers: extra = {}, root = `${origin}/api/secretariat` } = {}) => {
   clearCompanyCache();
-  const res = await realFetch(`${root}${path}`, { method, redirect: 'manual', headers: { ...(user ? { Authorization: `Bearer ${sign(user)}` } : {}), 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
+  const res = await realFetch(`${root}${path}`, { method, redirect: 'manual', headers: { ...(user ? { Authorization: `Bearer ${sign(user)}` } : {}), 'content-type': 'application/json', ...extra }, ...(body ? { body: JSON.stringify(body) } : {}) });
   const text = await res.text(); responses.push({ user, text });
   let json = null; try { json = JSON.parse(text); } catch { /* texte */ }
-  return { status: res.status, body: json, text, location: res.headers.get('location') };
+  return { status: res.status, body: json, text, location: res.headers.get('location'), cookies: res.headers.getSetCookie?.() || [] };
 };
 const sec = (m, p, o) => req(m, p, o);
 const mail = (m, p, o) => req(m, p, { ...o, root: `${origin}/api/emails` });
@@ -607,6 +608,97 @@ try {
   assert.equal(res2.connectionsOwnerless, 0); assert.equal(res2.sharedAccountsOwnerless, 0); assert.equal(res2.legacyInboxPurged, 0); assert.equal(res2.secretariesSettingReset, 0, 'idempotente');
   // après migration, la connexion orpheline est inutilisable
   await assert.rejects(S.withConnection(C1, 'microsoft', async () => 'x', { ownerId: 'owner1' }), (e) => e.code === 'not_connected');
+
+  // =========================================================================================================
+  // 8 bis. PROPRIÉTAIRE PARTI de la société : le titulaire retire sa connexion (jamais d'adresse), un rendez-vous n'écrit plus dans son calendrier
+  // =========================================================================================================
+  resetDb(); std();
+  const everyone = ['owner1', 'mgrA', 'mgrB', 'sec'].map((id) => ({ id, name: id, kind: 'member' }));
+  const directoryWithout = (gone) => async () => everyone.filter((p) => p.id !== gone);
+  putConn('microsoft', { connectedBy: 'mgrA' }); putShared(SA1, { connectedBy: 'mgrA', permissions: { send: true, calendar: true } }, 'S');
+  inbox.push({ _id: 'g1', companyId: C1, ownerUserId: null, accountId: null, connectionOwnerId: 'mgrA', providerMessageId: 'z', provider: 'microsoft' });
+  // annuaire illisible / vide : « inconnu » = encore rattaché : aucun retrait
+  Member.setDirectoryLoader(async () => { throw new Error('indisponible'); });
+  assert.equal((await sec('DELETE', `/connections/${C1}/microsoft`, { user: 'owner1' })).status, 403); assert.equal(conns.length, 1);
+  Member.setDirectoryLoader(async () => []);
+  assert.equal((await sec('DELETE', `/connections/${C1}/microsoft`, { user: 'owner1' })).status, 403, 'annuaire vide : inconnu, jamais un retrait'); assert.equal(conns.length, 1);
+  // propriétaire encore rattaché : refus
+  Member.setDirectoryLoader(directoryWithout('personne'));
+  assert.equal((await sec('DELETE', `/connections/${C1}/microsoft`, { user: 'owner1' })).status, 403);
+  r = await sec('GET', `/connections/${C1}`, { user: 'owner1' }); assert.ok(!r.body.data.microsoft.orphan);
+  // propriétaire parti : visible comme « orpheline » du seul titulaire, sans adresse ; retirable par le seul titulaire
+  Member.setDirectoryLoader(directoryWithout('mgrA'));
+  r = await sec('GET', `/connections/${C1}`, { user: 'owner1' }); assert.equal(r.body.data.microsoft.orphan, true); assert.equal(r.body.data.microsoft.account, null); assert.equal(r.body.data.microsoft.connected, false); assert.ok(!r.text.includes(BOSS_EMAIL));
+  r = await sec('GET', `/connections/${C1}`, { user: 'mgrB' }); assert.ok(!r.body.data.microsoft.orphan, 'les autres ne voient rien');
+  assert.equal((await sec('DELETE', `/connections/${C1}/microsoft`, { user: 'mgrB' })).status, 403, 'un responsable ne retire pas'); assert.equal(conns.length, 1);
+  assert.equal((await sec('DELETE', `/accounts/${C1}/${SA1}`, { user: 'mgrB' })).status, 404, 'compte partagé : un responsable ne retire pas'); assert.equal(accounts.length, 1);
+  r = await sec('DELETE', `/connections/${C1}/microsoft`, { user: 'owner1' }); assert.equal(r.status, 200); assert.ok(!r.text.includes(BOSS_EMAIL)); assert.equal(conns.length, 0); assert.equal(inbox.length, 0, 'e-mails stockés du propriétaire parti purgés');
+  Member.setDirectoryLoader(async () => []);
+  assert.equal((await sec('DELETE', `/accounts/${C1}/${SA1}`, { user: 'owner1' })).status, 404, 'compte partagé : annuaire inconnu, pas de retrait');
+  Member.setDirectoryLoader(directoryWithout('mgrA'));
+  assert.equal((await sec('DELETE', `/accounts/${C1}/${SA1}`, { user: 'owner1' })).status, 200, 'compte partagé d’un propriétaire parti : retiré par le titulaire'); assert.equal(accounts.length, 0);
+  // rendez-vous : modification / annulation seulement si le propriétaire du calendrier est encore rattaché ET sa connexion valide
+  std(); putConn('microsoft', { connectedBy: 'mgrA' }, 'MGRA'); toolsDocs.length = 0; toolsDocs.push({ companyId: C1, agenda: { provider: 'microsoft' } });
+  on('PATCH', /graph\.microsoft\.com\/v1\.0\/me\/events\//, () => ({ status: 200, json: { id: 'EV' } }));
+  const evt = (over = {}) => ({ companyId: C1, id: 'i', title: 'RDV', dueAt: new Date('2030-01-10T09:00:00Z'), durationMinutes: 30, timeZone: 'Europe/Paris', assignee: { id: 'mgrA' }, createdBy: { id: 'mgrA' }, calendarExternalId: 'EV', calendarProvider: 'microsoft', calendarOwnerId: 'mgrA', ...over });
+  Member.setDirectoryLoader(directoryWithout('personne'));
+  httpCalls.length = 0; s = await CS.syncAppointment(evt(), { op: 'update', token: 'T' });
+  assert.equal(s.status, 'synced'); assert.deepEqual(httpCalls.filter((c) => c.method === 'PATCH').map(bearer), ['ACCESS_MGRA'], 'propriétaire rattaché, connexion valide');
+  Member.setDirectoryLoader(directoryWithout('mgrA')); httpCalls.length = 0;
+  s = await CS.syncAppointment(evt(), { op: 'update', token: 'T' });
+  assert.deepEqual([s.status, s.unavailable], ['not_connected', true], 'propriétaire parti : not_connected, sans erreur'); assert.equal(httpCalls.length, 0, 'aucun appel fournisseur');
+  s = await CS.syncAppointment(evt(), { op: 'remove', token: 'T' }); assert.equal(s.status, 'not_connected'); assert.equal(httpCalls.length, 0);
+  Member.setDirectoryLoader(directoryWithout('personne')); conns[0].status = 'needs_reauth';
+  s = await CS.syncAppointment(evt(), { op: 'update', token: 'T' }); assert.equal(s.status, 'not_connected', 'connexion à refaire : not_connected sans erreur'); assert.equal(httpCalls.length, 0);
+  conns[0].status = 'connected'; conns[0].connectedBy = 'owner1';
+  s = await CS.syncAppointment(evt(), { op: 'update', token: 'T' }); assert.equal(s.status, 'not_connected', 'le calendrier mémorisé n’est plus celui de la connexion actuelle : jamais écrit'); assert.equal(httpCalls.length, 0);
+  Member.setDirectoryLoader(null);
+
+  // =========================================================================================================
+  // 8 ter. LIAISON DE L'AUTORISATION AU NAVIGATEUR (anti liaison de compte par un tiers) : nonce signé, usage unique, expiration courte
+  // =========================================================================================================
+  resetDb(); std();
+  const startAs = async (user) => {
+    const rs = await sec('POST', `/connections/${C1}/microsoft/start`, { user, body: {} });
+    assert.equal(rs.status, 200, rs.text);
+    const ck = rs.cookies.find((c) => /^harx_oauth_/.test(c)); assert.ok(ck, 'cookie de liaison posé'); assert.match(ck, /HttpOnly/); assert.match(ck, /SameSite=Lax/); assert.match(ck, /Max-Age=600/);
+    const state = new URL(rs.body.data.url).searchParams.get('state');
+    const nb = S.readState(state, 'microsoft').nb; assert.match(nb, /^[0-9a-f]{64}$/);
+    assert.ok(!rs.body.data.url.includes(ck.split('=')[1].split(';')[0]), 'le secret n’est jamais dans l’URL (seulement son empreinte dans l’état)');
+    return { state, cookie: ck.split(';')[0] };
+  };
+  const callbackWith = (state, cookie) => req('GET', `/oauth/microsoft/callback?${new URLSearchParams({ code: 'CODE_123', state })}`, { headers: cookie ? { Cookie: cookie } : {} });
+  oauthMicrosoft('mgra@acme.test', 'MGRA');
+  const X = await startAs('mgrB');        // l'attaquant démarre
+  const V = await startAs('mgrA');        // une autre personne démarre de son côté
+  // la victime ouvre l'URL de l'attaquant : pas de cookie correspondant -> refus AVANT tout échange de code
+  httpCalls.length = 0;
+  r = await callbackWith(X.state);
+  assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=browser_mismatch'); assert.equal(httpCalls.length, 0, 'aucun échange de code'); assert.equal(conns.length, 0);
+  r = await callbackWith(X.state, V.cookie); assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=browser_mismatch', 'cookie d’une autre autorisation'); assert.equal(conns.length, 0);
+  r = await callbackWith(X.state, `${X.cookie.split('=')[0]}=${'0'.repeat(64)}`); assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=browser_mismatch', 'secret forgé'); assert.equal(httpCalls.length, 0);
+  r = await callbackWith(X.state, `${X.cookie.split('=')[0]}=zz`); assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=browser_mismatch', 'secret mal formé');
+  // le secret de l'attaquant est lié à SON identité : recopié dans un état forgé pour un autre utilisateur, il ne passe pas
+  const forgedState = jwt.sign({ purpose: 'secretariat-oauth', companyId: C1, userId: 'mgrA', provider: 'microsoft', returnTo: 'tools', nb: S.readState(X.state, 'microsoft').nb }, process.env.JWT_SECRET, { expiresIn: 600 });
+  r = await callbackWith(forgedState, X.cookie); assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=browser_mismatch', 'état forgé pour un autre utilisateur'); assert.equal(conns.length, 0);
+  // état altéré / expiré : refusé comme avant
+  r = await callbackWith(`${X.state.slice(0, -3)}abc`, X.cookie); assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=invalid_state');
+  r = await callbackWith(jwt.sign({ purpose: 'secretariat-oauth', companyId: C1, userId: 'mgrB', provider: 'microsoft', returnTo: 'tools', nb: S.readState(X.state, 'microsoft').nb }, process.env.JWT_SECRET, { expiresIn: -5 }), X.cookie); assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=invalid_state', 'état expiré');
+  // le bon navigateur : accepté, cookie effacé ; rejouer le même retour est refusé (usage unique)
+  r = await callbackWith(V.state, V.cookie);
+  assert.equal(r.location, 'https://portal.test/telephony/app/tools?connected=microsoft'); assert.equal(conns[0].connectedBy, 'mgrA'); assert.ok(r.cookies.some((c) => /^harx_oauth_.*Max-Age=0/.test(c)), 'cookie consommé');
+  httpCalls.length = 0; const encNow = conns[0].credentialsEnc;
+  r = await callbackWith(V.state, V.cookie); assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=browser_mismatch', 'rejeu refusé'); assert.equal(httpCalls.length, 0); assert.equal(conns[0].credentialsEnc, encNow);
+  // les autres routes qui démarrent une autorisation posent aussi la liaison (comptes partagés, messagerie personnelle)
+  r = await sec('POST', `/accounts/${C1}/mine/microsoft/start`, { user: 'mgrB', body: {} }); assert.ok(r.cookies.some((c) => /^harx_oauth_/.test(c)));
+  r = await sec('POST', `/accounts/${C1}/microsoft/start`, { user: 'mgrB', body: { label: 'Equipe', ownerName: '' } }); assert.ok(r.cookies.some((c) => /^harx_oauth_/.test(c)));
+  // interrupteur de secours
+  process.env.OAUTH_BROWSER_BINDING = 'off';
+  try {
+    conns.length = 0; r = await sec('POST', `/connections/${C1}/microsoft/start`, { user: 'mgrB', body: {} });
+    assert.equal(r.cookies.length, 0); const stOff = new URL(r.body.data.url).searchParams.get('state'); assert.equal(S.readState(stOff, 'microsoft').nb, undefined);
+    oauthMicrosoft('mgrb@acme.test', 'MGRB'); assert.equal((await callbackWith(stOff)).location, 'https://portal.test/telephony/app/tools?connected=microsoft');
+  } finally { delete process.env.OAUTH_BROWSER_BINDING; }
 
   // =========================================================================================================
   // 9. Aucune fuite : ni jeton ni adresse de la boîte d'un autre dans les réponses ou les journaux de la session de test

@@ -55,6 +55,7 @@ function applyDelegated(item, sync) {
 
 /** Reporte le résultat d'une synchronisation d'agenda sur le rendez-vous. Un échec est CONSERVÉ (`failed`) et ne casse jamais le rendez-vous. */
 function applySync(item, sync, op) {
+  if (sync.unavailable) { item.calendarStatus = 'not_connected'; item.calendarMessage = null; return; } // propriétaire du calendrier parti / connexion inutilisable : rien n'est écrit, aucune erreur, identifiants conservés
   const had = Boolean(item.calendarExternalId);
   if (op === 'remove') {
     if (sync.status === 'synced') { item.calendarExternalId = null; item.calendarStatus = 'synced'; } else item.calendarStatus = 'failed';
@@ -68,7 +69,7 @@ function applySync(item, sync, op) {
 }
 
 /** Répercute une modification d'un rendez-vous sur l'agenda / la visio connectés. Ne lève jamais. */
-async function syncExternal(item, { wasStatus, keys, videoChanged, access }) {
+async function syncExternal(item, { wasStatus, keys, videoChanged, access, token }) {
   if (item.model !== 'appointment') return;
   const canceled = item.status === 'canceled';
   if (item.calendarAccountId) { // agenda délégué : toujours CE compte (jamais l'agenda de la société), pas de visio
@@ -85,7 +86,7 @@ async function syncExternal(item, { wasStatus, keys, videoChanged, access }) {
     const before = extView(item);
     let ok = true;
     if (item.calendarExternalId) {
-      const sync = await syncAppointment(before, { op: 'remove' });
+      const sync = await syncAppointment(before, { op: 'remove', token });
       applySync(item, sync, 'remove');
       ok = sync.status === 'synced';
     }
@@ -94,7 +95,7 @@ async function syncExternal(item, { wasStatus, keys, videoChanged, access }) {
   } else if (!canceled && (wasStatus === 'canceled' || videoChanged || keys.some((k) => ['dueAt', 'timeZone', 'title', 'durationMinutes', 'location'].includes(k)))) {
     if (item.videoProvider && item.videoExternalId && item.videoExternalId !== item.calendarExternalId) await updateVideoResource(String(item.companyId), extView(item));
     const op = item.calendarExternalId ? 'update' : 'push';
-    applySync(item, await syncAppointment(extView(item), { op }), op);
+    applySync(item, await syncAppointment(extView(item), { op, token }), op);
   } else return;
   await item.save();
 }
@@ -312,7 +313,7 @@ export const followUpController = {
         item.closedById = closing ? access.userId : '';
       }
       await item.save();
-      await syncExternal(item, { wasStatus, keys: Object.keys(checked.value), videoChanged: videoLink !== undefined, access });
+      await syncExternal(item, { wasStatus, keys: Object.keys(checked.value), videoChanged: videoLink !== undefined, access, token: bearer(req) });
       if (checked.value.status === 'done' && item.model === 'voicemail_callback' && item.originType === 'voicemail') {
         await Voicemail.updateOne({ _id: item.originId, companyId: item.companyId, followUpStatus: { $in: ['new', 'to_call'] } }, { $set: { followUpStatus: 'called' } }).catch(() => {});
       }

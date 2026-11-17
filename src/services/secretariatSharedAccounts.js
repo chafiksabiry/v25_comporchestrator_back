@@ -269,12 +269,18 @@ export async function updateAccount(companyId, accountId, patch, userId) {
  * Suppression : le propriétaire supprime SON compte ; le titulaire de la société (`titulaire`) peut en plus retirer un compte ORPHELIN (sans propriétaire).
  * Jamais le compte d'une autre personne, jamais une messagerie personnelle.
  */
-export async function removeAccount(companyId, accountId, { userId, titulaire = false } = {}) {
+export async function removeAccount(companyId, accountId, { userId, titulaire = false, ownerGone = null } = {}) {
   if (!isOid(accountId)) return false;
   const u = String(userId || '').trim();
   if (u && (await disconnectSharedAccount(companyId, accountId, { owner: null, connectedBy: u }))) return true;
-  if (titulaire) return disconnectSharedAccount(companyId, accountId, { owner: null, connectedBy: '' });
-  return false;
+  if (!titulaire) return false;
+  if (await disconnectSharedAccount(companyId, accountId, { owner: null, connectedBy: '' })) return true;
+  // Propriétaire parti de la société : le titulaire retire le compte (jamais utilisé, adresse jamais exposée).
+  if (typeof ownerGone !== 'function') return false;
+  const row = await SecretariatSharedAccount.findOne({ _id: oid(accountId), companyId: oid(companyId), personalUserId: null }).select('connectedBy').lean();
+  const owner = String(row?.connectedBy || '').trim();
+  if (!owner || !(await ownerGone(owner))) return false;
+  return disconnectSharedAccount(companyId, accountId, { owner: null, connectedBy: owner });
 }
 
 /** La secrétaire déconnecte SA messagerie personnelle (propriété vérifiée dans le filtre ; autre compte = introuvable). */

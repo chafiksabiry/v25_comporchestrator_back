@@ -483,6 +483,7 @@ try {
     r = await req('POST', `/connections/${C1}/microsoft/start`, { user, body: { returnTo: 'onboarding' } });
     assert.equal(r.status, 200, user); assert.deepEqual(Object.keys(r.body), ['success', 'data']); assert.deepEqual(Object.keys(r.body.data), ['url']);
     const sp = S.readState(qs(r.body.data.url).state, 'microsoft');
+    assert.match(sp.nb, /^[0-9a-f]{64}$/, 'état lié au navigateur (empreinte du secret)'); delete sp.nb;
     assert.deepEqual(sp, { companyId: C1, userId: user, provider: 'microsoft', returnTo: 'onboarding' }, 'état lié au centre et à la personne');
   }
   conns.push(keepMs);
