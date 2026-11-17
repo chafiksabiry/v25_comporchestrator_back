@@ -96,6 +96,7 @@ export const SPOKEN_REFUSALS = Object.freeze({
     no_subscription: 'No active subscription.',
     no_line: 'No line is available to place the call.',
     insufficient_minutes: 'Insufficient minutes balance.',
+    international_pack_required: 'An international minutes pack is required to call this destination.',
     error: 'An error occurred.',
     secretary_outbound_disabled: 'The account owner has turned off outbound calls for secretaries.',
     invalid_number: 'Invalid number. Enter it in international format.',
@@ -111,6 +112,7 @@ export const SPOKEN_REFUSALS = Object.freeze({
     no_subscription: 'Aucun abonnement actif.',
     no_line: 'Aucune ligne disponible pour appeler.',
     insufficient_minutes: 'Solde de minutes insuffisant.',
+    international_pack_required: 'Un pack de minutes internationales est requis pour appeler cette destination.',
     error: 'Une erreur est survenue.',
     secretary_outbound_disabled: SECRETARY_OUTBOUND_BLOCKED,
     invalid_number: 'Numéro invalide. Saisissez-le au format international.',
@@ -124,6 +126,7 @@ export const SPOKEN_REFUSALS = Object.freeze({
     no_subscription: 'No hay ninguna suscripción activa.',
     no_line: 'No hay ninguna línea disponible para llamar.',
     insufficient_minutes: 'Saldo de minutos insuficiente.',
+    international_pack_required: 'Se necesita un paquete de minutos internacionales para llamar a este destino.',
     error: 'Se ha producido un error.',
     secretary_outbound_disabled: 'El titular de la cuenta ha desactivado las llamadas salientes para las secretarias.',
     invalid_number: 'Número no válido. Introdúzcalo en formato internacional.',
@@ -152,14 +155,19 @@ export function spokenRefusal(key, language = 'en') {
  * Décision de numérotation, sans accès réseau : renvoie la consigne TwiML à donner à Twilio.
  * `line` est la ligne Twilio de l'entreprise utilisée comme numéro appelant ; `minutes` le solde de minutes.
  */
-export function decideOutboundCall({ to, line, subscribed, minutes, recording = null, action = null }) {
+export function decideOutboundCall({ to, line, subscribed, minutes, recording = null, action = null, balanceKind = 'national' }) {
   if (!to) return { ok: false, message: 'Numéro non autorisé.', key: 'number_not_allowed' };
   if (!subscribed) return { ok: false, message: 'Aucun abonnement actif.', key: 'no_subscription' };
   if (!line) return { ok: false, message: 'Aucune ligne disponible pour appeler.', key: 'no_line' };
   // Toute minute commencée est facturée en entier : il faut au moins une minute entière, et l'appel est coupé quand
   // les minutes entières du solde sont écoulées, pour que le solde ne passe jamais sous zéro.
   const maxSeconds = maxSecondsForBalance(minutes);
-  if (!maxSeconds) return { ok: false, message: 'Solde de minutes insuffisant.', key: 'insufficient_minutes' };
+  // `balanceKind: 'international'` : `minutes` est le solde du pack de minutes internationales (jamais le solde normal).
+  if (!maxSeconds) {
+    return balanceKind === 'international'
+      ? { ok: false, message: 'Un pack de minutes internationales est requis.', key: 'international_pack_required' }
+      : { ok: false, message: 'Solde de minutes insuffisant.', key: 'insufficient_minutes' };
+  }
   return { ok: true, maxSeconds, twiml: buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds, recording, action }) };
 }
 

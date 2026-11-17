@@ -12,6 +12,8 @@ import { syncMinutesFromCalls } from './escrowController.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { isPremiumRate, MESSAGES as DESTINATION_MESSAGES } from '../services/outboundDestinations.js';
 import { freshMinutesBalance, maxSecondsForBalance, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed } from '../services/browserOutbound.js';
+import { resolveOutboundBalance } from '../services/internationalMinutes.js';
+import { loadCompanyPlanLimits } from '../services/planLimits.js';
 import InboundSettings from '../models/InboundSettings.js';
 import { callerAccess } from '../middleware/companyScope.js';
 import { buildCallbackTwiml, buildRefusalTwiml, CALLBACK_WEBHOOK_PATH, ensureCallbackApp, pickDestination, signTicket, verifyTicket } from '../services/voicemailCallback.js';
@@ -172,8 +174,14 @@ export const voicemailController = {
       // Un rappel est un appel sortant : il consomme des minutes, donc seulement avec des minutes disponibles, et il est
       // coupé quand elles sont écoulées.
       const minutes = await freshMinutesBalance(String(vm.companyId), { sync: syncMinutesFromCalls, grant: ensurePlanMinutesGranted, readWallet: (id) => MinutesCompany.findOne({ companyId: id }).select('minutes').lean() });
-      const maxSeconds = maxSecondsForBalance(minutes);
-      if (!maxSeconds) return send(buildRefusalTwiml('Solde de minutes insuffisant.'));
+      // Offre concernée par le pack de minutes internationales : un rappel international n'utilise que le solde international.
+      let balance = { kind: 'national', minutes };
+      try {
+        const limits = await loadCompanyPlanLimits(String(vm.companyId));
+        if (limits?.internationalPack) balance = await resolveOutboundBalance({ companyId: String(vm.companyId), limits, to, nationalMinutes: minutes });
+      } catch { balance = { kind: 'national', minutes }; }
+      const maxSeconds = maxSecondsForBalance(balance.minutes);
+      if (!maxSeconds) return send(buildRefusalTwiml(balance.kind === 'international' ? 'Un pack de minutes internationales est requis.' : 'Solde de minutes insuffisant.'));
       return send(buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds }));
     } catch (error) {
       console.error('[voicemail] callbackVoice failed:', error.message);

@@ -6,6 +6,8 @@ import WalletCompany from '../models/WalletCompany.js';
 import WalletCompanyEntry from '../models/WalletCompanyEntry.js';
 import { notifyCompany } from './companyNotificationService.js';
 import { creditBundle } from './bundlePurchase.js';
+import InternationalMinutesCompany from '../models/InternationalMinutesCompany.js';
+import { creditInternationalPack } from './internationalMinutes.js';
 
 export async function fulfillWalletDeposit(payment) {
   const euros = Number((payment.amount / 100).toFixed(2));
@@ -75,6 +77,34 @@ export async function fulfillMinutesPurchase(payment) {
     minutes: wallet.minutes,
     purchasedMinutes: wallet.purchasedMinutes,
     credited: minutes
+  };
+}
+
+/**
+ * Pack de minutes internationales : crédite le SECOND solde (jamais le solde normal), une seule fois par paiement
+ * (clé `pack:<paiement>`), même si le retour de paiement et le webhook Stripe arrivent en même temps.
+ */
+export async function fulfillInternationalMinutesPurchase(payment) {
+  const minutes = Number(payment.quantity || 0);
+  if (minutes <= 0) {
+    throw new Error('Invalid international minutes quantity on payment');
+  }
+  const credited = await creditInternationalPack({ companyId: payment.companyId, minutes, paymentId: payment._id });
+  const wallet = await InternationalMinutesCompany.findOne({ companyId: payment.companyId });
+  if (credited) {
+    await notifyCompany({
+      companyId: payment.companyId,
+      key: `payment-${payment._id}`,
+      kind: 'minutes',
+      title: 'Minutes internationales ajoutées',
+      message: `${minutes.toLocaleString('fr-FR')} minutes internationales ont été ajoutées. Solde international : ${Number(wallet?.minutes ?? 0).toLocaleString('fr-FR')} min.`,
+      actionPath: '/dashboard/minutes',
+    });
+  }
+  return {
+    internationalMinutes: wallet?.minutes ?? 0,
+    purchasedMinutes: wallet?.purchasedMinutes ?? 0,
+    credited: credited ? minutes : 0,
   };
 }
 
@@ -193,6 +223,8 @@ async function fulfillStripeCompanyPaymentSession(session) {
     result = await fulfillTokensPurchase(payment);
   } else if (payment.purpose === 'bundle_purchase') {
     result = await fulfillBundlePurchase(payment);
+  } else if (payment.purpose === 'international_minutes_purchase') {
+    result = await fulfillInternationalMinutesPurchase(payment);
   } else {
     console.warn(`[payments] Unknown CompanyPayment purpose '${payment.purpose}' for payment ${payment._id}`);
     return { skipped: true, reason: `unknown purpose ${payment.purpose}` };

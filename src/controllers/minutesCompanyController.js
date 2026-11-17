@@ -2,6 +2,8 @@ import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import mongoose from 'mongoose';
+import { loadCompanyPlanLimits } from '../services/planLimits.js';
+import { internationalPackApplies, mongoStore as internationalStore, settleInternationalCalls } from '../services/internationalMinutes.js';
 
 export const minutesCompanyController = {
   getMinutes: async (req, res) => {
@@ -123,6 +125,25 @@ export const minutesCompanyController = {
       let wallet = await MinutesCompany.findOne({ companyId });
       if (!wallet) {
         wallet = await MinutesCompany.create({ companyId, minutes: 0 });
+      }
+
+      // Offre concernée par le pack de minutes internationales : un appel sortant international est débité du solde international,
+      // jamais du solde normal (même appel réel, même durée enregistrée, même clé d'idempotence).
+      let limits = null;
+      try { limits = await loadCompanyPlanLimits(companyId); } catch { limits = null; }
+      if (internationalPackApplies(limits)) {
+        const before = await internationalStore.read(companyId);
+        const handled = await settleInternationalCalls({ companyId, calls: [stored], limits });
+        if (handled.has(chargeKey)) {
+          const already = (before?.chargedCallSids || []).includes(chargeKey);
+          const after = await internationalStore.read(companyId);
+          return res.status(200).json({
+            success: true,
+            charged: !already,
+            ...(already ? { reason: 'Already charged' } : {}),
+            data: { minutes: wallet.minutes, internationalMinutes: after?.minutes ?? 0 },
+          });
+        }
       }
 
       // Billing rule: any started minute is billed in full (10s → 1 min, 1m02s → 2 min).

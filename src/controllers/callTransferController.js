@@ -9,6 +9,7 @@ import { loadUserName } from '../services/followUpDirectory.js';
 import { loadTools, mergedTools } from '../services/secretariatTools.js';
 import { voiceIdentity } from '../services/voicePresenceService.js';
 import { normalizeOutboundDestination, maxSecondsForBalance } from '../services/browserOutbound.js';
+import { resolveOutboundBalance } from '../services/internationalMinutes.js';
 import { languageForPhone, phrasesFor } from '../services/companyLanguage.js';
 import {
   buildTransferMessageTwiml, buildTransferResultTwiml, buildTransferTwiml, CALL_SID, entryAvailability, isReachableNow, resultOfDial,
@@ -33,6 +34,15 @@ const deps = {
       import('../services/browserOutbound.js'), import('./escrowController.js'), import('../services/planMinutesGrant.js'), import('../models/MinutesCompany.js'),
     ]);
     return freshMinutesBalance(companyId, { sync: syncMinutesFromCalls, grant: ensurePlanMinutesGranted, readWallet: (id) => MinutesCompany.findOne({ companyId: id }).select('minutes').lean() });
+  },
+  /** Solde à utiliser pour ce numéro : le solde normal, ou (offre concernée, destination internationale) le solde du pack international. */
+  balanceFor: async (companyId, to, nationalMinutes) => {
+    const { loadCompanyPlanLimits } = await import('../services/planLimits.js');
+    try {
+      const limits = await loadCompanyPlanLimits(companyId);
+      if (limits?.internationalPack) return await resolveOutboundBalance({ companyId, limits, to, nationalMinutes });
+    } catch { /* solde normal */ }
+    return { kind: 'national', minutes: nationalMinutes };
   },
   now: () => Date.now(),
 };
@@ -95,7 +105,9 @@ export const callTransferController = {
       if (mode === 'dial') {
         number = normalizeOutboundDestination(entry.phone);
         if (!number) return fail(res, 422, `Le numéro de ${entry.name} n’est pas une destination autorisée.`, { code: 'destination_not_allowed' });
-        maxSeconds = maxSecondsForBalance(await deps.minutes(access.companyId));
+        const balance = await deps.balanceFor(access.companyId, number, await deps.minutes(access.companyId));
+        maxSeconds = maxSecondsForBalance(balance.minutes);
+        if (!maxSeconds && balance.kind === 'international') return fail(res, 402, 'Un pack de minutes internationales est requis pour passer cet appel : proposez à l’appelant de laisser un message.', { code: 'international_pack_required' });
         if (!maxSeconds) return fail(res, 402, 'Solde de minutes insuffisant pour passer cet appel : proposez à l’appelant de laisser un message.', { code: 'no_minutes' });
       }
 

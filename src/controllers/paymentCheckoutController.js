@@ -3,7 +3,10 @@ import mongoose from 'mongoose';
 import CompanyPayment from '../models/CompanyPayment.js';
 import { paypalService } from '../services/paypalService.js';
 import { stripeService } from '../services/stripeService.js';
-import { bundleBalances, fulfillBundlePurchase, fulfillMinutesPurchase, fulfillTokensPurchase, fulfillWalletDeposit } from '../services/paymentFulfillment.js';
+import { bundleBalances, fulfillBundlePurchase, fulfillInternationalMinutesPurchase, fulfillMinutesPurchase, fulfillTokensPurchase, fulfillWalletDeposit } from '../services/paymentFulfillment.js';
+import { getInternationalPack, listInternationalPacks, packAmountFor } from '../services/internationalPacks.js';
+import { internationalPackApplies } from '../services/internationalMinutes.js';
+import { loadCompanyPlanLimits } from '../services/planLimits.js';
 import { bundleAmountCents, bundleLabel, parseBundleQuantities } from '../services/bundlePurchase.js';
 import { config } from '../config/env.js';
 import { FALLBACK_PURCHASE_CURRENCY, formatAmountLabel, purchaseCurrency } from '../services/purchaseCurrency.js';
@@ -101,6 +104,15 @@ async function fulfillPayment(payment) {
     if (payment.purpose === 'bundle_purchase') {
       return { purpose: payment.purpose, data: await bundleBalances(payment.companyId) };
     }
+    if (payment.purpose === 'international_minutes_purchase') {
+      const wallet = await import('../models/InternationalMinutesCompany.js').then((m) =>
+        m.default.findOne({ companyId: payment.companyId })
+      );
+      return {
+        purpose: payment.purpose,
+        data: { internationalMinutes: wallet?.minutes ?? 0, purchasedMinutes: wallet?.purchasedMinutes ?? 0 }
+      };
+    }
     if (payment.purpose === 'tokens_purchase') {
       const toks = await import('../models/TokensCompany.js').then((m) =>
         m.default.findOne({ companyId: payment.companyId })
@@ -128,6 +140,8 @@ async function fulfillPayment(payment) {
     result = await fulfillTokensPurchase(payment);
   } else if (payment.purpose === 'bundle_purchase') {
     result = await fulfillBundlePurchase(payment);
+  } else if (payment.purpose === 'international_minutes_purchase') {
+    result = await fulfillInternationalMinutesPurchase(payment);
   } else {
     throw new Error(`Unknown payment purpose: ${payment.purpose}`);
   }
@@ -161,6 +175,8 @@ export const paymentCheckoutController = {
           tokenPacks: pricing.tokenPacks,
           tokensCustomRateCents: pricing.tokensCustomRateCents,
           tokensCustomRateEuros: pricing.tokensCustomRateCents / 100,
+          // Packs de minutes internationales : lus de Stripe (produit + prix), liste vide si aucun n'est configuré.
+          internationalPacks: await listInternationalPacks(),
         }
       });
     } catch (error) {
@@ -176,23 +192,50 @@ export const paymentCheckoutController = {
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) {
         return res.status(400).json({ error: 'Valid companyId is required' });
       }
-      if (!['wallet_deposit', 'minutes_purchase', 'tokens_purchase', 'bundle_purchase'].includes(purpose)) {
+      if (!['wallet_deposit', 'minutes_purchase', 'tokens_purchase', 'bundle_purchase', 'international_minutes_purchase'].includes(purpose)) {
         return res.status(400).json({
-          error: "purpose must be 'wallet_deposit', 'minutes_purchase', 'tokens_purchase' or 'bundle_purchase'"
+          error: "purpose must be 'wallet_deposit', 'minutes_purchase', 'tokens_purchase', 'bundle_purchase' or 'international_minutes_purchase'"
         });
       }
       if (!['stripe', 'paypal'].includes(provider)) {
         return res.status(400).json({ error: "provider must be 'stripe' or 'paypal'" });
       }
 
-      const currency = purpose === 'wallet_deposit' ? WALLET_CURRENCY : await purchaseCurrency(req, companyId);
-      const amountCents = await computeAmountCents(purpose, { amountEuros, minutes, tokens });
+      // Pack de minutes internationales : Stripe uniquement ; contenu, prix et devise relus du produit / prix Stripe (rien n'est cru du client).
+      let pack = null;
+      if (purpose === 'international_minutes_purchase') {
+        if (provider !== 'stripe') {
+          return res.status(400).json({ error: "international_minutes_purchase is only available with provider 'stripe'" });
+        }
+        if (!req.body.packId) {
+          return res.status(400).json({ error: 'packId (Stripe price id of the international minutes pack) is required' });
+        }
+        let planLimits = null;
+        try { planLimits = await loadCompanyPlanLimits(companyId); } catch { planLimits = null; }
+        if (!internationalPackApplies(planLimits)) {
+          return res.status(409).json({ error: 'International minutes pack is not available for this plan', code: 'international_pack_not_applicable' });
+        }
+        pack = await getInternationalPack(req.body.packId);
+        if (!pack) {
+          return res.status(404).json({ error: 'International minutes pack not found', code: 'international_pack_not_found' });
+        }
+      }
+
+      let currency = purpose === 'wallet_deposit' ? WALLET_CURRENCY : await purchaseCurrency(req, companyId);
+      let amountCents;
+      if (pack) {
+        ({ amountCents, currency } = packAmountFor(pack, currency));
+      } else {
+        amountCents = await computeAmountCents(purpose, { amountEuros, minutes, tokens });
+      }
       if (amountCents == null || amountCents <= 0) {
         return res.status(400).json({ error: 'Invalid amount, minutes or tokens quantity' });
       }
 
       const quantity =
-        purpose === 'minutes_purchase'
+        pack
+          ? pack.minutes
+          : purpose === 'minutes_purchase'
           ? Number(minutes)
           : purpose === 'tokens_purchase'
             ? Number(tokens)
@@ -206,10 +249,11 @@ export const paymentCheckoutController = {
         amount: amountCents,
         currency,
         quantity:
-          purpose === 'minutes_purchase' || purpose === 'tokens_purchase'
+          purpose === 'minutes_purchase' || purpose === 'tokens_purchase' || pack
             ? quantity
             : undefined,
         ...(bundle ? { meta: { minutes: bundle.minutes, tokens: bundle.tokens } } : {}),
+        ...(pack ? { meta: { priceId: pack.id, productId: pack.productId } } : {}),
         status: 'pending'
       });
 
@@ -285,6 +329,8 @@ export const paymentCheckoutController = {
         const productName =
           purpose === 'wallet_deposit'
             ? `HARX — Crédit portefeuille ${formatAmountLabel(amountCents, currency)}`
+            : pack
+              ? `HARX — ${pack.label} (${pack.minutes} minutes internationales)`
             : purpose === 'bundle_purchase'
               ? bundleLabel(bundle)
               : purpose === 'tokens_purchase'
