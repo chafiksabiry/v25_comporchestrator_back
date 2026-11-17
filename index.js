@@ -36,6 +36,7 @@ import { clearExpiredRetractions } from './src/services/retractionService.js';
 import { resolveExpiredPendingReviews, flagWeeklyAiAudits } from './src/controllers/escrowController.js';
 import { billExpiredTrialLines, reconcilePendingMonthlyLines, terminateSuspendedLines } from './src/services/phoneLineBillingService.js';
 import { syncPlanMetadataFromStripe } from './src/services/planMetadataSync.js';
+import { retryFailedAnalyses } from './src/services/voicemailAnalysis.js';
 import { neutralizeGoogleInbox } from './src/services/googleInboxMigration.js';
 
 const app = express();
@@ -238,6 +239,13 @@ setInterval(() => {
 // webhook product.updated, pour qu'un webhook manqué ne laisse pas un prix de ligne périmé.
 setTimeout(() => { syncPlanMetadataFromStripe(); }, 30 * 1000);
 setInterval(() => { syncPlanMetadataFromStripe(); }, 6 * 60 * 60 * 1000);
+
+// Messages du répondeur dont l'analyse IA a échoué pour une cause transitoire (délai dépassé, réseau, 5xx) : reprise différée, 3 reprises au plus.
+setInterval(() => {
+  retryFailedAnalyses().catch((err) => {
+    console.warn('[voicemail-analysis-retry]', err.message);
+  });
+}, 10 * 60 * 1000);
 
 // Warn companies whose wallet / minutes / tokens run short (the first check runs a minute after boot).
 const runLowResourceScan = () =>

@@ -9,7 +9,28 @@ import { companyLanguage } from './companyLanguageLookup.js';
 export const MIN_TOKENS = 3000;
 export const SERVICE_SCOPE = 'voicemail-analyze';
 export const SERVICE_ISSUER = 'comporchestrator';
-const ANALYZE_TIMEOUT_MS = 90 * 1000;
+/**
+ * Délai d'attente de dash_calls PROPORTIONNEL à la durée du message (un message de 10 minutes ne tient pas dans 90 s) :
+ * base + (ms par seconde d'audio × durée), borné par un maximum. Réglable par variables d'environnement (valeurs par défaut ci-dessous).
+ */
+export const ANALYZE_TIMEOUT_MS = 90 * 1000;
+const ANALYZE_MS_PER_AUDIO_SECOND = 1000;
+const ANALYZE_MAX_TIMEOUT_MS = 15 * 60 * 1000;
+const posNum = (v, fallback) => { const n = Number(v); return v !== undefined && v !== '' && Number.isFinite(n) && n > 0 ? n : fallback; };
+export function analyzeTimeoutMs(durationSeconds, env = process.env) {
+  const base = posNum(env.VOICEMAIL_ANALYZE_TIMEOUT_MS, ANALYZE_TIMEOUT_MS);
+  const perSecond = posNum(env.VOICEMAIL_ANALYZE_MS_PER_AUDIO_SECOND, ANALYZE_MS_PER_AUDIO_SECOND);
+  const max = Math.max(base, posNum(env.VOICEMAIL_ANALYZE_MAX_TIMEOUT_MS, ANALYZE_MAX_TIMEOUT_MS));
+  const seconds = Number.isFinite(Number(durationSeconds)) && Number(durationSeconds) > 0 ? Number(durationSeconds) : 0;
+  return Math.min(Math.round(base + perSecond * seconds), max);
+}
+
+/** Reprise différée des analyses en échec TRANSITOIRE (délai dépassé, réseau, 408/429/5xx) : au plus MAX_ANALYSIS_RETRIES reprises par message. */
+export const MAX_ANALYSIS_RETRIES = 3;
+export const ANALYSIS_RETRY_DELAY_MS = 5 * 60 * 1000;
+export const ANALYSIS_RETRY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const TRANSIENT_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const isTransient = (error) => error?.retryable === true || ['TimeoutError', 'AbortError'].includes(error?.name) || error?.name === 'TypeError' /* fetch failed */;
 const URGENCIES = ['low', 'medium', 'high'];
 
 /** Jeton de service HS256, 120 s, signé avec le secret JWT partagé. */
@@ -81,17 +102,17 @@ export async function analyzeVoicemail(voicemailId) {
       method: 'POST',
       headers: { Authorization: `Bearer ${signServiceToken()}`, 'Content-Type': 'audio/mpeg' },
       body: audio,
-      signal: AbortSignal.timeout(ANALYZE_TIMEOUT_MS),
+      signal: AbortSignal.timeout(analyzeTimeoutMs(vm.durationSeconds)),
     });
     if (res.status === 402) {
       await setStatus(vm._id, 'needs_tokens');
       return 'needs_tokens';
     }
-    if (!res.ok) throw new Error(`dash_calls status ${res.status}`);
+    if (!res.ok) throw Object.assign(new Error(`dash_calls status ${res.status}`), { retryable: TRANSIENT_STATUS.has(res.status) });
     const payload = await res.json();
     if (!payload?.success || !payload.data) throw new Error('dash_calls invalid response');
     const analysis = sanitizeAnalysis(payload.data);
-    await setStatus(vm._id, 'done', { analysis });
+    await setStatus(vm._id, 'done', { analysis, analysisRetryable: false });
     if (analysis.urgency === 'high') {
       await notifyCompany({
         companyId: vm.companyId,
@@ -107,7 +128,37 @@ export async function analyzeVoicemail(voicemailId) {
   } catch (error) {
     // Pas de données personnelles dans les journaux : uniquement l'identifiant technique et le message d'erreur.
     console.error(`[voicemailAnalysis] ${vm?.recordingSid || voicemailId} failed: ${error.name}: ${error.message}`);
-    if (vm) await setStatus(vm._id, 'failed').catch(() => {});
+    if (vm) await setStatus(vm._id, 'failed', { analysisRetryable: isTransient(error), analysisFailedAt: new Date() }).catch(() => {});
     return 'failed';
   }
+}
+
+/**
+ * Reprend, un par un, les messages dont l'analyse a échoué pour une cause transitoire depuis au moins ANALYSIS_RETRY_DELAY_MS (et au plus
+ * ANALYSIS_RETRY_MAX_AGE_MS), s'il reste des reprises. La prise est atomique (échec -> en cours, compteur incrémenté) : deux instances ne
+ * reprennent jamais le même message. Les anciens échecs (sans marqueur `analysisRetryable`) ne sont jamais repris. Ne lève jamais.
+ * @returns {Promise<number>} nombre d'analyses relancées
+ */
+export async function retryFailedAnalyses({ now = Date.now(), limit = 5 } = {}) {
+  let started = 0;
+  try {
+    for (let i = 0; i < limit; i += 1) {
+      const vm = await Voicemail.findOneAndUpdate(
+        {
+          analysisStatus: 'failed',
+          analysisRetryable: true,
+          analysisAttempts: { $lt: MAX_ANALYSIS_RETRIES },
+          analysisFailedAt: { $lte: new Date(now - ANALYSIS_RETRY_DELAY_MS), $gte: new Date(now - ANALYSIS_RETRY_MAX_AGE_MS) },
+        },
+        { $set: { analysisStatus: 'pending' }, $inc: { analysisAttempts: 1 } },
+        { new: true, sort: { analysisFailedAt: 1 } }
+      ).lean();
+      if (!vm) break;
+      await analyzeVoicemail(vm._id);
+      started += 1;
+    }
+  } catch (error) {
+    console.error(`[voicemailAnalysis] reprise différée impossible: ${error.name}: ${error.message}`);
+  }
+  return started;
 }
