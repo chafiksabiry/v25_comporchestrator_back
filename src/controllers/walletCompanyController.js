@@ -3,11 +3,23 @@ import WalletCompanyEntry from '../models/WalletCompanyEntry.js';
 import EscrowTransaction from '../models/EscrowTransaction.js';
 import AgentWithdrawal from '../models/AgentWithdrawal.js';
 import mongoose from 'mongoose';
+import { guardCompanyAccess } from '../middleware/companyGuard.js';
+
+/** Montant strictement positif, fini, arrondi au centime ; null sinon (chaîne non numérique, NaN, Infinity, objet…). */
+function parseAmount(raw) {
+  if (typeof raw !== 'number' && typeof raw !== 'string') return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const cents = Math.round(n * 100) / 100;
+  return cents > 0 ? cents : null;
+}
 
 export const walletCompanyController = {
   getWallet: async (req, res) => {
     const { companyId } = req.params;
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    // Isolation : propriétaire ou membre de CETTE société (la lecture crée le portefeuille s'il manque : garde avant toute lecture).
+    if (!(await guardCompanyAccess(req, res, companyId))) return;
     try {
       let wallet = await WalletCompany.findOne({ companyId });
       if (!wallet) {
@@ -21,59 +33,33 @@ export const walletCompanyController = {
     }
   },
 
-  deposit: async (req, res) => {
-    const { companyId, amount, method, providerRef, description } = req.body;
-    if (!companyId || !amount || amount <= 0) {
-      return res.status(400).json({ error: 'companyId and positive amount are required' });
-    }
-    try {
-      let wallet = await WalletCompany.findOne({ companyId });
-      if (!wallet) {
-        wallet = new WalletCompany({ companyId, balance: 0 });
-      }
-      const value = Number(parseFloat(amount).toFixed(2));
-      wallet.balance = Number((wallet.balance + value).toFixed(2));
-      await wallet.save();
-
-      // Append to the ledger so the frontend can show the deposit history.
-      try {
-        await WalletCompanyEntry.create({
-          companyId,
-          type: 'deposit',
-          direction: 'credit',
-          amount: value,
-          balanceAfter: wallet.balance,
-          status: 'completed',
-          description: description || `Dépôt de ${value.toFixed(2)} €${method ? ` via ${method}` : ''}`,
-          meta: { method: method || null, providerRef: providerRef || null }
-        });
-      } catch (logErr) {
-        console.warn('WalletCompanyEntry log failed (deposit):', logErr.message);
-      }
-
-      res.status(200).json({ success: true, data: wallet });
-    } catch (err) {
-      console.error('Error during deposit:', err);
-      res.status(500).json({ error: 'Failed to deposit funds' });
-    }
-  },
+  // SUPPRIMÉ : cette route créditait le portefeuille d'un montant arbitraire SANS aucun paiement (n'importe quelle société, n'importe quelle somme).
+  // Aucun appelant (front orchestrateur, autres services) : le dépôt réel passe par le paiement (/api/payments/checkout, purpose=wallet_deposit,
+  // crédit après confirmation du paiement par Stripe / PayPal).
+  deposit: async (req, res) => res.status(410).json({
+    error: 'Deposits are only possible through the payment checkout',
+    code: 'deposit_disabled',
+    message: 'Utilisez le paiement (Stripe ou PayPal) pour alimenter le portefeuille.'
+  }),
 
   withdraw: async (req, res) => {
     const { companyId, amount, description } = req.body;
-    if (!companyId || !amount || amount <= 0) {
-      return res.status(400).json({ error: 'companyId and positive amount are required' });
-    }
+    if (!companyId) return res.status(400).json({ error: 'companyId and positive amount are required' });
+    // Mouvement d'argent : propriétaire de CETTE société uniquement (jamais un membre, un agent ou une autre société).
+    if (!(await guardCompanyAccess(req, res, companyId, { ownerOnly: true }))) return;
+    const value = parseAmount(amount);
+    if (value === null) return res.status(400).json({ error: 'companyId and positive amount are required' });
     try {
-      let wallet = await WalletCompany.findOne({ companyId });
+      // Atomique : la condition de solde et la décrémentation sont une seule opération (deux retraits simultanés ne passent pas tous les deux).
+      const wallet = await WalletCompany.findOneAndUpdate(
+        { companyId, balance: { $gte: value } },
+        { $inc: { balance: -value } },
+        { new: true }
+      );
       if (!wallet) {
-        return res.status(404).json({ error: 'Wallet not found' });
+        const exists = await WalletCompany.findOne({ companyId });
+        return exists ? res.status(400).json({ error: 'Insufficient balance' }) : res.status(404).json({ error: 'Wallet not found' });
       }
-      if (wallet.balance < amount) {
-        return res.status(400).json({ error: 'Insufficient balance' });
-      }
-      const value = Number(parseFloat(amount).toFixed(2));
-      wallet.balance = Number((wallet.balance - value).toFixed(2));
-      await wallet.save();
 
       try {
         await WalletCompanyEntry.create({
@@ -81,7 +67,7 @@ export const walletCompanyController = {
           type: 'withdrawal',
           direction: 'debit',
           amount: value,
-          balanceAfter: wallet.balance,
+          balanceAfter: Number(Number(wallet.balance).toFixed(2)),
           status: 'completed',
           description: description || `Retrait de ${value.toFixed(2)} €`
         });
@@ -113,6 +99,7 @@ export const walletCompanyController = {
   getEntries: async (req, res) => {
     const { companyId } = req.params;
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    if (!(await guardCompanyAccess(req, res, companyId))) return;
     try {
       const { type, direction, status, limit = 200 } = req.query;
       const maxLimit = Math.min(Number(limit) || 200, 500);
@@ -214,6 +201,7 @@ export const walletCompanyController = {
   getAgentWithdrawals: async (req, res) => {
     const { companyId } = req.params;
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    if (!(await guardCompanyAccess(req, res, companyId))) return;
     try {
       const companyObjectId = mongoose.Types.ObjectId.isValid(companyId) ? new mongoose.Types.ObjectId(companyId) : companyId;
       const withdrawals = await AgentWithdrawal.find({ 
@@ -242,39 +230,33 @@ export const walletCompanyController = {
 
   approveOrRefuseAgentWithdrawal: async (req, res) => {
     const { withdrawalId } = req.params;
-    const { action } = req.body; // action: 'approve' or 'refuse'
+    const { action } = req.body || {}; // action: 'approve' or 'refuse'
 
-    if (!withdrawalId || !action) {
-      return res.status(400).json({ error: 'withdrawalId and action are required' });
+    if (!withdrawalId || !mongoose.Types.ObjectId.isValid(withdrawalId) || !['approve', 'refuse'].includes(action)) {
+      return res.status(400).json({ error: "A valid withdrawalId and action ('approve' or 'refuse') are required" });
     }
+    // Propriétaire de la société de l'appelant uniquement ; le retrait est ensuite cherché DANS cette société (jamais celui d'une autre,
+    // jamais un retrait sans société enregistrée : propriété invérifiable).
+    const access = await guardCompanyAccess(req, res, null, { ownerOnly: true, ownCompany: true });
+    if (!access) return;
 
     try {
-      const withdrawal = await AgentWithdrawal.findById(withdrawalId);
+      const companyObjectId = new mongoose.Types.ObjectId(String(access.companyId));
+      // Atomique : seul un retrait EN ATTENTE est traité, une seule fois (plus de ré-approbation ni de retournement refus <-> approuvé,
+      // qui aurait rendu l'argent à l'agent après coup).
+      const withdrawal = await AgentWithdrawal.findOneAndUpdate(
+        { _id: withdrawalId, companyId: companyObjectId, status: 'pending' },
+        { $set: { status: action === 'approve' ? 'completed' : 'failed' } },
+        { new: true }
+      );
       if (!withdrawal) {
-        return res.status(404).json({ error: 'Withdrawal request not found' });
+        const own = await AgentWithdrawal.findOne({ _id: withdrawalId, companyId: companyObjectId });
+        return own
+          ? res.status(409).json({ error: `Withdrawal already ${own.status}` })
+          : res.status(404).json({ error: 'Withdrawal request not found' });
       }
-
-      if (action === 'approve') {
-        withdrawal.status = 'completed';
-        withdrawal.description = (withdrawal.description || '') + ' (Approuvé par la compagnie)';
-      } else {
-        withdrawal.status = 'failed';
-        withdrawal.description = (withdrawal.description || '') + ' (Refusé par la compagnie)';
-      }
-
+      withdrawal.description = (withdrawal.description || '') + (action === 'approve' ? ' (Approuvé par la compagnie)' : ' (Refusé par la compagnie)');
       await withdrawal.save();
-
-      // Trigger reconciliation for the agent to update their wallet
-      try {
-        const { escrowController } = await import('./escrowController.js');
-        if (escrowController && escrowController.getAgentWallet) {
-          // Trigger reconciliation inside escrow controller
-          const db = mongoose.connection.db;
-          // Re-trigger balance update via direct reconciliation or call the agent method
-        }
-      } catch (err) {
-        console.warn('Reconciliation import skipped:', err.message);
-      }
 
       res.status(200).json({ success: true, data: withdrawal });
     } catch (err) {

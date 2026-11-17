@@ -24,7 +24,7 @@ const base = (o = {}) => createPortalHandlers({
 // nominal
 let r = res(); await base().createPortalSession({ body: { returnUrl: 'https://harx.ai/billing' } }, r);
 assert.equal(r.code, 200); assert.equal(r.body.url, 'https://billing.stripe.com/p/x');
-assert.deepEqual(calls[0], { customer: 'cus_1', return_url: 'https://harx.ai/billing' });
+assert.deepEqual(calls[0], { customer: 'cus_1', return_url: 'https://harx.ai/billing', locale: 'en' });
 
 // origine non autorisée -> repli
 r = res(); await base().createPortalSession({ body: { returnUrl: 'https://evil.example/x' } }, r);
