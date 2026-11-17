@@ -301,11 +301,11 @@ try {
     assert.equal(conns.length, 1, 'la connexion est intacte'); assert.equal(inbox.length, 1, 'ses e-mails stockés aussi');
   }
   assert.equal((await sec('DELETE', `/connections/${C1}/microsoft`, { user: 'mgrA' })).status, 403);
-  putConn('microsoft', { connectedBy: 'mgrA' });
+  putConn('microsoft', { connectedBy: 'mgrA' }); inbox[0].connectionOwnerId = 'mgrA'; inbox.push({ _id: 'e2', companyId: C1, ownerUserId: null, accountId: null, connectionOwnerId: 'autre', providerMessageId: 'q', provider: 'microsoft' });
   r = await sec('DELETE', `/connections/${C1}/microsoft`, { user: 'owner1' });
-  assert.equal(r.status, 403, 'le titulaire de la société ne déconnecte pas la boîte d’un responsable'); assert.equal(conns.length, 1); assert.equal(inbox.length, 1);
+  assert.equal(r.status, 403, 'le titulaire de la société ne déconnecte pas la boîte d’un responsable'); assert.equal(conns.length, 1); assert.equal(inbox.length, 2);
   r = await sec('DELETE', `/connections/${C1}/microsoft`, { user: 'mgrA' });
-  assert.equal(r.status, 200); assert.equal(conns.length, 0, 'le propriétaire déconnecte'); assert.equal(inbox.length, 0, 'ses e-mails stockés sont purgés');
+  assert.equal(r.status, 200); assert.equal(conns.length, 0, 'le propriétaire déconnecte'); assert.deepEqual(inbox.map((d) => d._id), ['e2'], 'SES e-mails stockés sont purgés, pas ceux des autres boîtes');
   putConn('microsoft', { connectedBy: '' });
   assert.equal((await sec('DELETE', `/connections/${C1}/microsoft`, { user: 'mgrA' })).status, 403, 'orpheline : un responsable ne la retire pas');
   assert.equal(conns.length, 1);

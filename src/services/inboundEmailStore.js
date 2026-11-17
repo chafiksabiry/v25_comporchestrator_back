@@ -10,9 +10,10 @@ const oid = (v) => new mongoose.Types.ObjectId(String(v));
  * Ne touche JAMAIS aux e-mails des messageries personnelles des secrétaires (`ownerUserId` renseigné) : ils ont leur propre purge.
  * Module minimal (modèles seulement) pour être appelé depuis secretariatConnections.js sans dépendance circulaire.
  */
-export async function purgeInboundEmails(companyId) {
+export async function purgeInboundEmails(companyId, ownerId) {
   const id = oid(companyId);
-  await InboundEmail.deleteMany({ companyId: id, ownerUserId: null });
+  // `ownerId` : seulement les e-mails stockés de la boîte de CE propriétaire (les autres boîtes de l'entreprise ne sont pas touchées).
+  await InboundEmail.deleteMany({ companyId: id, ownerUserId: null, ...(ownerId ? { connectionOwnerId: String(ownerId) } : {}) });
   await SecretariatTools.updateOne({ companyId: id }, { $set: { 'inbound.lastSyncAt': null } });
 }
 

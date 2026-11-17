@@ -51,3 +51,11 @@ Les lignes qui ont un `connectedBy` gardent ce propriétaire. Aucun changement d
 
 ## Non vérifié
 Migration sur une base réelle (pas de MongoDB dans l'environnement : base simulée) ; Google / Microsoft réels (réseau simulé : routes de l'API non rejouées contre les fournisseurs) ; comportement de l'upsert conditionnel et de l'index unique sur un vrai MongoDB (simulé par le test) ; l'interface du portail (cette PR ne modifie que l'API).
+
+## Points ouverts (relecture adverse) — décisions à prendre
+1. **État OAuth non lié au navigateur** (hors périmètre, existant) : un membre peut démarrer `/start` et faire consentir un tiers ; la boîte consentie serait alors à son nom. Correctif possible : nonce en cookie HttpOnly vérifié au callback.
+2. **Modification / annulation d'un rendez-vous** par un autre responsable : l'événement est modifié dans le calendrier de son propriétaire mémorisé (jeton du propriétaire). Choix retenu : maintenance de l'événement créé par le système ; alternative stricte : refuser (`failed`) si l'éditeur n'est pas ce propriétaire.
+3. **`inbound.*` est un réglage de société** : tout propriétaire d'une boîte peut le régler (pas seulement celui du fournisseur visé).
+4. **Agenda automatique** : seules les connexions d'entreprise comptent ; la messagerie personnelle sert via l'agenda délégué (`calendarAccountId`).
+5. **Index unique `InboundEmail`** sans `connectionOwnerId` : purge à la reprise d'une orpheline ; index à revoir si plusieurs propriétaires de fournisseurs différents.
+6. **Journal d'envoi** (`GET /emails`) : l'adresse de la boîte (`from`) n'est montrée qu'à l'expéditeur ; destinataires et objet restent visibles du titulaire / responsables (inchangé).

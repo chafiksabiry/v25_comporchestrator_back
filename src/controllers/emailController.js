@@ -47,10 +47,10 @@ async function context(req, res) {
   return access;
 }
 
-const view = (l) => ({
+const view = (l, userId) => ({
   id: String(l._id), at: l.createdAt, by: { id: l.sentById, name: l.sentByName || '' }, to: l.to || [], subject: l.subject, template: l.template,
   followUpId: l.followUpId ? String(l.followUpId) : null, withIcs: l.withIcs === true, status: l.status, error: l.error || '',
-  from: l.accountId ? { accountId: String(l.accountId), email: l.fromEmail || '', label: l.fromLabel || '' } : null,
+  from: l.accountId && (userId === undefined || String(l.sentById) === String(userId)) ? { accountId: String(l.accountId), email: l.fromEmail || '', label: l.fromLabel || '' } : null,
 });
 
 async function usage(companyId) {
@@ -157,7 +157,7 @@ export const emailController = {
       }
       const limit = Math.min(100, Math.max(1, Math.floor(Number(req.query.limit)) || 50));
       const rows = await EmailLog.find(filter).sort({ createdAt: -1 }).limit(limit).lean();
-      res.json({ success: true, data: { items: rows.map(view) } });
+      res.json({ success: true, data: { items: rows.map((l) => view(l, access.userId)) } }); // `from` (adresse d'une boîte) : montrée à la seule personne qui a envoyé
     } catch (error) {
       console.error('emails list:', error.message);
       fail(res, 500, 'Lecture du journal des e-mails impossible.');

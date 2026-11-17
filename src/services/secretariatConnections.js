@@ -187,6 +187,7 @@ export async function completeConnection({ state, code }, { http = httpImpl, env
     // Boîte mail : seul son propriétaire la remplace. Aucune ligne ou ligne ORPHELINE : la personne connectée en devient propriétaire.
     const existing = await SecretariatConnection.findOne({ companyId: oid(companyId), provider }).select('connectedBy ownerless').lean();
     if (!mayTakeOver(existing, userId)) throw new SecretariatError('not_owner', messages.ownedByOther(provider), { status: 403 });
+    if (existing && isOwnerless(existing)) await purgeInboundEmails(companyId); // reprise d'une orpheline : plus aucun ancien e-mail stocké
     // Écriture conditionnelle : si la ligne a changé de propriétaire entre la lecture et l'écriture, l'insertion échoue sur l'index unique (jamais d'écrasement).
     const where = { companyId: oid(companyId), provider, connectedBy: isOwnerless(existing) && existing ? { $in: ['', null] } : String(userId) };
     try {
@@ -503,7 +504,7 @@ export async function disconnect(companyId, provider, { http = httpImpl, env = p
   // Boîte Google / Microsoft : son propriétaire la déconnecte ; une connexion ORPHELINE ne peut être retirée que par le titulaire de la société. Contrôle AVANT toute purge.
   if (conn && isMailProvider(provider) && !(ownsRow(conn, userId) || (isOwnerless(conn) && titulaire === true))) throw new SecretariatError('not_owner', messages.notOwner(), { status: 403 });
   // Les e-mails entrants stockés sont purgés AVANT la suppression des jetons : en cas d'échec rien n'est perdu et la déconnexion peut être rejouée.
-  if (conn && MAILBOX_PROVIDERS.includes(provider)) await purgeInboundEmails(companyId);
+  if (conn && MAILBOX_PROVIDERS.includes(provider)) await purgeInboundEmails(companyId, ownerOf(conn));
   if (!conn) { await releaseEmailProvider(companyId, provider); await releaseAgendaAndVisio(companyId, provider); return false; }
   try {
     const cfg = providerConfig(provider, env);
@@ -513,7 +514,7 @@ export async function disconnect(companyId, provider, { http = httpImpl, env = p
   } catch {
     // Révocation au mieux : les jetons sont supprimés dans tous les cas.
   }
-  await SecretariatConnection.deleteOne({ companyId: oid(companyId), provider });
+  await SecretariatConnection.deleteOne({ companyId: oid(companyId), provider, connectedBy: isOwnerless(conn) ? { $in: ['', null] } : ownerOf(conn) });
   await releaseEmailProvider(companyId, provider);
   await releaseAgendaAndVisio(companyId, provider);
   return true;

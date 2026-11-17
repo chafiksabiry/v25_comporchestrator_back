@@ -215,7 +215,7 @@ export async function refreshInbound(scope, now = Date.now()) {
     if (!isMine(s)) return mergedTools(await loadTools(s.companyId)).inbound.enabled === true;
     try { return (await loadMine(s)).inbound?.readEnabled === true; } catch { return false; }
   };
-  const gone = async () => { if (isMine(s)) await purgePersonalInbox(s.companyId, s.userId, s.accountId); else await purgeInboundEmails(s.companyId); };
+  const gone = async () => { if (isMine(s)) await purgePersonalInbox(s.companyId, s.userId, s.accountId); else await purgeInboundEmails(s.companyId, s.ownerId); };
   const goneError = () => (isMine(s) ? new SecretariatError('read_scope_missing', ERRORS.mine_read_scope_missing) : new SecretariatError('inbound_disabled', ERRORS.inbound_disabled));
   if (!(await stillEnabled())) { if (isMine(s)) await gone(); throw goneError(); }
   const fil = scopeFilter(s);
