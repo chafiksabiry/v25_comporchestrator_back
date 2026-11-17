@@ -11,6 +11,7 @@ import { createToolRunner, TOOL_DEFINITIONS } from '../salesiq/tools.js';
 import { createZohoClient, stepFromStage } from '../salesiq/zohoClient.js';
 import { createSalesIqRouter } from '../salesiq/routes.js';
 import { loadKnowledge } from '../salesiq/knowledge.js';
+import { createVisitorKb, DEFAULT_KB_TOPICS } from '../salesiq/kb.js';
 
 const quiet = { log() {}, info() {}, warn() {}, error() {} };
 const knowledge = loadKnowledge();
@@ -469,5 +470,66 @@ assert.equal(stepFromStage('Onboarding'), null);
   assert.doesNotMatch(reply, /À COMPLÉTER|À VÉRIFIER/, 'la réponse elle-même est utilisable telle quelle');
   assert.match(section, /appliquer la réponse n°12/, 'la rémunération reste renvoyée à la réponse n°12');
 }
+
+// --- Recherche dans la base de connaissances : rubriques autorisées seulement, jamais de chemins de fichiers ---
+{
+  const kb = createVisitorKb();
+  assert.ok(kb.size > 10, 'la base HARX est chargée');
+  assert.deepEqual(kb.docs.map((d) => d.id).sort(), ['account-signup-login', 'platform-overview', 'reps-matching']);
+  const hits = kb.search('how does matching score a rep against gig requirements languages skills');
+  assert.ok(hits.length > 0);
+  assert.ok(hits.every((h) => Object.keys(h).sort().join() === 'excerpt,section,topic'), 'ni sources ni chemins de fichiers');
+  assert.match(JSON.stringify(hits), /perfect_match|languages/i);
+  assert.ok(!/v25_|src\/|\.(js|tsx?|json)\b/.test(JSON.stringify(hits.map((h) => h.topic + h.section))), 'titres sans détail technique');
+  // rubriques internes ou côté entreprise : hors de portée
+  for (const q of ['subscription webhook stripe route', 'billing minutes tokens invoice', 'api routes orchestrator endpoints', 'twilio phone number purchase']) {
+    const r = kb.search(q);
+    assert.ok(r.every((h) => !/Billing rules|API routes|Telephony setup|Subscription plans/i.test(h.topic)), `rubrique interne exclue : ${q}`);
+  }
+  assert.equal(kb.readTopic('billing-minutes-tokens'), null);
+  assert.equal(kb.readTopic('troubleshooting'), null);
+  assert.equal(kb.readTopic('gen:ui-rep-app.json'), null);
+  assert.match(kb.readTopic('reps-matching').text, /Matching/);
+  assert.ok(!kb.topicIndex().includes('billing'));
+  assert.deepEqual(DEFAULT_KB_TOPICS.filter((x) => !x.startsWith('gen:')).sort(), kb.docs.map((d) => d.id).sort());
+
+  // outils : définitions présentes seulement avec une base ; résultats propres
+  const zoho = fakeZoho();
+  assert.deepEqual(createToolRunner({ zoho, logger: quiet }).definitions.map((x) => x.name), ['lookup_candidate', 'send_reply', 'flag_for_team']);
+  const tools = createToolRunner({ zoho, kb, logger: quiet });
+  assert.ok(tools.definitions.some((x) => x.name === 'search_knowledge') && tools.definitions.some((x) => x.name === 'read_knowledge_topic'));
+  assert.equal((await tools.execute('search_knowledge', { query: 'xqzvbnm inexistant' })).found, false);
+  const found = await tools.execute('search_knowledge', { query: 'apply to a gig marketplace invitation' });
+  assert.equal(found.found, true);
+  assert.deepEqual((await tools.execute('read_knowledge_topic', { topic_id: 'billing-minutes-tokens' })).available_topics.sort(), ['account-signup-login', 'platform-overview', 'reps-matching']);
+}
+
+// --- L'agent cherche avant d'abandonner : search_knowledge, puis réponse ---
+{
+  const zoho = fakeZoho();
+  const kb = createVisitorKb();
+  const claude = fakeClaude([
+    use('search_knowledge', { query: 'how are reps matched to gigs requirements' }),
+    use('send_reply', { text: "Chaque gig a des exigences (langues, compétences, secteurs, disponibilités) et votre profil est comparé à chacune d'elles. Je ne peux pas vous dire qui sélectionne ni quand." }, 'tu2'),
+  ]);
+  const agent = createAgent({ cfg: cfgOf(), claude, zoho, tools: createToolRunner({ zoho, kb, logger: quiet }), knowledge, kb, logger: quiet });
+  const r = await agent.handleWebhook(body('Quels sont les critères de sélection ?', { visitor: { id: 'kb-1' } }), 500);
+  assert.equal(r.response.action, 'reply');
+  assert.match(r.response.replies[0], /exigences/);
+  // le prompt annonce les rubriques autorisées et l'obligation de chercher
+  const sys = claude.calls[0].system[0].text;
+  assert.match(sys, /RECHERCHER L'INFORMATION AVANT D'ABANDONNER/);
+  assert.match(sys, /- reps-matching:/);
+  assert.doesNotMatch(sys, /billing-minutes-tokens|api-routes/);
+  assert.ok(claude.calls[0].tools.some((x) => x.name === 'search_knowledge'));
+  // l'extrait revient à Claude sans chemin de fichier
+  const toolResult = JSON.stringify(claude.calls[1].messages.find((m) => Array.isArray(m.content) && m.content[0]?.type === 'tool_result').content);
+  assert.match(toolResult, /found/);
+  assert.ok(!/v25_|src\/|\.tsx?\b/.test(toolResult), 'aucun chemin de fichier transmis à Claude');
+}
+
+// --- Garde-fou : aucun détail technique interne dans une réponse ---
+for (const bad of ['Cela vient de v25_matching_backend.', 'Voir src/routes/agentRoutes.js', 'Appel de /api/gigs/list', "D'après la base de connaissances HARX…", 'See the knowledge base.', 'Fichier package.json']) assert.equal(checkReply(bad).ok, false, bad);
+assert.equal(checkReply('Votre profil est comparé aux exigences du gig : langues, compétences et disponibilités.').ok, true);
 
 console.log('salesiq tests: OK');

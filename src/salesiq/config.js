@@ -31,7 +31,9 @@ export function getSalesIqConfig(env = process.env) {
     /** Vide = paramètre non envoyé. À régler (low / medium) après test sur le modèle choisi. */
     effort: env.SALESIQ_CLAUDE_EFFORT || '',
     maxTokens: int(env.SALESIQ_CLAUDE_MAX_TOKENS, 700),
-    maxToolRounds: int(env.SALESIQ_MAX_TOOL_ROUNDS, 4),
+    maxToolRounds: int(env.SALESIQ_MAX_TOOL_ROUNDS, 6),
+    /** Rubriques de la base de connaissances accessibles aux visiteurs (identifiants, séparés par des virgules). Vide = valeurs par défaut. */
+    kbTopics: String(env.SALESIQ_KB_TOPICS || '').split(',').map((x) => x.trim()).filter(Boolean),
     claudeTimeoutMs: int(env.SALESIQ_CLAUDE_TIMEOUT_MS, 45_000),
     /** Délai pendant lequel on attend Claude avant de répondre « pending » (SalesIQ coupe le webhook à 5 s). */
     syncBudgetMs: int(env.SALESIQ_SYNC_BUDGET_MS, 3500),

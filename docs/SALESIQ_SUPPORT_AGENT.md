@@ -30,6 +30,14 @@ Aucun mode ne transfère la conversation à un opérateur : le service n'envoie 
 - Chaque réponse envoyée est consignée en note interne (« RÉPONSE CLAUDE (envoyée) ») pour relecture.
 - Le texte des messages n'est pas journalisé (`SALESIQ_LOG_MESSAGE_TEXT=1` pour l'activer).
 
+## Recherche dans la base de connaissances HARX
+En plus de `pipeline.md`, `faq.md` et du CRM, Claude dispose de deux outils, `search_knowledge` et `read_knowledge_topic`, pour **chercher avant d'abandonner**. Ils interrogent la base de connaissances de l'assistant WhatsApp (`src/whatsapp/kb`), rédigée à partir du code réel des dépôts HARX (recherche en mémoire, quelques millisecondes, aucun service externe).
+- Seules les rubriques destinées aux visiteurs sont accessibles : `reps-matching`, `account-signup-login`, `platform-overview` et les textes d'écran de l'application rep. Routes d'API, messages d'erreur du back-office, facturation, rôles, téléphonie et dépannage restent hors de portée (variable `SALESIQ_KB_TOPICS` pour modifier la liste).
+- Les chemins de fichiers sources ne sont jamais transmis à Claude ; un garde-fou bloque toute réponse qui contient un nom de dépôt, un chemin, une route ou « base de connaissances ».
+- `pipeline.md`, `faq.md` et le CRM passent avant la base en cas de contradiction.
+- La base décrit le fonctionnement du produit, pas les décisions métier (qui sélectionne, sous quel délai) : pour cela, `knowledge/` reste la source.
+- Pour mettre à jour la base après une évolution du code : `npm run whatsapp:kb`.
+
 ## Variables d'environnement (Railway)
 | Variable | Rôle |
 |---|---|
