@@ -22,8 +22,10 @@ Le modèle repose sur le paiement au résultat (Transaction-as-a-Service).
 Réponse :
   "HARX met en relation des entreprises avec des professionnels de la relation client (les reps).
   Après votre inscription et la validation de votre profil, vous pouvez postuler à des missions
-  (gigs) proposées par nos clients. [À COMPLÉTER : comment le rep est rémunéré, en une phrase]"
-Ne jamais citer de montant.
+  (gigs) proposées par nos clients."
+Rémunération du rep : [À COMPLÉTER : comment le rep est rémunéré, en une phrase]. Tant que ce point n'est pas
+validé, ne rien dire sur la rémunération dans cette réponse ; si le visiteur pose la question de la
+rémunération, appliquer la réponse n°12. Ne jamais citer de montant.
 
 
 3. COMMENT S'INSCRIRE ?

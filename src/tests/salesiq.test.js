@@ -459,4 +459,15 @@ assert.equal(stepFromStage('Onboarding'), null);
   await new Promise((r) => server.close(r));
 }
 
+// --- FAQ n°2 : la réponse proposée au visiteur ne contient plus de passage à compléter ---
+{
+  const faq = knowledge.faq;
+  const section = faq.slice(faq.indexOf('2. COMMENT FONCTIONNE HARX'), faq.indexOf("3. COMMENT S'INSCRIRE"));
+  const reply = section.slice(section.indexOf('Réponse :'), section.indexOf('Rémunération du rep'));
+  assert.match(reply, /professionnels de la relation client \(les reps\)/);
+  assert.match(reply, /missions\s+\(gigs\) proposées par nos clients/);
+  assert.doesNotMatch(reply, /À COMPLÉTER|À VÉRIFIER/, 'la réponse elle-même est utilisable telle quelle');
+  assert.match(section, /appliquer la réponse n°12/, 'la rémunération reste renvoyée à la réponse n°12');
+}
+
 console.log('salesiq tests: OK');
