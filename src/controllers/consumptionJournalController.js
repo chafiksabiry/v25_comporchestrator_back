@@ -46,7 +46,10 @@ const defaultLoaders = {
     ]);
     const p = cap(payments, max, (x) => x.fulfilledAt || x.updatedAt || x.createdAt);
     const c = cap(calls, max, (x) => x.startTime || x.createdAt || x.endTime);
-    return { wallet, payments: p.docs, calls: c.docs, capped: [p.capped, c.capped].filter(Boolean).sort().at(-1) || null };
+    // Débits réels (facteur appliqué, tous canaux) : même règle que le débit ; sans effet à coefficient 1.
+    const { debitsForCalls } = await import('../services/creditCoefficient.js');
+    const debits = await debitsForCalls({ companyId: String(oid), calls: c.docs });
+    return { wallet, payments: p.docs, calls: c.docs, debits, capped: [p.capped, c.capped].filter(Boolean).sort().at(-1) || null };
   },
   async tokens(companyId) {
     const oid = toOid(companyId);

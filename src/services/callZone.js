@@ -2,12 +2,12 @@ import { COUNTRY_LABELS_EN, callingInfoOf, countryPrefixOf, toStrictE164 } from 
 import { isEuCountry } from './euCountries.js';
 
 /**
- * Régions ultrapériphériques françaises, donc de l'UE : La Réunion et Mayotte (+262), Guadeloupe et parties de Saint-Martin /
- * Saint-Barthélemy (+590), Guyane (+594), Martinique (+596). Traitées comme la France. Limite connue : Saint-Barthélemy (hors UE) et la
- * partie française de Saint-Martin partagent +590 avec la Guadeloupe, indistinguables par l'indicatif. Les autres collectivités
- * d'outre-mer (Nouvelle-Calédonie +687, Polynésie +689, Wallis-et-Futuna +681…) ne sont pas dans l'UE : internationales.
+ * DÉCISION DU PROPRIÉTAIRE : les DOM-TOM comptent comme NATIONAUX pour une entreprise française, y compris les collectivités d'outre-mer
+ * hors UE. Régions d'outre-mer : La Réunion et Mayotte (+262), Guadeloupe, Saint-Martin et Saint-Barthélemy (+590), Guyane (+594), Martinique
+ * (+596), Saint-Pierre-et-Miquelon (+508), Nouvelle-Calédonie (+687), Polynésie française (+689), Wallis-et-Futuna (+681). Traitées
+ * comme la France. Limite connue : Saint-Barthélemy et la partie française de Saint-Martin partagent +590 avec la Guadeloupe.
  */
-const FRENCH_EU_REGIONS = new Set(['+262', '+590', '+594', '+596']);
+const FRENCH_EU_REGIONS = new Set(['+262', '+590', '+594', '+596', '+508', '+687', '+689', '+681']);
 
 /** États-Unis et Canada : les seuls pays du plan nord-américain (+1) domestiques entre eux. */
 const NANP_DOMESTIC = new Set(['US', 'CA']);

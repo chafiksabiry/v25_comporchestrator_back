@@ -91,20 +91,24 @@ export function coefficientOf(limits) {
  * Zone : depuis la ligne réellement utilisée (`call.from`) si c'est un numéro lisible, sinon depuis `companyCountry` (première ligne de
  * l'entreprise). Ne lit rien d'autre.
  */
-export function callCreditFactor(call, { coefficient = 1, companyCountry = '', companyLines = null } = {}) {
-  if (!(coefficient > 1) || !isExplicitOutbound(call)) return 1;
+export function callCreditDetail(call, { coefficient = 1, companyCountry = '', companyLines = null } = {}) {
+  if (!(coefficient > 1)) return { factor: 1, zone: null };
+  if (!isExplicitOutbound(call)) return { factor: 1, zone: 'domestic' };
   const dest = toStrictE164(call?.to);
-  if (!dest) return 1;
+  if (!dest) return { factor: 1, zone: null };
   // Destination = une ligne de l'entreprise : appel interne, 1.
-  if (companyLines && companyLines.has(dest)) return 1;
+  if (companyLines && companyLines.has(dest)) return { factor: 1, zone: 'domestic' };
   const line = toStrictE164(call?.from);
   const home = line || companyCountry;
   const { zone } = classifyZone({ to: call.to, companyCountry: home });
-  if (zone === 'unknown') {
-    console.warn("[credits] pays de l'entreprise inconnu (aucune ligne lisible) : 1 crédit par minute (comportement historique)");
-    return 1;
-  }
-  return zone === 'international' ? coefficient : 1;
+  if (zone === 'unknown') return { factor: 1, zone: null, unknownHome: true };
+  return { factor: zone === 'international' ? coefficient : 1, zone };
+}
+
+export function callCreditFactor(call, options = {}) {
+  const d = callCreditDetail(call, options);
+  if (d.unknownHome) console.warn("[credits] pays de l'entreprise inconnu (aucune ligne lisible) : 1 crédit par minute (comportement historique)");
+  return d.factor;
 }
 
 /** Crédits d'un appel : minute entamée arrondie à la minute supérieure, puis multipliée. */
@@ -164,14 +168,14 @@ export async function cachedPlanLimits(companyId, { load, now = () => Date.now()
 
 const defaultLoadLimits = (companyId) => cachedPlanLimits(companyId);
 
-/** Décisions du webhook pour ces sids : Map sid -> facteur. Illisible : Map vide (reclassement, comme avant). */
+/** Décisions du webhook pour ces sids : Map sid -> { factor, zone }. Illisible : Map vide (reclassement, comme avant). */
 export async function loadCallDecisions(sids) {
   const list = [...new Set((sids || []).map(String).filter(Boolean))];
   if (!list.length) return new Map();
   try {
     const { default: CallCreditDecision } = await import('../models/CallCreditDecision.js');
-    const rows = await CallCreditDecision.find({ sid: { $in: list } }).select('sid factor').lean();
-    return new Map((rows || []).map((r) => [String(r.sid), Number(r.factor) >= 1 ? Number(r.factor) : 1]));
+    const rows = await CallCreditDecision.find({ sid: { $in: list } }).select('sid factor zone').lean();
+    return new Map((rows || []).map((r) => [String(r.sid), { factor: Number(r.factor) >= 1 ? Number(r.factor) : 1, zone: r.zone === 'international' || r.zone === 'domestic' ? r.zone : null }]));
   } catch (error) {
     console.warn('[credits] traces de décision illisibles, reclassement des appels :', error?.message || error);
     return new Map();
@@ -220,7 +224,7 @@ export async function planCreditCharging({ companyId, calls = [], loadLimits = d
   return {
     factorOf: (call) => {
       const traced = recorded.get(String(call?.sid || call?._id || ''));
-      return traced !== undefined ? traced : callCreditFactor(call, { coefficient, companyCountry: home, companyLines });
+      return traced !== undefined ? traced.factor : callCreditFactor(call, { coefficient, companyCountry: home, companyLines });
     },
     coefficient,
   };
@@ -281,4 +285,29 @@ export function buildCreditsOverview({ minutes, planMinutesIncluded = 0, coeffic
     internationalMinutesEquivalent: Math.max(0, Math.floor(Math.floor(credits) / n)),
     zone: { companyCountry: countryPrefixOf(companyCountry) || '', euZone: zone.euZone },
   };
+}
+
+/**
+ * Débits RÉELS appliqués aux appels d'une société, pour le journal de consommation : { [sid]: { coefficient, zone } }, avec la MÊME règle que le débit
+ * (trace du webhook d'abord, sinon reclassement). Coefficient 1 (cas par défaut) : objet vide (quantité historique, aucune lecture en plus). Forfait ou
+ * lignes illisibles : objet vide (le journal montre la quantité historique, comme le débit l'a appliquée à défaut de mieux).
+ */
+export async function debitsForCalls({ companyId, calls = [], loadLimits = defaultLoadLimits, country = companyHomeOf, lines = companyLinesOf, decisions = loadCallDecisions }) {
+  const out = {};
+  try {
+    const { coefficient } = coefficientOf(await loadLimits(companyId));
+    if (!(coefficient > 1)) return out;
+    const [home, companyLines, recorded] = await Promise.all([country(companyId), lines(companyId), decisions(calls.map((c) => c?.sid || c?._id))]);
+    for (const call of calls) {
+      const key = String(call?.sid || call?._id || '');
+      if (!key) continue;
+      const traced = recorded.get(key);
+      const d = traced !== undefined ? { factor: traced.factor, zone: traced.zone } : callCreditDetail(call, { coefficient, companyCountry: home, companyLines });
+      if (d.zone === 'domestic' || d.zone === 'international') out[key] = { coefficient: d.factor, zone: d.zone };
+    }
+  } catch (error) {
+    console.warn('[credits] débits du journal illisibles, quantité historique :', error?.message || error);
+    return {};
+  }
+  return out;
 }

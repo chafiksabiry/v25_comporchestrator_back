@@ -5,7 +5,7 @@ Recette uniquement à ce stade. Remplace le second solde / les packs internation
 ## Règle (décision du propriétaire)
 
 - Un appel **international** débite **N crédits par minute** : minute entamée arrondie à la minute supérieure, **puis** multipliée par N (61 s à N=4 : 2 min × 4 = 8 crédits).
-- Un appel **national, UE ou DOM-TOM** débite **1 crédit par minute**, comme aujourd'hui.
+- Un appel **national, UE ou DOM-TOM (y compris les collectivités d'outre-mer : +508, +687, +689, +681, décision du propriétaire)** débite **1 crédit par minute**, comme aujourd'hui.
 - Zone : voir « Classification ». Entrants : coefficient national (1) **sauf provenance internationale lisible** (choix documenté ci-dessous).
 - Idempotence inchangée : une clé par appel (`sid`), débit atomique (`chargedCallSids`).
 
@@ -18,7 +18,7 @@ Ordre de lecture : **métadonnée Stripe `international_minute_credits` du produ
 ## Classification
 
 - **Sortants** : zone de la destination, jugée depuis la **ligne réellement utilisée** par l'appel (champ `from` de l'appel stocké ; au moment de décider, la ligne qui va passer l'appel). Si `from` n'est pas un numéro lisible (par exemple `client:…`), **repli documenté** sur la première ligne lisible de l'entreprise. Le résultat ne dépend donc pas de l'instant de la synchro.
-- **Domestique** : même pays ; États-Unis ↔ Canada ; pour une entreprise de l'UE, les 27 pays de l'UE (`src/services/euCountries.js`, codes ISO, Royaume-Uni absent) ; régions françaises d'outre-mer **+262, +590, +594, +596 traitées comme la France** (limite connue : Saint-Barthélemy, hors UE, et la partie française de Saint-Martin partagent +590 avec la Guadeloupe).
+- **Domestique** : même pays ; États-Unis ↔ Canada ; pour une entreprise de l'UE, les 27 pays de l'UE (`src/services/euCountries.js`, codes ISO, Royaume-Uni absent) ; DOM-TOM **+262, +590, +594, +596, +508, +687, +689, +681 traités comme la France** (décision du propriétaire : nationaux pour une entreprise française, collectivités hors UE comprises) (limite connue : Saint-Barthélemy, hors UE, et la partie française de Saint-Martin partagent +590 avec la Guadeloupe).
 - **International** : tout le reste (Royaume-Uni, Suisse, Norvège… ; entreprise hors UE appelant l'UE comprise).
 - **Territoires** : le pays est identifié par `callingInfoOf` (`outboundDestinations.js`) à partir du numéro complet : pour une entreprise +1, seuls les **États-Unis et le Canada sont domestiques entre eux** ; Jamaïque, Bahamas, Porto Rico, République dominicaine, Trinité-et-Tobago… sont **internationaux** ; +7 distingue Russie et Kazakhstan ; +262 distingue La Réunion et Mayotte (toutes deux la France). `+44` n'est pas subdivisé par la table (Jersey, Guernesey, île de Man comptent comme le Royaume-Uni).
 - **Aucun pays identifiable** (indicatif absent de la table, ou indicatif partagé fourni seul sans numéro complet) : **domestique par prudence** (aucun surcoût sur une donnée inconnue), avec avertissement `[zone]`.
@@ -68,3 +68,7 @@ Refus parlé du webhook (en/fr/es) : « Solde insuffisant pour un appel internat
 - **Offre Accueil (C3)** : après la prise d'une ligne dans la réserve, le facteur et le plafond sont recalculés avec cette ligne ; s'il ne couvre plus le solde, la ligne est libérée et l'appel refusé.
 - **Transfert (C4)** : le facteur est calculé avec la ligne qui a reçu l'appel (celle utilisée comme identifiant de l'appelant du transfert).
 - **Code mort (C6)** : `planCreditCharging` ne renvoie plus de `deferred` (toujours vide) ; commentaire d'`escrowController` corrigé.
+
+## Journal de consommation (revue indépendante)
+À coefficient > 1, `GET /api/billing/consumption-journal` affiche pour chaque appel le facteur RÉELLEMENT débité (`debitsForCalls` : trace du webhook d'abord, sinon reclassement, avec la même règle que le débit ; entrant et appel interne : 1), tous canaux. À coefficient 1 : aucune lecture en plus, quantité historique. Forfait ou lignes illisibles : quantité historique.
+**Non bloquant, listé** : le pré-contrôle `minutesShortfall` classe sur la première ligne (la ligne réellement utilisée n'est connue qu'au webhook) ; le plafond de durée côté `dash_calls` n'applique pas le coefficient (le débit, lui, le fait) tant que `dash_calls` n'est pas adapté ; NANP : +1 distingue États-Unis et Canada seulement, les autres territoires +1 (ex. +1 787) sont classés d'après leur indicatif régional connu.

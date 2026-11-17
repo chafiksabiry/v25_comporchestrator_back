@@ -44,8 +44,8 @@ beforeEach(() => {
   PhoneNumber.find = () => { lineReads += 1; return thenable(() => lines); };
   PhoneNumber.findOne = () => thenable(() => lines[0] || null);
   decisions = new Map();
-  CallCreditDecision.find = () => thenable(() => [...decisions].map(([sid, factor]) => ({ sid, factor })));
-  CallCreditDecision.updateOne = async (f, u) => { if (!decisions.has(f.sid)) decisions.set(f.sid, u.$setOnInsert.factor); return {}; };
+  CallCreditDecision.find = () => thenable(() => [...decisions].map(([sid, d]) => ({ sid, factor: d.factor, zone: d.zone })));
+  CallCreditDecision.updateOne = async (f, u) => { if (!decisions.has(f.sid)) decisions.set(f.sid, { factor: u.$setOnInsert.factor, zone: u.$setOnInsert.zone }); return {}; };
   Subscription.findOne = () => { planReads += 1; return { populate: async () => subscription() }; };
   // Pays activés : France, Royaume-Uni, Allemagne (sinon la destination est refusée avant toute question de minutes).
   InboundSettings.findOne = () => thenable(() => ({ secretaryOutbound: true, outboundPrefixes: ['+33', '+44', '+49'] }));
@@ -295,7 +295,7 @@ test('B1 : le webhook enregistre sa décision (ligne, zone, facteur) et le débi
   process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(100);
   const xml = await webhook(GB); // ligne FR (+33…) → Royaume-Uni : international
   assert.equal(timeLimit(xml), 25 * 60);
-  assert.equal(decisions.get('CA1'), 4, 'facteur décidé enregistré sous le sid de l\'appel');
+  assert.equal(decisions.get('CA1').factor, 4, 'facteur décidé enregistré sous le sid de l\'appel'); assert.equal(decisions.get('CA1').zone, 'international');
   // Entre-temps la première ligne lisible devient britannique : un reclassement donnerait « national » (1).
   lines = [{ ...lines[0], phoneNumber: '+442071230000' }];
   CALLS = [callDoc('CA1', 60, { to: GB, from: 'client:cc-sec1' })];
@@ -327,4 +327,26 @@ test('B2 : direction absente, « incoming », « inbound » ou appel vers une li
 test('C4 : le transfert passe au calcul la ligne réellement utilisée (celle qui a reçu l\'appel)', async () => {
   const src = (await import('node:fs')).readFileSync(new URL('../controllers/callTransferController.js', import.meta.url), 'utf8');
   assert.match(src, /deps\.creditFactor\(access\.companyId, number, call\.phoneNumber\)/);
+});
+
+test('journal de consommation : à N > 1 les lignes d\'appels montrent le facteur RÉELLEMENT débité (trace du webhook, reclassement, entrant, interne), tous canaux', async () => {
+  const { debitsForCalls } = await import('../services/creditCoefficient.js');
+  const { buildMinutesRows } = await import('../services/consumptionJournal.js');
+  process.env.INTERNATIONAL_MINUTE_CREDITS = '4';
+  const calls = [callDoc('TRACE', 60, { to: GB, from: 'client:cc-sec1' }), callDoc('RECLASS', 60, { to: GB, from: '+33411112222' }), callDoc('FRNAT', 60, { to: FR }), callDoc('INC', 60, { to: GB, direction: 'incoming' })];
+  decisions.set('TRACE', { factor: 4, zone: 'international' });
+  const debits = await debitsForCalls({ companyId: C1, calls });
+  assert.deepEqual(debits.TRACE, { coefficient: 4, zone: 'international' });
+  assert.deepEqual(debits.RECLASS, { coefficient: 4, zone: 'international' });
+  assert.deepEqual(debits.FRNAT, { coefficient: 1, zone: 'domestic' });
+  assert.deepEqual(debits.INC, { coefficient: 1, zone: 'domestic' });
+  const { rows } = buildMinutesRows({ wallet: { chargedCallSids: calls.map((c) => c.sid), credits: [] }, payments: [], calls, debits });
+  const q = Object.fromEntries(rows.filter((r) => r.id.startsWith('call:')).map((r) => [r.id, r.quantity]));
+  assert.deepEqual(q, { 'call:TRACE': -4, 'call:RECLASS': -4, 'call:FRNAT': -1, 'call:INC': -1 });
+  // le solde réellement débité par la lecture du solde est cohérent avec le journal
+  N = wallet(100); CALLS = calls; await syncMinutesFromCalls(C1);
+  assert.equal(N.minutes, 100 + Object.values(q).reduce((a, b) => a + b, 0));
+  // coefficient 1 : aucune information en plus (quantité historique)
+  delete process.env.INTERNATIONAL_MINUTE_CREDITS; clearCoefficientCache();
+  assert.deepEqual(await debitsForCalls({ companyId: C1, calls }), {});
 });

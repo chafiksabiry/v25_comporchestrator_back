@@ -58,13 +58,15 @@ test('DOM-TOM (régions de l\'UE) : +262, +590, +594, +596 domestiques pour une 
     assert.equal(Z.classifyZone({ to, companyCountry: '+1' }).zone, 'international', `US → ${to}`);
   }
   // une entreprise dont la ligne est un numéro DOM-TOM est française (UE)
-  for (const home of ['+262', '+590', '+594', '+596']) {
+  for (const home of ['+262', '+590', '+594', '+596', '+508', '+687', '+689', '+681']) {
     assert.deepEqual(Z.classifyZone({ to: FR, companyCountry: home }), { zone: 'domestic', euZone: true }, home);
     assert.equal(Z.classifyZone({ to: DE, companyCountry: home }).zone, 'domestic');
     assert.equal(Z.classifyZone({ to: GB, companyCountry: home }).zone, 'international');
   }
-  // collectivités d'outre-mer hors UE : internationales
-  for (const to of ['+687123456', '+689123456', '+681123456'].map((n) => n.padEnd(12, '0'))) assert.equal(Z.classifyZone({ to, companyCountry: '+33' }).zone, 'international', to);
+  // décision du propriétaire : TOUS les DOM-TOM, collectivités d'outre-mer comprises (+508, +687, +689, +681), sont nationaux pour une entreprise française
+  for (const to of ['+508123456', '+687123456', '+689123456', '+681123456', '+262692123456', '+590690123456'].map((n) => n.padEnd(12, '0'))) assert.equal(Z.classifyZone({ to, companyCountry: '+33' }).zone, 'domestic', to);
+  // et pour une entreprise hors de France, ces territoires restent des appels internationaux
+  assert.equal(Z.classifyZone({ to: '+687123456000', companyCountry: '+442071234567' }).zone, 'international');
 });
 
 test('+1 : États-Unis et Canada domestiques entre eux (un seul indicatif), limite connue', () => {
