@@ -3,9 +3,11 @@ import { phoneNumberController } from '../controllers/phoneNumberController.js';
 import { voicemailController } from '../controllers/voicemailController.js';
 import { authenticate } from '../middleware/auth.js';
 import { guard, companyFrom, companyFromIfPresent, ofNumber, ofPayment, ofCaller } from '../middleware/phoneScope.js';
+import { copilotGuard } from '../middleware/copilotScope.js';
 
 // Access control: `authenticate` = valid login; `guard(...)` = login + the caller belongs to the targeted company.
-// Left open on purpose: provider webhooks, and the two routes the REP copilot calls (gig check, configure-voice).
+// Left open on purpose: provider webhooks only. The two REP copilot routes (gig check, configure-voice) use `copilotGuard`:
+// a `rep-copilot` service token, a user of the owning company, or a REP enrolled in the gig / holding the line (middleware/copilotScope.js).
 
 const router = express.Router();
 
@@ -76,10 +78,10 @@ router.delete('/:id', ...guard(ofNumber), phoneNumberController.deleteNumber.bin
 router.post('/terminate', ...guard(ofNumber), phoneNumberController.deleteNumber.bind(phoneNumberController));
 
 // Check if a gig has an active number
-router.get('/gig/:gigId/check', phoneNumberController.checkGigNumber.bind(phoneNumberController));
+router.get('/gig/:gigId/check', ...copilotGuard('gig'), phoneNumberController.checkGigNumber.bind(phoneNumberController));
 
 // Configure voice feature for a phone number
-router.post('/:phoneNumber/configure-voice', phoneNumberController.configureVoiceFeature.bind(phoneNumberController));
+router.post('/:phoneNumber/configure-voice', ...copilotGuard('line'), phoneNumberController.configureVoiceFeature.bind(phoneNumberController));
 
 // Test an outbound call (+ live status / hangup for the monitoring popup)
 router.post('/test-call', ...guard(companyFrom('companyId')), phoneNumberController.testCall.bind(phoneNumberController));
