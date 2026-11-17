@@ -1,7 +1,30 @@
 import { addressService } from '../services/addressService.js';
+import RegulatoryAsset from '../models/RegulatoryAsset.js';
+import { guardCompanyAccess } from '../middleware/companyGuard.js';
+
+/** La pièce doit appartenir à la société de l'appelant (enregistrée à sa création) : sinon 404, rien n'est lu chez l'opérateur ni modifié. */
+async function ownAsset(req, res, kind, externalId) {
+  const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+  if (!access) return null;
+  const row = await RegulatoryAsset.findOne({ kind, externalId: String(externalId), companyId: String(access.companyId) }).select('_id').lean();
+  if (!row) {
+    res.status(404).json({ error: 'Not Found', message: 'Not found' });
+    return null;
+  }
+  return access;
+}
+
+/** Enregistre la propriété d'une pièce créée chez l'opérateur (première inscription gagnante). */
+async function claimAsset(access, kind, externalId) {
+  if (!externalId) return;
+  await RegulatoryAsset.updateOne({ kind, externalId: String(externalId) }, { $setOnInsert: { kind, externalId: String(externalId), companyId: String(access.companyId), userId: access.userId } }, { upsert: true });
+}
+
 
 export const addressController = {
   async createAddress(req, res) {
+    const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+    if (!access) return;
     try {
       const {
         businessName,
@@ -44,6 +67,7 @@ export const addressController = {
         customerReference
       });
 
+      await claimAsset(access, 'address', address?.id);
       res.status(201).json(address);
     } catch (error) {
       console.error('Error in createAddress:', error);
@@ -74,6 +98,7 @@ export const addressController = {
         });
       }
 
+      if (!(await ownAsset(req, res, 'address', addressId))) return;
       const address = await addressService.retrieveAddress(addressId);
       res.json(address);
     } catch (error) {

@@ -2,6 +2,20 @@ import { telnyxRequirementGroupService } from '../services/telnyxRequirementGrou
 import { addressService } from '../services/addressService.js';
 import { documentService } from '../services/documentService.js';
 import { config } from '../config/env.js';
+import { TelnyxRequirementGroup } from '../models/TelnyxRequirementGroup.js';
+import { guardCompanyAccess } from '../middleware/companyGuard.js';
+
+/** Contrôle d'accès à un groupe désigné par son identifiant : l'appelant doit être rattaché à une société, et le groupe doit être celui de CETTE société (sinon 404). */
+async function ownGroup(req, res, groupId) {
+  const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+  if (!access) return null;
+  const row = await TelnyxRequirementGroup.findOne({ telnyxId: String(groupId), companyId: String(access.companyId) }).select('_id').lean();
+  if (!row) {
+    res.status(404).json({ error: 'Not Found', message: 'Requirement group not found' });
+    return null;
+  }
+  return access;
+}
 
 export const telnyxRequirementGroupController = {
   // Créer un nouveau groupe de requirements
@@ -15,6 +29,9 @@ export const telnyxRequirementGroupController = {
           message: 'Company ID and destination zone are required'
         });
       }
+
+      // L'appelant doit appartenir à CETTE société (propriétaire ou membre) ; refus 403 avant toute écriture.
+      if (!(await guardCompanyAccess(req, res, companyId))) return;
 
       // Valider le format du code pays
       if (!/^[A-Z]{2}$/.test(destinationZone)) {
@@ -43,6 +60,7 @@ export const telnyxRequirementGroupController = {
   async getGroup(req, res) {
     try {
       const { groupId } = req.params;
+      if (!(await ownGroup(req, res, groupId))) return;
 
       const group = await telnyxRequirementGroupService.getRequirementGroup(groupId);
       res.json(group);
@@ -67,6 +85,7 @@ export const telnyxRequirementGroupController = {
   async getCompanyGroup(req, res) {
     try {
       const { companyId, destinationZone } = req.params;
+      if (!(await guardCompanyAccess(req, res, companyId))) return;
 
       const group = await telnyxRequirementGroupService.getCompanyRequirementGroup(
         companyId,
@@ -95,6 +114,7 @@ export const telnyxRequirementGroupController = {
     try {
       const { groupId } = req.params;
       const { requirements } = req.body;
+      if (!(await ownGroup(req, res, groupId))) return;
 
       if (!Array.isArray(requirements) || requirements.length === 0) {
         return res.status(400).json({
@@ -142,6 +162,7 @@ export const telnyxRequirementGroupController = {
   async checkCompanyRequirementsStatus(req, res) {
     try {
       const { companyId } = req.params;
+      if (!(await guardCompanyAccess(req, res, companyId))) return;
 
       const groups = await telnyxRequirementGroupService.getCompanyRequirementGroups(companyId);
       
@@ -211,6 +232,7 @@ export const telnyxRequirementGroupController = {
   async checkGroupStatus(req, res) {
     try {
       const { groupId } = req.params;
+      if (!(await ownGroup(req, res, groupId))) return;
 
       const group = await telnyxRequirementGroupService.getRequirementGroup(groupId);
       

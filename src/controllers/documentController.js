@@ -1,5 +1,26 @@
 import { documentService } from '../services/documentService.js';
 import multer from 'multer';
+import RegulatoryAsset from '../models/RegulatoryAsset.js';
+import { guardCompanyAccess } from '../middleware/companyGuard.js';
+
+/** La pièce doit appartenir à la société de l'appelant (enregistrée à sa création) : sinon 404, rien n'est lu chez l'opérateur ni modifié. */
+async function ownAsset(req, res, kind, externalId) {
+  const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+  if (!access) return null;
+  const row = await RegulatoryAsset.findOne({ kind, externalId: String(externalId), companyId: String(access.companyId) }).select('_id').lean();
+  if (!row) {
+    res.status(404).json({ error: 'Not Found', message: 'Not found' });
+    return null;
+  }
+  return access;
+}
+
+/** Enregistre la propriété d'une pièce créée chez l'opérateur (première inscription gagnante). */
+async function claimAsset(access, kind, externalId) {
+  if (!externalId) return;
+  await RegulatoryAsset.updateOne({ kind, externalId: String(externalId) }, { $setOnInsert: { kind, externalId: String(externalId), companyId: String(access.companyId), userId: access.userId } }, { upsert: true });
+}
+
 
 // Configuration de multer pour les uploads
 const storage = multer.memoryStorage();
@@ -24,6 +45,8 @@ export const documentController = {
 
   // Upload d'un document
   async uploadDocument(req, res) {
+    const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+    if (!access) return;
     try {
       if (!req.file) {
         return res.status(400).json({
@@ -50,6 +73,7 @@ export const documentController = {
         customerReference
       );
       
+      await claimAsset(access, 'document', document?.id);
       res.status(201).json(document);
     } catch (error) {
       console.error('Error in uploadDocument:', error);
@@ -79,6 +103,7 @@ export const documentController = {
         });
       }
 
+      if (!(await ownAsset(req, res, 'document', documentId))) return;
       const result = await documentService.deleteDocument(documentId);
       res.json(result);
     } catch (error) {
@@ -109,6 +134,7 @@ export const documentController = {
         });
       }
 
+      if (!(await ownAsset(req, res, 'document', documentId))) return;
       const document = await documentService.getDocument(documentId);
       res.json(document);
     } catch (error) {
@@ -139,6 +165,7 @@ export const documentController = {
         });
       }
 
+      if (!(await ownAsset(req, res, 'document', documentId))) return;
       const documentData = await documentService.downloadDocument(documentId);
       
       // Définir les headers pour le téléchargement
