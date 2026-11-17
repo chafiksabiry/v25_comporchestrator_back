@@ -5,7 +5,7 @@ import { syncMinutesFromCalls } from './escrowController.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { loadCompanyPlanLimits } from '../services/planLimits.js';
 import { buildBalancesOverview, companyCountryOf, internationalPackApplies } from '../services/internationalMinutes.js';
-import { listInternationalPacks } from '../services/internationalPacks.js';
+import { listInternationalPacksChecked } from '../services/internationalPacks.js';
 
 const fail = (res, status, code, message) => res.status(status).json({ success: false, code, message });
 
@@ -22,7 +22,7 @@ export function createBalancesHandlers(deps = {}) {
   const readInternational = deps.readInternational || ((companyId) => InternationalMinutesCompany.findOne({ companyId }).lean());
   const loadLimits = deps.loadLimits || loadCompanyPlanLimits;
   const country = deps.country || companyCountryOf;
-  const listPacks = deps.listPacks || listInternationalPacks;
+  const listPacks = deps.listPacks || listInternationalPacksChecked;
 
   return {
     async getBalances(req, res) {
@@ -41,15 +41,19 @@ export function createBalancesHandlers(deps = {}) {
         try { planMinutesIncluded = (await grant(access.companyId))?.allowance || 0; } catch (error) { console.warn('[balances] octroi ignoré :', error?.message || error); }
         await sync(access.companyId);
         const limits = await loadLimits(access.companyId);
-        const [national, international, companyCountry, packs] = await Promise.all([
+        const applies = internationalPackApplies(limits);
+        const [national, international, companyCountry, catalog] = await Promise.all([
           readNational(access.companyId),
           readInternational(access.companyId),
           country(access.companyId),
-          internationalPackApplies(limits) ? listPacks() : [],
+          applies ? listPacks() : { packs: [], error: false },
         ]);
+        // Offre marquée mais rien à acheter : avertissement explicite (la lecture en erreur n'est pas confondue avec « aucun pack »).
+        if (applies && catalog.error) console.warn(`[international] lecture des packs Stripe en erreur (entreprise ${access.companyId}) : packsAvailable inconnu`);
+        else if (applies && !catalog.packs.length) console.warn(`[international] offre marquée international_pack SANS aucun pack Stripe configuré (entreprise ${access.companyId}) : les appels internationaux sont refusés sans moyen d'acheter`);
         return res.json({
           success: true,
-          data: { companyId: String(access.companyId), ...buildBalancesOverview({ limits, national: { minutes: national?.minutes, planMinutesIncluded }, international, companyCountry, packs }) },
+          data: { companyId: String(access.companyId), ...buildBalancesOverview({ limits, national: { minutes: national?.minutes, planMinutesIncluded }, international, companyCountry, packs: catalog.packs, packsError: catalog.error }) },
         });
       } catch (error) {
         console.error('[balances] lecture impossible :', error?.message || error);

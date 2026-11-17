@@ -262,7 +262,7 @@ const get = async (h, over = {}) => {
   await h.getBalances({ params: { companyId: C1 }, headers: {}, user: { userId: 'u1' }, ...over }, res);
   return out;
 };
-const handlers = (over = {}) => createBalancesHandlers({ getAccess: async () => ({ companyId: C1, role: 'owner' }), grant: async () => ({ allowance: 30 }), sync: async () => {}, readNational: async () => clone(N), readInternational: async () => clone(I), loadLimits: async () => ({ internationalPack: true }), country: async () => '+33', listPacks: async () => [{ id: 'price_p1', minutes: 60, amountCents: 1234, currency: 'eur', label: 'Pack Intl' }], ...over });
+const handlers = (over = {}) => createBalancesHandlers({ getAccess: async () => ({ companyId: C1, role: 'owner' }), grant: async () => ({ allowance: 30 }), sync: async () => {}, readNational: async () => clone(N), readInternational: async () => clone(I), loadLimits: async () => ({ internationalPack: true }), country: async () => '+33', listPacks: async () => ({ packs: [{ id: 'price_p1', minutes: 60, amountCents: 1234, currency: 'eur', label: 'Pack Intl' }], error: false }), ...over });
 
 test('endpoint : les deux soldes séparés, zone de l\'entreprise, packs disponibles', async () => {
   N = nat(12); I = { ...intl(45), purchasedMinutes: 100, consumedSeconds: 600 };
@@ -271,7 +271,7 @@ test('endpoint : les deux soldes séparés, zone de l\'entreprise, packs disponi
   assert.deepEqual(r.body.data, {
     companyId: C1,
     national: { minutes: 12, includedMinutes: 30 },
-    international: { applies: true, minutes: 45, purchasedMinutes: 100, consumedSeconds: 600 },
+    international: { applies: true, packsAvailable: true, minutes: 45, purchasedMinutes: 100, consumedSeconds: 600 },
     zone: { companyCountry: '+33', euZone: true },
     packs: [{ id: 'price_p1', minutes: 60, amountCents: 1234, currency: 'eur', label: 'Pack Intl' }],
   });
@@ -288,4 +288,79 @@ test('endpoint : offre non concernée => applies:false, aucun pack proposé ; ac
   const before = clone(N); await get(handlers()); assert.deepEqual(N, before);
   const layer = minutesCompanyRoutes.stack.find((l) => l.route?.path === '/:companyId/balances');
   assert.ok(layer); assert.deepEqual(Object.keys(layer.route.methods), ['get']); assert.ok(layer.route.stack.length >= 2, 'authenticate + handler');
+});
+
+// --- Revue : appel stocké, forfait illisible, pays inconnu, packs absents ---------------------------------------------------
+const res200 = () => { const r = { code: 200 }; r.status = (c) => { r.code = c; return r; }; r.json = (b) => { r.body = b; return r; }; return r; };
+
+test('charge-call (offre marquée) : appel international sans durée enregistrée => « pas encore », rien débité nulle part', async () => {
+  N = nat(10); I = intl(5); CALLS = [callDoc('CA1', 0, { to: GB }), callDoc('CA2', undefined, { to: GB })];
+  for (const sid of ['CA1', 'CA2']) {
+    const r = res200(); await minutesCompanyController.chargeCall({ body: { companyId: C1, callSid: sid, duration: 130 } }, r);
+    assert.equal(r.body.charged, false, sid);
+  }
+  assert.equal(N.minutes, 10); assert.deepEqual(N.chargedCallSids, []); assert.equal(I.minutes, 5);
+});
+
+test('charge-call : forfait illisible => aucun débit (jamais de chemin historique à l\'aveugle), l\'appel est repris à la lecture du solde', async () => {
+  N = nat(10); I = intl(5); CALLS = [callDoc('CA1', 130, { to: GB })];
+  Subscription.findOne = () => { throw new Error('mongo down'); };
+  const r = res200(); await minutesCompanyController.chargeCall({ body: { companyId: C1, callSid: 'CA1', duration: 130 } }, r);
+  assert.equal(r.code, 200); assert.equal(r.body.charged, false); assert.equal(N.minutes, 10); assert.deepEqual(N.chargedCallSids, []);
+  Subscription.findOne = () => ({ populate: async () => subscription() });
+  await syncMinutesFromCalls(C1);
+  assert.equal(I.minutes, 2); assert.equal(N.minutes, 10);
+});
+
+test('lecture du solde : forfait illisible => appels domestiques débités normalement, appels internationaux différés (jamais du solde normal)', async () => {
+  N = nat(10); I = intl(5);
+  CALLS = [callDoc('INT', 130, { to: GB }), callDoc('DOM', 60, { to: DE })];
+  Subscription.findOne = () => { throw new Error('mongo down'); };
+  await syncMinutesFromCalls(C1);
+  assert.equal(N.minutes, 9, 'domestique débité'); assert.deepEqual(N.chargedCallSids, ['DOM']); assert.equal(I.minutes, 5);
+  Subscription.findOne = () => ({ populate: async () => subscription() });
+  await syncMinutesFromCalls(C1);
+  assert.equal(I.minutes, 2); assert.equal(N.minutes, 9);
+});
+
+test('lecture du solde : erreur du second solde => domestiques quand même débités, international différé', async () => {
+  N = nat(10); I = intl(5);
+  CALLS = [callDoc('INT', 130, { to: GB }), callDoc('DOM', 60, { to: DE })];
+  const real = InternationalMinutesCompany.findOne; InternationalMinutesCompany.findOne = () => { throw new Error('mongo down'); };
+  try { await syncMinutesFromCalls(C1); } finally { InternationalMinutesCompany.findOne = real; }
+  assert.equal(N.minutes, 9); assert.deepEqual(N.chargedCallSids, ['DOM']); assert.equal(I.minutes, 5);
+});
+
+test('pays de l\'entreprise : lu des LIGNES même si le titulaire a personnalisé ses pays ; entreprise sans ligne => comportement historique', async () => {
+  // pays personnalisés (court-circuite la lecture des lignes dans outboundPolicy) : l'appel international reste international
+  N = nat(500); I = intl(0);
+  assert.match(said(await webhook(GB)), /pack de minutes internationales/i);
+  // sans aucune ligne : pays inconnu => solde normal, aucun appel pris en charge par le second solde
+  PhoneNumber.find = () => thenable(() => []);
+  PhoneNumber.findOne = () => thenable(() => null);
+  const r = await pc.minutesShortfall(C1, GB);
+  assert.equal(r, null, 'solde normal suffisant : comportement historique');
+  CALLS = [callDoc('INT', 130, { to: GB })]; N = nat(10); I = intl(5);
+  await syncMinutesFromCalls(C1);
+  assert.equal(N.minutes, 7, 'débité du solde normal comme avant'); assert.equal(I.minutes, 5);
+});
+
+test('endpoint : offre marquée sans pack => packsAvailable:false + avertissement ; erreur Stripe => null + avertissement distinct', async () => {
+  const warns = []; console.warn = (...a) => warns.push(a.join(' '));
+  N = nat(1); I = null;
+  let d = (await get(handlers({ listPacks: async () => ({ packs: [], error: false }) }))).body.data;
+  assert.equal(d.international.packsAvailable, false); assert.deepEqual(d.packs, []);
+  assert.ok(warns.some((w) => /SANS aucun pack Stripe/.test(w)));
+  warns.length = 0;
+  d = (await get(handlers({ listPacks: async () => ({ packs: [], error: true }) }))).body.data;
+  assert.equal(d.international.packsAvailable, null);
+  assert.ok(warns.some((w) => /en erreur/.test(w)) && !warns.some((w) => /SANS aucun pack/.test(w)));
+  d = (await get(handlers())).body.data;
+  assert.equal(d.international.packsAvailable, true);
+});
+
+test('refus international : message renvoyant vers l\'achat et le support', async () => {
+  N = nat(500); I = intl(0);
+  const r = await pc.minutesShortfall(C1, GB);
+  assert.match(r.message, /contact support/i); assert.match(r.messageFr, /support/i);
 });

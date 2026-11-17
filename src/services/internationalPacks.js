@@ -44,10 +44,13 @@ export function packAmountFor(pack, currency) {
 
 const sharedClient = () => (stripeService.isConfigured() ? stripeService.getSharedClient() : null);
 
-/** Packs disponibles (triés par minutes). Liste vide si aucun pack n'est configuré, si Stripe est absent ou en erreur. Ne lève jamais. */
-export async function listInternationalPacks({ stripe = sharedClient(), cache = true } = {}) {
-  if (!stripe) return [];
-  if (cache && cached && Date.now() - cached.at < CACHE_MS) return cached.packs;
+/**
+ * Packs disponibles (triés par minutes) et indicateur d'erreur : `{ packs: [], error: false }` = aucun pack configuré ;
+ * `{ packs: [], error: true }` = Stripe absent ou en erreur de lecture (journalisée). Ne lève jamais.
+ */
+export async function listInternationalPacksChecked({ stripe = sharedClient(), cache = true } = {}) {
+  if (!stripe) return { packs: [], error: true };
+  if (cache && cached && Date.now() - cached.at < CACHE_MS) return { packs: cached.packs, error: false };
   try {
     const packs = [];
     let startingAfter;
@@ -59,11 +62,16 @@ export async function listInternationalPacks({ stripe = sharedClient(), cache = 
     }
     packs.sort((a, b) => a.minutes - b.minutes);
     if (cache) cached = { at: Date.now(), packs };
-    return packs;
+    return { packs, error: false };
   } catch (error) {
     console.warn('[international-packs] lecture Stripe impossible :', error?.message || error);
-    return [];
+    return { packs: [], error: true };
   }
+}
+
+/** Packs disponibles ; liste vide si aucun pack n'est configuré OU en cas d'erreur (voir listInternationalPacksChecked pour les distinguer). */
+export async function listInternationalPacks(options) {
+  return (await listInternationalPacksChecked(options)).packs;
 }
 
 /** Pack d'un identifiant de prix, relu de Stripe (jamais cru du client) ; null s'il n'existe pas ou n'est pas un pack valide. */

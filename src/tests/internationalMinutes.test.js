@@ -48,11 +48,11 @@ test('classification : hors UE (Suisse, Norvège, Maroc) = international ; entre
   assert.equal(Z.classifyZone({ to: NO, companyCountry: '+47' }).zone, 'domestic');
 });
 
-test('classification : indicateur euZone, pays de l\'entreprise inconnu => préfixe par défaut (+33), destination illisible => domestique (comportement actuel)', () => {
+test('classification : indicateur euZone, pays de l\'entreprise INCONNU => zone inconnue (jamais supposée UE), destination illisible => domestique', () => {
   assert.equal(Z.classifyZone({ to: FR, companyCountry: '+33' }).euZone, true);
   assert.equal(Z.classifyZone({ to: FR, companyCountry: '+44' }).euZone, false);
-  assert.equal(Z.classifyZone({ to: GB, companyCountry: '' }).zone, 'international');
-  assert.equal(Z.classifyZone({ to: DE, companyCountry: '' }).zone, 'domestic');
+  assert.deepEqual(Z.classifyZone({ to: GB, companyCountry: '' }), { zone: 'unknown', euZone: null });
+  assert.deepEqual(Z.classifyZone({ to: DE }), { zone: 'unknown', euZone: null });
   assert.equal(Z.classifyZone({ to: '', companyCountry: '+33' }).zone, 'domestic');
   assert.equal(Z.classifyZone({ to: '0033612345678', companyCountry: '+33' }).zone, 'domestic');
 });
@@ -228,10 +228,83 @@ test('refus parlés et messages : pack de minutes internationales requis (en / f
 test('vue des deux soldes : séparés, jamais mélangés', () => {
   const v = M.buildBalancesOverview({ limits: LIMITS_ON, national: { minutes: 12, planMinutesIncluded: 30 }, international: { minutes: 45, purchasedMinutes: 100, consumedSeconds: 600 }, companyCountry: '+33', packs: [{ id: 'price_p1', minutes: 60, amountCents: 1234, currency: 'eur', label: 'Pack Intl' }] });
   assert.deepEqual(v.national, { minutes: 12, includedMinutes: 30 });
-  assert.deepEqual(v.international, { applies: true, minutes: 45, purchasedMinutes: 100, consumedSeconds: 600 });
+  assert.deepEqual(v.international, { applies: true, packsAvailable: true, minutes: 45, purchasedMinutes: 100, consumedSeconds: 600 });
   assert.deepEqual(v.zone, { companyCountry: '+33', euZone: true });
   assert.equal(v.packs.length, 1);
   const off = M.buildBalancesOverview({ limits: {}, national: { minutes: 12, planMinutesIncluded: 30 }, international: { minutes: 0, purchasedMinutes: 0, consumedSeconds: 0 }, companyCountry: '+33', packs: [] });
   assert.equal(off.international.applies, false);
   assert.equal(off.national.minutes, 12);
+});
+
+// --- Revue : DOM-TOM, pays inconnu, rejeu, reprise sur erreur ----------------------------------------------------------
+test('DOM-TOM (régions de l\'UE) : +262, +590, +594, +596 domestiques pour une entreprise française, et pour toute entreprise de l\'UE', () => {
+  for (const to of ['+262692123456', '+590690123456', '+594694123456', '+596696123456']) {
+    assert.equal(Z.classifyZone({ to, companyCountry: '+33' }).zone, 'domestic', `FR → ${to}`);
+    assert.equal(Z.classifyZone({ to, companyCountry: '+49' }).zone, 'domestic', `DE → ${to}`);
+    assert.equal(Z.classifyZone({ to, companyCountry: '+44' }).zone, 'international', `GB → ${to}`);
+    assert.equal(Z.classifyZone({ to, companyCountry: '+1' }).zone, 'international', `US → ${to}`);
+  }
+  // une entreprise dont la ligne est un numéro DOM-TOM est française (UE)
+  for (const home of ['+262', '+590', '+594', '+596']) {
+    assert.deepEqual(Z.classifyZone({ to: FR, companyCountry: home }), { zone: 'domestic', euZone: true }, home);
+    assert.equal(Z.classifyZone({ to: DE, companyCountry: home }).zone, 'domestic');
+    assert.equal(Z.classifyZone({ to: GB, companyCountry: home }).zone, 'international');
+  }
+  // collectivités d'outre-mer hors UE : internationales
+  for (const to of ['+687123456', '+689123456', '+681123456'].map((n) => n.padEnd(12, '0'))) assert.equal(Z.classifyZone({ to, companyCountry: '+33' }).zone, 'international', to);
+});
+
+test('+1 : États-Unis et Canada domestiques entre eux (un seul indicatif), limite connue', () => {
+  assert.equal(Z.classifyZone({ to: '+14165550123', companyCountry: '+1' }).zone, 'domestic');
+  assert.equal(Z.classifyZone({ to: '+14155550123', companyCountry: '+1' }).zone, 'domestic');
+});
+
+test('pays de l\'entreprise inconnu : solde normal (comportement historique), rien pris en charge, avertissement', async () => {
+  const warns = []; const warn = console.warn; console.warn = (...a) => warns.push(a.join(' '));
+  try {
+    const store = new MemStore(5);
+    const b = await M.resolveOutboundBalance({ companyId: 'C1', limits: { internationalPack: true }, to: GB, nationalMinutes: 4, store, country: async () => '' });
+    assert.deepEqual(b, { kind: 'national', minutes: 4, zone: 'unknown', euZone: null });
+    assert.ok(warns.some((w) => /pays de l'entreprise inconnu/.test(w)));
+    const h = await M.settleInternationalCalls({ companyId: 'C1', calls: [{ sid: 'X', duration: 60, direction: 'outbound', to: GB }], limits: { internationalPack: true }, store, country: async () => '' });
+    assert.equal(h.size, 0); assert.equal(store.w.minutes, 5);
+  } finally { console.warn = warn; }
+});
+
+test('rejeu : un appel international déjà traité n\'est pas redébité ni réécrit à chaque lecture (filtre sur le second solde)', async () => {
+  const store = new MemStore(10); let debits = 0; const real = store.debit.bind(store); store.debit = async (...a) => { debits += 1; return real(...a); };
+  const calls = [{ sid: 'I1', duration: 60, direction: 'outbound', to: GB }];
+  const args = { companyId: 'C1', calls, limits: { internationalPack: true }, store, country: async () => '+33' };
+  await M.settleInternationalCalls(args); await M.settleInternationalCalls(args); await M.settleInternationalCalls(args);
+  assert.equal(debits, 1); assert.equal(store.w.minutes, 9);
+  assert.deepEqual([...(await M.settleInternationalCalls(args))], ['I1'], 'toujours écarté du solde normal');
+});
+
+test('reprise sur erreur : les appels de type international sont repérés pour être différés, les autres débités normalement', async () => {
+  const calls = [{ sid: 'I', duration: 60, direction: 'outbound', to: GB }, { sid: 'D', duration: 60, direction: 'outbound', to: DE }, { sid: 'N', duration: 60, direction: 'inbound', from: GB, to: FR }, { sid: 'U', duration: 60, direction: 'outbound' }];
+  assert.deepEqual([...(await M.deferInternationalCalls({ companyId: 'C1', calls, country: async () => '+33' }))], ['I']);
+  assert.deepEqual([...(await M.deferInternationalCalls({ companyId: 'C1', calls, country: async () => '' }))], [], 'pays inconnu : rien différé');
+});
+
+test('vue des soldes : packsAvailable distingue « aucun pack » (false) d\'une erreur de lecture (null)', () => {
+  const base = { limits: LIMITS_ON, national: { minutes: 1 }, international: {}, companyCountry: '+33' };
+  assert.equal(M.buildBalancesOverview({ ...base, packs: [{ id: 'p' }], packsError: false }).international.packsAvailable, true);
+  assert.equal(M.buildBalancesOverview({ ...base, packs: [], packsError: false }).international.packsAvailable, false);
+  assert.equal(M.buildBalancesOverview({ ...base, packs: [], packsError: true }).international.packsAvailable, null);
+  assert.equal(M.buildBalancesOverview({ ...base, limits: {}, packs: [], packsError: false }).international.packsAvailable, null, 'offre non concernée : sans objet');
+});
+
+test('catalogue : erreur de lecture distinguée de « aucun pack »', async () => {
+  const warn = console.warn; console.warn = () => {};
+  try {
+    assert.deepEqual(await P.listInternationalPacksChecked({ stripe: { prices: { list: async () => ({ data: [], has_more: false }) } }, cache: false }), { packs: [], error: false });
+    const r = await P.listInternationalPacksChecked({ stripe: { prices: { list: async () => { throw new Error('stripe down'); } } }, cache: false });
+    assert.equal(r.error, true); assert.deepEqual(r.packs, []);
+    assert.deepEqual(await P.listInternationalPacksChecked({ stripe: null, cache: false }), { packs: [], error: true });
+  } finally { console.warn = warn; }
+});
+
+test('message de refus : renvoie vers l\'achat et le support', () => {
+  const r = M.internationalPackRefusal({ euZone: true });
+  assert.match(r.message, /support/i); assert.match(r.messageFr, /support/i);
 });

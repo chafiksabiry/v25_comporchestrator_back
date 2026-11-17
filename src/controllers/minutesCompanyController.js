@@ -129,8 +129,14 @@ export const minutesCompanyController = {
 
       // Offre concernée par le pack de minutes internationales : un appel sortant international est débité du solde international,
       // jamais du solde normal (même appel réel, même durée enregistrée, même clé d'idempotence).
+      // Si le forfait est illisible on ne sait pas quel solde débiter : rien ici, la lecture du solde reprend l'appel (jamais de chemin historique à l'aveugle).
       let limits = null;
-      try { limits = await loadCompanyPlanLimits(companyId); } catch { limits = null; }
+      try {
+        limits = await loadCompanyPlanLimits(companyId);
+      } catch (planErr) {
+        console.warn('[charge-call] forfait illisible, appel laissé à la lecture du solde :', planErr?.message || planErr);
+        return res.status(200).json({ success: true, charged: false, reason: 'Plan unavailable', data: { minutes: wallet.minutes } });
+      }
       if (internationalPackApplies(limits)) {
         const before = await internationalStore.read(companyId);
         const handled = await settleInternationalCalls({ companyId, calls: [stored], limits });

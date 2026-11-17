@@ -38,12 +38,17 @@ Uniquement pour une offre dont le produit Stripe porte `international_pack` : le
 - Lecture : `GET /api/minutes-company/:companyId/balances` (JWT, titulaire de cette entreprise) → `national{minutes, includedMinutes}`, `international{applies, minutes, purchasedMinutes, consumedSeconds}`, `zone{companyCountry, euZone}`, `packs[]`.
 - Refus : `{ success:false, code:"INTERNATIONAL_PACK_REQUIRED", zone:"international", balance, message (EN), messageFr }` ; refus parlé en en/fr/es.
 
-## Interprétation de la zone (à confirmer par le propriétaire)
+## Zone : règles et limites (décisions du propriétaire)
 
-Pays = indicatif pays (comme `outboundPolicy`). `+1` regroupe États-Unis et Canada (domestiques entre eux). Les territoires d'outre-mer (+262 La Réunion/Mayotte, +590, +594, +596) ont leur propre code ISO et sont donc **hors zone** (internationaux), y compris pour une entreprise française : à décider. Liste UE : `src/services/euCountries.js` (27 codes ISO, Royaume-Uni absent).
+- Pays = indicatif pays de la **première ligne lisible** de l'entreprise (comme `outboundPolicy`, mais lu même quand le titulaire a personnalisé ses pays activés). **Entreprise sans ligne lisible : pays inconnu, jamais supposé dans l'UE** → comportement historique (solde normal), avertissement serveur `[international] pays de l'entreprise inconnu`.
+- **Régions françaises de l'UE** : +262 (La Réunion, Mayotte), +590 (Guadeloupe, Saint-Martin, Saint-Barthélemy), +594 (Guyane), +596 (Martinique) sont traitées comme la France : domestiques pour une entreprise de l'UE ; une entreprise dont la ligne est un de ces numéros est française. Limite connue : Saint-Barthélemy (hors UE) et la partie française de Saint-Martin partagent +590 avec la Guadeloupe et ne se distinguent pas par l'indicatif. Autres collectivités d'outre-mer (+687, +689, +681…) : hors UE, internationales.
+- **+1** : États-Unis et Canada (un seul indicatif) sont domestiques entre eux ; les autres pays NANP (Caraïbes) aussi, sous le même indicatif, limite connue.
+- Offre marquée `international_pack` **sans aucun pack Stripe** : `GET /balances` renvoie `international.packsAvailable: false` et le serveur journalise un avertissement explicite ; une erreur de lecture Stripe donne `packsAvailable: null` (avertissement distinct), jamais confondue avec « aucun pack ». Le message de refus renvoie vers l'achat et le support.
+- Liste UE : `src/services/euCountries.js` (27 codes ISO, Royaume-Uni absent).
 
 ## Limites connues
 
 - Plafond « mou » : plusieurs appels internationaux simultanés lancés avec le même solde peuvent le dépasser ensemble (comme le solde normal).
 - Appels comptés à la lecture du solde : un appel passé avant l'activation de la métadonnée et compté après serait débité du solde international (qui peut passer sous zéro, compensé à l'achat suivant).
+- Erreur de lecture du forfait ou du second solde pendant le comptage : les appels de type international sont **différés** (jamais débités du solde normal), tous les autres sont débités normalement ; `charge-call` ne débite rien si le forfait est illisible (la lecture du solde reprend l'appel).
 - Pas de remboursement / retrait de minutes internationales. Front (écran Facturation, achat) et `dash_calls` hors périmètre.

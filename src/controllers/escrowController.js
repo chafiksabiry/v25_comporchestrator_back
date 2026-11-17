@@ -24,7 +24,7 @@ import {
 } from '../utils/retraction.js';
 import { clearExpiredRetractions, reverseSaleCommission } from '../services/retractionService.js';
 import { loadCompanyPlanLimits } from '../services/planLimits.js';
-import { settleInternationalCalls } from '../services/internationalMinutes.js';
+import { deferInternationalCalls, settleInternationalCalls } from '../services/internationalMinutes.js';
 
 // 70/30 split enforced server-side. Single source of truth.
 const REP_SHARE = 0.7;
@@ -952,13 +952,20 @@ export async function syncMinutesFromCalls(companyId) {
     ).toArray();
 
     // Offre concernée par le pack de minutes internationales : les appels sortants internationaux sont débités du solde international,
-    // jamais du solde normal. Pas de repli en cas d'erreur : on interrompt (ces appels seraient sinon débités du mauvais solde) et la
-    // prochaine lecture du solde reprend (idempotent par appel).
+    // jamais du solde normal. Une erreur ici ne saute JAMAIS le débit normal : les appels de type international sont alors différés
+    // (repris à la prochaine lecture, idempotent par appel) et tous les autres sont débités comme d'habitude. Si même ce tri est
+    // impossible, on interrompt (mieux vaut retarder que débiter le mauvais solde).
     const pending = calls.filter((c) => !alreadyCharged.has(String(c.sid || c._id || '')));
     let billable = calls;
     if (pending.length) {
-      const handled = await settleInternationalCalls({ companyId, calls: pending, limits: await loadCompanyPlanLimits(companyId) });
-      if (handled.size) billable = calls.filter((c) => !handled.has(String(c.sid || c._id || '')));
+      let skip = new Set();
+      try {
+        skip = await settleInternationalCalls({ companyId, calls: pending, limits: await loadCompanyPlanLimits(companyId) });
+      } catch (intlErr) {
+        console.warn('[syncMinutesFromCalls] solde international indisponible, appels internationaux différés :', intlErr?.message || intlErr);
+        skip = await deferInternationalCalls({ companyId, calls: pending });
+      }
+      if (skip.size) billable = calls.filter((c) => !skip.has(String(c.sid || c._id || '')));
     }
 
     // Billing rule: each call is billed at the ceiling of its duration in

@@ -27,8 +27,8 @@ export function internationalPackFromMetadata(metadata) {
 /** Messages du refus (anglais par défaut, français additif). Entreprise de l'UE : rappelle que l'UE est incluse dans le solde normal. */
 export function internationalPackRefusal({ euZone = false } = {}) {
   return {
-    message: `An international minutes pack is required to call this destination.${euZone ? ' Calls to your country and to EU countries use your regular minutes.' : ' Calls to your own country use your regular minutes.'}`,
-    messageFr: `Un pack de minutes internationales est requis pour appeler cette destination.${euZone ? ' Les appels vers votre pays et vers les pays de l’UE utilisent vos minutes habituelles.' : ' Les appels vers votre pays utilisent vos minutes habituelles.'}`,
+    message: `An international minutes pack is required to call this destination.${euZone ? ' Calls to your country and to EU countries use your regular minutes.' : ' Calls to your own country use your regular minutes.'} Buy a pack in the web app; if none is offered, contact support.`,
+    messageFr: `Un pack de minutes internationales est requis pour appeler cette destination.${euZone ? ' Les appels vers votre pays et vers les pays de l’UE utilisent vos minutes habituelles.' : ' Les appels vers votre pays utilisent vos minutes habituelles.'} Achetez un pack dans l’application ; si aucun n’est proposé, contactez le support.`,
   };
 }
 
@@ -65,10 +65,10 @@ export async function creditInternationalPack({ companyId, minutes, paymentId, s
   return store.credit(companyId, { minutes: qty, grantKey: `pack:${paymentId}`, at });
 }
 
-/** Pays de l'entreprise (indicatif de sa première ligne), comme outboundPolicy. */
+/** Pays de l'entreprise (indicatif de sa première ligne lisible), même règle que outboundPolicy ; '' si inconnu. */
 export async function companyCountryOf(companyId, options) {
-  const { resolveOutboundPolicy } = await import('./outboundPolicy.js');
-  return (await resolveOutboundPolicy(companyId, options)).companyCountry || '';
+  const { resolveCompanyCountry } = await import('./outboundPolicy.js');
+  return resolveCompanyCountry(companyId, options);
 }
 
 const callKey = (c) => String(c?.sid || c?._id || '');
@@ -84,16 +84,34 @@ export async function settleInternationalCalls({ companyId, calls, limits, store
   if (!internationalPackApplies(limits)) return handled;
   const home = await country(companyId);
   let ensured = false;
+  let done = null; // appels déjà débités du second solde : lus une fois, pas de réécriture à chaque lecture du solde
   for (const c of calls || []) {
     const key = callKey(c);
     const seconds = Number(c?.duration || 0);
     if (!key || !(seconds > 0) || !isOutbound(c) || !toStrictE164(c.to)) continue;
     if (classifyZone({ to: c.to, companyCountry: home }).zone !== 'international') continue;
-    if (!ensured) { await store.ensure(companyId); ensured = true; }
-    await store.debit(companyId, key, { minutes: Math.ceil(seconds / 60), seconds });
+    if (done === null) done = new Set((await store.read(companyId))?.chargedCallSids || []);
+    if (!done.has(key)) {
+      if (!ensured) { await store.ensure(companyId); ensured = true; }
+      await store.debit(companyId, key, { minutes: Math.ceil(seconds / 60), seconds });
+    }
     handled.add(key);
   }
   return handled;
+}
+
+/**
+ * Reprise sur erreur : clés des appels sortants de type INTERNATIONAL, à ne PAS débiter du solde normal (ils seront repris à la
+ * prochaine lecture). Les autres appels restent débités normalement. Pays de l'entreprise inconnu : rien n'est différé.
+ */
+export async function deferInternationalCalls({ companyId, calls, country = companyCountryOf }) {
+  const deferred = new Set();
+  const home = await country(companyId);
+  for (const c of calls || []) {
+    const key = callKey(c);
+    if (key && isOutbound(c) && toStrictE164(c.to) && classifyZone({ to: c.to, companyCountry: home }).zone === 'international') deferred.add(key);
+  }
+  return deferred;
 }
 
 /**
@@ -106,6 +124,10 @@ export async function resolveOutboundBalance({ companyId, limits, to, nationalMi
   if (!internationalPackApplies(limits)) return fallback;
   try {
     const { zone, euZone } = classifyZone({ to, companyCountry: await country(companyId) });
+    if (zone === 'unknown') {
+      console.warn(`[international] pays de l'entreprise inconnu (aucune ligne lisible) pour ${companyId} : comportement historique (solde normal)`);
+      return { kind: 'national', minutes: nationalMinutes, zone, euZone };
+    }
     if (zone !== 'international') return { kind: 'national', minutes: nationalMinutes, zone, euZone };
     const wallet = await store.read(companyId);
     return { kind: 'international', minutes: typeof wallet?.minutes === 'number' ? wallet.minutes : 0, zone, euZone };
@@ -116,12 +138,15 @@ export async function resolveOutboundBalance({ companyId, limits, to, nationalMi
 }
 
 /** Vue en lecture seule des deux soldes (écran Facturation). */
-export function buildBalancesOverview({ limits, national, international, companyCountry, packs }) {
+export function buildBalancesOverview({ limits, national, international, companyCountry, packs, packsError = false }) {
   const zone = classifyZone({ to: '', companyCountry });
+  const applies = internationalPackApplies(limits);
   return {
     national: { minutes: national?.minutes ?? 0, includedMinutes: national?.planMinutesIncluded ?? 0 },
     international: {
-      applies: internationalPackApplies(limits),
+      applies,
+      /** true : au moins un pack achetable ; false : offre marquée mais aucun pack configuré dans Stripe ; null : lecture Stripe en erreur (ou offre non concernée). */
+      packsAvailable: !applies ? null : packsError ? null : (packs || []).length > 0,
       minutes: international?.minutes ?? 0,
       purchasedMinutes: international?.purchasedMinutes ?? 0,
       consumedSeconds: international?.consumedSeconds ?? 0,
