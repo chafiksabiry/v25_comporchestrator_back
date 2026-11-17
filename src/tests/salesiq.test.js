@@ -22,13 +22,14 @@ const assertForward = (resp) => {
 };
 const tick = () => new Promise((r) => setImmediate(r));
 
-function fakeZoho({ deals = [], failCallback = false } = {}) {
+function fakeZoho({ deals = [], failCallback = false, validConversations = [] } = {}) {
   const calls = { callbacks: [], notes: [], lookups: [] };
   return {
     calls,
     callbackResponse: async (id, payload) => { if (failCallback) throw new Error('expired'); calls.callbacks.push({ id, payload }); },
     addNote: async (id, text) => { calls.notes.push({ id, text }); },
     findConversationId: async () => '848837000002087001',
+    verifyConversation: async (id) => { calls.verified = [...(calls.verified || []), id]; return validConversations.includes(id); },
     findDeals: async (email) => { calls.lookups.push(email); return deals; },
   };
 }
@@ -259,6 +260,19 @@ assert.equal(stepFromStage('Onboarding'), null);
   assert.equal(zoho.calls.notes[0].id, '848837000002087001');
 }
 
+// --- visitor.active_conversation_id « lettres_18chiffres_18chiffres » : candidats vérifiés par l'API ---
+{
+  const p = parseWebhookPayload({ visitor: { active_conversation_id: 'conversati_848837000002066001_848837000002087001' } });
+  assert.deepEqual(p.conversationIdCandidates, ['848837000002087001', '848837000002066001'], 'le dernier d\'abord');
+  assert.equal(p.conversationId, null);
+  assert.deepEqual(parseWebhookPayload({ visitor: {} }).conversationIdCandidates, []);
+  const zoho = fakeZoho({ validConversations: ['848837000002066001'] });
+  const { agent } = build({ env: { SALESIQ_MODE: 'shadow' }, zoho, script: [use('send_reply', { text: 'Bonjour, voici la réponse proposée.' })] });
+  await agent.handleWebhookBody(body('Question', { visitor: { active_conversation_id: 'conversati_848837000002066001_848837000002087001' } })).done;
+  assert.deepEqual(zoho.calls.verified, ['848837000002087001', '848837000002066001'], 'candidats essayés dans l\'ordre');
+  assert.equal(zoho.calls.notes[0].id, '848837000002066001', 'note sur le candidat vérifié, pas sur un identifiant deviné');
+}
+
 // --- Événement « failure » de SalesIQ : cause journalisée, aucune donnée de visiteur ---
 {
   const errors = [];
@@ -277,7 +291,12 @@ assert.equal(stepFromStage('Onboarding'), null);
   for (let i = 0; i < 2; i += 1) assert.equal(agent.handleWebhookBody(body('Bonjour')).response.action, 'reply');
   assertForward(agent.handleWebhookBody(body('Bonjour')).response);
   assertForward(build().agent.handleWebhookBody(body('   ')).response);
-  assert.deepEqual(build().agent.handleWebhookBody({ handler: 'trigger' }).response, { action: 'reply', replies: [] });
+  const welcome = build().agent.handleWebhookBody({ handler: 'trigger', visitor: { id: 'v7', language: 'fr' } }).response;
+  assert.equal(welcome.action, 'reply');
+  assert.equal(welcome.replies.length, 1, 'un trigger sans texte laisse « en train d’écrire » affiché');
+  assert.match(welcome.replies[0], /^Bonjour et bienvenue chez HARX ! Comment puis-je vous aider \?\n\nL'équipe HARX$/);
+  assert.match(build().agent.handleWebhookBody({ handler: 'trigger', visitor: { language: 'en' } }).response.replies[0], /^Hello and welcome to HARX! How can I help you\?/);
+  assert.deepEqual(build().agent.handleWebhookBody({ handler: 'failure' }).response, { action: 'reply', replies: [] });
 }
 
 // --- HTTP : authentification, corps brut, réponse rapide ---
