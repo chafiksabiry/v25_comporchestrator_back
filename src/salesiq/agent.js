@@ -169,7 +169,7 @@ export function createAgent({ cfg, claude, zoho, tools, knowledge, logger = cons
    * Point d'entrée : renvoie { response, done }. `response` DOIT partir vers SalesIQ en moins de 5 secondes ;
    * `done` est le travail de fond (Claude, rappel de réponse, note interne), jamais attendu par la requête HTTP.
    */
-  function handleWebhookBody(body) {
+  function plan(body) {
     const evt = parseWebhookPayload(body);
     const quiet = { response: { action: 'reply', replies: [] }, done: Promise.resolve() };
     if (cfg.logPayloadShape) logger.info?.('[salesiq] payload shape', JSON.stringify(payloadShape(body)));
@@ -222,23 +222,58 @@ export function createAgent({ cfg, claude, zoho, tools, knowledge, logger = cons
         await writeNote(evt, decision, 'shadow');
       })());
     }
+    // Question : Claude est lancé tout de suite ; la réponse part en direct s'il est assez rapide (voir handleWebhook),
+    // sinon « pending » puis livraison par rappel.
+    const work = (async () => {
+      const decision = finalize(await decide(evt, text), text);
+      remember(evt, text, decision);
+      return decision;
+    })();
+    work.catch(() => {}); // decide() ne lève jamais ; évite un rejet non géré
     return {
-      response: { action: 'pending', replies: [MESSAGES[lang].pending] },
-      done: (async () => {
-        const decision = finalize(await decide(evt, text), text);
-        remember(evt, text, decision);
-        const payload = { action: 'reply', replies: [decision.text] }; // jamais de transfert : Claude répond seul
-        let delivered = true;
-        try {
-          await zoho.callbackResponse(evt.requestId, payload);
-        } catch (e) {
-          delivered = false;
-          logger.error('[salesiq] callback delivery failed:', e.message);
-        }
-        await writeNote(evt, decision, 'live', delivered);
-      })(),
+      question: {
+        pending: { action: 'pending', replies: [MESSAGES[lang].pending] },
+        work,
+        finishSync: (decision) => writeNote(evt, decision, 'live'),
+        callbackFlow: async () => {
+          const decision = await work;
+          let delivered = true;
+          try {
+            await zoho.callbackResponse(evt.requestId, { action: 'reply', replies: [decision.text] }); // jamais de transfert
+          } catch (e) {
+            delivered = false;
+            logger.error('[salesiq] callback delivery failed:', e.message);
+          }
+          await writeNote(evt, decision, 'live', delivered);
+        },
+      },
     };
   }
 
-  return { handleWebhookBody, decide, isGreeting };
+  /** Version synchrone (« pending » toujours, réponse par rappel) : conservée pour les tests et les outils. */
+  function handleWebhookBody(body) {
+    const p = plan(body);
+    return p.question ? { response: p.question.pending, done: p.question.callbackFlow() } : p;
+  }
+
+  /**
+   * Point d'entrée du webhook : si Claude répond dans le délai (cfg.syncBudgetMs), la réponse part directement dans la
+   * réponse HTTP (aucun rappel, aucune attente côté visiteur). Sinon « pending » puis livraison par rappel.
+   * @returns {Promise<{response: object, done: Promise}>}
+   */
+  async function handleWebhook(body, budgetMs = cfg.syncBudgetMs) {
+    const p = plan(body);
+    if (!p.question) return p;
+    const q = p.question;
+    let timer;
+    const winner = await Promise.race([
+      q.work.then((decision) => ({ decision })),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(null), budgetMs); }),
+    ]);
+    clearTimeout(timer);
+    if (winner) return { response: { action: 'reply', replies: [winner.decision.text] }, done: q.finishSync(winner.decision) };
+    return { response: q.pending, done: q.callbackFlow() };
+  }
+
+  return { handleWebhookBody, handleWebhook, decide, isGreeting };
 }

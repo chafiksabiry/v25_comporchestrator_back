@@ -9,7 +9,7 @@ const WEBHOOK_BUDGET_MS = 4000; // SalesIQ coupe à 5 s : on garde une marge.
 export function createSalesIqRouter({ agent, cfg, logger = console }) {
   const router = express.Router();
 
-  router.post('/webhook', express.raw({ type: () => true, limit: '1mb' }), (req, res) => {
+  router.post('/webhook', express.raw({ type: () => true, limit: '1mb' }), async (req, res) => {
     const raw = req.body;
     if (!Buffer.isBuffer(raw)) return res.sendStatus(400);
     const auth = authenticateWebhook({ raw, signatureHeader: req.get('x-siqsignature'), queryKey: req.query.key, cfg });
@@ -21,7 +21,7 @@ export function createSalesIqRouter({ agent, cfg, logger = console }) {
     try { body = JSON.parse(raw.toString('utf8')); } catch { return res.sendStatus(400); }
     let result;
     try {
-      result = agent.handleWebhookBody(body);
+      result = await agent.handleWebhook(body);
     } catch (e) {
       // Une erreur renvoie une réponse de repli honnête : le visiteur n'est jamais laissé sans réponse.
       logger.error('[salesiq] handler crashed:', e.message);

@@ -38,8 +38,15 @@ export function createZohoClient({ cfg, fetchImpl = globalThis.fetch, now = () =
       });
       if (res.status === 401 && attempt === 0) { token = null; continue; }
       if (res.status === 204) return { status: 204, data: null };
-      const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(`Zoho ${method} ${new URL(url).pathname} -> ${res.status}`);
+      const raw = typeof res.text === 'function' ? await res.text().catch(() => '') : '';
+      let data = null;
+      if (raw) { try { data = JSON.parse(raw); } catch { /* corps non JSON */ } } else if (typeof res.json === 'function') data = await res.json().catch(() => null);
+      if (!res.ok) {
+        // Chemin masqué (les identifiants de requête sont longs) et corps d'erreur tronqué : de quoi diagnostiquer sans fuite.
+        const path = new URL(url).pathname.replace(/[0-9a-f]{32,}/gi, '<id>');
+        const body = (raw || JSON.stringify(data) || '').replace(/\s+/g, ' ').slice(0, 300);
+        throw new Error(`Zoho ${method} ${path} -> ${res.status}${body ? `: ${body}` : ''}`);
+      }
       return { status: res.status, data };
     }
     throw new Error('Zoho request failed after token refresh');
@@ -52,7 +59,24 @@ export function createZohoClient({ cfg, fetchImpl = globalThis.fetch, now = () =
     /** Livre la réponse finale d'une action « pending » (valable 3 minutes après la requête du bot). */
     async callbackResponse(requestId, payload) {
       if (!requestId) throw new Error('missing request id');
-      await request('POST', siq(`/callbacks/${encodeURIComponent(requestId)}/response`), { json: payload });
+      // La documentation ne dit pas si `replies` attend des textes ou des objets : on essaie les trois formes, dans l'ordre.
+      const replies = payload.replies || [];
+      const variants = [
+        ['strings', payload],
+        ['text-objects', { ...payload, replies: replies.map((text) => ({ text })) }],
+        ['typed-objects', { ...payload, replies: replies.map((text) => ({ type: 'text', text })) }],
+      ];
+      const errors = [];
+      for (const [name, json] of variants) {
+        try {
+          await request('POST', siq(`/callbacks/${encodeURIComponent(requestId)}/response`), { json });
+          logger.info?.(`[salesiq] callback delivered (format ${name})`);
+          return;
+        } catch (e) {
+          errors.push(`${name}: ${e.message}`);
+        }
+      }
+      throw new Error(`callback rejected in every format: ${errors.join(' | ')}`);
     },
 
     async addNote(conversationId, text) {
