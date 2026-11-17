@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import jwt from 'jsonwebtoken';
 import WebSocket from 'ws';
+import mongoose from 'mongoose';
 
 process.env.JWT_SECRET = process.env.JWT_SECRET || 't';
 process.env.REGISTRATION_BACKEND_URL = 'https://registration.test';
@@ -26,6 +27,9 @@ before(async () => {
     const uid = new URL(url).searchParams.get('userId');
     return { ok: true, json: async () => ({ success: true, data: WHO[uid] || { companyId: null, isOwner: true } }) };
   };
+  // Fiche agent : `_id` PROPRE (AG) + `userId` du compte « agent-acct » (comme le service d'inscription).
+  const agentsColl = { find: (q) => ({ toArray: async () => ([{ _id: AG, userId: 'agent-acct' }].filter((r) => (q?.userId?.$in || []).map(String).includes(String(r.userId)))) }) };
+  Object.defineProperty(mongoose.connection, 'db', { get: () => ({ collection: () => agentsColl }), configurable: true });
   server = http.createServer(); setupEscrowWebSocket(server);
   await new Promise((r) => server.listen(0, '127.0.0.1', r)); port = server.address().port;
 });
@@ -71,21 +75,22 @@ test('ISOLATION : un événement n\'est remis qu\'à la société concernée (pr
   [a, m, b, ag].forEach((c) => c.ws.close());
 });
 
-test('événement d\'agent (repId) : remis à cet agent seulement ; sans société ni agent identifiable : remis à personne', async () => {
+test('événement d\'agent (repId = _id de la FICHE agent, ≠ userId du compte) : remis à cet agent seulement ; sans société ni agent identifiable : remis à personne', async () => {
   clearCompanyCache();
-  WHO[AG] = { companyId: C1, isAgent: true };
-  const rep = await open(`?token=${sign(AG)}`); const o = await open(`?token=${sign('owner1')}`); const other = await open(`?token=${sign('owner2')}`);
+  WHO['agent-acct'] = { companyId: C1, isAgent: true };
+  const rep = await open(`?token=${sign('agent-acct')}`); const o = await open(`?token=${sign('owner1')}`); const other = await open(`?token=${sign('owner2')}`);
   await settle(); [rep, o, other].forEach((c) => { c.messages.length = 0; });
   broadcastUpdate({ type: 'rep_wallet_update', repId: AG });
   broadcastUpdate({ type: 'mystery' });
   await settle();
-  assert.equal(rep.messages.length, 1); assert.equal(o.messages.length, 0); assert.equal(other.messages.length, 0);
-  [rep, o, other].forEach((c) => c.ws.close()); delete WHO[AG];
+  assert.equal(rep.messages.length, 1, 'l\'agent reçoit l\'événement de SA fiche'); assert.equal(o.messages.length, 0); assert.equal(other.messages.length, 0);
+  [rep, o, other].forEach((c) => c.ws.close()); delete WHO['agent-acct'];
 });
 
 test('canReceive : règle pure', () => {
   const owner = { userId: 'u1', companyIds: [C1] };
   assert.equal(canReceive(owner, { companyId: C1 }), true); assert.equal(canReceive(owner, { companyId: C2 }), false);
   assert.equal(canReceive(owner, {}), false); assert.equal(canReceive(null, { companyId: C1 }), false);
-  assert.equal(canReceive({ userId: AG, companyIds: [] }, { repId: AG, companyId: C2 }), true);
+  assert.equal(canReceive({ userId: 'acct', companyIds: [], agentIds: [AG] }, { repId: AG, companyId: C2 }), true, 'fiche liée au compte');
+  assert.equal(canReceive({ userId: 'acct', companyIds: [], agentIds: [] }, { repId: AG }), false, 'compte sans cette fiche');
 });

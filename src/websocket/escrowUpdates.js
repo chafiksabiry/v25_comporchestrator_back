@@ -1,6 +1,7 @@
 import { WebSocketServer } from 'ws';
 import jwt from 'jsonwebtoken';
 import { callerAccess, ScopeError } from '../middleware/companyScope.js';
+import mongoose from 'mongoose';
 
 let wss;
 
@@ -22,7 +23,8 @@ export function tokenOfUpgrade(req) {
 /**
  * Authentifie la connexion : jeton valide (même secret que `authenticate`), puis société de la personne fournie par le service d'inscription
  * (source de vérité, jamais le navigateur). Échec : { ok:false, status } (401 sans jeton valide, 503 si l'inscription est indisponible : jamais ouvert).
- * @returns {Promise<{ok:true, userId:string, companyIds:string[], expiresAt:number}|{ok:false,status:number}>}
+ * `agentIds` : fiches agent (`agents._id`) liées au compte (la fiche a son propre `_id` et un champ `userId` : le `repId` des événements est cet `_id`).
+ * @returns {Promise<{ok:true, userId:string, companyIds:string[], agentIds:string[], expiresAt:number}|{ok:false,status:number}>}
  */
 export async function authenticateUpgrade(req) {
   const token = tokenOfUpgrade(req);
@@ -40,7 +42,14 @@ export async function authenticateUpgrade(req) {
     // Les événements financiers d'une société ne vont qu'à son propriétaire et à ses membres ; un agent ne reçoit que SES événements.
     const companyIds = access.role === 'agent' ? [] : [access.companyId].filter(Boolean).map(String);
     const expiresAt = decoded.exp ? decoded.exp * 1000 : Date.now() + 60 * 60 * 1000;
-    return { ok: true, userId: String(userId), companyIds, expiresAt };
+    let agentIds = [];
+    try {
+      const uid = String(userId);
+      const forms = [uid, ...(mongoose.Types.ObjectId.isValid(uid) ? [new mongoose.Types.ObjectId(uid)] : [])];
+      const rows = await mongoose.connection.db.collection('agents').find({ userId: { $in: forms } }, { projection: { _id: 1 } }).toArray();
+      agentIds = (rows || []).map((r) => String(r._id));
+    } catch { agentIds = []; }
+    return { ok: true, userId: String(userId), companyIds, agentIds, expiresAt };
   } catch (error) {
     return { ok: false, status: error instanceof ScopeError && error.status === 401 ? 401 : 503 };
   }
@@ -53,7 +62,7 @@ export async function authenticateUpgrade(req) {
 export function canReceive(client, data) {
   if (!client || !data) return false;
   if (data.companyId && client.companyIds.includes(String(data.companyId))) return true;
-  if (data.repId && client.userId === String(data.repId)) return true;
+  if (data.repId && (client.userId === String(data.repId) || (client.agentIds || []).includes(String(data.repId)))) return true;
   return false;
 }
 
