@@ -1,6 +1,7 @@
 import express from 'express';
 import { authenticateWebhook } from './signature.js';
 import { missingConfig } from './config.js';
+import { forwardResponse } from './agent.js';
 
 const WEBHOOK_BUDGET_MS = 4000; // SalesIQ coupe à 5 s : on garde une marge.
 
@@ -24,7 +25,7 @@ export function createSalesIqRouter({ agent, cfg, logger = console }) {
     } catch (e) {
       // Une erreur renvoie `forward` : l'humain prend la main, le visiteur n'est jamais laissé sans réponse.
       logger.error('[salesiq] handler crashed:', e.message);
-      return res.status(200).json({ action: 'forward' });
+      return res.status(200).json(forwardResponse());
     }
     result.done.catch((e) => logger.error('[salesiq] background processing error:', e.message));
     return res.status(200).json(result.response);

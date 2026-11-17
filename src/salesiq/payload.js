@@ -2,6 +2,7 @@ const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
 const STRICT_EMAIL_RE = /^[^\s@(),:\\"']+@[^\s@(),:\\"']+\.[^\s@(),:\\"']+$/;
 
 const first = (...vals) => vals.find((v) => v != null && v !== '');
+const numericId = (v) => (/^\d{1,19}$/.test(String(v ?? '')) ? String(v) : null);
 
 export const isValidEmail = (s) => typeof s === 'string' && s.length <= 254 && STRICT_EMAIL_RE.test(s);
 
@@ -27,8 +28,9 @@ export function parseWebhookPayload(body) {
     text: String(first(request.message?.text, b.message?.text, '') || ''),
     hasAttachments: Array.isArray(b.attachments) && b.attachments.length > 0,
     requestId: first(request.request_id, request.id, b.request_id) ? String(first(request.request_id, request.id, b.request_id)) : null,
-    conversationId: first(chat.id, chat.conversation_id, b.conversation_id, visitor.active_conversation_id)
-      ? String(first(chat.id, chat.conversation_id, b.conversation_id, visitor.active_conversation_id)) : null,
+    // Seul un identifiant numérique est une conversation SalesIQ (un identifiant de session visiteur ne l'est pas) ;
+    // sinon l'agent retrouve la conversation par l'API.
+    conversationId: numericId(first(chat.id, chat.conversation_id, b.conversation_id, visitor.active_conversation_id)),
     visitorEmail: isValidEmail(String(emailRaw || '')) ? String(emailRaw).toLowerCase() : null,
     visitorId: first(visitor.id, visitor.user_id, visitor.uuid) ? String(first(visitor.id, visitor.user_id, visitor.uuid)) : null,
     visitorUuid: visitor.uuid ? String(visitor.uuid) : null,
