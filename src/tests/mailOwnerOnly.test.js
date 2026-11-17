@@ -553,8 +553,16 @@ try {
   putConn('microsoft', { connectedBy: 'owner1' }, 'BOSS'); putConn('google', { connectedBy: 'mgrA', accountEmail: 'mgra@acme.test' }, 'MGRA');
   toolsDocs.push({ companyId: C1, agenda: { provider: 'microsoft' }, email: { provider: 'microsoft' } });
   const appt = (over = {}) => ({ companyId: C1, id: 'i1', title: 'RDV', dueAt: new Date('2030-01-10T09:00:00Z'), durationMinutes: 30, timeZone: 'Europe/Paris', contactName: 'Client', location: '', assignee: { id: 'mgrB' }, createdBy: { id: 'mgrB' }, calendarExternalId: null, calendarProvider: null, ...over });
-  let s = await CS.syncAppointment(appt({ assignee: { id: 'mgrA' }, createdBy: { id: 'mgrB' } }));
+  let s = await CS.syncAppointment(appt({ assignee: { id: 'mgrA' }, createdBy: { id: 'mgrB' } }), { actorId: 'mgrA' });
   assert.equal(s.status, 'synced', JSON.stringify(s)); assert.equal(s.ownerId, 'mgrA'); assert.deepEqual(eventsBy(), ['ACCESS_MGRA'], 'agenda de la personne assignée');
+  httpCalls.length = 0;
+  // Délégation Google suspendue (googleDelegation.js) : mgrB n'écrit pas dans l'agenda GOOGLE de mgrA ; réactivée par GOOGLE_DELEGATION_ENABLED=1.
+  s = await CS.syncAppointment(appt({ assignee: { id: 'mgrA' }, createdBy: { id: 'mgrB' } }), { actorId: 'mgrB' });
+  assert.equal(s.status, 'not_connected', JSON.stringify(s)); assert.equal(eventsBy().length, 0, 'délégation Google suspendue : rien dans l’agenda Google de mgrA');
+  process.env.GOOGLE_DELEGATION_ENABLED = '1';
+  s = await CS.syncAppointment(appt({ assignee: { id: 'mgrA' }, createdBy: { id: 'mgrB' } }), { actorId: 'mgrB' });
+  delete process.env.GOOGLE_DELEGATION_ENABLED;
+  assert.equal(s.status, 'synced', JSON.stringify(s)); assert.deepEqual(eventsBy(), ['ACCESS_MGRA'], 'délégation Google réactivée : comportement de #149');
   httpCalls.length = 0;
   s = await CS.syncAppointment(appt({ assignee: { id: 'mgrB' }, createdBy: { id: 'owner1' } }));
   assert.equal(s.status, 'synced'); assert.equal(s.ownerId, 'owner1'); assert.deepEqual(eventsBy(), ['ACCESS_BOSS'], 'sinon agenda de celle qui crée le rendez-vous');

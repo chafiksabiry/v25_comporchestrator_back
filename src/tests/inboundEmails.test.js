@@ -51,8 +51,8 @@ assert.equal(M.stripQuoted('Ok.\n\nOn Mon, Nov 2, 2026 at 9:00 AM Bob <b@x.com> 
 assert.equal(M.stripQuoted('Oui.\n> cité\nFin'), 'Oui.\nFin');
 assert.equal(M.stripQuoted('Réponse\n\n-----Original Message-----\nFrom: x\nancien'), 'Réponse');
 assert.equal(M.limitBody('a'.repeat(30000)).length, 20000);
-// Google : plus aucun scope de lecture (retiré) ; même un ancien scope accordé ne vaut pas lecture
-assert.ok(READ_SCOPE.google === undefined && !hasReadScope('google', ['openid', 'https://www.googleapis.com/auth/gmail.readonly']) && !hasReadScope('zoom', ['Mail.Read']) && hasReadScope('microsoft', ['Mail.Read']));
+// Google : gmail.readonly de nouveau scope de lecture (boîte lisible par son seul propriétaire) ; gmail.modify seul ne vaut pas lecture (jamais demandé)
+assert.ok(READ_SCOPE.google === 'https://www.googleapis.com/auth/gmail.readonly' && hasReadScope('google', ['openid', 'https://www.googleapis.com/auth/gmail.readonly']) && !hasReadScope('google', ['https://www.googleapis.com/auth/gmail.modify']) && !hasReadScope('zoom', ['Mail.Read']) && hasReadScope('microsoft', ['Mail.Read']));
 assert.ok(hasReadScope('microsoft', ['https://graph.microsoft.com/Mail.Read']) && hasReadScope('microsoft', ['mail.read']) && !hasReadScope('microsoft', ['Mail.Send']));
 
 // ---------- faux modèles
@@ -134,7 +134,7 @@ const FULL = { INTEGRATIONS_ENC_KEY: ENC_KEY, PUBLIC_API_BASE_URL: 'https://api.
 const base = { companyId: C1, userId: 'owner1', returnTo: 'tools' };
 assert.equal(qs(S.startAuthorization({ ...base, provider: 'google' }, FULL)).scope, 'openid email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.events', 'sans read : inchangé');
 assert.equal(qs(S.startAuthorization({ ...base, provider: 'google', read: false }, FULL)).scope, qs(S.startAuthorization({ ...base, provider: 'google' }, FULL)).scope);
-assert.throws(() => S.startAuthorization({ ...base, provider: 'google', read: true }, FULL), (e) => e.code === 'invalid_request', 'Google : lecture refusée sans condition');
+assert.equal(qs(S.startAuthorization({ ...base, provider: 'google', read: true }, FULL)).scope, 'openid email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/gmail.readonly', 'Google : lecture = gmail.readonly, jamais gmail.modify');
 assert.equal(qs(S.startAuthorization({ ...base, provider: 'microsoft', read: true }, FULL)).scope, 'offline_access openid email User.Read Mail.Send Calendars.ReadWrite OnlineMeetings.ReadWrite Mail.Read');
 assert.throws(() => S.startAuthorization({ ...base, provider: 'zoom', read: true }, FULL), (e) => e.code === 'invalid_request');
 assert.deepEqual(S.readState(qs(S.startAuthorization({ ...base, provider: 'microsoft', read: true }, FULL)).state, 'microsoft'), { companyId: C1, userId: 'owner1', provider: 'microsoft', returnTo: 'tools' }, 'l’état signé ne change pas');
@@ -181,15 +181,15 @@ try {
   // ---------- 3. POST /start : corps { read }
   reset();
   let r = await req('POST', `/connections/${C1}/google/start`, { user: 'owner1', body: { returnTo: 'tools', read: true } });
-  assert.equal(r.status, 400, 'Google : lecture refusée sans condition'); assert.match(r.body.message, /Gmail|Google/);
+  assert.equal(r.status, 200, 'Google : lecture demandée comme Microsoft'); assert.match(qs(r.body.data.url).scope, /gmail\.readonly$/); assert.doesNotMatch(qs(r.body.data.url).scope, /modify/);
   r = await req('POST', `/connections/${C1}/microsoft/start`, { user: 'owner1', body: { returnTo: 'tools', read: true } });
   assert.equal(r.status, 200); assert.match(qs(r.body.data.url).scope, /Mail\.Read$/);
   r = await req('POST', `/connections/${C1}/google/start`, { user: 'owner1', body: { returnTo: 'tools' } });
-  assert.doesNotMatch(qs(r.body.data.url).scope, /readonly|modify/, 'Google : jamais de scope de lecture / écriture');
+  assert.doesNotMatch(qs(r.body.data.url).scope, /readonly|modify/, 'Google sans read : ni lecture ni écriture');
   assert.equal((await req('POST', `/connections/${C1}/microsoft/start`, { user: 'owner1', body: { read: 'oui' } })).status, 400, 'booléen strict');
   assert.equal((await req('POST', `/connections/${C1}/zoom/start`, { user: 'owner1', body: { read: true } })).status, 400);
   assert.equal((await req('POST', `/connections/${C1}/microsoft/start`, { user: 'agent1', body: { read: true } })).status, 403);
-  // un compte Google autorisé avant le retrait (ancien scope en base) n'a plus aucun droit de lecture
+  // aucune connexion Google : pas de lecture Google
   putConnection(C1, 'microsoft', { scopes: READ_M });
   assert.deepEqual([(r = await req('GET', `/connections/${C1}`, { user: 'owner1' })).body.data.google.canRead, r.body.data.google.canModify], [false, false]);
 
@@ -489,11 +489,11 @@ try {
     const WRITE_M = ['Mail.Send', 'https://graph.microsoft.com/Mail.ReadWrite'];
     // scopes : l'écriture inclut la lecture ; refreshExtra Microsoft ; démarrage { write }
     assert.ok(hasReadScope('microsoft', ['Mail.ReadWrite']) && hasWriteScope('microsoft', WRITE_M) && !hasWriteScope('microsoft', READ_M));
-    assert.ok(WRITE_SCOPE.google === undefined && !hasWriteScope('google', ['https://www.googleapis.com/auth/gmail.modify']) && !hasReadScope('google', ['https://www.googleapis.com/auth/gmail.modify']), 'Google : plus aucun scope d’écriture, ni de lecture');
+    assert.ok(WRITE_SCOPE.google === undefined && !hasWriteScope('google', ['https://www.googleapis.com/auth/gmail.modify']) && !hasReadScope('google', ['https://www.googleapis.com/auth/gmail.modify']), 'Google : aucun scope d’écriture ; gmail.modify seul ne vaut pas lecture');
     assert.ok(PROVIDERS.microsoft.refreshExtra({}, ['Mail.ReadWrite']).scope.endsWith(' Mail.ReadWrite'));
     assert.ok(!PROVIDERS.microsoft.refreshExtra({}, ['Mail.Read']).scope.includes('Mail.ReadWrite') && PROVIDERS.microsoft.refreshExtra({}, ['Mail.Read']).scope.endsWith(' Mail.Read'));
     assert.ok(!PROVIDERS.microsoft.refreshExtra({}, ['Mail.Send']).scope.includes('Mail.Read'));
-    assert.throws(() => S.startAuthorization({ ...base, provider: 'google', write: true }, FULL), (e) => e.code === 'invalid_request', 'Google : écriture refusée sans condition');
+    assert.throws(() => S.startAuthorization({ ...base, provider: 'google', write: true }, FULL), (e) => e.code === 'invalid_request', 'Google : écriture (gmail.modify) jamais demandée');
     assert.match(qs(S.startAuthorization({ ...base, provider: 'microsoft', write: true }, FULL)).scope, /Mail\.ReadWrite$/);
     assert.throws(() => S.startAuthorization({ ...base, provider: 'zoom', write: true }, FULL), (e) => e.code === 'invalid_request');
     reset();
@@ -507,7 +507,7 @@ try {
     putConnection(C1, 'microsoft', { scopes: READ_M });
     assert.deepEqual([(r = await req('GET', `/connections/${C1}`, { user: 'owner1' })).body.data.microsoft.canRead, r.body.data.microsoft.canModify], [true, false]);
     putConnection(C1, 'google', { scopes: [...READ_G, 'https://www.googleapis.com/auth/gmail.modify'] });
-    assert.deepEqual([(r = await req('GET', `/connections/${C1}`, { user: 'owner1' })).body.data.google.canRead, r.body.data.google.canModify], [false, false], 'Google déjà autorisé avec gmail.modify : plus aucun droit');
+    assert.deepEqual([(r = await req('GET', `/connections/${C1}`, { user: 'owner1' })).body.data.google.canRead, r.body.data.google.canModify], [true, false], 'Google : lecture (gmail.readonly) oui, gestion jamais');
 
     // réglage : validation stricte, dépend de enabled, remis à false à la désactivation, aucun appel fournisseur
     reset(); putConnection(C1, 'microsoft', { scopes: READ_M });
@@ -614,6 +614,30 @@ try {
     // droits : mêmes que les routes inbound (secrétaire sans autorisation : 403 ; autre centre : 404)
     setup(true, WRITE_M); okTrash(); a = mk(1); assert.equal((await req('DELETE', `/inbound-emails/${C1}/${a}`, { user: 'agent1' })).status, 403); assert.equal(httpCalls.length, 0);
     assert.equal((await req('DELETE', `/inbound-emails/${C1}/${'f'.repeat(24)}`, { user: 'owner1' })).status, 404); assert.equal(httpCalls.length, 0);
+    reset();
+  }
+
+  // ---------- 13c. GOOGLE : lecture (gmail.readonly) par le SEUL propriétaire de la boîte ; jamais de gestion dans Gmail (gmail.modify jamais demandé)
+  {
+    reset(); toolsDocs.push({ companyId: C1, email: { provider: 'google' }, inbound: { enabled: true, mailboxActions: true, lastSyncAt: null } });
+    putConnection(C1, 'google', { scopes: READ_G });
+    on('GET', /gmail\.googleapis\.com\/gmail\/v1\/users\/me\/messages\?/, () => ({ status: 200, json: { messages: [{ id: 'gm1' }] } }));
+    on('GET', /gmail\.googleapis\.com\/gmail\/v1\/users\/me\/messages\/gm1\?format=metadata/, () => ({ status: 200, json: { id: 'gm1', internalDate: String(Date.parse('2026-11-10T09:00:00Z')), snippet: 'Bonjour Gmail', payload: { headers: [{ name: 'From', value: 'Marie Durand <Marie@Exemple.fr>' }, { name: 'Subject', value: 'Rendez-vous' }] } } }));
+    on('GET', /gmail\.googleapis\.com\/gmail\/v1\/users\/me\/messages\/gm1\?format=full/, () => ({ status: 200, json: { payload: { mimeType: 'text/plain', body: { data: Buffer.from(`${BODY_SECRET} Gmail`).toString('base64url') } } } }));
+    // un autre membre autorisé à gérer les appels : la boîte Google du titulaire n'existe pas pour lui, aucun appel Gmail
+    let r = await req('POST', `/inbound-emails/${C1}/refresh`, { user: 'member1' });
+    assert.deepEqual([r.status, r.body.code], [409, 'no_mailbox'], 'boîte Google d’un autre : jamais lue'); assert.equal(providerCalls().length, 0);
+    // la personne qui a connecté la boîte : lecture Gmail avec SON jeton
+    r = await req('POST', `/inbound-emails/${C1}/refresh`, { user: 'owner1' });
+    assert.equal(r.status, 200, r.text); assert.equal(r.body.data.items.length, 1); assert.deepEqual(r.body.data.items[0].from, { name: 'Marie Durand', email: 'marie@exemple.fr' });
+    assert.ok(providerCalls().length >= 2 && providerCalls().every((c) => c.method === 'GET' && c.headers.Authorization === 'Bearer ACCESS_SECRET_G1'), 'lecture seule, jeton du propriétaire');
+    const gid = r.body.data.items[0].id;
+    r = await req('GET', `/inbound-emails/${C1}/${gid}/body`, { user: 'owner1' }); assert.equal(r.status, 200); assert.match(JSON.stringify(r.body.data), /Gmail/);
+    assert.equal((await req('GET', `/inbound-emails/${C1}/${gid}/body`, { user: 'member1' })).status, 409, 'corps : jamais pour un autre membre');
+    assert.equal((await req('GET', `/inbound-emails/${C1}`, { user: 'member1' })).body.data.items.length, 0, 'liste : rien pour un autre membre');
+    // suppression / archivage avec mailboxActions : dans l'application seulement, aucune écriture Gmail
+    r = await req('DELETE', `/inbound-emails/${C1}/${gid}`, { user: 'owner1' });
+    assert.deepEqual([r.status, r.body.data.mailbox], [200, 'app_only'], r.text); assert.equal(providerCalls().filter((c) => c.method !== 'GET').length, 0, 'jamais de corbeille / archivage Gmail');
     reset();
   }
 

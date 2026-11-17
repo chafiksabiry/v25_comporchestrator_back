@@ -86,16 +86,16 @@ async function syncExternal(item, { wasStatus, keys, videoChanged, access, token
     const before = extView(item);
     let ok = true;
     if (item.calendarExternalId) {
-      const sync = await syncAppointment(before, { op: 'remove', token });
+      const sync = await syncAppointment(before, { op: 'remove', token, actorId: access?.userId });
       applySync(item, sync, 'remove');
       ok = sync.status === 'synced';
     }
-    const removed = await removeVideoResource(before.companyId, before);
+    const removed = await removeVideoResource(before.companyId, before, { actorId: access?.userId });
     if (item.videoProvider && ok && removed) { item.videoUrl = ''; item.videoProvider = ''; item.videoExternalId = ''; } // le lien n'existe plus chez le fournisseur
   } else if (!canceled && (wasStatus === 'canceled' || videoChanged || keys.some((k) => ['dueAt', 'timeZone', 'title', 'durationMinutes', 'location'].includes(k)))) {
-    if (item.videoProvider && item.videoExternalId && item.videoExternalId !== item.calendarExternalId) await updateVideoResource(String(item.companyId), extView(item));
+    if (item.videoProvider && item.videoExternalId && item.videoExternalId !== item.calendarExternalId) await updateVideoResource(String(item.companyId), extView(item), { actorId: access?.userId });
     const op = item.calendarExternalId ? 'update' : 'push';
-    applySync(item, await syncAppointment(extView(item), { op, token }), op);
+    applySync(item, await syncAppointment(extView(item), { op, token, actorId: access?.userId }), op);
   } else return;
   await item.save();
 }
@@ -258,7 +258,7 @@ export const followUpController = {
         });
       } catch (error) {
         // Enregistrement impossible : on ne laisse pas de réunion / d'événement orphelin chez le fournisseur.
-        if (video.externalId) await removeVideoResource(access.companyId, { videoProvider: video.provider, videoExternalId: video.externalId });
+        if (video.externalId) await removeVideoResource(access.companyId, { videoProvider: video.provider, videoExternalId: video.externalId }, { actorId: access.userId });
         if (delegated) await discardDelegatedEvent(access.companyId, delegated.account, delegated.eventId);
         throw error;
       }
@@ -267,7 +267,7 @@ export const followUpController = {
       } else if (v.model === 'appointment') {
         if (video.sharesCalendar) { // l'événement qui porte le lien Meet / Teams est l'événement d'agenda du rendez-vous
           item.calendarProvider = video.eventProvider; item.calendarExternalId = video.externalId; item.calendarStatus = 'synced'; item.calendarOwnerId = video.ownerId || '';
-        } else applySync(item, await syncAppointment(extView(item)), 'push');
+        } else applySync(item, await syncAppointment(extView(item), { actorId: access.userId }), 'push');
         await item.save();
       }
       if (v.model === 'voicemail_callback' && v.originType === 'voicemail') {
@@ -302,7 +302,7 @@ export const followUpController = {
         if (video.sharesCalendar && !item.calendarExternalId) { item.calendarProvider = video.eventProvider; item.calendarExternalId = video.externalId; item.calendarStatus = 'synced'; item.calendarOwnerId = video.ownerId || ''; }
       }
       if (videoLink === false) {
-        await removeVideoResource(String(item.companyId), extView(item)); // réunion Zoom / événement dédié ; l'événement d'agenda reste
+        await removeVideoResource(String(item.companyId), extView(item), { actorId: access.userId }); // réunion Zoom / événement dédié ; l'événement d'agenda reste
         item.videoUrl = ''; item.videoProvider = ''; item.videoExternalId = '';
       }
       // Chaque modification d'un rendez-vous (déplacement, annulation, visio) fait monter la révision du fichier agenda.

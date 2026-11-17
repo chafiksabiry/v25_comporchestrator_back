@@ -17,6 +17,8 @@ delete process.env.SECRETARIAT_RETURN_URL;
 process.env.GOOGLE_CLIENT_ID = 'g-id'; process.env.GOOGLE_CLIENT_SECRET = 'g-secret';
 process.env.MICROSOFT_CLIENT_ID = 'm-id'; process.env.MICROSOFT_CLIENT_SECRET = 'm-secret';
 process.env.ZOOM_CLIENT_ID = 'z-id'; process.env.ZOOM_CLIENT_SECRET = 'z-secret';
+// Ce fichier teste le mécanisme de délégation lui-même (Google compris) : délégation Google RÉACTIVÉE ici. Suspension (par défaut) : googleDelegation.test.js.
+process.env.GOOGLE_DELEGATION_ENABLED = '1';
 for (const k of ['GOOGLE_REDIRECT_URI', 'MICROSOFT_REDIRECT_URI', 'ZOOM_REDIRECT_URI', 'MICROSOFT_TENANT_ID']) delete process.env[k];
 process.env.BREVO_API_KEY = 'cle-de-test';
 process.env.BREVO_SENDER_EMAIL = 'noreply@harx.ai';

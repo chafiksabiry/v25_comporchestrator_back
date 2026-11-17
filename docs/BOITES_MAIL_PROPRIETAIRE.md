@@ -87,3 +87,9 @@ Le **titulaire** peut déconnecter la connexion (ou retirer le compte partagé) 
 1. Agenda automatique : seules les connexions d'entreprise de la personne comptent ; la messagerie personnelle sert via l'agenda délégué (`calendarAccountId`).
 2. Index unique `InboundEmail` sans `connectionOwnerId` (purge à la reprise d'une orpheline) : à revoir si plusieurs propriétaires de fournisseurs différents lisent en même temps.
 3. La finalisation suppose que le portail appelle `complete` au retour OAuth (contrat ci-dessus) ; non testable ici avec le vrai portail. Index TTL `secretariat_oauth_pending` créé à l'initialisation du modèle (vérifier `autoIndex` en recette).
+
+## Google : lecture pour le titulaire de la boîte, délégation suspendue
+
+- **Lecture Gmail rétablie** (scope `gmail.readonly`, optionnel, `read: true`) avec l'envoi (`gmail.send`) et l'agenda : boîte d'entreprise ou messagerie personnelle, lisible par **la seule personne qui l'a connectée** (règle ci-dessus). `gmail.modify` n'est jamais demandé : `write: true` est refusé pour Google (400) et, même avec `inbound.mailboxActions`, suppression / archivage d'un e-mail Gmail restent dans HARX (`mailbox: 'app_only'`).
+- L'ancienne migration « Google sans lecture » (`googleInboxMigration.js`) est **sans effet** et n'est plus appelée au démarrage : elle ne purge ni ne neutralise plus rien.
+- **Délégation Google suspendue** tant que Google n'a pas vérifié l'application (`src/services/googleDelegation.js`, `GOOGLE_DELEGATION_ENABLED=1` pour la réactiver) : comptes partagés Google (nouveau, reconnexion, droit accordé : `409 google_delegation_disabled` ; usage par un autre que le propriétaire : `403 google_delegation_disabled`), rendez-vous dans « l'agenda d'un collègue » Google, agenda Google de la personne assignée quand une autre personne crée / modifie / annule (`calendarStatus: not_connected`, identifiants conservés), événement Meet dédié d'un collègue. Rien n'est supprimé ; Microsoft inchangé.

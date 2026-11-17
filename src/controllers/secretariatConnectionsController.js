@@ -4,7 +4,7 @@ import { canManage, canUse } from '../services/followUps.js';
 import {
   completeConnection, connectionsView, disconnect, isAvailable, messages, readState, returnUrl, beginAuthorization, browserBindingEnabled, exchangeAuthorization, finishAuthorization, stashAuthorization,
 } from '../services/secretariatConnections.js';
-import { GOOGLE_MAILBOX_ACCESS_REFUSED, isProviderId, SecretariatError } from '../services/secretariatProviders/common.js';
+import { GOOGLE_MAILBOX_WRITE_UNAVAILABLE, isProviderId, SecretariatError } from '../services/secretariatProviders/common.js';
 import { isMailProvider, isOwnerless, mayTakeOver, ownerOf, ownsRow } from '../services/mailOwnership.js';
 import { ownerHasLeft } from '../services/mailOwnerMembership.js';
 
@@ -54,12 +54,11 @@ export const secretariatConnectionsController = {
       // `read: true` : demande en plus le scope (optionnel) de lecture de la boîte de réception (e-mails entrants).
       const read = req.body?.read === undefined ? false : req.body.read;
       if (typeof read !== 'boolean') return fail(res, 400, 'Le champ « read » doit être vrai ou faux.');
-      if (read && provider === 'google') return fail(res, 400, GOOGLE_MAILBOX_ACCESS_REFUSED); // refus inconditionnel : Google ne demande plus jamais la lecture
-      if (read && provider !== 'microsoft') return fail(res, 400, 'La lecture des e-mails n’est pas disponible pour ce fournisseur.');
+      if (read && !['google', 'microsoft'].includes(provider)) return fail(res, 400, 'La lecture des e-mails n’est pas disponible pour ce fournisseur.');
       // `write: true` : demande en plus le scope (optionnel, séparé) d'écriture (corbeille / archivage dans la messagerie ; inclut la lecture).
       const write = req.body?.write === undefined ? false : req.body.write;
       if (typeof write !== 'boolean') return fail(res, 400, 'Le champ « write » doit être vrai ou faux.');
-      if (write && provider === 'google') return fail(res, 400, GOOGLE_MAILBOX_ACCESS_REFUSED); // idem pour l'écriture (corbeille / archivage)
+      if (write && provider === 'google') return fail(res, 400, GOOGLE_MAILBOX_WRITE_UNAVAILABLE); // gmail.modify n'est jamais demandé : corbeille / archivage Gmail indisponibles
       if (write && provider !== 'microsoft') return fail(res, 400, 'La gestion de la messagerie n’est pas disponible pour ce fournisseur.');
       const url = beginAuthorization({ companyId: String(companyId), userId: req.companyAccess.userId, provider, returnTo, read, write });
       res.json({ success: true, data: { url } });

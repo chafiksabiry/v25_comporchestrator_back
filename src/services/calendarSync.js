@@ -35,16 +35,16 @@ export const hasCompanyCalendarResolver = () => companyResolver !== null;
 
 /**
  * @param {object} item rendez-vous (avec `companyId` pour le choix de l'agenda du centre)
- * @param {{ op?: 'push' | 'update' | 'remove' }} [options]
+ * @param {{ op?: 'push' | 'update' | 'remove', token?: string|null, actorId?: string|null }} [options] `actorId` : la personne qui agit (délégation Google, voir googleDelegation.js)
  * @returns {Promise<{ status: 'not_connected' | 'synced' | 'failed', provider: string | null, externalId: string | null, ownerId?: string }>}
  */
-export async function syncAppointment(item, { op = 'push', token = null } = {}) {
+export async function syncAppointment(item, { op = 'push', token = null, actorId = null } = {}) {
   let adapter = null;
   try {
     if (companyResolver && item?.companyId) {
       // `userIds` : personnes dont l'agenda peut recevoir le rendez-vous (assignée, puis créatrice) ; `ownerId` : propriétaire du calendrier où l'événement existe déjà.
       adapter = await companyResolver(String(item.companyId), {
-        op, token, provider: item.calendarProvider || null, hasExternalId: Boolean(item.calendarExternalId), ownerId: item.calendarOwnerId || '',
+        op, token, actorId: actorId ? String(actorId) : '', provider: item.calendarProvider || null, hasExternalId: Boolean(item.calendarExternalId), ownerId: item.calendarOwnerId || '',
         userIds: [item.assignee?.id || item.assigneeId, item.createdBy?.id || item.createdById].filter(Boolean),
       });
     }

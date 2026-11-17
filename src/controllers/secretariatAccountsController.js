@@ -9,6 +9,7 @@ import {
   validateAccountInput, validateEventInput,
 } from '../services/secretariatSharedAccounts.js';
 import SecretariatSharedAccount from '../models/SecretariatSharedAccount.js';
+import { googleDelegationEnabled, googleDelegationError } from '../services/googleDelegation.js';
 import { mayTakeOver } from '../services/mailOwnership.js';
 import { ownerHasLeft } from '../services/mailOwnerMembership.js';
 
@@ -61,6 +62,8 @@ export const secretariatAccountsController = {
       if (!MAILBOX_PROVIDERS.includes(provider)) return fail(res, 400, 'Fournisseur inconnu : choisissez Google ou Microsoft 365.');
       const v = validateAccountInput(req.body);
       if (v.error) return fail(res, 400, v.error);
+      // Délégation Google suspendue : aucun NOUVEAU compte Google partagé (chacun connecte sa propre messagerie depuis son profil). Microsoft inchangé.
+      if (provider === 'google' && !googleDelegationEnabled()) return answer(res, googleDelegationError(409), 'start');
       if (!isAvailable(provider)) return fail(res, 409, messages.unavailable(provider));
       const url = beginAuthorization({ companyId: a.companyId, userId: a.userId, provider, returnTo: 'tools', shared: { label: v.value.label, ownerName: v.value.ownerName, send: v.value.send, calendar: v.value.calendar } });
       res.json({ success: true, data: { url } });
@@ -77,6 +80,7 @@ export const secretariatAccountsController = {
         ? await SecretariatSharedAccount.findOne({ _id: id, companyId: a.companyId, personalUserId: null }).select('provider label ownerName permissions connectedBy ownerless').lean() : null;
       // Seul le propriétaire reconnecte son compte ; un compte orphelin se reconnecte par celui qui prouve l'accès à la boîte (même adresse obligatoire au retour). Autre : introuvable.
       if (!d || !mayTakeOver(d, a.userId)) return fail(res, 404, 'Compte introuvable.', 'account_not_found');
+      if (d.provider === 'google' && !googleDelegationEnabled()) return answer(res, googleDelegationError(409), 'reconnect'); // délégation Google suspendue (compte conservé, supprimable)
       if (!isAvailable(d.provider)) return fail(res, 409, messages.unavailable(d.provider));
       const url = beginAuthorization({ companyId: a.companyId, userId: a.userId, provider: d.provider, returnTo: 'tools', shared: { label: d.label, ownerName: d.ownerName || '', send: d.permissions?.send === true, calendar: d.permissions?.calendar === true, accountId: String(d._id) } });
       res.json({ success: true, data: { url } });
@@ -99,8 +103,7 @@ export const secretariatAccountsController = {
       const ownerName = String((await loadUserName(a.userId)) || '').replace(/[\u0000-\u001F\u007F<>"\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
       // Reconnexion d'une messagerie dont la lecture est activée : on redemande aussi le scope de lecture (sinon le nouveau jeton la perdrait).
       const prev = await SecretariatSharedAccount.findOne({ companyId: a.companyId, provider, personalUserId: String(a.userId) }).select('inbound').lean();
-      // Google : jamais de lecture (même si un ancien consentement subsiste) : la reconnexion se fait sans lecture et sans erreur.
-      const read = provider !== 'google' && prev?.inbound?.readEnabled === true;
+      const read = prev?.inbound?.readEnabled === true;
       const url = beginAuthorization({ companyId: a.companyId, userId: a.userId, provider, returnTo, read, shared: { personal: true, ownerName, ...(read ? { read: true } : {}) } });
       res.json({ success: true, data: { url } });
     } catch (error) { answer(res, error, 'startMine'); }

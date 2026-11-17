@@ -2,6 +2,7 @@ import { registerCompanyCalendarResolver } from './calendarSync.js';
 import SecretariatConnection from '../models/SecretariatConnection.js';
 import { connectedAccount, messages, resolveVisio, withConnection } from './secretariatConnections.js';
 import { isMailProvider, ownsRow } from './mailOwnership.js';
+import { blocksGoogleDelegation } from './googleDelegation.js';
 import { sendFromAccount } from './secretariatSharedAccounts.js';
 import { ownerHasLeft } from './mailOwnerMembership.js';
 import { SecretariatError } from './secretariatProviders/common.js';
@@ -80,9 +81,10 @@ function calendarAdapter(companyId, provider, ownerId) {
  * Connexion Google / Microsoft de `userId` utilisable pour l'agenda : celle du fournisseur choisi (réglage) si elle est active, sinon son autre boîte active.
  * Les connexions des AUTRES personnes ne comptent jamais. @returns {Promise<'google'|'microsoft'|null>}
  */
-async function agendaProviderOf(companyId, userId, preferred) {
+async function agendaProviderOf(companyId, userId, preferred, { noGoogle = false } = {}) {
   if (!userId) return null;
-  const rows = (await SecretariatConnection.find({ companyId, provider: { $in: ['google', 'microsoft'] } }).select('provider status connectedBy').lean()).filter((r) => r.status === 'connected' && ownsRow(r, userId));
+  const rows = (await SecretariatConnection.find({ companyId, provider: { $in: ['google', 'microsoft'] } }).select('provider status connectedBy').lean())
+    .filter((r) => r.status === 'connected' && ownsRow(r, userId) && !(noGoogle && r.provider === 'google'));
   return (rows.find((r) => r.provider === preferred) || rows[0])?.provider || null;
 }
 
@@ -99,6 +101,8 @@ registerCompanyCalendarResolver(async (companyId, hint) => {
     // Rendez-vous antérieur à la règle (propriétaire du calendrier non mémorisé) : on ne devine PAS (le propriétaire actuel de la connexion peut avoir un autre calendrier) : `not_connected`.
     const ownerId = String(hint.ownerId || '').trim();
     if (!ownerId) return { id: hint.provider, unavailable: true };
+    // Délégation Google suspendue : seule la personne dont c'est l'agenda Google y modifie / supprime l'événement ; pour une autre, rien n'est écrit (`not_connected`, identifiants conservés).
+    if (blocksGoogleDelegation(hint.provider, ownerId, hint.actorId)) return { id: hint.provider, unavailable: true };
     // Agir dans le calendrier de son propriétaire mémorisé seulement s'il est encore rattaché à la société ET que sa connexion est valide ; sinon `not_connected` sans erreur.
     const conn = await SecretariatConnection.findOne({ companyId, provider: hint.provider }).select('status connectedBy').lean();
     if (!conn || conn.status !== 'connected' || !ownsRow(conn, ownerId) || (await ownerHasLeft(companyId, ownerId, hint.token))) return { id: hint.provider, unavailable: true };
@@ -106,7 +110,8 @@ registerCompanyCalendarResolver(async (companyId, hint) => {
   }
   if (agenda !== 'google' && agenda !== 'microsoft') return null; // création : « none » = aucun agenda
   for (const userId of [...new Set((hint.userIds || []).map((u) => String(u || '').trim()).filter(Boolean))]) {
-    const provider = await agendaProviderOf(companyId, userId, agenda);
+    // Délégation Google suspendue : l'agenda Google de la personne assignée n'est utilisé que si c'est elle qui agit (sinon son agenda Microsoft, ou la personne suivante).
+    const provider = await agendaProviderOf(companyId, userId, agenda, { noGoogle: blocksGoogleDelegation('google', userId, hint.actorId) });
     if (provider) return calendarAdapter(companyId, provider, userId);
   }
   return null;
@@ -150,8 +155,10 @@ async function videoOwnerOf(companyId, item, account) {
 }
 
 /** Met à jour la réunion / l'événement DÉDIÉ au lien (jamais l'événement d'agenda, géré par calendarSync). Au mieux : renvoie false en cas d'échec. */
-export async function updateVideoResource(companyId, item) {
+export async function updateVideoResource(companyId, item, { actorId = null } = {}) {
   if (!item.videoProvider || !item.videoExternalId) return true;
+  // Délégation Google suspendue : l'événement Meet dédié d'une autre personne n'est pas modifié (au mieux : false, rien n'est écrit).
+  if (VISIO_NEEDS[item.videoProvider] === 'google' && item.videoExternalId !== item.calendarExternalId && blocksGoogleDelegation('google', await videoOwnerOf(companyId, item, 'google'), actorId)) return false;
   try {
     const event = eventOf({ ...item, videoUrl: '' }, mergedTools(await loadTools(companyId)));
     if (item.videoProvider === 'zoom') await withConnection(companyId, 'zoom', (accessToken, http) => PROVIDERS.zoom.updateMeeting({ http, accessToken, id: item.videoExternalId, event }));
@@ -167,8 +174,9 @@ export async function updateVideoResource(companyId, item) {
 }
 
 /** Supprime la réunion Zoom / l'événement dédié au lien. L'événement partagé avec l'agenda est supprimé par calendarSync. Au mieux. */
-export async function removeVideoResource(companyId, item) {
+export async function removeVideoResource(companyId, item, { actorId = null } = {}) {
   if (!item.videoProvider || !item.videoExternalId || item.videoExternalId === item.calendarExternalId) return true;
+  if (VISIO_NEEDS[item.videoProvider] === 'google' && blocksGoogleDelegation('google', await videoOwnerOf(companyId, item, 'google'), actorId)) return false; // délégation Google suspendue
   try {
     if (item.videoProvider === 'zoom') await withConnection(companyId, 'zoom', (accessToken, http) => PROVIDERS.zoom.deleteMeeting({ http, accessToken, id: item.videoExternalId }));
     else {

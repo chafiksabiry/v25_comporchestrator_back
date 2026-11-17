@@ -118,7 +118,7 @@ InboundEmail.findOneAndUpdate = (f, upd) => {
 };
 FollowUpItem.exists = async (f) => (followUps.some((x) => match(x, f)) ? { _id: f._id } : null);
 
-// La messagerie personnelle testée ici est Microsoft 365 : Google ne propose plus JAMAIS la lecture (scopes restreints retirés, voir googleNoRead.test.js).
+// La messagerie personnelle testée ici est Microsoft 365 ; la lecture Google (gmail.readonly, propriétaire seulement) est testée dans googleRead.test.js.
 const SEND_M = ['offline_access', 'openid', 'email', 'User.Read', 'Mail.Send', 'Calendars.ReadWrite', 'OnlineMeetings.ReadWrite'];
 const READ_M = [...SEND_M, 'Mail.Read'];
 const READ_G = READ_M; const SEND_G = SEND_M; // noms conservés pour les scénarios ci-dessous

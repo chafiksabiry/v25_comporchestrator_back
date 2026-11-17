@@ -3,6 +3,7 @@ import SecretariatSharedAccount from '../models/SecretariatSharedAccount.js';
 import { disconnectSharedAccount, messages, SHARED_LABEL_MAX, sharedReauthMessage, withConnection } from './secretariatConnections.js';
 import { hasReadScope, SecretariatError } from './secretariatProviders/common.js';
 import { isOwnerless, ownsRow } from './mailOwnership.js';
+import { blocksGoogleDelegation, googleDelegationEnabled, googleDelegationError } from './googleDelegation.js';
 import { PROVIDERS } from './secretariatProviders/index.js';
 import { DEFAULT_TIME_ZONE, normalizeTimeZone, UNKNOWN_TIME_ZONE_MESSAGE } from './timeZone.js';
 
@@ -74,11 +75,15 @@ const base = (d) => ({
   status: d.status === 'needs_reauth' ? 'needs_reauth' : 'connected', needsReauth: d.status === 'needs_reauth',
 });
 /** Vue du titulaire / d'un responsable : droits réglés + date de connexion. */
-export const managerView = (d) => ({ ...base(d), permissions: { send: d.permissions?.send === true, calendar: d.permissions?.calendar === true }, connectedAt: d.connectedAt ? new Date(d.connectedAt).toISOString() : null });
+/** Compte PARTAGÉ Google alors que la délégation Google est suspendue (googleDelegation.js) : droits enregistrés conservés mais sans effet. */
+const googleSuspended = (d) => !d.personalUserId && d.provider === 'google' && !googleDelegationEnabled();
+export const managerView = (d) => ({ ...base(d), permissions: { send: d.permissions?.send === true, calendar: d.permissions?.calendar === true }, connectedAt: d.connectedAt ? new Date(d.connectedAt).toISOString() : null, ...(googleSuspended(d) ? { delegationDisabled: true } : {}) });
 /** Vue d'une secrétaire : ce qu'elle peut faire, rien d'autre (pas de date de connexion, pas de réglage). */
 export const secretaryView = (d) => (d.personalUserId
   ? { ...base(d), mine: true, can: { send: true, calendar: true }, inbound: { readEnabled: d.inbound?.readEnabled === true && hasReadScope(d.provider, d.scopes) } } // c'est SA messagerie : droits fixes ; état de la lecture de SA boîte
-  : { ...base(d), can: { send: d.permissions?.send === true, calendar: d.permissions?.calendar === true } });
+  : googleSuspended(d)
+    ? { ...base(d), can: { send: false, calendar: false }, delegationDisabled: true } // délégation Google suspendue : visible, inutilisable
+    : { ...base(d), can: { send: d.permissions?.send === true, calendar: d.permissions?.calendar === true } });
 
 const DISPLAY_FIELDS = 'provider label ownerName accountEmail status permissions connectedAt personalUserId scopes inbound connectedBy ownerless';
 /** Messagerie personnelle de cet utilisateur ? (jamais vrai pour un compte partagé ni pour la messagerie d'une autre personne) */
@@ -112,6 +117,8 @@ export async function requireAccount(companyId, access, accountId, need) {
   if (!d.personalUserId && !ownsShared(d, access)) {
     // Compte d'une autre personne (ou orphelin) : seulement s'il est DÉLÉGUÉ, et seulement pour l'action déléguée ; sinon il n'existe pas pour lui. Valable pour tous les rôles.
     if (isOwnerless(d) || !delegatedAny(d)) throw fail('account_not_found', NOT_FOUND, 404);
+    // Délégation Google suspendue : le compte Google d'un autre n'est utilisable par personne d'autre que son propriétaire (403, rien n'est modifié).
+    if (blocksGoogleDelegation(d.provider, d.connectedBy, access.userId)) throw googleDelegationError(403);
     if (d.permissions?.[need] !== true) throw fail('account_not_allowed', need === 'send' ? 'Le propriétaire du compte n’a pas autorisé l’envoi d’e-mails depuis ce compte.' : 'Le propriétaire du compte n’a pas autorisé l’accès à l’agenda de ce compte.', 403);
   }
   if (d.status === 'needs_reauth') throw fail('account_needs_reauth', sharedReauthMessage(d), 409);
@@ -262,7 +269,13 @@ export async function updateAccount(companyId, accountId, patch, userId) {
   if (patch.ownerName !== undefined) set.ownerName = patch.ownerName;
   if (patch.send !== undefined) set['permissions.send'] = patch.send;
   if (patch.calendar !== undefined) set['permissions.calendar'] = patch.calendar;
-  return SecretariatSharedAccount.findOneAndUpdate({ _id: oid(accountId), companyId: oid(companyId), personalUserId: null, connectedBy: String(userId) }, { $set: set }, { new: true }).select(DISPLAY_FIELDS).lean();
+  const where = { _id: oid(accountId), companyId: oid(companyId), personalUserId: null, connectedBy: String(userId) };
+  // Délégation Google suspendue : on ne peut pas ACCORDER un droit sur un compte Google (409) ; les retirer, ou changer le libellé, reste possible.
+  if ((patch.send === true || patch.calendar === true) && !googleDelegationEnabled()) {
+    const cur = await SecretariatSharedAccount.findOne(where).select('provider').lean();
+    if (cur?.provider === 'google') throw googleDelegationError(409);
+  }
+  return SecretariatSharedAccount.findOneAndUpdate(where, { $set: set }, { new: true }).select(DISPLAY_FIELDS).lean();
 }
 
 /**

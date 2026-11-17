@@ -8,16 +8,16 @@ import { MAILBOX_PROVIDERS, messages, withConnection } from './secretariatConnec
 import { purgeInboundEmails, purgePersonalInbox } from './inboundEmailStore.js';
 import { loadTools, mergedTools } from './secretariatTools.js';
 import { ownsRow } from './mailOwnership.js';
-import { GOOGLE_MAILBOX_ACCESS_REFUSED, hasReadScope, hasWriteScope, SecretariatError } from './secretariatProviders/common.js';
+import { hasReadScope, hasWriteScope, SecretariatError } from './secretariatProviders/common.js';
 import { PROVIDERS } from './secretariatProviders/index.js';
 
 /**
  * E-mails ENTRANTS autorisés puis traités. Source = la messagerie connectée du centre (Gmail / Outlook) avec le scope OPTIONNEL de lecture.
  * Garde-fous : aucune lecture chez le fournisseur sans `inbound.enabled` ET sans scope de lecture ; seules des MÉTADONNÉES sont stockées
  * (modèle InboundEmail, TTL 30 jours) ; le corps est relu en direct à la demande, jamais stocké ni journalisé ; isolation stricte par centre.
- * Les appels aux fournisseurs (Graph /me/mailFolders/inbox/messages) sont À VÉRIFIER en recette avec un vrai compte.
- * GOOGLE : AUCUNE lecture ni écriture, jamais (scopes restreints retirés) : toute lecture d'une messagerie Google est refusée par `read_unavailable`, même pour un
- * compte autorisé avant le retrait ; les données Google déjà stockées sont purgées par services/googleInboxMigration.js.
+ * Les appels aux fournisseurs (Gmail messages.list/get, Graph /me/mailFolders/inbox/messages) sont À VÉRIFIER en recette avec un vrai compte.
+ * GOOGLE : lecture (gmail.readonly) comme Microsoft, par le SEUL propriétaire de la boîte (mêmes portées ci-dessous) ; AUCUNE écriture (gmail.modify jamais demandé) :
+ * suppression / archivage d'un e-mail Gmail = dans l'application seulement (`mailbox: 'app_only'`), même avec `inbound.mailboxActions`.
  *
  * DEUX PORTÉES, mêmes règles :
  *  - ENTREPRISE = connexion Google / Microsoft de la société, lisible par son SEUL PROPRIÉTAIRE (`connectionScope(société, utilisateur)`) : e-mails stockés avec `ownerUserId` et
@@ -58,7 +58,7 @@ export async function loadMine(s) {
 }
 export const MINE_NOT_FOUND = 'Messagerie introuvable.';
 /** Lecture activée = consentement donné, pas arrêté, ET scope de lecture réellement accordé. */
-export const mineReadEnabled = (acc) => acc?.provider !== 'google' && acc?.inbound?.readEnabled === true && hasReadScope(acc.provider, acc.scopes);
+export const mineReadEnabled = (acc) => acc?.inbound?.readEnabled === true && hasReadScope(acc.provider, acc.scopes);
 
 const attempts = new Map();
 /** Remet à zéro la limite de fréquence (tests). */
@@ -66,7 +66,7 @@ export const resetRefreshThrottle = () => attempts.clear();
 
 /**
  * Messagerie à lire : parmi les messageries connectées (le fournisseur choisi pour l'envoi s'il est actif, sinon toutes), la première qui a le scope de lecture.
- * @returns {Promise<{mailbox?: {provider: string, account: string}, canRead: boolean, error?: 'no_mailbox'|'needs_reauth'|'read_scope_missing'|'read_unavailable'}>}
+ * @returns {Promise<{mailbox?: {provider: string, account: string}, canRead: boolean, error?: 'no_mailbox'|'needs_reauth'|'read_scope_missing'}>}
  */
 export async function locateMailbox(companyId, preferred, ownerId) {
   // Seules les connexions DONT `ownerId` est propriétaire sont lues : jamais la boîte d'un autre membre.
@@ -75,8 +75,7 @@ export async function locateMailbox(companyId, preferred, ownerId) {
   if (!active.length) return { canRead: false, error: rows.some((r) => r.status === 'needs_reauth') ? 'needs_reauth' : 'no_mailbox' };
   const candidates = active.some((r) => r.provider === preferred) ? active.filter((r) => r.provider === preferred) : active;
   const readable = candidates.find((r) => hasReadScope(r.provider, r.scopes));
-  // La messagerie à lire est Google : réponse « non » sans condition (aucune lecture Gmail n'existe). Sinon, l'autorisation de lecture manque (Microsoft).
-  if (!readable) return { canRead: false, error: candidates.every((r) => r.provider === 'google') ? 'read_unavailable' : 'read_scope_missing' };
+  if (!readable) return { canRead: false, error: 'read_scope_missing' };
   return { canRead: true, canModify: hasWriteScope(readable.provider, readable.scopes), mailbox: { provider: readable.provider, account: readable.accountEmail } };
 }
 
@@ -87,7 +86,6 @@ const ERRORS = {
   read_scope_missing: 'La messagerie connectée n’a pas l’autorisation de lecture. Autorisez la lecture dans Paramétrage > Outils.',
   write_scope_missing: 'La messagerie connectée n’a pas l’autorisation de gérer les e-mails (corbeille, archivage). Donnez cette autorisation dans Paramétrage > Outils.',
   mine_read_scope_missing: 'La lecture de votre messagerie n’est pas activée. Activez-la depuis votre profil.',
-  read_unavailable: GOOGLE_MAILBOX_ACCESS_REFUSED,
 };
 
 /**
@@ -102,7 +100,8 @@ async function mailboxSync(scope) {
   const tools = mergedTools(await loadTools(companyId));
   if (tools.inbound.enabled !== true || tools.inbound.mailboxActions !== true) return { sync: false };
   const found = await locateMailbox(companyId, tools.email.provider, s.ownerId);
-  if (found.error === 'no_mailbox' || found.error === 'needs_reauth' || found.error === 'read_unavailable') throw new SecretariatError(found.error, ERRORS[found.error]);
+  if (found.error === 'no_mailbox' || found.error === 'needs_reauth') throw new SecretariatError(found.error, ERRORS[found.error]);
+  if (found.mailbox?.provider === 'google') return { sync: false }; // gmail.modify n'est jamais demandé : application seulement, rien n'est touché dans Gmail
   if (found.error || !found.canModify) throw new SecretariatError('write_scope_missing', ERRORS.write_scope_missing);
   return { sync: true, provider: found.mailbox.provider, ownerId: s.ownerId };
 }
@@ -112,7 +111,7 @@ async function mailboxSync(scope) {
  * (Graph), sinon null. 404 = succès (géré par le fournisseur). Toute autre panne : provider_error (message sûr) ; needs_reauth conservé. Jamais de détail.
  */
 async function providerWrite(companyId, provider, doc, op, ownerId) {
-  if (provider === 'google') throw new SecretariatError('read_unavailable', ERRORS.read_unavailable); // jamais d'écriture Gmail
+  if (provider === 'google') throw new SecretariatError('write_scope_missing', ERRORS.write_scope_missing); // garde-fou : jamais d'écriture Gmail
   if (doc.provider !== provider) throw new SecretariatError('no_mailbox', ERRORS.no_mailbox); // la messagerie a changé depuis la lecture
   try {
     const out = await withConnection(companyId, provider, (accessToken, http) => (op === 'trash'
@@ -141,7 +140,6 @@ async function requireReadAccess(scope) {
   const s = asScope(scope);
   if (isMine(s)) {
     const acc = await loadMine(s);
-    if (acc.provider === 'google') throw new SecretariatError('read_unavailable', ERRORS.read_unavailable); // jamais de lecture Gmail, même ancien consentement
     if (acc.status === 'needs_reauth') throw new SecretariatError('needs_reauth', messages.personalNeedsReauth()); // jamais de repli sur un autre compte
     if (!mineReadEnabled(acc)) throw new SecretariatError('read_scope_missing', ERRORS.mine_read_scope_missing);
     return { provider: acc.provider, account: acc.accountEmail, lastSyncAt: acc.inbound?.lastSyncAt };
@@ -186,7 +184,7 @@ export async function inboundView(scope, view = 'active') {
   const iso = (v) => { const d = v ? new Date(v) : null; return d && !Number.isNaN(d.getTime()) ? d.toISOString() : null; };
   if (isMine(s)) {
     const acc = await loadMine(s);
-    const enabled = acc.provider !== 'google' && acc.inbound?.readEnabled === true;
+    const enabled = acc.inbound?.readEnabled === true;
     const [rows, nw, handled, archived] = await counted(enabled);
     return {
       enabled, canRead: acc.status === 'connected' && mineReadEnabled(acc), needsReauth: acc.status === 'needs_reauth', email: acc.accountEmail, provider: acc.provider,
