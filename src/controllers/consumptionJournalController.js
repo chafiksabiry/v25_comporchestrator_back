@@ -17,29 +17,49 @@ const fail = (res, status, code, message) => res.status(status).json({ success: 
 
 const toOid = (id) => (mongoose.Types.ObjectId.isValid(String(id)) ? new mongoose.Types.ObjectId(String(id)) : null);
 
+/** Plafond de documents lus par source et par requête (société à gros volume). Réglable : JOURNAL_MAX_SOURCE_ROWS. */
+export function maxSourceRows(env = process.env) {
+  const n = Number.parseInt(env.JOURNAL_MAX_SOURCE_ROWS, 10);
+  return Number.isInteger(n) && n >= 1 ? n : 50000;
+}
+
+/** Garde les `max` plus récents ; `capped` = plus ancienne date conservée (borne de couverture), null si rien n'est tronqué. */
+function cap(docs, max, dateOf) {
+  if (docs.length <= max) return { docs, capped: null };
+  const kept = docs.slice(0, max);
+  const dates = kept.map(dateOf).filter(Boolean).map((d) => new Date(d).toISOString()).sort();
+  return { docs: kept, capped: dates[0] || new Date().toISOString() };
+}
+
 const defaultLoaders = {
   async minutes(companyId) {
     const oid = toOid(companyId);
     if (!oid) return { wallet: null, payments: [], calls: [] };
+    const max = maxSourceRows();
     const [wallet, payments, calls] = await Promise.all([
       MinutesCompany.findOne({ companyId: oid }).select('minutes planGrantKeys chargedCallSids credits').lean(),
-      CompanyPayment.find({ companyId: oid, status: 'succeeded', purpose: { $in: ['minutes_purchase', 'bundle_purchase'] } }).lean(),
+      CompanyPayment.find({ companyId: oid, status: 'succeeded', purpose: { $in: ['minutes_purchase', 'bundle_purchase'] } }).sort({ fulfilledAt: -1 }).limit(max + 1).lean(),
       mongoose.connection.db.collection('calls').find(
         { $or: [{ companyId: oid }, { companyId: String(oid) }], duration: { $gt: 0 }, isTest: { $ne: true } },
         { projection: { sid: 1, duration: 1, direction: 1, from: 1, to: 1, startTime: 1, createdAt: 1, endTime: 1, isTest: 1 } },
-      ).toArray(),
+      ).sort({ startTime: -1 }).limit(max + 1).toArray(),
     ]);
-    return { wallet, payments, calls };
+    const p = cap(payments, max, (x) => x.fulfilledAt || x.updatedAt || x.createdAt);
+    const c = cap(calls, max, (x) => x.startTime || x.createdAt || x.endTime);
+    return { wallet, payments: p.docs, calls: c.docs, capped: [p.capped, c.capped].filter(Boolean).sort().at(-1) || null };
   },
   async tokens(companyId) {
     const oid = toOid(companyId);
     if (!oid) return { wallet: null, payments: [], usage: [] };
+    const max = maxSourceRows();
     const [wallet, payments, usage] = await Promise.all([
       TokensCompany.findOne({ companyId: oid }).select('tokens planTokensGranted planGrantKeys').lean(),
-      CompanyPayment.find({ companyId: oid, status: 'succeeded', purpose: { $in: ['tokens_purchase', 'bundle_purchase'] } }).lean(),
-      TokensUsageLedger.find({ companyId: oid }).select('-meta').lean(),
+      CompanyPayment.find({ companyId: oid, status: 'succeeded', purpose: { $in: ['tokens_purchase', 'bundle_purchase'] } }).sort({ fulfilledAt: -1 }).limit(max + 1).lean(),
+      TokensUsageLedger.find({ companyId: oid }).select('-meta').sort({ createdAt: -1 }).limit(max + 1).lean(),
     ]);
-    return { wallet, payments, usage };
+    const p = cap(payments, max, (x) => x.fulfilledAt || x.updatedAt || x.createdAt);
+    const u = cap(usage, max, (x) => x.createdAt);
+    return { wallet, payments: p.docs, usage: u.docs, capped: [p.capped, u.capped].filter(Boolean).sort().at(-1) || null };
   },
 };
 
@@ -74,19 +94,27 @@ export function createJournalHandlers(deps = {}) {
     let built;
     let balance;
     let extra;
+    let capped = null;
     if (q.type === 'minutes') {
       const src = await loaders.minutes(companyId);
       const { rows, orphanDebitedCalls } = buildMinutesRows(src);
-      built = rows; balance = src.wallet?.minutes ?? 0; extra = { orphanDebitedCalls };
+      built = rows; balance = src.wallet?.minutes ?? 0; extra = { orphanDebitedCalls }; capped = src.capped || null;
     } else {
       const src = await loaders.tokens(companyId);
       const { rows, unattributedPlanGrant } = buildTokensRows(src);
-      built = rows; balance = src.wallet?.tokens ?? 0; extra = { unattributedPlanGrant };
+      built = rows; balance = src.wallet?.tokens ?? 0; extra = { unattributedPlanGrant }; capped = src.capped || null;
     }
+    // Lecture plafonnée : on ne garde que la période couverte par TOUTES les sources (plus récente des bornes) ; les soldes après opération
+    // des lignes conservées restent exacts (on retire les plus anciennes), mais l'écart non expliqué et les appels orphelins ne sont plus calculables.
+    const floor = capped || null;
+    if (floor) built = built.filter((r) => r.date && r.date >= floor);
     const all = sortWithBalances(built, balance);
-    const summary = summarize(all, { from: q.from, to: q.to, currentBalance: balance, extra });
+    let summary = summarize(all, { from: q.from, to: q.to, currentBalance: balance, extra });
+    if (floor) {
+      summary = { ...summary, unexplained: null, ...(q.type === 'minutes' ? { orphanDebitedCalls: null } : {}), truncated: true, coveredFrom: floor };
+    }
     const filtered = all.filter((r) => inPeriod(r, q.from, q.to) && (!q.natures || q.natures.includes(r.nature)));
-    return { filtered, summary };
+    return { filtered, summary, truncated: Boolean(floor) };
   }
 
   const guarded = (fn) => async (req, res) => {
@@ -102,7 +130,8 @@ export function createJournalHandlers(deps = {}) {
     list: guarded(async (req, res) => {
       const ctx = await context(req, res, { paged: true });
       if (!ctx) return undefined;
-      const { filtered, summary } = await compute(ctx.companyId, ctx.q);
+      const { filtered, summary, truncated } = await compute(ctx.companyId, ctx.q);
+      if (truncated) res.setHeader('X-Journal-Truncated', 'true');
       const page = paginate(filtered, ctx.q.page, ctx.q.limit);
       res.setHeader('Cache-Control', 'no-store');
       return res.json({ success: true, data: { type: ctx.q.type, ...page, summary } });
@@ -111,12 +140,12 @@ export function createJournalHandlers(deps = {}) {
     exportCsv: guarded(async (req, res) => {
       const ctx = await context(req, res, { paged: false });
       if (!ctx) return undefined;
-      const { filtered } = await compute(ctx.companyId, ctx.q);
+      const { filtered, truncated } = await compute(ctx.companyId, ctx.q);
       const rows = filtered.slice(0, CSV_MAX_ROWS);
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="journal-consommation-${ctx.q.type}-${new Date().toISOString().slice(0, 10)}.csv"`);
       res.setHeader('Cache-Control', 'no-store');
-      if (filtered.length > rows.length) res.setHeader('X-Journal-Truncated', 'true');
+      if (truncated || filtered.length > rows.length) res.setHeader('X-Journal-Truncated', 'true');
       return res.send(toCsv(rows));
     }),
   };

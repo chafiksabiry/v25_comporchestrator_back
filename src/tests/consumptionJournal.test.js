@@ -342,6 +342,27 @@ const rowsOf = (r) => r.body.data.items;
   assert.equal(csvCell('\u0000=1+1'), "'\u0000=1+1"); assert.equal(csvCell('\u200b=1+1'), "'\u200b=1+1"); assert.equal(csvCell('\u0001@x'), "'\u0001@x");
   assert.equal(csvCell('a;=1+1'), '"a;=1+1"');
 }
+// ---------- Plafond de lecture ----------
+{
+  const hh = createJournalHandlers({ getAccess: async () => ({ companyId: C1, role: 'owner', isOwner: true }), loaders: {
+    minutes: async () => ({ wallet: { minutes: 10, chargedCallSids: ['N1', 'N2', 'OLD'], credits: [{ at: D('2026-08-01'), minutes: 99, kind: 'plan', grantKey: 'g:2026-08-01T00:00:00.000Z' }] }, payments: [],
+      calls: [{ sid: 'N1', duration: 60, startTime: D('2026-10-05') }, { sid: 'N2', duration: 60, startTime: D('2026-10-04') }], capped: '2026-10-04T00:00:00.000Z' }) } });
+  const r = res(); await hh.list({ query: { type: 'minutes', limit: '200' } }, r);
+  assert.equal(r.headers['x-journal-truncated'], 'true');
+  assert.deepEqual(r.body.data.items.map((x) => x.id), ['call:N1', 'call:N2'], 'seules les lignes de la période couverte par toutes les sources');
+  assert.deepEqual(r.body.data.items.map((x) => x.balanceAfter), [10, 11], 'soldes exacts des lignes conservées');
+  const s = r.body.data.summary;
+  assert.equal(s.truncated, true); assert.equal(s.coveredFrom, '2026-10-04T00:00:00.000Z'); assert.equal(s.unexplained, null); assert.equal(s.orphanDebitedCalls, null);
+  const x = res(); await hh.exportCsv({ query: { type: 'minutes' } }, x);
+  assert.equal(x.headers['x-journal-truncated'], 'true'); assert.ok(!x.text.includes('g:2026-08-01'));
+  const ok = await get({ type: 'minutes' }); assert.equal(ok.headers['x-journal-truncated'], undefined);
+  assert.equal(ok.body.data.summary.truncated, undefined);
+}
+{
+  const { maxSourceRows } = await import('../controllers/consumptionJournalController.js');
+  assert.equal(maxSourceRows({}), 50000); assert.equal(maxSourceRows({ JOURNAL_MAX_SOURCE_ROWS: '1000' }), 1000);
+  for (const bad of ['0', '-5', 'abc', '']) assert.equal(maxSourceRows({ JOURNAL_MAX_SOURCE_ROWS: bad }), 50000);
+}
 function round(n) { return Math.round(n * 100) / 100; }
 
 // ---------- Lecture seule : aucun solde modifié ----------

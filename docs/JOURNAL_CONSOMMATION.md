@@ -87,7 +87,7 @@ depuis `calls` que les appels sans ligne. Le contrat d'API ne change pas (champs
 
 ## Limites connues
 
-- **Aucun plafond de lecture** : chaque requête relit tous les appels, paiements et usages de la société (même `limit=1`). Aucune limitation de débit sur ces routes. À borner (fenêtre de dates côté base, plafond ou cache) avant une société à très gros volume.
+- **Plafond de lecture** : au plus `JOURNAL_MAX_SOURCE_ROWS` documents (défaut 50 000, entier ≥ 1) par source (appels, paiements, usages de jetons) et par requête, les plus récents d'abord. Si une source dépasse : seule la période couverte par **toutes** les sources est renvoyée, en-tête `X-Journal-Truncated: true` (liste et CSV), `summary.truncated = true`, `summary.coveredFrom` (début de la couverture), `unexplained` et `orphanDebitedCalls` à `null` ; les soldes après opération des lignes conservées restent exacts. Pas de limitation de débit sur ces routes. Les portefeuilles (`credits`, `chargedCallSids`) sont lus entiers.
 
 - Calcul à la volée sur tout l'historique de la société à chaque lecture (une lecture de `calls` filtrée par société, durée > 0, hors tests). Acceptable aujourd'hui ;
   à matérialiser ou indexer si une société dépasse quelques dizaines de milliers d'appels.
