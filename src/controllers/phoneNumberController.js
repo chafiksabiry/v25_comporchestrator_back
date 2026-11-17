@@ -45,6 +45,7 @@ import { callPayload, notifyOwners, voicemailPayload } from '../services/webPush
 import { blockedCallBody } from '../services/blockedCallers.js';
 import { languageForPhone } from '../services/companyLanguage.js';
 import { getInboundTest, needsInboundTestProof, realCallProof, receiveInboundCall, startInboundTest as startInboundTestSession } from '../services/inboundTestService.js';
+import { stripeLocaleFromRequest } from '../services/stripeLocale.js';
 
 /** Titulaire Nomad Solo (une seule personne) : l'appelant entend des messages à la première personne. Toute erreur = texte entreprise. */
 const isSoloCompany = async (companyId) => {
@@ -1356,6 +1357,7 @@ class PhoneNumberController {
             clientReferenceId: payment._id,
             // Authorize only. The charge is captured after the number order succeeds.
             captureMethod: 'manual',
+            locale: stripeLocaleFromRequest(req),
             metadata: { purpose: 'phone_line', companyId: String(companyId), paymentId: String(payment._id) }
           });
 
