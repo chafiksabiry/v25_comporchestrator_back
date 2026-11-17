@@ -2,6 +2,7 @@ import { phoneNumberService } from '../services/phoneNumberService.js';
 import { callerAccess, ScopeError, scopeToCompany } from '../middleware/companyScope.js';
 import { guardCompanyAccess } from '../middleware/companyGuard.js';
 import TwilioResourceOwner from '../models/TwilioResourceOwner.js';
+import { bundleFriendlyName, CONTACT_EMAIL_REQUIRED, CONTACT_EMAIL_REQUIRED_MESSAGE, resolveBundleContact } from '../services/twilioBundleContact.js';
 import { AssignmentError, LINE_NOT_ASSIGNED, LINE_NOT_ASSIGNED_MESSAGE, agentLineStatus, inboundRingFilter, enforcementSettings, lineStatusView, agentCapacity, assertAgentCanHaveLine, assertReleasable, assignAgent, assignmentFields, offerKind, oldestOf, resolvePurchaseAssignment, unassignAgent, withCenterLock } from '../services/lineAssignment.js';
 import { listLinesFor } from '../services/phoneNumberList.js';
 import { callingInfoOf } from '../services/outboundDestinations.js';
@@ -3335,11 +3336,17 @@ class PhoneNumberController {
 
   async createTwilioBundle(req, res) {
     try {
-      // Expects friendlyName, email, regulationSid, isoCountry
-      const { friendlyName, email, regulationSid, isoCountry } = req.body;
+      // Seuls regulationSid, isoCountry et (facultatifs) type / endUserType viennent du navigateur. L'e-mail (destinataire des notifications
+      // d'état de Twilio) et le libellé sont décidés ici : un `email` / `friendlyName` envoyé par le client est ignoré.
+      const { regulationSid, isoCountry, type, endUserType } = req.body || {};
       const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
       if (!access) return;
-      const bundle = await phoneNumberService.createTwilioBundle(friendlyName, email, undefined, regulationSid, isoCountry);
+      const contact = await resolveBundleContact(access);
+      if (!contact.email) {
+        return res.status(400).json({ error: 'Contact email required', code: CONTACT_EMAIL_REQUIRED, message: CONTACT_EMAIL_REQUIRED_MESSAGE });
+      }
+      const friendlyName = bundleFriendlyName({ isoCountry, type, endUserType, companyName: contact.companyName });
+      const bundle = await phoneNumberService.createTwilioBundle(friendlyName, contact.email, undefined, regulationSid, isoCountry);
       await this.claimTwilio(access, 'bundle', bundle?.sid);
       res.json(bundle);
     } catch (error) {

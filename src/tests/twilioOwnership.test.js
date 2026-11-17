@@ -15,6 +15,7 @@ const { default: TwilioResourceOwner } = await import('../models/TwilioResourceO
 const { phoneNumberRoutes } = await import('../routes/phoneNumber.js');
 const { phoneNumberService } = await import('../services/phoneNumberService.js');
 const { clearCompanyCache } = await import('../middleware/companyScope.js');
+const { bundleContactSources } = await import('../services/twilioBundleContact.js');
 
 const C1 = '64b0000000000000000000c1'; const C2 = '64b0000000000000000000c2';
 let who; let owners; let twilioCalls; let n = 0;
@@ -28,6 +29,7 @@ beforeEach(() => {
   TwilioResourceOwner.findOne = (q) => ({ select: () => ({ lean: async () => owners.find((o) => o.sid === q.sid && (!q.kind || o.kind === q.kind) && o.companyId === q.companyId) || null }) });
   TwilioResourceOwner.updateOne = async (q, u) => { if (!owners.find((o) => o.sid === q.sid)) owners.push({ ...u.$setOnInsert }); return {}; };
   global.fetch = async () => ({ ok: true, json: async () => ({ success: true, data: who }) });
+  bundleContactSources.loadCompany = async () => ({ name: 'Société test', email: 'contact@societe.test' });
 });
 after(() => { Object.assign(console, saved); });
 
