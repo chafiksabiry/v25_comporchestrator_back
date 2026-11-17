@@ -12,7 +12,7 @@ const router = express.Router();
 // checking a company's minutes balance before placing a call (cahier de
 // recette PAY-16). Same payload shape as the now-authenticated
 // GET /api/minutes-company/:companyId.
-router.get('/companies/:companyId/minutes-balance', minutesCompanyController.getMinutes);
+router.get('/companies/:companyId/minutes-balance', minutesCompanyController.getMinutesInternal);
 
 // Same pattern, for the euro/commission wallet (cahier de recette PAY-17):
 // dash_calls_backend checks this before placing a call too.
