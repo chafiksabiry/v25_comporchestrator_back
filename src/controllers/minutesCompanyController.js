@@ -1,6 +1,7 @@
 import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
+import mongoose from 'mongoose';
 
 export const minutesCompanyController = {
   getMinutes: async (req, res) => {
@@ -83,22 +84,41 @@ export const minutesCompanyController = {
     }
   },
 
-  // Endpoint hit by other microservices (e.g. dash_calls_backend) right after a
-  // call is saved so the minute balance reflects the consumption immediately.
-  // Body: { companyId, callSid, duration|durationSeconds }  -- duration in seconds
+  // Endpoint hit by other microservices (dash_calls_backend, Twilio and Telnyx paths) right after a call is saved so the
+  // minute balance reflects the consumption immediately. Body: { companyId, callSid, duration|durationSeconds }.
+  // The route is NOT authenticated (server-to-server, no caller identity), so nothing financial is believed from the body:
+  // the call must exist in the `calls` collection for THAT company, and the debited duration is the stored one. The body only
+  // says which call to look at. A call not saved yet (or without a duration) is left to syncMinutesFromCalls, which debits it
+  // on the next balance read with the same idempotency key (the call's sid).
   chargeCall: async (req, res) => {
     const { companyId, callSid, duration, durationSeconds: durationSecondsBody } = req.body;
     if (!companyId || !callSid) {
       return res.status(400).json({ error: 'companyId and callSid are required' });
     }
 
-    // Accept both `duration` (Twilio) and `durationSeconds` (Telnyx).
-    const durationSeconds = Number(duration ?? durationSecondsBody ?? 0);
-    if (durationSeconds <= 0) {
+    // Accept both `duration` (Twilio) and `durationSeconds` (Telnyx): only to ignore requests that carry no duration at all.
+    if (Number(duration ?? durationSecondsBody ?? 0) <= 0) {
       return res.status(200).json({ success: true, charged: false, reason: 'No duration' });
     }
 
     try {
+      // The real call: same company, a stored duration, not a test call. Anything else is not charged here.
+      let stored = null;
+      try {
+        stored = await mongoose.connection.db.collection('calls').findOne({ sid: String(callSid) });
+      } catch (lookupErr) {
+        console.warn('[charge-call] calls lookup failed, nothing charged:', lookupErr?.message || lookupErr);
+      }
+      const durationSeconds = Number(stored?.duration);
+      if (!stored || String(stored.companyId) !== String(companyId) || stored.isTest === true) {
+        return res.status(200).json({ success: true, charged: false, reason: 'Call not found' });
+      }
+      if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+        return res.status(200).json({ success: true, charged: false, reason: 'No duration' });
+      }
+      // Same idempotency key as syncMinutesFromCalls (`sid || _id`).
+      const chargeKey = String(stored.sid || stored._id || callSid);
+
       // Ensure the wallet exists (avoids upsert collisions on unique companyId)
       let wallet = await MinutesCompany.findOne({ companyId });
       if (!wallet) {
@@ -108,13 +128,13 @@ export const minutesCompanyController = {
       // Billing rule: any started minute is billed in full (10s → 1 min, 1m02s → 2 min).
       const durationMinutes = Math.ceil(durationSeconds / 60);
       const updated = await MinutesCompany.findOneAndUpdate(
-        { companyId, chargedCallSids: { $ne: callSid } },
+        { companyId, chargedCallSids: { $ne: chargeKey } },
         {
           $inc: {
             minutes: -durationMinutes,
             consumedSeconds: durationSeconds
           },
-          $addToSet: { chargedCallSids: callSid }
+          $addToSet: { chargedCallSids: chargeKey }
         },
         { new: true }
       );
