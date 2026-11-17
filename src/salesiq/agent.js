@@ -10,11 +10,13 @@ const SIGNATURE = "L'équipe HARX";
 /** Textes fixes (aucun appel à Claude). Greeting = réponse n°1 de faq.md, mot pour mot. */
 const MESSAGES = {
   fr: {
+    welcome: 'Bonjour et bienvenue chez HARX ! Comment puis-je vous aider ?',
     greeting: "Bonjour et bienvenue chez HARX ! Comment puis-je vous aider ? Si votre question concerne votre compte ou votre candidature, pouvez-vous m'indiquer l'email utilisé lors de votre inscription ?",
     hold: "Merci pour votre message. Je transmets votre demande à un membre de l'équipe, qui vous répondra directement.",
     pending: 'Un instant, je regarde cela pour vous.',
   },
   en: {
+    welcome: 'Hello and welcome to HARX! How can I help you?',
     greeting: 'Hello and welcome to HARX! How can I help you? If your question is about your account or your application, could you share the email you used to sign up?',
     hold: 'Thank you for your message. I am passing your request to a member of the team, who will get back to you directly.',
     pending: 'One moment, I am looking into this for you.',
@@ -150,7 +152,11 @@ export function createAgent({ cfg, claude, zoho, tools, knowledge, logger = cons
 
   async function writeNote(evt, decision, mode, delivered = true) {
     try {
-      const convId = evt.conversationId || await zoho.findConversationId({ email: evt.visitorEmail, visitorId: evt.visitorId, visitorUuid: evt.visitorUuid });
+      let convId = evt.conversationId;
+      for (const candidate of convId ? [] : evt.conversationIdCandidates) {
+        if (await zoho.verifyConversation(candidate, evt.visitorEmail)) { convId = candidate; break; }
+      }
+      convId = convId || await zoho.findConversationId({ email: evt.visitorEmail, visitorId: evt.visitorId, visitorUuid: evt.visitorUuid });
       if (!convId) return logger.warn('[salesiq] conversation id not found: internal note skipped');
       await zoho.addNote(convId, noteText(decision, mode, delivered));
     } catch (e) {
@@ -171,6 +177,11 @@ export function createAgent({ cfg, claude, zoho, tools, knowledge, logger = cons
       logger.error?.(`[salesiq] SalesIQ rejected our response: code=${evt.failure?.code} desc="${evt.failure?.desc}" action=${evt.failure?.action} replies=${evt.failure?.replies}`);
     } else if (cfg.logPayloadShape && evt.activeConversationIdShape) {
       logger.info?.(`[salesiq] active_conversation_id shape: ${evt.activeConversationIdShape}`);
+    }
+    // Ouverture du chat : SalesIQ attend un vrai message, sinon l'indicateur « en train d'écrire » reste affiché.
+    if (evt.handler === 'trigger') {
+      const lang = evt.language === 'en' ? 'en' : 'fr';
+      return { response: { action: 'reply', replies: [signed(MESSAGES[lang].welcome)] }, done: Promise.resolve() };
     }
     if (evt.handler && evt.handler !== 'message') return quiet;
 

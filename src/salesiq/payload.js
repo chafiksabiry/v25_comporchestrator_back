@@ -36,6 +36,10 @@ export function parseWebhookPayload(body) {
     // Forme (chiffres -> 9, lettres -> a) de l'identifiant de conversation actif, pour le diagnostic : jamais sa valeur.
     activeConversationIdShape: visitor.active_conversation_id != null
       ? String(visitor.active_conversation_id).replace(/[0-9]/g, '9').replace(/[A-Za-z]/g, 'a').slice(0, 60) : null,
+    language: String(visitor.language || '').toLowerCase().slice(0, 2),
+    // visitor.active_conversation_id a la forme « <lettres>_<18 chiffres>_<18 chiffres> » : chaque nombre est un candidat,
+    // vérifié par l'API avant d'écrire une note (le dernier d'abord).
+    conversationIdCandidates: String(visitor.active_conversation_id || '').split('_').filter((x) => /^\d{15,19}$/.test(x)).reverse(),
     hasAttachments: Array.isArray(b.attachments) && b.attachments.length > 0,
     requestId: first(request.request_id, request.id, b.request_id) ? String(first(request.request_id, request.id, b.request_id)) : null,
     // Seul un identifiant numérique est une conversation SalesIQ (un identifiant de session visiteur ne l'est pas) ;

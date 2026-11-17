@@ -60,6 +60,20 @@ export function createZohoClient({ cfg, fetchImpl = globalThis.fetch, now = () =
       await request('POST', siq(`/conversations/${conversationId}/notes`), { json: { notes: String(text).slice(0, 4000) } });
     },
 
+    /** Vrai si l'identifiant est une conversation SalesIQ existante, et (si connus des deux côtés) du même visiteur. */
+    async verifyConversation(conversationId, email = null) {
+      if (!num(conversationId)) return false;
+      try {
+        const { data } = await request('GET', siq(`/conversations/${conversationId}`));
+        const conv = data?.data || data || {};
+        if (!conv.id) return false;
+        const theirs = String(conv.visitor?.email || '').toLowerCase();
+        return !(email && theirs && theirs !== email);
+      } catch {
+        return false;
+      }
+    },
+
     /** Retrouve la conversation active du visiteur (le webhook ne la donne pas toujours). */
     async findConversationId({ email, visitorId, visitorUuid } = {}) {
       const qs = new URLSearchParams({ sort_by: 'updated_time', sort_order: 'desc', limit: '10', fields: 'id,visitor,chat_status' });
