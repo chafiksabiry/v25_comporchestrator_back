@@ -8,22 +8,26 @@ Visiteur ─► Zobot SalesIQ ──webhook──► POST /api/salesiq/webhook?k
             salutation ─────────────────►│  {"action":"reply"}   réponse fixe, sans Claude
             autre message ──────────────►│  {"action":"pending"} puis Claude + CRM en arrière-plan
                                          ▼
-              POST …/api/v2/{screenname}/callbacks/{request_id}/response  (reply ou forward)
-              + note interne sur la conversation (résumé, étape CRM, « A TRAITER PAR UN HUMAIN »)
+              POST …/api/v2/{screenname}/callbacks/{request_id}/response  (toujours « reply »)
+              + note interne sur la conversation (réponse envoyée, étape CRM ; « A TRAITER PAR UN HUMAIN » si besoin)
 ```
 
 ## Modes (`SALESIQ_MODE`)
+Aucun mode ne transfère la conversation à un opérateur : le service n'envoie jamais l'action `forward` (pas de demande Accept/Decline).
+
 | Mode | Effet |
 |---|---|
-| `off` (défaut) | le webhook transfère tout aux opérateurs (`forward`). |
-| `shadow` | transfère aux opérateurs et ajoute en note interne un « BROUILLON CLAUDE : … ». Rien n'est envoyé au visiteur. |
-| `live` | le bot répond ; transfère à un humain dans les cas prévus. |
+| `off` (défaut) | le visiteur reçoit une réponse de repli honnête (« votre demande a été enregistrée pour l'équipe HARX »), sans Claude. |
+| `shadow` | réponse de repli au visiteur ; Claude rédige en plus un « BROUILLON CLAUDE » en note interne (rien d'autre n'est envoyé). |
+| `live` | Claude répond seul aux visiteurs, d'après `knowledge/` et le CRM. |
 
 ## Garanties
-- Sources uniques : `src/salesiq/knowledge/pipeline.md` et `faq.md` (modifier ces fichiers suffit). Une réponse contenant `[À COMPLÉTER]` / `[À VÉRIFIER]` n'est jamais envoyée : transfert à un humain.
-- Garde-fous en code (`guards.js`) sur toute réponse : pas de nom interne d'étape, de pourcentage, de montant, de lien externe, pas de réponse vide ou trop longue.
+- Sources uniques : `src/salesiq/knowledge/pipeline.md` et `faq.md` (modifier ces fichiers suffit). Une réponse qui dépend d'un passage `[À COMPLÉTER]` / `[À VÉRIFIER]` n'est jamais donnée : Claude appelle `flag_for_team` (réponse honnête au visiteur + note « A TRAITER PAR UN HUMAIN » pour l'équipe, sans transfert ni interruption).
+- Dans `pipeline.md` et `faq.md`, « passer à un humain » et « transmettre à un membre de l'équipe » signifient `flag_for_team`.
+- Garde-fous en code (`guards.js`) sur toute réponse : pas de nom interne d'étape, de pourcentage, de montant, de lien externe, pas d'annonce de transfert, pas de réponse vide ou trop longue. Une réponse refusée est remplacée par la réponse de repli.
 - CRM en **lecture seule** (une seule requête GET de recherche de deals) ; aucun outil de suppression, de blocage, d'export ou de clôture.
-- Tout échec (Claude, CRM, rappel SalesIQ, erreur de code) aboutit à `forward` ou à une note « A TRAITER PAR UN HUMAIN » : aucun visiteur sans réponse.
+- Tout échec (Claude, CRM, rappel SalesIQ, erreur de code) aboutit à la réponse de repli et à une note : aucun visiteur sans réponse.
+- Chaque réponse envoyée est consignée en note interne (« RÉPONSE CLAUDE (envoyée) ») pour relecture.
 - Le texte des messages n'est pas journalisé (`SALESIQ_LOG_MESSAGE_TEXT=1` pour l'activer).
 
 ## Variables d'environnement (Railway)
