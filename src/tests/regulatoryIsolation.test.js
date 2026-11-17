@@ -24,7 +24,8 @@ const { telnyxRequirementGroupRoutes: groupRoutes } = await import('../routes/te
 const { clearCompanyCache } = await import('../middleware/companyScope.js');
 
 const C1 = '64b0000000000000000000c1'; const C2 = '64b0000000000000000000c2';
-const DOC = 'doc-1'; const ADDR = 'addr-1'; const GRP = 'grp-1';
+const DOC = 'doc-1'; const ADDR = 'addr-1'; const GRP = '64b0000000000000000000d1';
+let owned; let groupsOfCompany;
 let who; let registrationDown; let external; let local; let claims; let n = 0;
 const saved = { log: console.log, warn: console.warn, error: console.error };
 beforeEach(() => {
@@ -37,10 +38,12 @@ beforeEach(() => {
   groupService.createRequirementGroup = ext({ id: GRP }); groupService.getRequirementGroup = ext({ id: GRP, requirements: [], isComplete: () => true }); groupService.updateRequirements = ext({ id: GRP });
   groupService.getCompanyRequirementGroup = ext({ id: GRP }); groupService.getCompanyRequirementGroups = ext([]);
   // Propriété : DOC / ADDR / GRP appartiennent à C1.
-  const owned = [{ kind: 'document', externalId: DOC, companyId: C1 }, { kind: 'address', externalId: ADDR, companyId: C1 }];
-  RegulatoryAsset.findOne = (q) => { local += 1; const r = owned.find((x) => x.kind === q.kind && x.externalId === q.externalId && x.companyId === q.companyId); return { select: () => ({ lean: async () => r || null }) }; };
-  RegulatoryAsset.updateOne = async (q, u) => { local += 1; claims.push({ q, u }); return {}; };
-  TelnyxRequirementGroup.findOne = (q) => { local += 1; const ok = q.telnyxId === GRP && q.companyId === C1; return { select: () => ({ lean: async () => (ok ? { _id: 'g' } : null) }) }; };
+  owned = [{ kind: 'document', externalId: DOC, companyId: C1 }, { kind: 'address', externalId: ADDR, companyId: C1 }];
+  groupsOfCompany = {};
+  RegulatoryAsset.findOne = (q) => { local += 1; const r = owned.find((x) => x.kind === q.kind && x.externalId === q.externalId); return { select: () => ({ lean: async () => r || null }) }; };
+  TelnyxRequirementGroup.find = (q) => { local += 1; return { select: () => ({ lean: async () => groupsOfCompany[q.companyId] || [] }) }; };
+  RegulatoryAsset.updateOne = async (q, u) => { local += 1; claims.push({ q, u }); owned.push({ kind: q.kind, externalId: q.externalId, companyId: u.$setOnInsert.companyId }); return {}; };
+  TelnyxRequirementGroup.findOne = (q) => { local += 1; const ok = String(q._id) === GRP && q.companyId === C1; return { select: () => ({ lean: async () => (ok ? { _id: GRP, requirements: [{ requirementId: 'r', type: 'document' }, { requirementId: 't', type: 'textual' }] } : null) }) }; };
   global.fetch = async () => { if (registrationDown) throw new Error('down'); return { ok: true, json: async () => ({ success: true, data: who }) }; };
 });
 after(() => { Object.assign(console, saved); });
@@ -68,7 +71,7 @@ const CASES = [
   ['GET /addresses/:id', addressRoutes, 'get', '/:addressId', { params: { addressId: ADDR } }, true],
   ['POST /requirement-groups', groupRoutes, 'post', '/', { body: { companyId: C1, destinationZone: 'FR' } }, 'company'],
   ['GET /requirement-groups/:id', groupRoutes, 'get', '/:groupId', { params: { groupId: GRP } }, true],
-  ['PATCH /requirement-groups/:id/requirements', groupRoutes, 'patch', '/:groupId/requirements', { params: { groupId: GRP }, body: { requirements: [{ requirementId: 'r', value: 'v' }] } }, true],
+  ['PATCH /requirement-groups/:id/requirements', groupRoutes, 'patch', '/:groupId/requirements', { params: { groupId: GRP }, body: { requirements: [{ requirementId: 'r', value: DOC }] } }, true],
   ['GET /requirement-groups/:id/status', groupRoutes, 'get', '/:groupId/status', { params: { groupId: GRP } }, true],
   ['GET /requirement-groups/companies/:c/zones/:z', groupRoutes, 'get', '/companies/:companyId/zones/:destinationZone', { params: { companyId: C1, destinationZone: 'FR' } }, 'company'],
   ['GET /requirement-groups/company/:c/status', groupRoutes, 'get', '/company/:companyId/status', { params: { companyId: C1 } }, 'company'],
@@ -103,3 +106,40 @@ for (const [label, router, method, path, req, kind] of CASES) {
     }
   });
 }
+
+// ───────── Reprise de propriété des pièces créées avant le déploiement ; pièces référencées dans PATCH /requirements ─────────
+test('reprise : une pièce non enregistrée mais déjà référencée (submittedValueId) par un groupe de la société lui appartient (enregistrée, idempotent) ; jamais pour une autre société', async () => {
+  groupsOfCompany[C1] = [{ requirements: [{ type: 'document', submittedValueId: JSON.stringify({ id: 'legacy-doc' }) }, { type: 'address', submittedValueId: 'legacy-addr' }] }];
+  who = { companyId: C1, isOwner: true };
+  const own = await call(documentRoutes, 'get', '/:documentId', { params: { documentId: 'legacy-doc' } });
+  assert.equal(own.code, 200); assert.equal(claims.length, 1); assert.equal(claims[0].u.$setOnInsert.companyId, C1);
+  const again = await call(documentRoutes, 'get', '/:documentId', { params: { documentId: 'legacy-doc' } });
+  assert.equal(again.code, 200); assert.equal(claims.length, 1, 'déjà enregistrée : aucune nouvelle inscription');
+  const addr = await call(addressRoutes, 'get', '/:addressId', { params: { addressId: 'legacy-addr' } });
+  assert.equal(addr.code, 200);
+  // une pièce d'un autre type n'est pas reprise sous un autre nom ; une autre société ne la voit pas
+  const wrongKind = await call(addressRoutes, 'get', '/:addressId', { params: { addressId: 'legacy-doc' } });
+  assert.equal(wrongKind.code, 404);
+  who = { companyId: C2, isOwner: true }; clearCompanyCache(); external = 0;
+  const other = await call(documentRoutes, 'get', '/:documentId', { params: { documentId: 'legacy-doc' } });
+  assert.equal(other.code, 404); assert.equal(external, 0);
+});
+
+test('reprise : une pièce déjà enregistrée au nom d\'une société n\'est JAMAIS reprise par une autre, même si un groupe de celle-ci la référence', async () => {
+  groupsOfCompany[C2] = [{ requirements: [{ type: 'document', submittedValueId: DOC }] }]; // DOC appartient à C1
+  who = { companyId: C2, isOwner: true }; clearCompanyCache();
+  const r = await call(documentRoutes, 'get', '/:documentId', { params: { documentId: DOC } });
+  assert.equal(r.code, 404); assert.equal(external, 0); assert.equal(claims.length, 0);
+});
+
+test('PATCH /requirements : la pièce référencée doit appartenir à la société (403 asset_not_owned avant tout appel opérateur) ; pièce propre (id brut ou JSON) et exigence textuelle passent', async () => {
+  who = { companyId: C1, isOwner: true };
+  const patch = (value, id = 'r') => call(groupRoutes, 'patch', '/:groupId/requirements', { params: { groupId: GRP }, body: { requirements: [{ requirementId: id, value }] } });
+  const foreign = await patch('doc-of-someone-else');
+  assert.equal(foreign.code, 403); assert.equal(foreign.body.code, 'asset_not_owned'); assert.equal(external, 0);
+  assert.equal((await patch(JSON.stringify({ id: 'doc-of-someone-else' }))).code, 403);
+  assert.equal((await patch('')).code, 400, 'valeur vide : refusée par la validation existante');
+  const ownRaw = await patch(DOC); assert.equal(ownRaw.code, 200);
+  const ownJson = await patch(JSON.stringify({ id: DOC, filename: 'a.pdf' })); assert.equal(ownJson.code, 200);
+  const text = await patch('free text', 't'); assert.equal(text.code, 200, 'exigence textuelle : pas de pièce à vérifier');
+});
