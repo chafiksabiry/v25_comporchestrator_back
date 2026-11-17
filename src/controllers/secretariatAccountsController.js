@@ -97,7 +97,8 @@ export const secretariatAccountsController = {
       const ownerName = String((await loadUserName(a.userId)) || '').replace(/[\u0000-\u001F\u007F<>"\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
       // Reconnexion d'une messagerie dont la lecture est activée : on redemande aussi le scope de lecture (sinon le nouveau jeton la perdrait).
       const prev = await SecretariatSharedAccount.findOne({ companyId: a.companyId, provider, personalUserId: String(a.userId) }).select('inbound').lean();
-      const read = prev?.inbound?.readEnabled === true;
+      // Google : jamais de lecture (même si un ancien consentement subsiste) : la reconnexion se fait sans lecture et sans erreur.
+      const read = provider !== 'google' && prev?.inbound?.readEnabled === true;
       const url = startAuthorization({ companyId: a.companyId, userId: a.userId, provider, returnTo, read, shared: { personal: true, ownerName, ...(read ? { read: true } : {}) } });
       res.json({ success: true, data: { url } });
     } catch (error) { answer(res, error, 'startMine'); }
