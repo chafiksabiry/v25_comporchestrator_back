@@ -30,6 +30,7 @@ import { startIntegrationsWorker } from './src/integrations/runtime.js';
 import { internalRoutes } from './src/routes/internal.js';
 import { companyNotificationRoutes } from './src/routes/companyNotifications.js';
 import { createWhatsAppModule } from './src/whatsapp/index.js';
+import { createSalesIqModule } from './src/salesiq/index.js';
 import { startMessageReminders } from './src/services/messageReminders.js';
 import { scanLowResources } from './src/services/companyNotificationService.js';
 import { clearExpiredRetractions } from './src/services/retractionService.js';
@@ -64,6 +65,10 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// HARX SalesIQ Support Agent : webhook Zobot -> Claude -> réponse en temps réel (voir docs/SALESIQ_SUPPORT_AGENT.md).
+// Monté AVANT le contrôle de connexion MongoDB et avant express.json() : il n'utilise pas la base et lit le corps brut.
+app.use('/api/salesiq', createSalesIqModule().router);
 
 // Database connection health check middleware
 app.use((req, res, next) => {
