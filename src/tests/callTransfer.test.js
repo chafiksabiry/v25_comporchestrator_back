@@ -92,7 +92,7 @@ const legs = {
 const updates = [];
 let failUpdate = false;
 const client = { calls: (sid) => ({ fetch: async () => { if (!legs[sid]) throw new Error('404'); return legs[sid]; }, update: async (p) => { if (failUpdate) throw new Error('twilio down'); updates.push({ sid, ...p }); return {}; } }) };
-setTransferDeps({ twilio: async () => client, minutes: async () => 30, now: () => NOW });
+setTransferDeps({ twilio: async () => client, minutes: async () => 30, balanceFor: async (_c, _t, m) => ({ kind: 'national', minutes: m }), now: () => NOW });
 
 let calls = [];
 const resetCalls = () => { calls = [

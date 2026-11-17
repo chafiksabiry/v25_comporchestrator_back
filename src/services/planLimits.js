@@ -2,6 +2,7 @@ import { Subscription } from '../models/Subscription.js';
 import { stripeService } from './stripeService.js';
 import { CALLCENTER_TIER_LINES, callcenterTierFromMetadata } from './callcenterTier.js';
 import { phoneLinePriceCentsFromMetadata } from './phoneLineSubscription.js';
+import { internationalPackFromMetadata } from './internationalMinutes.js';
 
 function numberOrNull(value) {
   const n = Number(value);
@@ -40,6 +41,8 @@ export async function loadCompanyPlanLimits(companyId) {
     callcenterTier: callcenterTierFromMetadata(metadata),
     /** Prix mensuel d'une ligne supplémentaire (metadata `phone_line_price_cents`, centimes) ; null = prix par défaut. */
     phoneLinePriceCents: phoneLinePriceCentsFromMetadata(metadata),
+    /** Offre concernée par le pack de minutes internationales (metadata `international_pack` du produit de l'offre) ; false = comportement inchangé. */
+    internationalPack: internationalPackFromMetadata(metadata),
     maxGigs: numberOrNull(fromMeta.maxGigs) ?? numberOrNull(plan.maxGigs),
     maxReps: numberOrNull(fromMeta.maxReps) ?? numberOrNull(plan.maxReps),
     communicationMinutes: numberOrNull(fromMeta.communicationMinutes) ?? numberOrNull(plan.communicationMinutes),

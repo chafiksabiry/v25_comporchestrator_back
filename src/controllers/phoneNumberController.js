@@ -34,6 +34,7 @@ import { notifyCompany } from '../services/companyNotificationService.js';
 import { createVoiceToken, pushCredentialFor, VOICE_TOKEN_TTL_S } from '../services/voiceTokenService.js';
 import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
+import { INTERNATIONAL_PACK_CODE, internationalPackRefusal, resolveOutboundBalance } from '../services/internationalMinutes.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket, MINUTES_INSUFFICIENT_CODE, MINUTES_INSUFFICIENT_MESSAGE, spokenLanguage, spokenRefusal, SPOKEN_REFUSALS } from '../services/browserOutbound.js';
 import { transferResult } from './callTransferController.js';
@@ -2348,7 +2349,9 @@ class PhoneNumberController {
         if (gate.blocked || (own && !usable && gate.enforced)) return send(spokenRefusal('line_not_assigned'));
         if (usable) callerLine = own;
       }
-      let decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording });
+      // Offre concernée par le pack de minutes internationales : un appel international n'utilise QUE le solde international (jamais le solde normal).
+      const balance = limits?.internationalPack ? await resolveOutboundBalance({ companyId, limits, to, nationalMinutes: minutes }) : { kind: 'national', minutes };
+      let decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes: balance.minutes, balanceKind: balance.kind, recording });
       if (!decision.ok) {
         console.warn(`[browser-outbound] refusé pour l'entreprise ${companyId} : ${decision.message}`);
         return send(spokenRefusal(decision.key, spokenLanguage(callerLine?.phoneNumber)));
@@ -2365,7 +2368,7 @@ class PhoneNumberController {
             return send(spokenRefusal('line_busy'));
           }
           callerLine = pool.find((l) => String(l._id) === String(taken.lineId));
-          decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, action: `https://${req.get('host')}${LINE_CALL_END_PATH}?t=${signLineCallEnd({ secret: config.twilioAuthToken, callSid: sidForLine })}` });
+          decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes: balance.minutes, balanceKind: balance.kind, recording, action: `https://${req.get('host')}${LINE_CALL_END_PATH}?t=${signLineCallEnd({ secret: config.twilioAuthToken, callSid: sidForLine })}` });
         } catch (error) {
           console.error('[browser-outbound] contrôle de ligne ignoré :', error?.message || error);
         }
@@ -2396,6 +2399,30 @@ class PhoneNumberController {
     } catch (error) {
       console.warn('[minutes] solde illisible, aucun contrôle préalable :', error?.message || error);
       return null;
+    }
+    // Offre concernée par le pack de minutes internationales : une destination internationale se juge sur le solde international seul.
+    if (to) {
+      try {
+        const limits = await loadCompanyPlanLimits(companyId);
+        if (limits?.internationalPack) {
+          const chosen = await resolveOutboundBalance({ companyId, limits, to, nationalMinutes: minutes });
+          if (chosen.kind === 'international') {
+            const intlBalance = Number(chosen.minutes);
+            if (Number.isFinite(intlBalance) && Math.floor(intlBalance) >= 1) return null;
+            return {
+              success: false,
+              error: INTERNATIONAL_PACK_CODE,
+              code: INTERNATIONAL_PACK_CODE,
+              country: callingInfoOf(to).countryIso,
+              zone: 'international',
+              balance: Number.isFinite(intlBalance) ? intlBalance : 0,
+              ...internationalPackRefusal({ euZone: chosen.euZone }),
+            };
+          }
+        }
+      } catch (error) {
+        console.warn('[minutes] pack international illisible, contrôle sur le solde normal :', error?.message || error);
+      }
     }
     const balance = Number(minutes);
     if (Number.isFinite(balance) && Math.floor(balance) >= 1) return null;

@@ -1,6 +1,9 @@
 import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
+import { loadCompanyPlanLimits } from '../services/planLimits.js';
+import { internationalPackApplies, mongoStore as internationalStore, settleInternationalCalls } from '../services/internationalMinutes.js';
+import mongoose from 'mongoose';
 
 export const minutesCompanyController = {
   getMinutes: async (req, res) => {
@@ -103,6 +106,28 @@ export const minutesCompanyController = {
       let wallet = await MinutesCompany.findOne({ companyId });
       if (!wallet) {
         wallet = await MinutesCompany.create({ companyId, minutes: 0 });
+      }
+
+      // Offre concernée par le pack de minutes internationales : un appel sortant international réel (document de la collection calls pour
+      // CETTE entreprise ; durée relue de ce document) est débité du solde international, jamais du solde normal. Sans document : chemin historique.
+      let limits = null;
+      try { limits = await loadCompanyPlanLimits(companyId); } catch { limits = null; }
+      if (internationalPackApplies(limits)) {
+        let stored = null;
+        try { stored = await mongoose.connection.db.collection('calls').findOne({ sid: String(callSid) }); } catch { stored = null; }
+        if (stored && String(stored.companyId) === String(companyId) && stored.isTest !== true) {
+          const before = await internationalStore.read(companyId);
+          const handled = await settleInternationalCalls({ companyId, calls: [stored], limits });
+          if (handled.has(String(callSid))) {
+            const after = await internationalStore.read(companyId);
+            return res.status(200).json({
+              success: true,
+              charged: !(before?.chargedCallSids || []).includes(String(callSid)),
+              ...((before?.chargedCallSids || []).includes(String(callSid)) ? { reason: 'Already charged' } : {}),
+              data: { minutes: wallet.minutes, internationalMinutes: after?.minutes ?? 0 },
+            });
+          }
+        }
       }
 
       // Billing rule: any started minute is billed in full (10s → 1 min, 1m02s → 2 min).
