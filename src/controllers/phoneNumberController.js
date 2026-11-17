@@ -1,6 +1,7 @@
 import { phoneNumberService } from '../services/phoneNumberService.js';
 import { callerAccess, ScopeError, scopeToCompany } from '../middleware/companyScope.js';
 import { guardCompanyAccess } from '../middleware/companyGuard.js';
+import TwilioResourceOwner from '../models/TwilioResourceOwner.js';
 import { AssignmentError, LINE_NOT_ASSIGNED, LINE_NOT_ASSIGNED_MESSAGE, agentLineStatus, inboundRingFilter, enforcementSettings, lineStatusView, agentCapacity, assertAgentCanHaveLine, assertReleasable, assignAgent, assignmentFields, offerKind, oldestOf, resolvePurchaseAssignment, unassignAgent, withCenterLock } from '../services/lineAssignment.js';
 import { listLinesFor } from '../services/phoneNumberList.js';
 import { callingInfoOf } from '../services/outboundDestinations.js';
@@ -3208,10 +3209,33 @@ class PhoneNumberController {
     }
   }
 
+  /** Enregistre la propriété d'une ressource Twilio créée par cette société (première inscription gagnante). */
+  async claimTwilio(access, kind, sid) {
+    if (!sid) return;
+    await TwilioResourceOwner.updateOne({ sid: String(sid) }, { $setOnInsert: { kind, sid: String(sid), companyId: String(access.companyId), userId: String(access.userId || '') } }, { upsert: true });
+  }
+
+  /** Les ressources désignées (`kind` optionnel) doivent toutes appartenir à la société de l'appelant : sinon 404 (rien n'est envoyé à Twilio). */
+  async ownTwilio(req, res, wanted) {
+    const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+    if (!access) return null;
+    for (const w of wanted) {
+      const row = w.sid ? await TwilioResourceOwner.findOne({ sid: String(w.sid), ...(w.kind ? { kind: w.kind } : {}), companyId: String(access.companyId) }).select('_id').lean() : null;
+      if (!row) {
+        res.status(404).json({ error: 'Not Found', message: 'Resource not found' });
+        return null;
+      }
+    }
+    return access;
+  }
+
   async createTwilioEndUser(req, res) {
     try {
       const { friendlyName, type, attributes } = req.body;
+      const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+      if (!access) return;
       const endUser = await phoneNumberService.createTwilioEndUser(friendlyName, type, attributes);
+      await this.claimTwilio(access, 'end_user', endUser?.sid);
       res.json(endUser);
     } catch (error) {
       res.status(500).json({ error: 'Failed to create End User', details: error.message });
@@ -3227,6 +3251,8 @@ class PhoneNumberController {
       const { friendlyName, type, attributes } = req.body;
       const parsedAttributes = typeof attributes === 'string' ? JSON.parse(attributes) : attributes;
 
+      const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+      if (!access) return;
       const document = await phoneNumberService.createTwilioDocument(
         req.file.buffer,
         req.file.mimetype,
@@ -3234,6 +3260,7 @@ class PhoneNumberController {
         type,
         parsedAttributes
       );
+      await this.claimTwilio(access, 'document', document?.sid);
       res.json(document);
     } catch (error) {
       console.error('Error in createTwilioDocument:', error);
@@ -3245,7 +3272,10 @@ class PhoneNumberController {
     try {
       // Expects friendlyName, email, regulationSid, isoCountry
       const { friendlyName, email, regulationSid, isoCountry } = req.body;
+      const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+      if (!access) return;
       const bundle = await phoneNumberService.createTwilioBundle(friendlyName, email, undefined, regulationSid, isoCountry);
+      await this.claimTwilio(access, 'bundle', bundle?.sid);
       res.json(bundle);
     } catch (error) {
       res.status(500).json({ error: 'Failed to create Bundle', details: error.message });
@@ -3256,6 +3286,9 @@ class PhoneNumberController {
     try {
       const { sid } = req.params;
       const { objectSid } = req.body;
+      // Le dossier ET la pièce ajoutée doivent appartenir à la société de l'appelant : sinon 404, rien n'est envoyé à Twilio.
+      const access = await this.ownTwilio(req, res, [{ kind: 'bundle', sid }, { sid: objectSid }]);
+      if (!access) return;
       const item = await phoneNumberService.assignItemToBundle(sid, objectSid);
       res.json(item);
     } catch (error) {
@@ -3266,6 +3299,8 @@ class PhoneNumberController {
   async submitTwilioBundle(req, res) {
     try {
       const { sid } = req.params;
+      const access = await this.ownTwilio(req, res, [{ kind: 'bundle', sid }]);
+      if (!access) return;
       const bundle = await phoneNumberService.submitTwilioBundle(sid);
       res.json(bundle);
     } catch (error) {
@@ -3276,6 +3311,8 @@ class PhoneNumberController {
   async createTwilioAddress(req, res) {
     try {
       const { customerName, street, city, region, postalCode, isoCountry } = req.body;
+      const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+      if (!access) return;
       const address = await phoneNumberService.createTwilioAddress(
         customerName,
         street,
@@ -3284,6 +3321,7 @@ class PhoneNumberController {
         postalCode,
         isoCountry
       );
+      await this.claimTwilio(access, 'address', address?.sid);
       res.json(address);
     } catch (error) {
       console.error('Error in createTwilioAddress:', error);
