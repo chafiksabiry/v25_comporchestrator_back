@@ -1,12 +1,24 @@
 import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
+import { callerAccess, ScopeError } from '../middleware/companyScope.js';
 import mongoose from 'mongoose';
 
 export const minutesCompanyController = {
   getMinutes: async (req, res) => {
     const { companyId } = req.params;
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    // Isolation : un utilisateur authentifié ne lit que le solde de SA société (propriétaire ou membre ; pas un agent). La société vient du
+    // service d'inscription (source de vérité), jamais du navigateur ; service indisponible : 503, jamais d'accès ouvert par défaut.
+    try {
+      const access = await callerAccess(req);
+      if (!access.companyId || access.role === 'agent' || String(companyId) !== String(access.companyId)) {
+        return res.status(403).json({ error: 'Forbidden', code: 'forbidden' });
+      }
+    } catch (error) {
+      const status = error instanceof ScopeError ? error.status : 503;
+      return res.status(status).json({ error: error.message || 'Company lookup failed', code: error.code || 'COMPANY_LOOKUP_FAILED' });
+    }
     try {
       // Credit plan-included minutes (e.g. Starter 120) for the current period
       // when not yet granted — also backfills existing trialing/active subs.
