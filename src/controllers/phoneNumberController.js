@@ -98,9 +98,27 @@ const recordingPlanFromFirstDecision = async ({ companyId, callSid, baseUrl, fro
 };
 
 /** In-memory status for live test-call monitoring (popup). */
+/**
+ * Dossier réglementaire / adresse fournis à l'achat d'un numéro : un sid du CORPS n'est cru que s'il est ceux de la plateforme (configuration par pays) ou
+ * enregistré au nom de la société de l'appelant (TwilioResourceOwner, à la création via /twilio/*). Sinon 403 AVANT tout appel à Twilio ou paiement.
+ * @returns {Promise<{status:number, body:object}|null>} null si tout est autorisé.
+ */
+async function foreignRegulatorySids(companyId, { bundleSid, addressSid } = {}) {
+  const platform = new Set([config.twilioFrenchBundleSid, config.twilioGbBundleSid, config.twilioFrenchNationalBundleSid, config.twilioFrenchAddressSid, config.twilioGbAddressSid, config.twilioFrenchNationalAddressSid].filter(Boolean));
+  for (const [field, kind, sid] of [['bundleSid', 'bundle', bundleSid], ['addressSid', 'address', addressSid]]) {
+    if (sid === undefined || sid === null || sid === '') continue;
+    const value = String(sid);
+    if (platform.has(value)) continue;
+    const row = await TwilioResourceOwner.findOne({ sid: value, kind, companyId: String(companyId) }).select('_id').lean();
+    if (!row) return { status: 403, body: { error: 'Forbidden', code: 'regulatory_resource_not_owned', message: `${field} does not belong to your company` } };
+  }
+  return null;
+}
+
 const testCallSessions = new Map();
 /** Sessions des appels de test en cours (exposées pour les tests uniquement). */
 export const testCallSessionsForTests = testCallSessions;
+export const foreignRegulatorySidsForTests = foreignRegulatorySids;
 
 const toE164 = (value) => {
   let s = String(value || '').trim().replace(/[\s()-]/g, '');
@@ -376,6 +394,10 @@ class PhoneNumberController {
       console.log("📦 req.body:", JSON.stringify(req.body, null, 2));
 
       const { phoneNumber, provider, gigId, requirementGroupId, companyId, bundleSid, addressSid, paymentId } = req.body;
+      if (companyId && (bundleSid || addressSid)) {
+        const foreign = await foreignRegulatorySids(companyId, { bundleSid, addressSid });
+        if (foreign) return res.status(foreign.status).json(foreign.body);
+      }
 
       const missingFields = {
         phoneNumber: !phoneNumber ? 'Phone number is required' : null,
@@ -637,6 +659,10 @@ class PhoneNumberController {
 
       const { phoneNumber, gigId, companyId, bundleSid, addressSid, paymentId } = req.body;
       console.log("phoneNumber", phoneNumber);
+      if (companyId && (bundleSid || addressSid)) {
+        const foreign = await foreignRegulatorySids(companyId, { bundleSid, addressSid });
+        if (foreign) return res.status(foreign.status).json(foreign.body);
+      }
 
       // Le numéro doit être du pays de l'entreprise (ou d'Europe pour une entreprise européenne).
       const countryGate = await checkNumberCountry(req, companyId, { phoneNumber });
@@ -1649,6 +1675,10 @@ class PhoneNumberController {
           error: 'Payment not succeeded',
           message: `Payment status is '${payment.status}', cannot recover.`
         });
+      }
+      if (bundleSid || addressSid) {
+        const foreign = await foreignRegulatorySids(payment.companyId, { bundleSid, addressSid });
+        if (foreign) return res.status(foreign.status).json(foreign.body);
       }
       if (payment.phoneNumberRef) {
         return res.json({
