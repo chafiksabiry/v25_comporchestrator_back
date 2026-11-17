@@ -1,6 +1,7 @@
 import express from 'express';
 import { escrowController } from '../controllers/escrowController.js';
 import { authenticate } from '../middleware/auth.js';
+import { userOrService, ESCROW_RECONCILE_SCOPE, CALL_ANALYSIS_NOTIFY_SCOPE } from '../middleware/serviceToken.js';
 
 const router = express.Router();
 
@@ -27,13 +28,13 @@ router.get('/ai-audits/:companyId', authenticate, escrowController.getAiAudits);
 router.post('/ai-audits/:repTransactionId/respond', authenticate, escrowController.respondToAiAudit);
 router.post('/call-commissions/:repTransactionId/respond', authenticate, escrowController.approveOrRefuseCallCommission);
 
-// Server-to-server only (dash_calls_backend, right after AI scoring) — no
-// user JWT to present. /reconcile is also called directly by the frontend
-// (walletBalanceSync.ts) but it is read-safe/idempotent either way, so
-// leaving it open costs nothing.
-router.post('/reconcile/:companyId', escrowController.triggerReconciliation);
-router.post('/call-analysis-help', escrowController.broadcastCallAnalysisHelp);
-router.post('/call-analysis-complete', escrowController.broadcastCallAnalysisComplete);
+// Rapprochement et évènements temps réel d'analyse : appelés par le service des appels (dash_calls_backend, jeton de service
+// HS256 à portée `escrow-reconcile` / `call-analysis-notify`, voir middleware/serviceToken.js) ou par l'application de la
+// société (jeton utilisateur : le contrôleur exige alors l'appartenance à CETTE société, le titulaire pour /reconcile).
+// Sans l'un ou l'autre : 401. Avant, ces trois routes étaient ouvertes à tous (écritures d'argent, messages diffusés falsifiables).
+router.post('/reconcile/:companyId', userOrService(ESCROW_RECONCILE_SCOPE), escrowController.triggerReconciliation);
+router.post('/call-analysis-help', userOrService(CALL_ANALYSIS_NOTIFY_SCOPE), escrowController.broadcastCallAnalysisHelp);
+router.post('/call-analysis-complete', userOrService(CALL_ANALYSIS_NOTIFY_SCOPE), escrowController.broadcastCallAnalysisComplete);
 
 // Agent Payouts / Withdrawals — REP-facing, same JWT/auth system as company.
 router.get('/agent/wallet/:agentId', authenticate, escrowController.getAgentWallet);

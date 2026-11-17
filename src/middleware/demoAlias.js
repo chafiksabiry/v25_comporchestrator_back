@@ -4,11 +4,12 @@ import mongoose from 'mongoose';
  * Alias de démonstration : la valeur littérale `demo_company_id` (corps, requête ou chemin) est réécrite en l'identifiant d'une société RÉELLE codé en
  * dur. Sur toute route non protégée par propriété, cela donne accès aux données de cette société à quiconque connaît l'alias. Aucun appelant connu
  * (fronts et dash_calls lus : aucun n'envoie `demo_company_id` ; le front a seulement un repli sur le même identifiant quand le cookie companyId manque).
- * Désactivation : variable `DEMO_COMPANY_ID_DISABLED=true` (l'alias donne alors 400 « Invalid companyId format »). Par défaut : actif, comportement inchangé.
+ * DÉCISION DU PROPRIÉTAIRE : l'alias est DÉSACTIVÉ par défaut (l'alias donne 400 « Invalid companyId format », jamais réécrit). Réactivable uniquement avec
+ * `DEMO_COMPANY_ID_ENABLED=true` (démo explicite).
  */
 export const DEMO_ALIAS = 'demo_company_id';
 export const DEMO_COMPANY_ID = '6a0bfd35d605ccca8b51e13b';
-export const demoAliasEnabled = (env = process.env) => String(env.DEMO_COMPANY_ID_DISABLED || '').trim().toLowerCase() !== 'true';
+export const demoAliasEnabled = (env = process.env) => String(env.DEMO_COMPANY_ID_ENABLED || '').trim().toLowerCase() === 'true';
 
 /** Réécriture de l'alias dans le corps et la requête (inactive si désactivée). */
 export function demoBodyQueryAlias(env = process.env) {

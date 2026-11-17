@@ -38,7 +38,7 @@ import { clearExpiredRetractions } from './src/services/retractionService.js';
 import { resolveExpiredPendingReviews, flagWeeklyAiAudits } from './src/controllers/escrowController.js';
 import { billExpiredTrialLines, reconcilePendingMonthlyLines, terminateSuspendedLines } from './src/services/phoneLineBillingService.js';
 import { syncPlanMetadataFromStripe } from './src/services/planMetadataSync.js';
-import { neutralizeGoogleInbox } from './src/services/googleInboxMigration.js';
+import { applyMailOwnership } from './src/services/mailOwnershipMigration.js';
 
 const app = express();
 
@@ -51,8 +51,8 @@ mongoose.connect(config.mongodbUri, {
   useUnifiedTopology: true,
 }).then(() => {
   console.log('✅ Connected to MongoDB');
-  // Google ne demande plus jamais la lecture de la boîte : lecture coupée et e-mails Google purgés pour les comptes déjà autorisés (idempotent, journalisé).
-  neutralizeGoogleInbox();
+  // Une boîte mail connectée n'est utilisable que par la personne qui l'a connectée : anciennes connexions sans propriétaire marquées (inutilisables jusqu'à reconnexion), e-mails stockés partagés purgés (idempotent, journalisé sans donnée personnelle).
+  applyMailOwnership();
 }).catch((error) => {
   console.error('❌ MongoDB connection error:', error);
   process.exit(1); // Exit if we can't connect to database
@@ -97,11 +97,11 @@ app.use((req, res, next) => {
 app.use(express.urlencoded({ extended: true }));
 
 // Map and Validate companyId / agentId parameters to prevent Mongoose CastErrors (alias de démonstration : voir src/middleware/demoAlias.js ;
-// désactivable avec DEMO_COMPANY_ID_DISABLED=true).
+// désactivé par défaut, réactivable avec DEMO_COMPANY_ID_ENABLED=true).
 app.use(demoBodyQueryAlias());
 app.param('companyId', idParam('companyId'));
 app.param('agentId', idParam('agentId'));
-if (demoAliasEnabled()) console.warn('[security] alias « demo_company_id » actif (donne accès à une société réelle sur les routes non protégées) : DEMO_COMPANY_ID_DISABLED=true pour le désactiver');
+if (demoAliasEnabled()) console.warn('[security] alias « demo_company_id » ACTIVÉ par DEMO_COMPANY_ID_ENABLED=true (donne accès à une société réelle sur les routes non protégées)');
 
 // Routes API
 app.use('/api/requirements', requirementRoutes);
