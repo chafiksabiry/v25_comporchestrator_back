@@ -12,6 +12,8 @@ process.env.REGISTRATION_BACKEND_URL = 'https://registration.test';
 process.env.INTEGRATIONS_ENC_KEY = 'ab'.repeat(32);
 process.env.GOOGLE_CLIENT_ID = 'g-id'; process.env.GOOGLE_CLIENT_SECRET = 'g-secret';
 process.env.MICROSOFT_CLIENT_ID = 'm-id'; process.env.MICROSOFT_CLIENT_SECRET = 'm-secret';
+// Ce fichier teste le mécanisme de délégation lui-même (Google compris) : délégation Google RÉACTIVÉE ici. Suspension (par défaut) : googleDelegation.test.js.
+process.env.GOOGLE_DELEGATION_ENABLED = '1';
 for (const k of ['GOOGLE_REDIRECT_URI', 'MICROSOFT_REDIRECT_URI', 'MICROSOFT_TENANT_ID']) delete process.env[k];
 
 const C1 = '64b0000000000000000000c1';

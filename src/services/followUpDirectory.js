@@ -14,14 +14,26 @@ async function getJson(url, token) {
  * Une des deux listes peut être refusée (droits) : on garde l'autre. @returns {Promise<Array<{id, name, kind}>>}
  */
 export async function loadDirectory({ companyId, token }) {
+  return (await loadDirectoryComplete({ companyId, token })).people;
+}
+
+/**
+ * Comme `loadDirectory`, mais signale une lecture PARTIELLE : `complete` n'est vrai que si les DEUX listes (membres ET agents) ont été lues. Une absence dans une annuaire
+ * partiel ne prouve rien (la catégorie illisible paraîtrait « partie ») : les décisions qui en dépendent (retrait d'une connexion, agenda d'un propriétaire) exigent `complete`.
+ * @returns {Promise<{complete: boolean, people: Array<{id, name, kind}>}>}
+ */
+export async function loadDirectoryComplete({ companyId, token }) {
   const origin = registrationOrigin();
-  if (!origin) return [];
+  if (!origin) return { complete: false, people: [] };
   const q = `companyId=${encodeURIComponent(companyId)}`;
   const [members, agents] = await Promise.allSettled([
     getJson(`${origin}/api/company-members?${q}`, token),
     getJson(`${origin}/api/call-center/agents?${q}`, token),
   ]);
-  return parseDirectory(members.status === 'fulfilled' ? members.value : null, agents.status === 'fulfilled' ? agents.value : null);
+  return {
+    complete: members.status === 'fulfilled' && agents.status === 'fulfilled',
+    people: parseDirectory(members.status === 'fulfilled' ? members.value : null, agents.status === 'fulfilled' ? agents.value : null),
+  };
 }
 
 /** Nom affiché d'une personne (lecture du compte), '' si introuvable. */

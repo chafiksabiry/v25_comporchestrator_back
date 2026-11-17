@@ -35,17 +35,25 @@ export const hasCompanyCalendarResolver = () => companyResolver !== null;
 
 /**
  * @param {object} item rendez-vous (avec `companyId` pour le choix de l'agenda du centre)
- * @param {{ op?: 'push' | 'update' | 'remove' }} [options]
- * @returns {Promise<{ status: 'not_connected' | 'synced' | 'failed', provider: string | null, externalId: string | null }>}
+ * @param {{ op?: 'push' | 'update' | 'remove', token?: string|null, actorId?: string|null }} [options] `actorId` : la personne qui agit (délégation Google, voir googleDelegation.js)
+ * @returns {Promise<{ status: 'not_connected' | 'synced' | 'failed', provider: string | null, externalId: string | null, ownerId?: string }>}
  */
-export async function syncAppointment(item, { op = 'push' } = {}) {
+export async function syncAppointment(item, { op = 'push', token = null, actorId = null } = {}) {
   let adapter = null;
   try {
-    if (companyResolver && item?.companyId) adapter = await companyResolver(String(item.companyId), { op, provider: item.calendarProvider || null, hasExternalId: Boolean(item.calendarExternalId) });
+    if (companyResolver && item?.companyId) {
+      // `userIds` : personnes dont l'agenda peut recevoir le rendez-vous (assignée, puis créatrice) ; `ownerId` : propriétaire du calendrier où l'événement existe déjà.
+      adapter = await companyResolver(String(item.companyId), {
+        op, token, actorId: actorId ? String(actorId) : '', provider: item.calendarProvider || null, hasExternalId: Boolean(item.calendarExternalId), ownerId: item.calendarOwnerId || '',
+        userIds: [item.assignee?.id || item.assigneeId, item.createdBy?.id || item.createdById].filter(Boolean),
+      });
+    }
   } catch (error) {
     console.error(`[calendarSync] résolution de l’agenda impossible: ${error.code || error.message}`);
     return { status: 'failed', provider: null, externalId: null };
   }
+  // Propriétaire du calendrier parti ou connexion inutilisable : pas d'écriture chez le fournisseur, `not_connected` sans erreur.
+  if (adapter?.unavailable) return { status: 'not_connected', provider: adapter.id || null, externalId: null, unavailable: true };
   adapter = adapter || providers.values().next().value;
   if (!adapter) return { status: 'not_connected', provider: null, externalId: null };
   try {
@@ -55,7 +63,7 @@ export async function syncAppointment(item, { op = 'push' } = {}) {
       return { status: 'synced', provider: adapter.id, externalId: null };
     }
     const r = await (op === 'update' && typeof adapter.update === 'function' ? adapter.update(item) : adapter.push(item));
-    return { status: 'synced', provider: r.provider, externalId: r.externalId };
+    return { status: 'synced', provider: r.provider, externalId: r.externalId, ...(r.ownerId ? { ownerId: r.ownerId } : {}) };
   } catch (error) {
     console.error(`[calendarSync] ${adapter.id} failed: ${error.code || error.message}`); // jamais le détail du fournisseur
     return { status: 'failed', provider: adapter.id, externalId: null };
