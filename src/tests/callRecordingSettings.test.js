@@ -34,11 +34,9 @@ assert.deepEqual(toPublicSettings(null).recording, { inbound: true, outbound: tr
 assert.deepEqual(toPublicSettings({}).recording, { inbound: true, outbound: true });
 assert.deepEqual(toPublicSettings({ recording: { inbound: false } }).recording, { inbound: false, outbound: true });
 assert.deepEqual(toPublicSettings({ recording: { outbound: false } }).recording, { inbound: true, outbound: false });
-// Valeur publique selon l'offre : Call Centre / TaaS inchangé (absent = activé) ; Accueil désactivé par défaut ; Nomad toujours désactivé.
-for (const policy of [undefined, 'default_on']) {
-  assert.deepEqual(toPublicSettings(null, { recordingPolicy: policy }).recording, { inbound: true, outbound: true }, `${policy} : comportement d'avant`);
-  assert.deepEqual(toPublicSettings({ recording: { inbound: false } }, { recordingPolicy: policy }).recording, { inbound: false, outbound: true });
-}
+// Valeur publique selon l'offre : Call Centre / TaaS toujours activé (non réglable, valeur stockée ignorée) ; Accueil désactivé par défaut ; Nomad toujours désactivé.
+assert.deepEqual(toPublicSettings(null, { recordingPolicy: 'default_on' }).recording, { inbound: true, outbound: true }, 'comportement d\'avant');
+assert.deepEqual(toPublicSettings({ recording: { inbound: false, outbound: false } }, { recordingPolicy: 'default_on' }).recording, { inbound: true, outbound: true }, 'valeur stockée ignorée');
 assert.deepEqual(toPublicSettings(null, { recordingPolicy: 'opt_in' }).recording, { inbound: false, outbound: false }, 'Accueil : désactivé par défaut');
 assert.deepEqual(toPublicSettings({ greetingEnabled: true }, { recordingPolicy: 'opt_in' }).recording, { inbound: false, outbound: false });
 assert.deepEqual(toPublicSettings({ recording: { inbound: true, outbound: true } }, { recordingPolicy: 'opt_in' }).recording, { inbound: true, outbound: true }, 'Accueil activé par le titulaire');
@@ -71,11 +69,12 @@ assert.deepEqual(Object.fromEntries(Object.entries(plans).map(([k, v]) => [k, R.
 assert.equal(R.recordingPolicy({ product: 'autre', callcenterTier: null }), 'never');
 assert.equal(R.recordingPolicy(null), 'never');
 // enabled : offres enregistrées par défaut ; enabledOptIn : Accueil (seul un `true` explicite active)
+// Full Scope / Multi-clients / TaaS : toujours enregistrés, réglage non lu (comportement de recette) ; seul Accueil dépend du réglage.
 const settingsCases = {
   absent: { load: async () => null, enabled: true, enabledOptIn: false },
   document_sans_recording: { load: async () => ({ greetingEnabled: true }), enabled: true, enabledOptIn: false },
   active: { load: async () => ({ recording: { inbound: true, outbound: true } }), enabled: true, enabledOptIn: true },
-  les_deux_coupes: { load: async () => ({ recording: { inbound: false, outbound: false } }), enabled: false, enabledOptIn: false },
+  les_deux_coupes: { load: async () => ({ recording: { inbound: false, outbound: false } }), enabled: true, enabledOptIn: false },
   valeur_non_booleenne: { load: async () => ({ recording: { inbound: 'true', outbound: 1 } }), enabled: true, enabledOptIn: false },
 };
 for (const [offer, limits] of Object.entries(plans)) {
@@ -89,18 +88,21 @@ for (const [offer, limits] of Object.entries(plans)) {
       else assert.deepEqual(d, { record: false, reason: 'disabled_by_company' }, label);
       assert.equal(await R.shouldRecordCompany(COMPANY, async () => limits, { direction, loadSettings: sc.load }), d.record, `${label} : booléen aligné`);
     }
-    // Erreur de lecture du réglage : jamais d'enregistrement (offre éligible) ; offre non éligible : le motif reste « offre ».
+    // Erreur de lecture du réglage : Accueil jamais enregistré (lookup_failed) ; offres enregistrées par défaut : enregistrées comme sur
+    // recette (réglage non lu) ; offre exclue : le motif reste « offre ».
     const boom = async () => { throw new Error('base indisponible'); };
     const d = await R.decideRecording(COMPANY, { direction, loadLimits: async () => limits, loadSettings: boom });
-    assert.deepEqual(d, eligible.includes(offer) ? { record: false, reason: 'lookup_failed' } : { record: false, reason: 'plan_excludes' }, `${offer}/${direction}/erreur réglage`);
+    const expectBoom = !eligible.includes(offer) ? { record: false, reason: 'plan_excludes' } : OPT_IN.includes(offer) ? { record: false, reason: 'lookup_failed' } : { record: true, reason: 'recorded_planned' };
+    assert.deepEqual(d, expectBoom, `${offer}/${direction}/erreur réglage`);
     // Erreur de lecture de l'offre
     assert.deepEqual(await R.decideRecording(COMPANY, { direction, loadLimits: boom, loadSettings: settingsCases.active.load }), { record: false, reason: 'lookup_failed' });
   }
 }
-// Un seul sens coupé : l'autre reste enregistré
-const inOnly = async () => ({ recording: { inbound: false } });
-assert.equal((await R.decideRecording(COMPANY, { direction: 'inbound', loadLimits: async () => plans.full_scope, loadSettings: inOnly })).reason, 'disabled_by_company');
-assert.equal((await R.decideRecording(COMPANY, { direction: 'outbound', loadLimits: async () => plans.full_scope, loadSettings: inOnly })).reason, 'recorded_planned');
+
+// Offre enregistrée par défaut : le réglage n'est même pas lu
+let readDefault = false;
+assert.equal((await R.decideRecording(COMPANY, { direction: 'inbound', loadLimits: async () => plans.full_scope, loadSettings: async () => { readDefault = true; return { recording: { inbound: false } }; } })).reason, 'recorded_planned');
+assert.equal(readDefault, false);
 // Entreprise inconnue
 assert.deepEqual(await R.decideRecording('', { direction: 'inbound', loadLimits: async () => plans.full_scope }), { record: false, reason: 'lookup_failed' });
 // Sans chargeur de réglage (ancien appel) : comportement d'avant ; Accueil : jamais sans réglage lu
@@ -130,7 +132,7 @@ assert.equal(R.buildRecordingPlan({ record: false, companyId: COMPANY, callSid: 
   const ok = await R.planForCall({ companyId: COMPANY, callSid: CALL, baseUrl: 'https://orch.test', language: 'fr', direction: 'inbound', loadLimits: async () => plans.full_scope, loadSettings: async () => null });
   assert.equal(ok.reason, 'recorded_planned');
   assert.ok(ok.plan && ok.plan.say && ok.plan.attrs, 'annonce + attributs ensemble');
-  const off = await R.planForCall({ companyId: COMPANY, callSid: CALL, baseUrl: 'https://orch.test', language: 'fr', direction: 'outbound', loadLimits: async () => plans.full_scope, loadSettings: async () => ({ recording: { outbound: false } }) });
+  const off = await R.planForCall({ companyId: COMPANY, callSid: CALL, baseUrl: 'https://orch.test', language: 'fr', direction: 'outbound', loadLimits: async () => plans.accueil, loadSettings: async () => ({ recording: { outbound: false } }) });
   assert.deepEqual({ plan: off.plan, reason: off.reason }, { plan: null, reason: 'disabled_by_company' });
   // CallSid illisible : pas de consigne, donc pas « recorded_planned »
   const nosid = await R.planForCall({ companyId: COMPANY, callSid: 'x', baseUrl: 'https://orch.test', language: 'fr', direction: 'inbound', loadLimits: async () => plans.full_scope, loadSettings: async () => null });
@@ -200,6 +202,17 @@ assert.equal(S.FAILED_PATH, '/calls/recording/failed');
   assert.equal(await S.recordDecision({ callSid: '', companyId: COMPANY, direction: 'inbound', reason: 'recorded_planned' }, { model: fakeModel(), env }), 'ignored');
   assert.equal(await S.recordDecision({ callSid: CALL, companyId: COMPANY, direction: 'inbound', reason: 'inconnu' }, { model: fakeModel(), env }), 'ignored');
   assert.equal(await S.recordDecision({ callSid: CALL, companyId: COMPANY, direction: 'sideways', reason: 'recorded_planned' }, { model: fakeModel(), env }), 'ignored');
+}
+
+// ---------------------------------------------------------------- première décision consignée (tentatives suivantes)
+{
+  const rowModel = (row, fail = false) => ({ findOne: () => ({ select: () => ({ lean: async () => { if (fail) throw new Error('mongo down'); return row; } }) }) });
+  assert.equal(await S.firstRecordingDecision({ callSid: CALL, companyId: COMPANY }, { model: rowModel({ reason: 'recorded_planned', companyId: COMPANY }) }), 'recorded_planned');
+  assert.equal(await S.firstRecordingDecision({ callSid: CALL, companyId: COMPANY }, { model: rowModel({ reason: 'disabled_by_company', companyId: COMPANY }) }), 'disabled_by_company');
+  assert.equal(await S.firstRecordingDecision({ callSid: CALL, companyId: COMPANY }, { model: rowModel(null) }), null, 'aucune décision');
+  assert.equal(await S.firstRecordingDecision({ callSid: CALL, companyId: COMPANY }, { model: rowModel({ reason: 'recorded_planned', companyId: '64b0000000000000000000ff' }) }), null, 'autre entreprise');
+  assert.equal(await S.firstRecordingDecision({ callSid: CALL, companyId: COMPANY }, { model: rowModel(null, true) }), null, 'base en panne');
+  assert.equal(await S.firstRecordingDecision({ callSid: 'x', companyId: COMPANY }, { model: rowModel({ reason: 'recorded_planned', companyId: COMPANY }) }), null, 'CallSid illisible');
 }
 
 // ---------------------------------------------------------------- échec d'attache : persisté ET signalé (technical_failure)

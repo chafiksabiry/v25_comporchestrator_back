@@ -38,8 +38,8 @@ import { syncMinutesFromCalls } from './escrowController.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket, MINUTES_INSUFFICIENT_CODE, MINUTES_INSUFFICIENT_MESSAGE, spokenLanguage, spokenRefusal, SPOKEN_REFUSALS } from '../services/browserOutbound.js';
 import { transferResult } from './callTransferController.js';
-import { consentLanguageFor, consentTwiml, mapCallRecordingCallback, normalizeConsentLanguage, planForCall, verifyRecordingToken } from '../services/callRecording.js';
-import { attachRecordingTracked, recordDecision } from '../services/recordingStatus.js';
+import { buildRecordingPlan, consentLanguageFor, consentTwiml, mapCallRecordingCallback, normalizeConsentLanguage, planForCall, verifyRecordingToken } from '../services/callRecording.js';
+import { attachRecordingTracked, firstRecordingDecision, recordDecision } from '../services/recordingStatus.js';
 import { journalForwardedCall, journalUnansweredCall } from '../services/journalCall.js';
 import ReachSettings from '../models/ReachSettings.js';
 import { decideInboundRoute, mobileTarget, shouldRingMobileAfter } from '../services/reach.js';
@@ -82,6 +82,17 @@ const recordingPlanFor = async ({ companyId, callSid, baseUrl, from, language = 
   if (!companyId || !callSid) return null;
   // Annonce dans la langue de l'interlocuteur quand son indicatif est reconnu, sinon dans celle de la société (`language`).
   return recordingDecisionFor({ companyId, callSid, baseUrl, language: consentLanguageFor(from, language), direction: 'inbound' });
+};
+
+/**
+ * Consigne d'enregistrement des tentatives SUIVANTES d'une sonnerie à tour de rôle : la première décision consignée de l'appel
+ * fait foi (jamais recalculée). L'annonce a été jouée (ou non) à la première tentative : enregistrer seulement si cette décision
+ * était `recorded_planned`. Pas de décision lisible (consigne absente, autre entreprise, base en panne) : non enregistré.
+ */
+const recordingPlanFromFirstDecision = async ({ companyId, callSid, baseUrl, from, language = 'fr' }) => {
+  if (!companyId || !callSid) return null;
+  if ((await firstRecordingDecision({ callSid, companyId })) !== 'recorded_planned') return null;
+  return buildRecordingPlan({ record: true, companyId: String(companyId), callSid, baseUrl, language: consentLanguageFor(from, language) });
 };
 
 /** In-memory status for live test-call monitoring (popup). */
@@ -2663,10 +2674,12 @@ class PhoneNumberController {
     try {
       const baseUrl = `https://${req.get('host')}`;
       const from = String(req.body?.From || '').trim();
-      // Tentatives suivantes : même enregistrement que la première (l'annonce n'est pas répétée). Entreprise lue dans le plan signé.
+      // Tentatives suivantes : même enregistrement que la première (l'annonce n'est pas répétée) : la PREMIÈRE décision consignée
+      // de l'appel fait foi, jamais recalculée (un réglage changé entre-temps n'enregistre pas une tentative sans annonce).
+      // Entreprise lue dans le plan signé.
       const callSid0 = String(req.body?.CallSid || '').trim();
       const planOwner = (() => { try { return readPlan(req.query?.s).companyId; } catch { return ''; } })();
-      const recording = await recordingPlanFor({ companyId: planOwner, callSid: callSid0, baseUrl, from, language: languageForPhone(toE164(req.body?.To || req.body?.Called)) });
+      const recording = await recordingPlanFromFirstDecision({ companyId: planOwner, callSid: callSid0, baseUrl, from, language: languageForPhone(toE164(req.body?.To || req.body?.Called)) });
       const step = continueQueuePlan({ token: req.query?.s, dialStatus: req.body?.DialCallStatus, baseUrl, from, recording });
       if (step.action === 'dial') return res.type('text/xml').status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response>${step.body}</Response>`);
       const callSid = String(req.body?.CallSid || '').trim();

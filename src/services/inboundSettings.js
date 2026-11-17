@@ -16,8 +16,8 @@ export const DEFAULTS = Object.freeze({
   greetingEnabled: true,
   secretaryOutbound: true,
   /**
-   * Enregistrement des conversations voulu par la société, par sens, pour une offre enregistrée par défaut (Full Scope,
-   * Multi-clients, TaaS). Accueil (option) : `false` par défaut ; Nomad Solo / offre inconnue : toujours `false` (voir toPublicSettings).
+   * Enregistrement des conversations, par sens (valeur sans politique d'offre connue). Full Scope / Multi-clients / TaaS : toujours `true`
+   * (non réglable) ; Accueil (option) : `false` par défaut ; Nomad Solo / offre inconnue : toujours `false` (voir toPublicSettings).
    */
   recording: Object.freeze({ inbound: true, outbound: true }),
 });
@@ -81,11 +81,12 @@ export function isAudioValidated(audio, text, voice) {
 
 /**
  * Valeur publique du réglage d'enregistrement d'un sens selon la politique de l'offre (callRecording.recordingPolicy) :
- * 'default_on' ou politique non fournie : absent = activé (comportement d'avant) ; 'opt_in' (Accueil) : activé seulement si `true` ;
- * 'never' : toujours désactivé ; toute autre valeur (offre illisible) : activé seulement si `true` (rien n'est enregistré sans offre lisible).
+ * 'default_on' : toujours activé (non réglable, la valeur stockée est ignorée) ; politique non fournie : absent = activé ;
+ * 'opt_in' (Accueil) : activé seulement si `true` ; 'never' : toujours désactivé ; toute autre valeur (offre illisible) : activé seulement si `true`.
  */
 function publicRecording(value, policy) {
-  if (policy === undefined || policy === 'default_on') return value ?? true;
+  if (policy === 'default_on') return true;
+  if (policy === undefined) return value ?? true;
   if (policy === 'never') return false;
   return value === true;
 }

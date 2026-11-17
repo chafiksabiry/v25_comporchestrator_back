@@ -53,6 +53,8 @@ export const inboundSettingsController = {
       if (value.recording !== undefined) {
         const access = await callerAccess(req).catch((e) => { if (e instanceof ScopeError) return null; throw e; });
         if (!access || access.isOwner !== true || String(access.companyId) !== String(companyId)) return fail(res, 403, "Seul le titulaire peut régler l'enregistrement des appels.", 'RECORDING_OWNER_ONLY');
+        // Réglable seulement pour Accueil (option) ; Full Scope / Multi-clients / TaaS : toujours enregistrés, Nomad Solo : jamais.
+        if ((await recordingPolicyOf(companyId)) !== 'opt_in') return fail(res, 400, "L'enregistrement des appels n'est pas réglable pour votre offre.", 'RECORDING_NOT_CONFIGURABLE');
       }
       // Pays autorisés pour les appels sortants : liste d'indicatifs connus, ou null pour revenir au réglage par défaut.
       // Réservé au responsable (même règle que l'autorisation des secrétaires) ; validé par le serveur.

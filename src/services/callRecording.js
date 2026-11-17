@@ -8,8 +8,8 @@ import { resolveDashCallsApi, SERVICE_ISSUER } from './voicemailAnalysis.js';
  * Enregistrement des conversations (<Dial record>), selon l'offre et le réglage de la société.
  *
  * Décision du propriétaire, par offre (`recordingPolicy`) :
- *  - Full Scope / Multi-clients (Call Centre) et forfaits TaaS : enregistrés par défaut ; la société peut le couper par sens
- *    (réglage `recording.<sens>` à `false`). Comportement inchangé.
+ *  - Full Scope / Multi-clients (Call Centre) et forfaits TaaS : toujours enregistrés, comme avant ; aucun réglage société
+ *    (le réglage n'est ni lu ni modifiable : PUT refusé, RECORDING_NOT_CONFIGURABLE).
  *  - Accueil : option de la société, DÉSACTIVÉE par défaut ; enregistré seulement si le titulaire l'a activée
  *    (`recording.<sens>` strictement `true`).
  *  - Nomad Solo, offre inconnue ou absente : jamais enregistrés.
@@ -53,12 +53,12 @@ export const RECORDING_REASONS = ['recorded_planned', 'plan_excludes', 'disabled
 export const RECORDING_DIRECTIONS = ['inbound', 'outbound'];
 
 /**
- * Décision unique « enregistré = offre ET réglage société » + motif. Ne lève jamais.
- * L'offre est lue d'abord : offre jamais enregistrée = `plan_excludes` (le réglage n'est pas lu).
- *  - offre enregistrée par défaut : `recording.<direction>` à `false` (seule valeur qui désactive ; absent = activé) = `disabled_by_company` ;
+ * Décision unique « enregistré = offre (ET réglage société pour Accueil) » + motif. Ne lève jamais.
+ * L'offre est lue d'abord : offre jamais enregistrée = `plan_excludes`.
+ *  - offre enregistrée par défaut (Full Scope, Multi-clients, TaaS) : toujours enregistrée, le réglage n'est pas lu (comportement de recette) ;
  *  - Accueil (option) : enregistré seulement si `recording.<direction>` vaut strictement `true`, sinon `disabled_by_company`
- *    (y compris sans fonction de lecture du réglage).
- * Toute erreur de lecture (offre, réglage) ou entreprise inconnue : non enregistré, `lookup_failed`.
+ *    (y compris sans fonction de lecture du réglage) ; réglage illisible : non enregistré, `lookup_failed`.
+ * Offre illisible ou entreprise inconnue : non enregistré, `lookup_failed`.
  * `loadLimits` et `loadSettings` (optionnel) sont injectés.
  * @returns {Promise<{record: boolean, reason: 'recorded_planned'|'plan_excludes'|'disabled_by_company'|'lookup_failed'}>}
  */
@@ -72,13 +72,11 @@ export async function decideRecording(companyId, { direction = 'inbound', loadLi
     return { record: false, reason: 'lookup_failed' };
   }
   if (policy === 'never') return { record: false, reason: 'plan_excludes' };
-  if (typeof loadSettings !== 'function') {
-    return policy === 'default_on' ? { record: true, reason: 'recorded_planned' } : { record: false, reason: 'disabled_by_company' };
-  }
+  if (policy === 'default_on') return { record: true, reason: 'recorded_planned' };
+  if (typeof loadSettings !== 'function') return { record: false, reason: 'disabled_by_company' };
   try {
     const value = (await loadSettings(companyId))?.recording?.[direction];
-    const enabled = policy === 'opt_in' ? value === true : value !== false;
-    return enabled ? { record: true, reason: 'recorded_planned' } : { record: false, reason: 'disabled_by_company' };
+    return value === true ? { record: true, reason: 'recorded_planned' } : { record: false, reason: 'disabled_by_company' };
   } catch (e) {
     console.error('[call-recording] réglage société illisible, appel non enregistré:', e?.message || e);
     return { record: false, reason: 'lookup_failed' };

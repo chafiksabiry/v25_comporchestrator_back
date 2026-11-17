@@ -89,6 +89,23 @@ export async function recordDecision({ callSid, companyId, direction, reason }, 
   }
 }
 
+/**
+ * Première décision consignée d'un appel (motif), pour les étapes suivantes du même appel. null si aucune ligne, si elle appartient
+ * à une autre entreprise ou si la lecture échoue : l'appelant n'enregistre alors pas (jamais d'enregistrement sans annonce).
+ * @returns {Promise<string|null>}
+ */
+export async function firstRecordingDecision({ callSid, companyId }, { model = CallRecordingStatus } = {}) {
+  if (!CALL_SID.test(String(callSid || '')) || !companyId) return null;
+  try {
+    const row = await model.findOne({ callSid }).select('reason companyId').lean();
+    if (!row || String(row.companyId) !== String(companyId)) return null;
+    return RECORDING_REASONS.includes(row.reason) ? row.reason : null;
+  } catch (e) {
+    console.error('[call-recording] première décision illisible, tentative non enregistrée:', e?.message || e);
+    return null;
+  }
+}
+
 const FAILURE_CODE = { pending: 'attach_retries_exhausted', error: 'attach_retries_exhausted', rejected: 'attach_rejected', unconfigured: 'dash_unconfigured' };
 
 /**

@@ -27,6 +27,7 @@ const { PhoneNumber } = await import('../models/PhoneNumber.js');
 const { Subscription } = await import('../models/Subscription.js');
 const { markAvailable, clearPresence } = await import('../services/voicePresenceService.js');
 const { signOutboundTicket } = await import('../services/browserOutbound.js');
+const { signPlan } = await import('../services/queueRouting.js');
 const { phoneNumberService } = await import('../services/phoneNumberService.js');
 const { phoneNumberController: pc } = await import('../controllers/phoneNumberController.js');
 const { inboundSettingsController } = await import('../controllers/inboundSettingsController.js');
@@ -69,6 +70,7 @@ beforeEach(() => {
   InboundSettings.findOne = () => settingsRead(settingsDoc, settingsFails);
   ReachSettings.findOne = () => lean(null);
   MinutesCompany.findOne = () => ({ select: () => ({ lean: async () => ({ minutes: 100 }) }) });
+  CallRecordingStatus.findOne = (f) => ({ select: () => ({ lean: async () => statusDocs.get(f.callSid) || null }) });
   CallRecordingStatus.updateOne = async (f, u, o) => {
     const cur = statusDocs.get(f.callSid);
     if (!cur) { if (!o?.upsert) return { upsertedCount: 0 }; statusDocs.set(f.callSid, { callSid: f.callSid, ...(u.$setOnInsert || {}), ...(u.$set || {}) }); return { upsertedCount: 1 }; }
@@ -99,10 +101,10 @@ const announced = (twiml) => /(peut être enregistré|may be recorded|call-annou
 const statusOf = async (callSid) => { await settle(); await settle(); return { doc: statusDocs.get(callSid), push: dashCalls.filter((c) => c.url.endsWith('/calls/recording/intent') && c.body.sid === callSid) }; };
 
 const SETTINGS = {
-  // expectRecorded : offres enregistrées par défaut ; expectOptIn : Accueil (seul `true` explicite pour ce sens)
+  // expectRecorded : offres enregistrées par défaut (réglage ignoré, comme sur recette) ; expectOptIn : Accueil (seul `true` explicite pour ce sens)
   absent: { doc: () => ({}), expectRecorded: true, expectOptIn: false },
   active: { doc: (dir) => ({ recording: { [dir]: true } }), expectRecorded: true, expectOptIn: true },
-  desactive: { doc: (dir) => ({ recording: { [dir]: false } }), expectRecorded: false, expectOptIn: false },
+  desactive: { doc: (dir) => ({ recording: { [dir]: false } }), expectRecorded: true, expectOptIn: false },
   autre_sens_coupe: { doc: (dir) => ({ recording: { [dir === 'inbound' ? 'outbound' : 'inbound']: false } }), expectRecorded: true, expectOptIn: false },
   autre_sens_active: { doc: (dir) => ({ recording: { [dir === 'inbound' ? 'outbound' : 'inbound']: true } }), expectRecorded: true, expectOptIn: false },
 };
@@ -128,16 +130,17 @@ for (const offer of Object.keys(OFFERS)) {
         assert.equal(push[0].body.recordingStatus, reason === 'recorded_planned' ? 'pending' : 'not_recorded');
       });
     }
-    test(`${offer} / ${dir} / erreur de lecture du réglage : jamais enregistré`, async () => {
+    test(`${offer} / ${dir} / erreur de lecture du réglage : Accueil non enregistré, offres par défaut enregistrées comme sur recette`, async () => {
       plan = offer; settingsFails = true;
       const callSid = sid('b');
       // l'entrant lit aussi le réglage d'accueil avec un repli : seule la lecture « recording » doit faire échouer la décision
       const twiml = await (dir === 'inbound' ? inbound(callSid) : outbound(callSid));
-      assert.equal(recorded(twiml), false);
-      assert.equal(announced(twiml), false);
+      const expected = ELIGIBLE.includes(offer) && !OPT_IN.includes(offer);
+      assert.equal(recorded(twiml), expected);
+      assert.equal(announced(twiml), expected, 'annonce avec l\'enregistrement, et seulement lui');
       if (offer === 'nomad_solo' && dir === 'inbound') return;
       const { doc } = await statusOf(callSid);
-      assert.equal(doc?.reason, ELIGIBLE.includes(offer) ? 'lookup_failed' : 'plan_excludes');
+      assert.equal(doc?.reason, !ELIGIBLE.includes(offer) ? 'plan_excludes' : OPT_IN.includes(offer) ? 'lookup_failed' : 'recorded_planned');
     });
   }
 }
@@ -179,11 +182,24 @@ const put = async (body, { role = 'owner' } = {}) => {
   await inboundSettingsController.put({ body: { companyId: C1, ...body }, headers: { authorization: 'Bearer tok' }, user: { userId: `u-${role}` }, get: () => 'orch.test' }, res);
   return { out, update };
 };
-test('PUT : le titulaire règle l\'enregistrement (mise à jour partielle, chemins pointés)', async () => {
-  const { out, update } = await put({ recording: { inbound: false } });
+test('PUT : le titulaire règle l\'enregistrement Accueil (mise à jour partielle, chemins pointés)', async () => {
+  plan = 'accueil';
+  const { out, update } = await put({ recording: { inbound: true } });
   assert.equal(out.code, 200);
-  assert.deepEqual(update.$set, { 'recording.inbound': false });
-  assert.deepEqual(out.body.data.recording, { inbound: false, outbound: true });
+  assert.deepEqual(update.$set, { 'recording.inbound': true });
+  assert.deepEqual(out.body.data.recording, { inbound: true, outbound: false });
+});
+test('PUT : réglage refusé hors Accueil (Full Scope, Multi-clients, TaaS, Nomad), rien n\'est écrit, le reste des réglages inchangé', async () => {
+  for (const offer of ['full_scope', 'multi_clients', 'taas', 'nomad_solo']) {
+    plan = offer;
+    const r = await put({ recording: { inbound: false, outbound: false } });
+    assert.equal(r.out.code, 400, offer);
+    assert.equal(r.out.body.code, 'RECORDING_NOT_CONFIGURABLE', offer);
+    assert.equal(r.update, null, `${offer} : rien n'est écrit`);
+    assert.equal((await put({ ringTimeoutSeconds: 40 })).out.code, 200, `${offer} : autres réglages`);
+  }
+  plan = 'full_scope';
+  assert.deepEqual((await put({ ringTimeoutSeconds: 40 })).out.body.data.recording, { inbound: true, outbound: true }, 'Full Scope : toujours enregistré');
 });
 test('PUT : seul le titulaire règle l\'enregistrement ; une secrétaire (agent) ou un membre est refusé, le reste des réglages reste accessible comme avant', async () => {
   for (const role of ['agent', 'member']) {
@@ -238,4 +254,51 @@ test('PUT Accueil : le titulaire active l\'option, la réponse le reflète', asy
   assert.deepEqual(out.body.data.recording, { inbound: true, outbound: true });
   const off = await put({ recording: { inbound: false } });
   assert.deepEqual(off.out.body.data.recording, { inbound: false, outbound: false }, 'sortant absent = désactivé pour Accueil');
+});
+
+// ---------------------------------------------------------------- sonnerie à tour de rôle : la PREMIÈRE décision fait foi
+const queuePlan = [{ ids: ['cc-a'], t: 20, seq: true }, { ids: ['cc-b'], t: 20, seq: true }, { ids: ['cc-c'], t: 20, seq: true }];
+const queueNext = (callSid, companyId = C1) => hit('handleTwilioInboundQueueNext', { body: { From: CALLER, To: LINE, CallSid: callSid, DialCallStatus: 'no-answer' }, query: { s: signPlan(queuePlan, 1, companyId) } });
+test('tentative suivante : enregistrée seulement si la première décision était « recorded_planned », sans nouvelle annonce', async () => {
+  plan = 'accueil'; settingsDoc = { recording: { inbound: true } };
+  const callSid = sid('q');
+  const first = await inbound(callSid);
+  assert.ok(recorded(first) && announced(first), 'première tentative : annonce + enregistrement');
+  await statusOf(callSid);
+  // Le titulaire coupe l'option pendant la sonnerie : la tentative suivante reste enregistrée (l'annonce a été jouée)
+  settingsDoc = { recording: { inbound: false } };
+  const next = await queueNext(callSid);
+  assert.match(next, /<Client>cc-b<\/Client>/);
+  assert.ok(recorded(next), 'même enregistrement que la première tentative');
+  assert.equal(announced(next), false, 'l\'annonce n\'est pas répétée');
+});
+test('tentative suivante : jamais enregistrée si la première ne l\'était pas, même si l\'option est activée entre-temps (pas d\'enregistrement sans annonce)', async () => {
+  plan = 'accueil'; settingsDoc = {};
+  const callSid = sid('r');
+  const first = await inbound(callSid);
+  assert.ok(!recorded(first) && !announced(first));
+  await statusOf(callSid);
+  settingsDoc = { recording: { inbound: true } };
+  const next = await queueNext(callSid);
+  assert.match(next, /<Client>cc-b<\/Client>/);
+  assert.equal(recorded(next), false);
+  assert.equal(announced(next), false);
+});
+test('tentative suivante : sans décision consignée, d\'une autre entreprise ou base en panne : non enregistrée, et rien n\'est recalculé', async () => {
+  plan = 'full_scope';
+  // Aucune ligne (consignation perdue) : non enregistrée, même pour une offre enregistrée par défaut
+  let next = await queueNext(sid('s'));
+  assert.match(next, /<Client>cc-b<\/Client>/);
+  assert.equal(recorded(next), false);
+  assert.equal(statusDocs.has(sid('s')), false, 'aucune nouvelle décision consignée');
+  // Ligne d'une autre entreprise
+  statusDocs.set(sid('t'), { callSid: sid('t'), companyId: '64b0000000000000000000ff', reason: 'recorded_planned' });
+  next = await queueNext(sid('t'));
+  assert.equal(recorded(next), false);
+  // Base en panne
+  CallRecordingStatus.findOne = () => ({ select: () => ({ lean: async () => { throw new Error('mongo down'); } }) });
+  statusDocs.set(sid('u'), { callSid: sid('u'), companyId: C1, reason: 'recorded_planned' });
+  next = await queueNext(sid('u'));
+  assert.match(next, /<Client>cc-b<\/Client>/);
+  assert.equal(recorded(next), false);
 });
