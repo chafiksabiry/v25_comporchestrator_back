@@ -87,6 +87,14 @@ export async function reverseSaleCommission({
     throw err;
   }
 
+  // La commission est toujours rattachée à une société (réservation impossible sans) : c'est elle qui fait foi, même si la transaction d'origine
+  // n'a pas de companyId (la vérification ci-dessus serait alors contournée).
+  if (companyId && String(repTx.companyId) !== String(companyId)) {
+    const err = new Error('Transaction does not belong to this company');
+    err.statusCode = 403;
+    throw err;
+  }
+
   if (repTx.status === 'reversed' || repTx.status === 'refused') {
     const err = new Error('Commission already reversed');
     err.statusCode = 409;
