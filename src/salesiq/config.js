@@ -33,6 +33,8 @@ export function getSalesIqConfig(env = process.env) {
     maxTokens: int(env.SALESIQ_CLAUDE_MAX_TOKENS, 700),
     maxToolRounds: int(env.SALESIQ_MAX_TOOL_ROUNDS, 4),
     claudeTimeoutMs: int(env.SALESIQ_CLAUDE_TIMEOUT_MS, 45_000),
+    /** Délai pendant lequel on attend Claude avant de répondre « pending » (SalesIQ coupe le webhook à 5 s). */
+    syncBudgetMs: int(env.SALESIQ_SYNC_BUDGET_MS, 3500),
     // --- Zoho (un seul client OAuth « Self Client » avec jeton de rafraîchissement) ---
     zoho: {
       clientId: env.ZOHO_CLIENT_ID || '',
