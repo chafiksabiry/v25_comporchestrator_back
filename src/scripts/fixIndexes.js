@@ -5,7 +5,9 @@ import { PhoneNumber } from '../models/PhoneNumber.js';
 async function fixIndexes() {
   try {
     // Connect to MongoDB preprod database 
-    await mongoose.connect('mongodb://harx:ix5S3vU6BjKn4MHp@207.180.226.2:27017/V25_HarxPreProd', {
+    const uri = process.env.MONGODB_URI;
+    if (!uri) throw new Error('MONGODB_URI is required (no credentials are stored in the repository)');
+    await mongoose.connect(uri, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
     });
