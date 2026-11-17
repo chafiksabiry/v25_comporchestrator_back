@@ -65,7 +65,14 @@ export const addressController = {
         customerReference
       });
 
-      await claimAsset(access, 'address', address?.id);
+      try {
+        await claimAsset(access, 'address', address?.id);
+      } catch (claimError) {
+        // Propriété non enregistrée : l'adresse serait inaccessible à sa propre société ; nettoyage chez l'opérateur au mieux, erreur claire.
+        console.error('Error registering address ownership:', claimError);
+        if (address?.id) await addressService.deleteAddress(address.id).catch((e) => console.error('Cleanup of address failed:', e?.message || e));
+        return res.status(500).json({ error: 'Internal Server Error', code: 'ownership_registration_failed', message: 'The address could not be registered for your company; please retry.' });
+      }
       res.status(201).json(address);
     } catch (error) {
       console.error('Error in createAddress:', error);

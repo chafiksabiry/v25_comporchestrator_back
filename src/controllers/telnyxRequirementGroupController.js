@@ -143,10 +143,14 @@ export const telnyxRequirementGroupController = {
         });
       }
 
-      // Les pièces (documents, adresses) référencées doivent appartenir à CETTE société : on n'attache pas la pièce d'autrui à son groupe (refus avant tout appel Telnyx).
+      // Chaque exigence doit être DÉCLARÉE dans le groupe local (sinon le contrôle de pièce ci-dessous serait contournable avec un identifiant inconnu), et les pièces
+      // (documents, adresses) référencées doivent appartenir à CETTE société : on n'attache pas la pièce d'autrui à son groupe (refus avant tout appel Telnyx).
       for (const r of requirements) {
         const declared = (own.group.requirements || []).find((x) => x.requirementId === r.requirementId);
-        if (declared && (declared.type === 'document' || declared.type === 'address')) {
+        if (!declared) {
+          return res.status(400).json({ error: 'Bad Request', code: 'unknown_requirement', message: `Requirement ${r.requirementId} is not part of this group` });
+        }
+        if (declared.type === 'document' || declared.type === 'address') {
           const assetId = assetIdOf(r.value);
           if (!assetId || !(await isOwnedAsset(declared.type, assetId, own.access.companyId))) {
             return res.status(403).json({ error: 'Forbidden', code: 'asset_not_owned', message: `Requirement ${r.requirementId}: the ${declared.type} does not belong to your company` });

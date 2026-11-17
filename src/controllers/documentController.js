@@ -71,7 +71,14 @@ export const documentController = {
         customerReference
       );
       
-      await claimAsset(access, 'document', document?.id);
+      try {
+        await claimAsset(access, 'document', document?.id);
+      } catch (claimError) {
+        // Propriété non enregistrée : la pièce serait inaccessible à sa propre société ; nettoyage chez l'opérateur au mieux, erreur claire.
+        console.error('Error registering document ownership:', claimError);
+        if (document?.id) await documentService.deleteDocument(document.id).catch((e) => console.error('Cleanup of document failed:', e?.message || e));
+        return res.status(500).json({ error: 'Internal Server Error', code: 'ownership_registration_failed', message: 'The document could not be registered for your company; please retry.' });
+      }
       res.status(201).json(document);
     } catch (error) {
       console.error('Error in uploadDocument:', error);
