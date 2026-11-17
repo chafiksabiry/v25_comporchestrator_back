@@ -1,5 +1,24 @@
 import { documentService } from '../services/documentService.js';
 import multer from 'multer';
+import { claimAsset as claim, isOwnedAsset } from '../services/regulatoryAssets.js';
+import { guardCompanyAccess } from '../middleware/companyGuard.js';
+
+/** La pièce doit appartenir à la société de l'appelant (enregistrée à sa création, ou reprise d'un groupe de la société) : sinon 404, rien n'est lu chez l'opérateur ni modifié. */
+async function ownAsset(req, res, kind, externalId) {
+  const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+  if (!access) return null;
+  if (!(await isOwnedAsset(kind, externalId, access.companyId))) {
+    res.status(404).json({ error: 'Not Found', message: 'Not found' });
+    return null;
+  }
+  return access;
+}
+
+/** Enregistre la propriété d'une pièce créée chez l'opérateur (première inscription gagnante). */
+async function claimAsset(access, kind, externalId) {
+  await claim(access, kind, externalId);
+}
+
 
 // Configuration de multer pour les uploads
 const storage = multer.memoryStorage();
@@ -24,6 +43,8 @@ export const documentController = {
 
   // Upload d'un document
   async uploadDocument(req, res) {
+    const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+    if (!access) return;
     try {
       if (!req.file) {
         return res.status(400).json({
@@ -50,6 +71,14 @@ export const documentController = {
         customerReference
       );
       
+      try {
+        await claimAsset(access, 'document', document?.id);
+      } catch (claimError) {
+        // Propriété non enregistrée : la pièce serait inaccessible à sa propre société ; nettoyage chez l'opérateur au mieux, erreur claire.
+        console.error('Error registering document ownership:', claimError);
+        if (document?.id) await documentService.deleteDocument(document.id).catch((e) => console.error('Cleanup of document failed:', e?.message || e));
+        return res.status(500).json({ error: 'Internal Server Error', code: 'ownership_registration_failed', message: 'The document could not be registered for your company; please retry.' });
+      }
       res.status(201).json(document);
     } catch (error) {
       console.error('Error in uploadDocument:', error);
@@ -79,6 +108,7 @@ export const documentController = {
         });
       }
 
+      if (!(await ownAsset(req, res, 'document', documentId))) return;
       const result = await documentService.deleteDocument(documentId);
       res.json(result);
     } catch (error) {
@@ -109,6 +139,7 @@ export const documentController = {
         });
       }
 
+      if (!(await ownAsset(req, res, 'document', documentId))) return;
       const document = await documentService.getDocument(documentId);
       res.json(document);
     } catch (error) {
@@ -139,6 +170,7 @@ export const documentController = {
         });
       }
 
+      if (!(await ownAsset(req, res, 'document', documentId))) return;
       const documentData = await documentService.downloadDocument(documentId);
       
       // Définir les headers pour le téléchargement
