@@ -6,7 +6,7 @@ Permet au **titulaire du compte** de suivre ce qui a été octroyé, rechargé e
 
 ## API
 
-Les deux routes exigent un jeton (`authenticate`) puis le rôle **titulaire** de la société (`callerAccess`, `role === 'owner'`).
+Les deux routes exigent un jeton (`authenticate`) puis le **titulaire** de la société : `callerAccess` avec `role === 'owner'` **et** `isOwner === true`. Ce second champ (ajouté à `callerAccess`, additif) est nécessaire car l'annuaire accorde le rôle `owner` par défaut quand `isOwner` est absent : une réponse dégradée ne suffit pas à lire le journal.
 La société est celle du titulaire : un `companyId` éventuellement passé dans la requête est ignoré.
 
 | Route | Rôle |
@@ -15,7 +15,7 @@ La société est celle du titulaire : un `companyId` éventuellement passé dans
 | `GET /api/billing/consumption-journal/export.csv` | Même contenu, mêmes filtres, sans pagination (CSV) |
 
 Paramètres : `type` (**obligatoire**, `minutes` ou `tokens`), `from`, `to` (date `YYYY-MM-DD` ou ISO ; `to` en date seule = fin de journée UTC,
-bornes incluses), `nature` (une ou plusieurs valeurs séparées par des virgules), `page` (défaut 1), `limit` (défaut 50, plafond 200 ; ignorés par l'export).
+bornes incluses ; **toutes les dates sont en UTC**, un appel passé peu après minuit heure de Paris peut tomber la veille), `nature` (une ou plusieurs valeurs séparées par des virgules), `page` (défaut 1), `limit` (défaut 50, plafond 200 ; ignorés par l'export).
 
 Réponse `200` :
 
@@ -30,6 +30,7 @@ Réponse `200` :
                "currentBalance": 100, "unexplained": -214, "orphanDebitedCalls": 1, "from": null, "to": null } } }
 ```
 
+- La liste JSON est servie avec `Cache-Control: no-store`.
 - Tri : plus récent d'abord ; les lignes sans date en dernier.
 - `nature` : `octroi_forfait | recharge | consommation | ajustement | expiration`. `ajustement` et `expiration` n'existent pas dans le dépôt
   aujourd'hui : acceptés par le filtre, jamais produits.
@@ -37,13 +38,13 @@ Réponse `200` :
 - `reference` selon la source : appel (`callSid`, `direction`, `counterpart` masqué, `durationSeconds`, `billedMinutes`), achat (`paymentId`, `purpose`,
   `provider`, `providerRef`, `amountCents`, `currency`, `pack`), usage de jetons (`usageId`, `tool`, `gigId`, `provider`, `model`, `estimated`, `inputTokens`,
   `outputTokens`), octroi (`planName`, `grantKey`).
-- `coefficient` et `zone` (`domestic | international | unknown`) : **champs réservés, toujours `null` aujourd'hui** (voir « Écriture au moment du débit »).
+- `coefficient` (entier ≥ 1) et `zone` (`domestic | international`) : **`null` aujourd'hui** (aucune source ne les fournit encore). Dès qu'ils sont connus pour un appel, `quantity = −(minutes arrondies × coefficient)` ; sinon quantité historique (minutes arrondies) et coefficient `null`. Un coefficient connu sans zone connue, ou non entier, est ignoré. Branchement : paramètre `debits[sid] = { coefficient, zone }` de `buildMinutesRows`, à alimenter après la fusion de la PR du coefficient (aucune fonction de débit n'est modifiée ici). `balanceAfter` reste cohérent avec un solde exprimé en crédits.
 - `reconstructed: true` : ligne déduite d'une autre source que sa propre ligne datée (voir le tableau ci-dessous).
 - **Résumé** : totaux sur la période `from`–`to` ; le filtre `nature` ne les modifie pas (la liste, elle, est filtrée). `consumed` et `expired` sont positifs.
   Jetons : `unattributedPlanGrant` ; minutes : `orphanDebitedCalls`.
 - **Solde après opération** (`balanceAfter`) : calculé en remontant depuis le solde actuel (ligne la plus récente = solde actuel ; chaque ligne précédente =
   solde de la suivante − quantité de la suivante). Il ne dépend ni de la page ni des filtres. Une quantité inconnue interrompt la chaîne (`null` avant elle),
-  une ligne sans date n'a pas de solde.
+  une ligne sans date n'a pas de solde, et dès qu'une ligne du journal est sans date **aucun** solde après opération n'est affiché (`null`). Le débit d'un appel a lieu à la synchronisation, pas à l'heure de l'appel : un appel débité après une recharge plus récente que lui peut rendre les soldes intermédiaires inexacts ; seul le solde le plus récent est garanti.
 - **`unexplained`** = solde actuel − somme de toutes les lignes du journal (solde d'ouverture, ou mouvements sans trace : crédits manuels, etc.). Il n'est
   jamais absorbé en silence. `null` si une quantité est inconnue.
 
@@ -58,7 +59,7 @@ export tronqué et en-tête `X-Journal-Truncated: true`.
 
 ## Vie privée
 
-Pas de numéro de téléphone en clair, ni dans le JSON ni dans le CSV : la contrepartie (appelé en sortant, appelant en entrant) est réduite à ses **deux derniers
+Pas de numéro de téléphone en clair, ni dans le JSON ni dans le CSV. Les champs libres que fournit le service de jetons (non authentifié) — `usageId`, `tool`, `model`, `provider` — sont filtrés : toute suite d'au moins 6 chiffres y est remplacée par `•••` ; l'`id` de ligne d'un usage est un hachage de l'`usageId`. Le `callSid` (identifiant opaque Twilio) reste exposé pour le suivi : à trancher côté produit s'il doit aussi être masqué. La contrepartie des appels : la contrepartie (appelé en sortant, appelant en entrant) est réduite à ses **deux derniers
 chiffres** (`•••••••••78`). Un identifiant de client navigateur (`client:…`), un numéro trop court ou un sens inconnu donnent `null`. Le numéro de la société
 n'est jamais exposé. Le `providerRef` d'un achat (identifiant de session de paiement) est exposé au seul titulaire, pour retrouver la facture.
 
@@ -85,6 +86,8 @@ depuis `calls` que les appels sans ligne. Le contrat d'API ne change pas (champs
 (`fulfill*`).
 
 ## Limites connues
+
+- **Aucun plafond de lecture** : chaque requête relit tous les appels, paiements et usages de la société (même `limit=1`). Aucune limitation de débit sur ces routes. À borner (fenêtre de dates côté base, plafond ou cache) avant une société à très gros volume.
 
 - Calcul à la volée sur tout l'historique de la société à chaque lecture (une lecture de `calls` filtrée par société, durée > 0, hors tests). Acceptable aujourd'hui ;
   à matérialiser ou indexer si une société dépasse quelques dizaines de milliers d'appels.

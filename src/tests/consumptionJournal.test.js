@@ -66,7 +66,7 @@ const loaders = {
   minutes: async (companyId) => { seen.push(['minutes', companyId]); const s = store[companyId] || {}; return { wallet: s.minutesWallet || null, payments: s.payments || [], calls: s.calls || [] }; },
   tokens: async (companyId) => { seen.push(['tokens', companyId]); const s = store[companyId] || {}; return { wallet: s.tokensWallet || null, payments: s.payments || [], usage: s.usage || [] }; },
 };
-const h = (access = { userId: 'u', companyId: C1, role: 'owner' }) => createJournalHandlers({ getAccess: async () => access, loaders });
+const h = (access = { userId: 'u', companyId: C1, role: 'owner', isOwner: true }) => createJournalHandlers({ getAccess: async () => access, loaders });
 const get = async (query = {}, access, fn = 'list') => { const r = res(); await h(access)[fn]({ query, headers: {} }, r); return r; };
 
 // ---------- Accès ----------
@@ -78,7 +78,7 @@ for (const role of ['member', 'agent']) {
 }
 {
   seen.length = 0;
-  assert.equal((await get({ type: 'minutes' }, { userId: 'u', companyId: null, role: 'owner' })).code, 404);
+  assert.equal((await get({ type: 'minutes' }, { userId: 'u', companyId: null, role: 'owner', isOwner: true })).code, 404);
   assert.equal(seen.length, 0, 'aucune lecture sans société');
   let r = res(); await createJournalHandlers({ getAccess: async () => { throw new ScopeError(401, 'Authentication required'); }, loaders }).list({ query: { type: 'minutes' } }, r);
   assert.equal(r.code, 401);
@@ -86,6 +86,12 @@ for (const role of ['member', 'agent']) {
   assert.equal(r.code, 503); assert.equal(r.body.code, 'unavailable');
   r = res(); await createJournalHandlers({ getAccess: async () => { throw new ScopeError(503, 'Company lookup failed'); }, loaders }).list({ query: { type: 'minutes' } }, r);
   assert.equal(r.code, 503);
+}
+
+// ---------- Titulaire : preuve positive exigée (le rôle « owner » est accordé par défaut côté annuaire) ----------
+for (const access of [{ companyId: C1, role: 'owner' }, { companyId: C1, role: 'owner', isOwner: false }, { companyId: C1, role: 'owner', isOwner: 'true' }, { companyId: C1, role: 'Owner', isOwner: true }, { companyId: C1, isOwner: true }]) {
+  const r = await get({ type: 'minutes' }, access);
+  assert.equal(r.code, 403, JSON.stringify(access));
 }
 
 // ---------- Isolation : la société vient de l'authentification, jamais de la requête ----------
@@ -97,7 +103,7 @@ for (const role of ['member', 'agent']) {
   for (const leak of ['CB1', 'pay_c2', '9999', 'Other', C2]) assert.ok(!blob.includes(leak), `fuite ${leak}`);
   const t = await get({ type: 'tokens', limit: '200' });
   assert.ok(!JSON.stringify(t.body).includes('secret-c2'));
-  const owner2 = await get({ type: 'minutes' }, { userId: 'u2', companyId: C2, role: 'owner' });
+  const owner2 = await get({ type: 'minutes' }, { userId: 'u2', companyId: C2, role: 'owner', isOwner: true });
   assert.ok(!JSON.stringify(owner2.body).includes('CA1'));
   assert.equal(owner2.body.data.summary.currentBalance, 5);
 }
@@ -166,17 +172,17 @@ const rowsOf = (r) => r.body.data.items;
   assert.equal(grant[0].date, '2026-09-01T00:00:00.000Z');
   assert.equal(grant[0].reconstructed, true);
   assert.deepEqual(rows.filter((x) => x.nature === 'recharge').map((x) => [x.reference.paymentId, x.quantity]).sort(), [['pay_bun', 200], ['pay_tok', 500]]);
-  const u1 = rows.find((x) => x.id === 'usage:u1');
+  const u1 = rows.find((x) => x.reference.usageId === 'u1');
   assert.equal(u1.quantity, -300);
   assert.deepEqual([u1.reference.usageId, u1.reference.tool, u1.reference.provider, u1.reference.model, u1.reference.gigId], ['u1', '=HYPERLINK("http://x")', 'openai', 'gpt', 'g1']);
-  assert.equal(rows.find((x) => x.id === 'usage:u2').reference.estimated, true);
+  assert.equal(rows.find((x) => x.reference.usageId === 'u2').reference.estimated, true);
   assert.equal(u1.reconstructed, false);
 }
 {
   // plusieurs clés : quantité par période inconnue, jamais devinée
   const local = JSON.parse(JSON.stringify(store[C1].tokensWallet));
   local.planGrantKeys.push('tokens:sub_1:2026-10-01T00:00:00.000Z'); local.planTokensGranted = 2000;
-  const hh = createJournalHandlers({ getAccess: async () => ({ companyId: C1, role: 'owner' }), loaders: { ...loaders, tokens: async () => ({ wallet: local, payments: [], usage: [] }) } });
+  const hh = createJournalHandlers({ getAccess: async () => ({ companyId: C1, role: 'owner', isOwner: true }), loaders: { ...loaders, tokens: async () => ({ wallet: local, payments: [], usage: [] }) } });
   const r = res(); await hh.list({ query: { type: 'tokens', nature: 'octroi_forfait' } }, r);
   assert.equal(r.body.data.items.length, 2);
   assert.ok(r.body.data.items.every((x) => x.quantity === null && x.quantityApproximate === true));
@@ -287,10 +293,8 @@ const rowsOf = (r) => r.body.data.items;
   // le nom d'outil piégé est neutralisé (jamais une formule exécutable), et seules les cellules texte sont touchées
   assert.ok(r.text.includes(`'=HYPERLINK`));
   assert.ok(!/(^|,|")=HYPERLINK/m.test(r.text), 'aucune cellule ne commence par =');
-  const cells = (l) => l.match(/("([^"]|"")*"|[^,]*)(,|$)/g);
   for (const l of lines.slice(1)) assert.ok(/^20\d\d-\d\d-\d\dT/.test(l));
   assert.ok(lines.some((l) => l.includes(',tokens,consommation,-300,')));
-  void cells;
 
   // masquage dans l'export, mêmes filtres, mêmes accès, isolation
   const m = await get({ type: 'minutes', from: '2026-10-10', to: '2026-10-13' }, undefined, 'exportCsv');
@@ -305,6 +309,41 @@ const rowsOf = (r) => r.body.data.items;
   assert.equal(badDate.code, 400);
 }
 
+// ---------- Cas limites relevés à la relecture ----------
+{
+  const mk = (min, tok) => createJournalHandlers({ getAccess: async () => ({ companyId: C1, role: 'owner', isOwner: true }), loaders: { minutes: async () => min, tokens: async () => tok } });
+  const call = async (hh, q, fn = 'list') => { const r = res(); await hh[fn]({ query: q }, r); return r; };
+  // même sid dans deux documents : une seule ligne
+  let r = await call(mk({ wallet: { minutes: 0, chargedCallSids: ['A'], credits: [] }, payments: [], calls: [{ sid: 'A', duration: 60, direction: 'outbound', to: '+33612345678', startTime: D('2026-10-01') }, { sid: 'A', duration: 60, direction: 'outbound', startTime: D('2026-10-01') }] }), { type: 'minutes' });
+  assert.deepEqual(r.body.data.items.map((x) => [x.id, x.quantity]), [['call:A', -1]]);
+  // sens Twilio « outbound-api » / « inbound »
+  r = await call(mk({ wallet: { minutes: 0, chargedCallSids: ['B', 'C'], credits: [] }, payments: [], calls: [{ sid: 'B', duration: 30, direction: 'outbound-api', to: '+33600000012', startTime: D('2026-10-01') }, { sid: 'C', duration: 30, direction: 'inbound', from: '+33600000034', startTime: D('2026-10-02') }] }), { type: 'minutes' });
+  assert.deepEqual(r.body.data.items.map((x) => [x.reference.direction, x.reference.counterpart]), [['inbound', '•••••••••34'], ['outbound', '•••••••••12']]);
+  // coefficient : connu (entier >= 1 et zone connue) => quantité = -(minutes arrondies x coefficient) ; sinon historique, coefficient null
+  const calls = [{ sid: 'I', duration: 61, startTime: D('2026-10-01') }, { sid: 'J', duration: 61, startTime: D('2026-10-02') }, { sid: 'K', duration: 61, startTime: D('2026-10-03') }, { sid: 'L', duration: 61, startTime: D('2026-10-04') }];
+  r = await call(mk({ wallet: { minutes: 0, chargedCallSids: ['I', 'J', 'K', 'L'], credits: [] }, payments: [], calls, debits: { I: { coefficient: 4, zone: 'international' }, J: { coefficient: 1, zone: 'domestic' }, K: { coefficient: 4, zone: null }, L: { coefficient: 2.5, zone: 'international' } } }), { type: 'minutes' });
+  const q = Object.fromEntries(r.body.data.items.map((x) => [x.reference.callSid, [x.quantity, x.coefficient, x.zone]]));
+  assert.deepEqual(q, { I: [-8, 4, 'international'], J: [-2, 1, 'domestic'], K: [-2, null, null], L: [-2, null, null] });
+  // lignes sans date : jamais de solde après opération inventé
+  r = await call(mk({ wallet: { minutes: 10, chargedCallSids: ['U', 'V'], credits: [] }, payments: [], calls: [{ sid: 'U', duration: 60 }, { sid: 'V', duration: 60, startTime: D('2026-10-01') }] }), { type: 'minutes' });
+  assert.ok(r.body.data.items.every((x) => x.balanceAfter === null));
+  // journal cohérent : somme = solde => rien d'inexpliqué ; solde après opération exact
+  r = await call(mk({ wallet: { minutes: 7, chargedCallSids: ['X'], credits: [{ at: D('2026-10-01'), minutes: 10, kind: 'plan', planName: 'P', grantKey: 'g:2026-10-01T00:00:00.000Z' }] }, payments: [{ _id: 'p1', purpose: 'minutes_purchase', status: 'succeeded', quantity: '10.005', fulfilledAt: D('2026-10-02') }], calls: [{ sid: 'X', duration: 120, startTime: D('2026-10-03') }] }), { type: 'minutes' });
+  assert.equal(r.body.data.summary.unexplained, round(7 - (10 + 10.01 - 2)));
+  assert.deepEqual(r.body.data.items.map((x) => x.balanceAfter), [7, 9, -1.01 + 0 === 0 ? 0 : round(9 - 10.01)]);
+  assert.equal(r.headers['cache-control'], 'no-store');
+  // PII dans les champs libres d'un service tiers non authentifié
+  r = await call(mk(null, { wallet: { tokens: 0 }, payments: [], usage: [{ usageId: 'call-+33612345678', tokensUsed: 5, tool: 'dial +33 6 12 34 56 78', model: '0612345678', provider: 'x', createdAt: D('2026-10-01') }] }), { type: 'tokens' });
+  let blob = JSON.stringify(r.body);
+  for (const raw of ['33612345678', '612345678', '0612345678', '6 12 34 56 78']) assert.ok(!blob.includes(raw), raw);
+  r = await call(mk(null, { wallet: { tokens: 0 }, payments: [], usage: [{ usageId: 'call-+33612345678', tokensUsed: 5, tool: 'dial +33 6 12 34 56 78', model: '0612345678', createdAt: D('2026-10-01') }] }), { type: 'tokens' }, 'exportCsv');
+  for (const raw of ['33612345678', '0612345678', '6 12 34 56 78']) assert.ok(!r.text.includes(raw), raw);
+  // CSV : caractères de tête invisibles et point-virgule
+  assert.equal(csvCell('\u0000=1+1'), "'\u0000=1+1"); assert.equal(csvCell('\u200b=1+1'), "'\u200b=1+1"); assert.equal(csvCell('\u0001@x'), "'\u0001@x");
+  assert.equal(csvCell('a;=1+1'), '"a;=1+1"');
+}
+function round(n) { return Math.round(n * 100) / 100; }
+
 // ---------- Lecture seule : aucun solde modifié ----------
 {
   // Aucun chargeur ne reçoit de moyen d'écriture ; les données sont gelées : toute mutation lèverait.
@@ -315,9 +354,9 @@ const rowsOf = (r) => r.body.data.items;
   await get({ type: 'minutes' }, undefined, 'exportCsv'); await get({ type: 'tokens' }, undefined, 'exportCsv');
   assert.equal(JSON.stringify(store), before);
   // Garde statique : ni le contrôleur, ni le service, ni les routes ne contiennent d'opération d'écriture ni d'appel qui débite/crédite.
-  const forbidden = /\.(save|create|insertOne|insertMany|updateOne|updateMany|findOneAndUpdate|findByIdAndUpdate|deleteOne|deleteMany|bulkWrite|replaceOne|syncMinutesFromCalls|ensurePlanMinutesGranted|ensurePlanTokensGranted)\b|\$inc\b|\$set\b|\$push\b|\$addToSet\b/;
+  const forbidden = /\.(save|create|insert|insertOne|insertMany|update|updateOne|updateMany|findOneAndUpdate|findOneAndDelete|findOneAndReplace|findByIdAndUpdate|remove|drop|aggregate|deleteOne|deleteMany|bulkWrite|replaceOne|syncMinutesFromCalls|ensurePlanMinutesGranted|ensurePlanTokensGranted)\b|\$inc\b|\$out\b|\$merge\b|\$set\b|\$push\b|\$addToSet\b/;
   for (const f of ['../controllers/consumptionJournalController.js', '../services/consumptionJournal.js', '../routes/billing.js']) {
-    const src = fs.readFileSync(path.join(here, f), 'utf8').split('\n').filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*') && !l.trim().startsWith('/*')).join('\n');
+    const src = fs.readFileSync(path.join(here, f), 'utf8').split('\n').filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*') && !l.trim().startsWith('/*')).join('\n').replace(/createHash\('sha256'\)\.update\(/g, '');
     assert.ok(!forbidden.test(src), `${f} contient une opération d'écriture`);
   }
 }

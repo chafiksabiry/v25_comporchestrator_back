@@ -58,7 +58,7 @@ export function createJournalHandlers(deps = {}) {
       return null;
     }
     if (!access?.companyId) { fail(res, 404, 'no_company', 'Entreprise introuvable.'); return null; }
-    if (access.role !== 'owner') { fail(res, 403, 'forbidden', 'Accès refusé.'); return null; }
+    if (access.role !== 'owner' || access.isOwner !== true) { fail(res, 403, 'forbidden', 'Accès refusé.'); return null; }
     let q;
     try {
       q = parseQuery(req.query || {}, { paged });
@@ -104,6 +104,7 @@ export function createJournalHandlers(deps = {}) {
       if (!ctx) return undefined;
       const { filtered, summary } = await compute(ctx.companyId, ctx.q);
       const page = paginate(filtered, ctx.q.page, ctx.q.limit);
+      res.setHeader('Cache-Control', 'no-store');
       return res.json({ success: true, data: { type: ctx.q.type, ...page, summary } });
     }),
 

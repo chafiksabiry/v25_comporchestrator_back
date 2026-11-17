@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 /**
  * Journal de consommation (minutes | jetons IA) d'une entreprise : fonctions PURES, en lecture seule.
  *
@@ -21,7 +22,14 @@ const isoOrNull = (d) => {
   return Number.isNaN(t.getTime()) ? null : t.toISOString();
 };
 const str = (v) => (v == null || v === '' ? null : String(v));
-const clip = (v, n = 200) => (v == null ? null : String(v).slice(0, n));
+/** Texte libre d'un service tiers : toute suite ressemblant à un numéro (6 chiffres ou plus) est masquée. */
+export function scrub(v, n = 200) {
+  if (v == null) return null;
+  let s = String(v).slice(0, n);
+  if (s.replace(/\D/g, '').length >= 6) s = s.replace(/\+?\d[\d\s().-]{3,}\d/g, '•••');
+  return s;
+}
+const clip = scrub;
 
 /** Date de période portée par une clé d'octroi (`<abonnement>:<ISO>` ou `tokens:<abonnement>:<ISO>`), null si absente. */
 export function dateFromGrantKey(key) {
@@ -49,8 +57,8 @@ const row = (r) => ({
   quantity: Number.isFinite(r.quantity) ? r.quantity : null,
   balanceAfter: null,
   reference: r.reference,
-  coefficient: null, // réservé : coefficient appliqué au débit (minutes), renseigné quand l'écriture au débit existera
-  zone: null, // réservé : 'domestic' | 'international' | 'unknown'
+  coefficient: Number.isInteger(r.coefficient) ? r.coefficient : null, // crédits par minute, si connu pour cet appel
+  zone: r.zone ?? null, // 'domestic' | 'international' si connue, sinon null
   source: r.source,
   reconstructed: Boolean(r.reconstructed),
   quantityApproximate: Boolean(r.quantityApproximate),
@@ -67,8 +75,8 @@ function paymentRows(type, payments, credits) {
     let date = isoOrNull(p.fulfilledAt);
     const bundle = p.purpose === 'bundle_purchase';
     if (type === 'minutes') {
-      if (p.purpose === 'minutes_purchase') quantity = Number(p.quantity);
-      else if (bundle && p.meta?.minutesCredited === true) quantity = Number(p.meta.minutes);
+      if (p.purpose === 'minutes_purchase') quantity = round2(p.quantity);
+      else if (bundle && p.meta?.minutesCredited === true) quantity = round2(p.meta.minutes);
     } else if (p.purpose === 'tokens_purchase') quantity = Math.round(Number(p.quantity));
     else if (bundle && p.meta?.tokensCredited === true) quantity = Math.round(Number(p.meta.tokens));
     if (!Number.isFinite(quantity) || quantity <= 0) continue;
@@ -97,7 +105,7 @@ function paymentRows(type, payments, credits) {
 }
 
 /** Lignes du journal des minutes. Entrées : portefeuille (ou null), paiements de la société, appels de la société. */
-export function buildMinutesRows({ wallet, payments, calls }) {
+export function buildMinutesRows({ wallet, payments, calls, debits = {} }) {
   const rows = [];
   const credits = Array.isArray(wallet?.credits) ? wallet.credits : [];
   credits.forEach((c, i) => {
@@ -129,17 +137,25 @@ export function buildMinutesRows({ wallet, payments, calls }) {
   for (const c of calls || []) {
     const key = String(c.sid || c._id || '');
     const secs = Number(c.duration);
-    if (!key || !charged.has(key) || c.isTest === true || !(secs > 0)) continue;
+    if (!key || !charged.has(key) || matched.has(key) || c.isTest === true || !(secs > 0)) continue;
     matched.add(key);
-    const direction = c.direction === 'inbound' || c.direction === 'outbound' ? c.direction : null;
+    const dir = String(c.direction || '').toLowerCase();
+    const direction = /^inbound/.test(dir) ? 'inbound' : /^outbound/.test(dir) ? 'outbound' : null;
     const counterpart = direction === 'outbound' ? c.to : direction === 'inbound' ? c.from : null;
     const billedMinutes = Math.ceil(secs / 60);
+    // Coefficient (crédits par minute) : seulement s'il est connu pour CET appel (entier >= 1) avec une zone connue ; sinon la
+    // quantité historique (minutes arrondies) et coefficient null. `debits[sid]` = { coefficient, zone } : source branchée à la fusion du coefficient.
+    const d = debits?.[key];
+    const known = d && Number.isInteger(d.coefficient) && d.coefficient >= 1 && (d.zone === 'domestic' || d.zone === 'international');
+    const coefficient = known ? d.coefficient : null;
     rows.push(row({
       id: `call:${key}`,
       type: 'minutes',
       date: isoOrNull(c.startTime) || isoOrNull(c.createdAt) || isoOrNull(c.endTime),
       nature: 'consommation',
-      quantity: -billedMinutes,
+      quantity: -(billedMinutes * (coefficient || 1)),
+      coefficient,
+      zone: known ? d.zone : null,
       reference: { callSid: key, direction, counterpart: maskCounterpart(counterpart), durationSeconds: secs, billedMinutes },
       source: 'calls',
       reconstructed: true,
@@ -167,13 +183,13 @@ export function buildTokensRows({ wallet, payments, usage }) {
     const used = Number(u.tokensUsed);
     if (!u.usageId || !(used > 0)) continue;
     rows.push(row({
-      id: `usage:${u.usageId}`,
+      id: `usage:${createHash('sha256').update(String(u.usageId)).digest('hex').slice(0, 24)}`,
       type: 'tokens',
       date: isoOrNull(u.createdAt),
       nature: 'consommation',
       quantity: -used,
       reference: {
-        usageId: String(u.usageId),
+        usageId: scrub(u.usageId),
         tool: clip(u.tool),
         gigId: u.gigId ? String(u.gigId) : null,
         provider: clip(u.provider, 60),
@@ -203,7 +219,9 @@ export function sortWithBalances(rows, currentBalance) {
     const q = dated[i].quantity;
     next = next == null || q == null ? null : next - q;
   }
+  // Une ligne sans date a bougé le solde à un moment inconnu : aucun solde après opération n'est fiable, on ne les affiche pas.
   const undated = rows.filter((r) => !r.date).sort((a, b) => (a.id < b.id ? 1 : -1));
+  if (undated.length) dated.forEach((r) => { r.balanceAfter = null; });
   return [...dated.reverse(), ...undated];
 }
 
@@ -304,8 +322,9 @@ export function csvCell(v) {
   if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '';
   if (typeof v === 'boolean') return v ? 'true' : 'false';
   let s = String(v);
-  if (/^[\s]*[=+\-@]/.test(s) || /^[\t\r]/.test(s)) s = `'${s}`;
-  return /[",\r\n\t]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  const lead = s.replace(/^[\u0000-\u0008\u000e-\u001f\u200b-\u200f\u2060\ufeff\u180e\s]+/, '');
+  if (/^[=+\-@]/.test(lead) || /^[\t\r]/.test(s)) s = `'${s}`;
+  return /[",;\r\n\t]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 const packText = (p) => (p ? [p.minutes ? `${p.minutes} min` : null, p.tokens ? `${p.tokens} tokens` : null].filter(Boolean).join(' + ') : null);
