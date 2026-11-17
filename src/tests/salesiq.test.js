@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import express from 'express';
 import { getSalesIqConfig, missingConfig } from '../salesiq/config.js';
-import { authenticateWebhook, verifySalesIqSignature } from '../salesiq/signature.js';
+import { authenticateWebhook, verifySalesIqSignature, parsePublicKey } from '../salesiq/signature.js';
 import { parseWebhookPayload, extractEmail, payloadShape } from '../salesiq/payload.js';
 import { checkReply } from '../salesiq/guards.js';
 import { createAgent, isGreeting } from '../salesiq/agent.js';
@@ -64,6 +64,22 @@ assert.deepEqual(missingConfig(cfgOf()), []);
   const both = cfgOf({ SALESIQ_WEBHOOK_PUBLIC_KEY: pem.replace(/\n/g, '\\n') });
   assert.equal(authenticateWebhook({ raw, queryKey: 'k', signatureHeader: sig, cfg: both }).ok, true);
   assert.equal(authenticateWebhook({ raw, queryKey: 'k', signatureHeader: 'bad', cfg: both }).ok, false, 'les deux mécanismes configurés doivent réussir');
+  // Formats de clé collables dans une variable d'environnement : base64 brut (affichage SalesIQ), PEM sur une ligne, PKCS#1.
+  const der = publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
+  assert.equal(verifySalesIqSignature(raw, sig, der), true, 'base64 brut sans en-têtes');
+  assert.equal(verifySalesIqSignature(raw, sig, `-----BEGIN PUBLIC KEY----- ${der} -----END PUBLIC KEY-----`), true, 'PEM sur une ligne (espaces)');
+  assert.equal(verifySalesIqSignature(raw, sig, `  ${der.match(/.{1,40}/g).join('\n')}  `), true, 'base64 coupé en lignes');
+  const pkcs1 = publicKey.export({ type: 'pkcs1', format: 'der' }).toString('base64');
+  assert.equal(verifySalesIqSignature(raw, sig, pkcs1), true, 'PKCS#1 brut');
+  const pss = crypto.sign('sha256', raw, { key: privateKey, padding: crypto.constants.RSA_PKCS1_PSS_PADDING, saltLength: 32 }).toString('base64');
+  assert.equal(verifySalesIqSignature(raw, pss, der), true, 'bourrage PSS');
+  assert.equal(verifySalesIqSignature(raw, crypto.sign('sha256', raw, privateKey).toString('base64url'), der), true, 'base64url');
+  assert.equal(parsePublicKey('pas une clé'), null);
+  const bad = authenticateWebhook({ raw, queryKey: 'k', signatureHeader: sig, cfg: cfgOf({ SALESIQ_WEBHOOK_PUBLIC_KEY: 'pas une clé' }) });
+  assert.equal(bad.ok, false);
+  assert.match(bad.reason, /public key unreadable/);
+  assert.match(authenticateWebhook({ raw, queryKey: 'k', cfg: both }).reason, /header missing/);
+  assert.equal(authenticateWebhook({ raw, queryKey: 'k', signatureHeader: sig, cfg: cfgOf({ SALESIQ_WEBHOOK_PUBLIC_KEY: der }) }).ok, true, 'clé brute via la configuration');
 }
 
 // --- Lecture de la charge utile ---
