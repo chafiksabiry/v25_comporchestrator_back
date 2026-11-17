@@ -1,5 +1,10 @@
 import { registerCompanyCalendarResolver } from './calendarSync.js';
+import SecretariatConnection from '../models/SecretariatConnection.js';
 import { connectedAccount, messages, resolveVisio, withConnection } from './secretariatConnections.js';
+import { isMailProvider, ownsRow } from './mailOwnership.js';
+import { blocksGoogleDelegation } from './googleDelegation.js';
+import { sendFromAccount } from './secretariatSharedAccounts.js';
+import { ownerHasLeft } from './mailOwnerMembership.js';
 import { SecretariatError } from './secretariatProviders/common.js';
 import { PROVIDERS } from './secretariatProviders/index.js';
 import { loadTools, mergedTools, VISIO_NEEDS } from './secretariatTools.js';
@@ -18,17 +23,27 @@ const safe = (error) => (error instanceof SecretariatError ? error : new Secreta
 
 // ---------- e-mail
 /**
- * Envoie par la messagerie connectée du centre (From = compte connecté). Aucun repli sur l'expéditeur HARX : l'appelant décide.
+ * Envoie par la messagerie que `userId` a connectée (From = ce compte ; SEUL son propriétaire peut l'utiliser). Aucun repli sur l'expéditeur HARX ni sur la boîte
+ * d'une autre personne : sans `userId` propriétaire, `not_connected`. L'appelant décide.
  * @param {{fromName: string, to: string[], subject: string, text: string, html?: string, replyTo?: {email: string, name?: string},
  *   attachments?: Array<{name: string, contentType: string, contentBase64: string}>}} message
  */
-export async function sendViaConnection(companyId, provider, message) {
+export async function sendViaConnection(companyId, provider, message, { userId = null } = {}) {
   try {
-    const account = await connectedAccount(companyId, provider);
-    return await withConnection(companyId, provider, (accessToken, http) => PROVIDERS[provider].sendMail({ http, accessToken, account, message }));
+    const account = await connectedAccount(companyId, provider, userId);
+    return await withConnection(companyId, provider, (accessToken, http) => PROVIDERS[provider].sendMail({ http, accessToken, account, message }), { ownerId: userId });
   } catch (error) {
     throw safe(error);
   }
+}
+
+/**
+ * Envoi pour le compte d'une boîte résolue par `resolveUserMailbox` : la connexion dont `userId` est propriétaire, ou SA messagerie personnelle.
+ * Jamais la boîte d'un autre. @param {{kind: 'connection'|'personal', provider: string, account: string, accountId?: string}} mailbox
+ */
+export async function sendViaMailbox(companyId, mailbox, message, { userId } = {}) {
+  if (mailbox?.kind === 'personal') return sendFromAccount(companyId, { _id: mailbox.accountId, provider: mailbox.provider, accountEmail: mailbox.account }, message);
+  return sendViaConnection(companyId, mailbox?.provider, message, { userId });
 }
 
 // ---------- événements d'agenda
@@ -45,28 +60,61 @@ export async function appointmentEvent(companyId, appt) {
 }
 
 /** Adaptateur d'agenda d'UN centre pour calendarSync (rendez-vous = vue `toItem` + companyId + calendarExternalId). */
-function calendarAdapter(companyId, provider) {
+function calendarAdapter(companyId, provider, ownerId) {
   const P = PROVIDERS[provider];
   const upsert = async (item, id) => {
     const tools = mergedTools(await loadTools(companyId));
-    return withConnection(companyId, provider, (accessToken, http) => P.upsertEvent({ http, accessToken, id, event: eventOf(item, tools) }));
+    return withConnection(companyId, provider, (accessToken, http) => P.upsertEvent({ http, accessToken, id, event: eventOf(item, tools) }), { ownerId });
   };
-  const push = async (item) => ({ provider, externalId: (await upsert(item, null)).id });
+  const push = async (item) => ({ provider, externalId: (await upsert(item, null)).id, ownerId });
   return {
     id: provider,
     push,
-    update: async (item) => (item.calendarExternalId ? { provider, externalId: (await upsert(item, item.calendarExternalId)).id } : push(item)),
+    update: async (item) => (item.calendarExternalId ? { provider, externalId: (await upsert(item, item.calendarExternalId)).id, ownerId } : push(item)),
     remove: async (item) => {
-      if (item.calendarExternalId) await withConnection(companyId, provider, (accessToken, http) => P.deleteEvent({ http, accessToken, id: item.calendarExternalId }));
+      if (item.calendarExternalId) await withConnection(companyId, provider, (accessToken, http) => P.deleteEvent({ http, accessToken, id: item.calendarExternalId }), { ownerId });
     },
   };
 }
 
-/** Agenda du centre : celui des réglages ; pour modifier / supprimer, celui où l'événement a été créé. Null sans agenda connecté. */
+/**
+ * Connexion Google / Microsoft de `userId` utilisable pour l'agenda : celle du fournisseur choisi (réglage) si elle est active, sinon son autre boîte active.
+ * Les connexions des AUTRES personnes ne comptent jamais. @returns {Promise<'google'|'microsoft'|null>}
+ */
+async function agendaProviderOf(companyId, userId, preferred, { noGoogle = false } = {}) {
+  if (!userId) return null;
+  const rows = (await SecretariatConnection.find({ companyId, provider: { $in: ['google', 'microsoft'] } }).select('provider status connectedBy').lean())
+    .filter((r) => r.status === 'connected' && ownsRow(r, userId) && !(noGoogle && r.provider === 'google'));
+  return (rows.find((r) => r.provider === preferred) || rows[0])?.provider || null;
+}
+
+/**
+ * Agenda d'un rendez-vous. CRÉATION : l'agenda de la personne ASSIGNÉE, sinon celui de CELLE QUI CRÉE le rendez-vous (`hint.userIds`, dans cet ordre), s'ils ont connecté
+ * une boîte Google / Microsoft ; sinon null (`not_connected`) : jamais l'agenda d'une autre personne. MODIFICATION / ANNULATION : le calendrier où l'événement a été créé
+ * (`hint.ownerId` mémorisé) ; rendez-vous antérieur sans propriétaire mémorisé : le propriétaire actuel de la connexion de ce fournisseur (jamais une connexion orpheline).
+ * Réglage d'agenda « none » : aucun envoi.
+ */
 registerCompanyCalendarResolver(async (companyId, hint) => {
-  let provider = mergedTools(await loadTools(companyId)).agenda.provider;
-  if ((hint.op === 'update' || hint.op === 'remove') && hint.hasExternalId && (hint.provider === 'google' || hint.provider === 'microsoft')) provider = hint.provider;
-  return provider === 'google' || provider === 'microsoft' ? calendarAdapter(companyId, provider) : null;
+  const agenda = mergedTools(await loadTools(companyId)).agenda.provider;
+  // Modification / annulation d'un événement existant : toujours chez le fournisseur mémorisé, même si le réglage d'agenda est passé à « none » depuis la création.
+  if ((hint.op === 'update' || hint.op === 'remove') && hint.hasExternalId && isMailProvider(hint.provider)) {
+    // Rendez-vous antérieur à la règle (propriétaire du calendrier non mémorisé) : on ne devine PAS (le propriétaire actuel de la connexion peut avoir un autre calendrier) : `not_connected`.
+    const ownerId = String(hint.ownerId || '').trim();
+    if (!ownerId) return { id: hint.provider, unavailable: true };
+    // Délégation Google suspendue : seule la personne dont c'est l'agenda Google y modifie / supprime l'événement ; pour une autre, rien n'est écrit (`not_connected`, identifiants conservés).
+    if (blocksGoogleDelegation(hint.provider, ownerId, hint.actorId)) return { id: hint.provider, unavailable: true };
+    // Agir dans le calendrier de son propriétaire mémorisé seulement s'il est encore rattaché à la société ET que sa connexion est valide ; sinon `not_connected` sans erreur.
+    const conn = await SecretariatConnection.findOne({ companyId, provider: hint.provider }).select('status connectedBy').lean();
+    if (!conn || conn.status !== 'connected' || !ownsRow(conn, ownerId) || (await ownerHasLeft(companyId, ownerId, hint.token))) return { id: hint.provider, unavailable: true };
+    return calendarAdapter(companyId, hint.provider, ownerId);
+  }
+  if (agenda !== 'google' && agenda !== 'microsoft') return null; // création : « none » = aucun agenda
+  for (const userId of [...new Set((hint.userIds || []).map((u) => String(u || '').trim()).filter(Boolean))]) {
+    // Délégation Google suspendue : l'agenda Google de la personne assignée n'est utilisé que si c'est elle qui agit (sinon son agenda Microsoft, ou la personne suivante).
+    const provider = await agendaProviderOf(companyId, userId, agenda, { noGoogle: blocksGoogleDelegation('google', userId, hint.actorId) });
+    if (provider) return calendarAdapter(companyId, provider, userId);
+  }
+  return null;
 });
 
 // ---------- visio
@@ -79,9 +127,9 @@ registerCompanyCalendarResolver(async (companyId, hint) => {
  * @param {{calendar?: {provider: string|null, externalId: string|null}|null}} [options] événement d'agenda déjà créé pour ce rendez-vous
  * @returns {Promise<{url: string, provider: '' | 'google_meet' | 'teams' | 'zoom', externalId: string, sharesCalendar: boolean, eventProvider: string}>}
  */
-export async function createVideo(companyId, appt, { calendar = null } = {}) {
+export async function createVideo(companyId, appt, { calendar = null, userId = null } = {}) {
   const tools = mergedTools(await loadTools(companyId));
-  const resolved = await resolveVisio(companyId, tools.visio.provider);
+  const resolved = await resolveVisio(companyId, tools.visio.provider, userId); // Meet / Teams : la boîte de `userId` seulement
   if (resolved.error) throw new SecretariatError(`visio_${resolved.error}`, resolved.error === 'needs_reauth' ? messages.needsReauth(resolved.account) : VISIO_NOT_CONNECTED_MESSAGE, { status: 409 });
   const kind = resolved.provider;
   const account = VISIO_NEEDS[kind];
@@ -89,11 +137,11 @@ export async function createVideo(companyId, appt, { calendar = null } = {}) {
   try {
     if (kind === 'zoom') {
       const r = await withConnection(companyId, 'zoom', (accessToken, http) => PROVIDERS.zoom.createMeeting({ http, accessToken, event }));
-      return { url: r.joinUrl, provider: 'zoom', externalId: r.id, sharesCalendar: false, eventProvider: '' };
+      return { url: r.joinUrl, provider: 'zoom', externalId: r.id, sharesCalendar: false, eventProvider: '', ownerId: '' };
     }
     const existing = calendar?.provider === account && calendar.externalId ? calendar.externalId : null;
-    const r = await withConnection(companyId, account, (accessToken, http) => PROVIDERS[account].upsertEvent({ http, accessToken, id: existing, event, addMeeting: true }));
-    return { url: r.joinUrl, provider: kind, externalId: r.id, sharesCalendar: Boolean(existing) || tools.agenda.provider === account, eventProvider: account };
+    const r = await withConnection(companyId, account, (accessToken, http) => PROVIDERS[account].upsertEvent({ http, accessToken, id: existing, event, addMeeting: true }), { ownerId: userId });
+    return { url: r.joinUrl, provider: kind, externalId: r.id, sharesCalendar: Boolean(existing) || tools.agenda.provider === account, eventProvider: account, ownerId: userId };
   } catch (error) {
     const e = safe(error);
     const detail = e.code === 'not_connected' || e.code === 'needs_reauth' ? e.message : 'Réessayez dans un instant ou choisissez un autre outil de visio dans Paramétrage > Outils.';
@@ -101,15 +149,22 @@ export async function createVideo(companyId, appt, { calendar = null } = {}) {
   }
 }
 
+/** Propriétaire de la boîte qui porte le lien Meet / Teams d'un rendez-vous : celui mémorisé ; antérieur à la règle : le propriétaire actuel de la connexion (jamais orpheline). */
+async function videoOwnerOf(companyId, item, account) {
+  return String(item.videoOwnerId || item.calendarOwnerId || '').trim(); // jamais deviné : sans propriétaire mémorisé, rien n'est écrit (`not_connected`)
+}
+
 /** Met à jour la réunion / l'événement DÉDIÉ au lien (jamais l'événement d'agenda, géré par calendarSync). Au mieux : renvoie false en cas d'échec. */
-export async function updateVideoResource(companyId, item) {
+export async function updateVideoResource(companyId, item, { actorId = null } = {}) {
   if (!item.videoProvider || !item.videoExternalId) return true;
+  // Délégation Google suspendue : l'événement Meet dédié d'une autre personne n'est pas modifié (au mieux : false, rien n'est écrit).
+  if (VISIO_NEEDS[item.videoProvider] === 'google' && item.videoExternalId !== item.calendarExternalId && blocksGoogleDelegation('google', await videoOwnerOf(companyId, item, 'google'), actorId)) return false;
   try {
     const event = eventOf({ ...item, videoUrl: '' }, mergedTools(await loadTools(companyId)));
     if (item.videoProvider === 'zoom') await withConnection(companyId, 'zoom', (accessToken, http) => PROVIDERS.zoom.updateMeeting({ http, accessToken, id: item.videoExternalId, event }));
     else if (item.videoExternalId !== item.calendarExternalId) {
       const account = VISIO_NEEDS[item.videoProvider];
-      await withConnection(companyId, account, (accessToken, http) => PROVIDERS[account].upsertEvent({ http, accessToken, id: item.videoExternalId, event }));
+      await withConnection(companyId, account, (accessToken, http) => PROVIDERS[account].upsertEvent({ http, accessToken, id: item.videoExternalId, event }), { ownerId: await videoOwnerOf(companyId, item, account) });
     }
     return true;
   } catch (error) {
@@ -119,13 +174,17 @@ export async function updateVideoResource(companyId, item) {
 }
 
 /** Supprime la réunion Zoom / l'événement dédié au lien. L'événement partagé avec l'agenda est supprimé par calendarSync. Au mieux. */
-export async function removeVideoResource(companyId, item) {
+export async function removeVideoResource(companyId, item, { actorId = null, report = null } = {}) {
   if (!item.videoProvider || !item.videoExternalId || item.videoExternalId === item.calendarExternalId) return true;
+  if (VISIO_NEEDS[item.videoProvider] === 'google' && blocksGoogleDelegation('google', await videoOwnerOf(companyId, item, 'google'), actorId)) { // délégation Google suspendue
+    if (report) report.blocked = true; // `report` (facultatif) : l'appelant distingue ce refus d'une panne du fournisseur
+    return false;
+  }
   try {
     if (item.videoProvider === 'zoom') await withConnection(companyId, 'zoom', (accessToken, http) => PROVIDERS.zoom.deleteMeeting({ http, accessToken, id: item.videoExternalId }));
     else {
       const account = VISIO_NEEDS[item.videoProvider];
-      await withConnection(companyId, account, (accessToken, http) => PROVIDERS[account].deleteEvent({ http, accessToken, id: item.videoExternalId }));
+      await withConnection(companyId, account, (accessToken, http) => PROVIDERS[account].deleteEvent({ http, accessToken, id: item.videoExternalId }), { ownerId: await videoOwnerOf(companyId, item, account) });
     }
     return true;
   } catch (error) {
