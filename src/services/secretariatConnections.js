@@ -228,7 +228,7 @@ export async function completeConnection({ state, code }, { http = httpImpl, env
     // Boîte mail : seul son propriétaire la remplace. Aucune ligne ou ligne ORPHELINE : la personne connectée en devient propriétaire.
     const existing = await SecretariatConnection.findOne({ companyId: oid(companyId), provider }).select('connectedBy ownerless').lean();
     if (!mayTakeOver(existing, userId)) throw new SecretariatError('not_owner', messages.ownedByOther(provider), { status: 403 });
-    if (existing && isOwnerless(existing)) await purgeInboundEmails(companyId); // reprise d'une orpheline : plus aucun ancien e-mail stocké
+    if (existing && isOwnerless(existing)) await purgeInboundEmails(companyId, null); // reprise d'une orpheline : seulement les anciens e-mails stockés sans propriétaire
     // Écriture conditionnelle : si la ligne a changé de propriétaire entre la lecture et l'écriture, l'insertion échoue sur l'index unique (jamais d'écrasement).
     const where = { companyId: oid(companyId), provider, connectedBy: isOwnerless(existing) && existing ? { $in: ['', null] } : String(userId) };
     try {
@@ -484,15 +484,6 @@ export async function connectedProviders(companyId, userId) {
 export async function ownsMailConnection(companyId, userId) {
   const rows = await SecretariatConnection.find({ companyId: oid(companyId), provider: { $in: MAILBOX_PROVIDERS } }).select('provider connectedBy').lean();
   return rows.some((r) => ownsRow(r, userId));
-}
-
-/**
- * `userId` peut-il régler la lecture des e-mails entrants (`inbound.*`) de l'entreprise ? Oui s'il est propriétaire d'une boîte Google / Microsoft, ou si aucune boîte
- * n'a de propriétaire (rien de connecté, ou seulement des connexions orphelines : le réglage ne touche alors la boîte de personne). Non si la boîte est celle d'un autre.
- */
-export async function mayConfigureInbound(companyId, userId) {
-  const rows = await SecretariatConnection.find({ companyId: oid(companyId), provider: { $in: MAILBOX_PROVIDERS } }).select('provider connectedBy').lean();
-  return rows.some((r) => ownsRow(r, userId)) || rows.every((r) => isOwnerless(r));
 }
 
 /**

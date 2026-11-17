@@ -396,6 +396,10 @@ try {
   putConn('microsoft', { connectedBy: 'owner1' }); toolsDocs[0].inbound.lastSyncAt = null;
   r = await sec('PUT', `/tools/${C1}`, { user: 'mgrA', body: { inbound: { enabled: false } } });
   assert.equal(r.status, 403); assert.equal(toolsDocs[0].inbound.enabled, true, 'réglage inchangé');
+  inbox.push({ _id: 'keep1', companyId: C1, ownerUserId: null, accountId: null, connectionOwnerId: 'autre', providerMessageId: 'k', provider: 'microsoft' });
+  r = await sec('PUT', `/tools/${C1}`, { user: 'sec', body: { inbound: { enabled: false } } }); assert.equal(r.status, 403);
+  assert.ok(inbox.some((d) => d._id === 'keep1'), 'les e-mails stockés d’un autre ne sont pas purgés par un non-titulaire');
+  inbox.pop();
   r = await sec('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: { secretaries: true } } });
   assert.equal(r.status, 400, 'ouvrir la lecture aux secrétaires n’existe plus'); assert.match(r.body.message, /personne qui l’a connectée/);
   r = await sec('PUT', `/tools/${C1}`, { user: 'owner1', body: { inbound: { enabled: false } } }); assert.equal(r.status, 200); assert.equal(r.body.data.inbound.secretaries, false);
@@ -403,7 +407,10 @@ try {
   r = await sec('GET', `/tools/${C1}`, { user: 'sec' }); assert.equal(r.body.data.inbound.secretaries, false, 'jamais exposé comme actif');
   // un non-propriétaire ne choisit pas la boîte d'un autre comme fournisseur de la société
   r = await sec('PUT', `/tools/${C1}`, { user: 'mgrA', body: { email: { provider: 'microsoft' } } });
-  assert.equal(r.status, 400, 'fournisseur non connecté POUR LUI'); assert.match(r.body.message, /pas connecté/i);
+  assert.equal(r.status, 403, 'réglage global de la société : le titulaire seul');
+  r = await sec('PUT', `/tools/${C1}`, { user: 'owner1', body: { email: { provider: 'google' } } });
+  assert.equal(r.status, 400, 'fournisseur non connecté POUR LUI (la boîte Google, s’il en existait une, serait celle d’un autre)'); assert.match(r.body.message, /pas connecté/i);
+  r = await sec('PUT', `/tools/${C1}`, { user: 'mgrA', body: { email: { fromName: 'Acme' } } }); assert.equal(r.status, 200, 'les réglages sans fournisseur restent ouverts aux responsables');
 
   // =========================================================================================================
   // 4. COMPTES PARTAGÉS / DÉLÉGUÉS — propriétaire = connectedBy ; délégation explicite seulement
@@ -560,13 +567,13 @@ try {
   httpCalls.length = 0;
   s = await CS.syncAppointment(appt({ calendarExternalId: 'EV_MS', calendarProvider: 'microsoft', calendarOwnerId: 'mgrB' }), { op: 'remove' });
   assert.notEqual(s.status, 'synced', 'le propriétaire de l’événement n’a plus de boîte : jamais celle d’un autre'); assert.equal(httpCalls.filter((c) => c.method === 'DELETE').length, 0);
-  // anciens rendez-vous (sans propriétaire mémorisé) : seul le propriétaire actuel de la connexion de ce fournisseur (jamais une orpheline)
+  // anciens rendez-vous (sans propriétaire d'agenda mémorisé) : on ne devine PAS (le propriétaire actuel de la connexion peut avoir un autre calendrier) : not_connected, rien d'écrit
   httpCalls.length = 0;
-  s = await CS.syncAppointment(appt({ calendarExternalId: 'EV_MS', calendarProvider: 'microsoft' }), { op: 'update' });
-  assert.equal(s.status, 'synced'); assert.deepEqual(httpCalls.filter((c) => c.method === 'PATCH').map(bearer), ['ACCESS_BOSS'], 'rendez-vous antérieur : agenda de la connexion qui l’a créé');
-  putConn('microsoft', { connectedBy: '' }); httpCalls.length = 0;
-  s = await CS.syncAppointment(appt({ calendarExternalId: 'EV_MS', calendarProvider: 'microsoft' }), { op: 'update' });
-  assert.notEqual(s.status, 'synced'); assert.equal(httpCalls.filter((c) => c.method === 'PATCH').length, 0, 'connexion orpheline : rien');
+  for (const op of ['update', 'remove']) {
+    s = await CS.syncAppointment(appt({ calendarExternalId: 'EV_MS', calendarProvider: 'microsoft' }), { op });
+    assert.deepEqual([s.status, s.unavailable], ['not_connected', true], `ancien rendez-vous (${op}) : not_connected`);
+  }
+  assert.equal(httpCalls.filter((c) => c.method === 'PATCH' || c.method === 'DELETE').length, 0, 'aucune écriture chez le fournisseur');
   // réglage « aucun agenda » : respecté
   putConn('microsoft', { connectedBy: 'owner1' }, 'BOSS'); toolsDocs[0].agenda.provider = 'none'; httpCalls.length = 0;
   assert.equal((await CS.syncAppointment(appt({ assignee: { id: 'owner1' }, createdBy: { id: 'owner1' } }))).status, 'not_connected'); assert.equal(eventsBy().length, 0);
@@ -699,6 +706,46 @@ try {
     assert.equal(r.cookies.length, 0); const stOff = new URL(r.body.data.url).searchParams.get('state'); assert.equal(S.readState(stOff, 'microsoft').nb, undefined);
     oauthMicrosoft('mgrb@acme.test', 'MGRB'); assert.equal((await callbackWith(stOff)).location, 'https://portal.test/telephony/app/tools?connected=microsoft');
   } finally { delete process.env.OAUTH_BROWSER_BINDING; }
+
+  // =========================================================================================================
+  // 8 quater. Purge ciblée, journal d'envoi masqué, configuration des secrétaires, existence chez un autre
+  // =========================================================================================================
+  resetDb(); std();
+  // purge : jamais « tout » sans le demander explicitement
+  inbox.push({ _id: 'p1', companyId: C1, ownerUserId: null, accountId: null, connectionOwnerId: 'mgrA', providerMessageId: 'a', provider: 'microsoft' },
+    { _id: 'p2', companyId: C1, ownerUserId: null, accountId: null, connectionOwnerId: 'mgrB', providerMessageId: 'b', provider: 'microsoft' },
+    { _id: 'p3', companyId: C1, ownerUserId: null, accountId: null, providerMessageId: 'c', provider: 'microsoft' },
+    { _id: 'p4', companyId: C1, ownerUserId: 'sec', accountId: PA_SEC, providerMessageId: 'd', provider: 'microsoft' });
+  const Store = await import('../services/inboundEmailStore.js');
+  await Store.purgeInboundEmails(C1, 'mgrA'); assert.deepEqual(inbox.map((d) => d._id).sort(), ['p2', 'p3', 'p4'], 'un propriétaire : seulement ses e-mails');
+  await Store.purgeInboundEmails(C1, null); assert.deepEqual(inbox.map((d) => d._id).sort(), ['p2', 'p4'], 'sans propriétaire : seulement les anciens e-mails sans propriétaire');
+  await Store.purgeInboundEmails(C1); assert.deepEqual(inbox.map((d) => d._id).sort(), ['p2', 'p4'], 'sans argument : jamais « tout »');
+  await Store.purgeInboundEmails(C1, Store.ALL_OWNERS); assert.deepEqual(inbox.map((d) => d._id), ['p4'], 'tous les propriétaires seulement sur demande explicite ; jamais les messageries personnelles');
+  // déconnexion du propriétaire A : les e-mails stockés du propriétaire B (autre fournisseur) restent
+  inbox.length = 0; putConn('microsoft', { connectedBy: 'mgrA' }); putConn('google', { connectedBy: 'mgrB' });
+  inbox.push({ _id: 'q1', companyId: C1, ownerUserId: null, accountId: null, connectionOwnerId: 'mgrA', providerMessageId: 'a', provider: 'microsoft' }, { _id: 'q2', companyId: C1, ownerUserId: null, accountId: null, connectionOwnerId: 'mgrB', providerMessageId: 'b', provider: 'google' });
+  assert.equal((await sec('DELETE', `/connections/${C1}/microsoft`, { user: 'mgrA' })).status, 200); assert.deepEqual(inbox.map((d) => d._id), ['q2'], 'seuls les e-mails de la boîte déconnectée sont purgés');
+  // reprise d'une connexion orpheline : seuls les anciens e-mails sans propriétaire sont purgés, pas ceux d'une autre boîte
+  putConn('microsoft', { connectedBy: '', ownerless: true }); inbox.push({ _id: 'q3', companyId: C1, ownerUserId: null, accountId: null, providerMessageId: 'o', provider: 'microsoft' });
+  oauthMicrosoft('x@acme.test', 'X'); assert.equal((await cb('microsoft', stateFor('microsoft', 'mgrB'))).location, 'https://portal.test/telephony/app/tools?connected=microsoft');
+  assert.deepEqual(inbox.map((d) => d._id), ['q2'], 'reprise : anciens e-mails sans propriétaire purgés, pas ceux de la boîte d’un autre');
+  // journal d'envoi : destinataires, objet, nom, adresse de la boîte seulement pour l'auteur ; les autres (titulaire compris) ne voient que des totaux
+  resetDb(); std(); putConn('microsoft', { connectedBy: 'mgrA' }, 'MGRA'); toolsDocs.push({ companyId: C1, email: { provider: 'microsoft' } });
+  r = await mail('POST', '/', { user: 'mgrA', body: { ...SEND, subject: 'OBJET_CONFIDENTIEL', to: ['secret@client.test'] } }); assert.equal(r.status, 201, r.text);
+  r = await mail('GET', '/', { user: 'mgrA' }); assert.equal(r.body.data.items[0].subject, 'OBJET_CONFIDENTIEL'); assert.deepEqual(r.body.data.items[0].to, ['secret@client.test']);
+  for (const user of ['owner1', 'mgrB']) {
+    r = await mail('GET', '/', { user });
+    assert.equal(r.body.data.items.length, 1, `${user} : le total est visible`); assert.equal(r.body.data.items[0].masked, true);
+    assert.ok(!r.text.includes('OBJET_CONFIDENTIEL') && !r.text.includes('secret@client.test') && !r.text.includes('Nom mgrA') && !r.text.includes(BOSS_EMAIL), `${user} : ni objet, ni destinataire, ni nom, ni adresse`);
+  }
+  // une secrétaire qui possède (ancien) un compte partagé « owned » : GET /emails/config ne plante pas (500)
+  putShared(SA2, { connectedBy: 'sec', permissions: { send: false, calendar: false } }, 'S');
+  r = await mail('GET', '/config', { user: 'sec' }); assert.equal(r.status, 200, r.text); assert.equal(r.body.data.configured, true, 'son propre compte est utilisable');
+  // existence chez un autre : fuite d'EXISTENCE acceptée et documentée, jamais l'adresse ni l'identité du propriétaire
+  resetDb(); std(); putConn('microsoft', { connectedBy: 'owner1' });
+  for (const [m, p, body, st] of [['POST', `/connections/${C1}/microsoft/start`, {}, 409], ['DELETE', `/connections/${C1}/microsoft`, undefined, 403]]) {
+    r = await sec(m, p, { user: 'mgrA', body }); assert.equal(r.status, st); assert.ok(!r.text.includes(BOSS_EMAIL) && !r.text.includes('owner1'), `${m} : ni adresse ni identité`);
+  }
 
   // =========================================================================================================
   // 9. Aucune fuite : ni jeton ni adresse de la boîte d'un autre dans les réponses ou les journaux de la session de test

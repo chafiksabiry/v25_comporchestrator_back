@@ -4,8 +4,8 @@ import FollowUpItem from '../models/FollowUpItem.js';
 import { canManage } from '../services/followUps.js';
 import { buildCalendarIcs } from '../services/ics.js';
 import { isVisioUrl } from '../services/visio.js';
-import { purgeInboundEmails } from '../services/inboundEmailStore.js';
-import { connectedProviders, mayConfigureInbound } from '../services/secretariatConnections.js';
+import { ALL_OWNERS, purgeInboundEmails } from '../services/inboundEmailStore.js';
+import { connectedProviders } from '../services/secretariatConnections.js';
 import {
   feedTokenMatches, feedUrlFor, hashFeedToken, isFeedTokenShape, loadTools, newFeedToken, toView, validateToolsPatch,
 } from '../services/secretariatTools.js';
@@ -40,14 +40,15 @@ export const secretariatToolsController = {
       // Les connexions ne sont lues que si le corps choisit un fournisseur externe (rien à vérifier sinon).
       const b = req.body && typeof req.body === 'object' ? req.body : {};
       const external = [b.email?.provider, b.agenda?.provider, b.visio?.provider].some((p) => typeof p === 'string' && !['platform', 'none', 'jitsi', 'custom'].includes(p));
-      // Lecture des e-mails entrants : se règle par la personne qui a connecté la boîte, jamais par un autre membre (titulaire compris) quand la boîte est celle d'un autre.
-      if (b.inbound !== undefined && !(await mayConfigureInbound(companyId, req.companyAccess.userId))) return fail(res, 403, 'Seule la personne qui a connecté la messagerie peut régler la lecture de ses e-mails entrants.');
+      // Réglages GLOBAUX de la société (lecture des e-mails entrants, fournisseur d'e-mail / d'agenda / de visio) : le titulaire seul les change. Chaque boîte reste utilisée
+      // par son propriétaire ; un autre propriétaire de boîte ne peut ni activer / couper la lecture d'une boîte qui n'est pas la sienne, ni purger ses e-mails stockés.
+      if ((b.inbound !== undefined || external) && req.companyAccess.role !== 'owner') return fail(res, 403, 'Seul le titulaire peut modifier ces réglages de la société (lecture des e-mails entrants, fournisseurs).');
       // Fournisseur « connecté » = connecté PAR CETTE PERSONNE (Google / Microsoft) : on ne choisit pas la boîte d'un autre.
       const checked = validateToolsPatch(req.body, await loadTools(companyId), external ? await connectedProviders(companyId, req.companyAccess.userId) : new Set());
       if (checked.error) return fail(res, 400, checked.error);
       const doc = await SecretariatTools.findOneAndUpdate({ companyId }, { $set: checked.set }, { upsert: true, new: true, setDefaultsOnInsert: true }).lean();
       // Désactivation des e-mails entrants : lecture arrêtée (réglage déjà écrit) puis purge immédiate de tous les e-mails stockés du centre.
-      if (checked.set['inbound.enabled'] === false) await purgeInboundEmails(companyId);
+      if (checked.set['inbound.enabled'] === false) await purgeInboundEmails(companyId, ALL_OWNERS); // réglage global coupé par le titulaire : tous les e-mails stockés de l'entreprise
       res.json({ success: true, data: toView(doc) });
     } catch (error) {
       console.error('secretariat tools update:', error.message);

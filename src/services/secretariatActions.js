@@ -1,7 +1,7 @@
 import { registerCompanyCalendarResolver } from './calendarSync.js';
 import SecretariatConnection from '../models/SecretariatConnection.js';
 import { connectedAccount, messages, resolveVisio, withConnection } from './secretariatConnections.js';
-import { isMailProvider, isOwnerless, ownerOf, ownsRow } from './mailOwnership.js';
+import { isMailProvider, ownsRow } from './mailOwnership.js';
 import { sendFromAccount } from './secretariatSharedAccounts.js';
 import { ownerHasLeft } from './mailOwnerMembership.js';
 import { SecretariatError } from './secretariatProviders/common.js';
@@ -96,12 +96,9 @@ registerCompanyCalendarResolver(async (companyId, hint) => {
   const agenda = mergedTools(await loadTools(companyId)).agenda.provider;
   if (agenda !== 'google' && agenda !== 'microsoft') return null;
   if ((hint.op === 'update' || hint.op === 'remove') && hint.hasExternalId && isMailProvider(hint.provider)) {
-    let ownerId = String(hint.ownerId || '').trim();
-    if (!ownerId) { // rendez-vous antérieur à la règle : la connexion qui a créé l'événement, si elle a un propriétaire
-      const row = await SecretariatConnection.findOne({ companyId, provider: hint.provider }).select('connectedBy').lean();
-      ownerId = row && !isOwnerless(row) ? ownerOf(row) : '';
-    }
-    if (!ownerId) return null;
+    // Rendez-vous antérieur à la règle (propriétaire du calendrier non mémorisé) : on ne devine PAS (le propriétaire actuel de la connexion peut avoir un autre calendrier) : `not_connected`.
+    const ownerId = String(hint.ownerId || '').trim();
+    if (!ownerId) return { id: hint.provider, unavailable: true };
     // Agir dans le calendrier de son propriétaire mémorisé seulement s'il est encore rattaché à la société ET que sa connexion est valide ; sinon `not_connected` sans erreur.
     const conn = await SecretariatConnection.findOne({ companyId, provider: hint.provider }).select('status connectedBy').lean();
     if (!conn || conn.status !== 'connected' || !ownsRow(conn, ownerId) || (await ownerHasLeft(companyId, ownerId, hint.token))) return { id: hint.provider, unavailable: true };
@@ -148,10 +145,7 @@ export async function createVideo(companyId, appt, { calendar = null, userId = n
 
 /** Propriétaire de la boîte qui porte le lien Meet / Teams d'un rendez-vous : celui mémorisé ; antérieur à la règle : le propriétaire actuel de la connexion (jamais orpheline). */
 async function videoOwnerOf(companyId, item, account) {
-  const stored = String(item.videoOwnerId || item.calendarOwnerId || '').trim();
-  if (stored) return stored;
-  const row = await SecretariatConnection.findOne({ companyId, provider: account }).select('connectedBy').lean();
-  return row && !isOwnerless(row) ? ownerOf(row) : '';
+  return String(item.videoOwnerId || item.calendarOwnerId || '').trim(); // jamais deviné : sans propriétaire mémorisé, rien n'est écrit (`not_connected`)
 }
 
 /** Met à jour la réunion / l'événement DÉDIÉ au lien (jamais l'événement d'agenda, géré par calendarSync). Au mieux : renvoie false en cas d'échec. */

@@ -314,7 +314,7 @@ try {
   for (const body of [{ status: 'handled' }]) { await req('POST', `/inbound-emails/${C1}/delete-many`, { user: 'owner1', body }); await req('POST', `/inbound-emails/${C1}/archive-many`, { user: 'owner1', body }); }
   assert.equal(sophieDocs().length, 2); assert.ok(sophieDocs().every((d) => !d.deletedAt && !d.archivedAt && d.status === 'new' && d.subject), 'rien n’a bougé côté personnel');
   // la purge de l'entreprise ne touche pas aux e-mails personnels (et inversement)
-  await Store.purgeInboundEmails(C1); assert.equal(companyDocs().length, 0); assert.equal(sophieDocs().length, 2);
+  await Store.purgeInboundEmails(C1, Store.ALL_OWNERS); assert.equal(companyDocs().length, 0); assert.equal(sophieDocs().length, 2);
   inbox.push({ _id: 'c-x', companyId: C1, ownerUserId: null, accountId: null, providerMessageId: 'cx', status: 'new', deletedAt: null, archivedAt: null, receivedAt: new Date(), fetchedAt: new Date(), subject: 'x' });
   await Store.purgePersonalInbox(C1, 'paul', ACC_SOPHIE); assert.equal(sophieDocs().length, 2, 'filtre société + propriétaire + compte');
   await Store.purgePersonalInbox(C1, 'sophie', ACC_PAUL); assert.equal(sophieDocs().length, 2);

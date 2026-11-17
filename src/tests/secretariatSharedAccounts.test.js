@@ -324,7 +324,7 @@ try {
   r = await req('GET', '/', { user: 'sophie', root: `${origin}/emails` });
   assert.equal(r.status, 200); assert.ok(r.body.data.items.every((i) => i.by.id === 'sophie')); assert.ok(r.body.data.items.length >= 2);
   r = await req('GET', '/', { user: 'paul', root: `${origin}/emails` }); assert.deepEqual(r.body.data.items, []);
-  r = await req('GET', '/', { user: 'owner1', root: `${origin}/emails` }); assert.ok(r.body.data.items.some((i) => i.by.id === 'owner1') && r.body.data.items.some((i) => i.by.id === 'sophie'));
+  r = await req('GET', '/', { user: 'owner1', root: `${origin}/emails` }); assert.ok(r.body.data.items.some((i) => i.by.id === 'owner1' && i.to.length > 0), 'le titulaire voit SES envois en détail'); assert.ok(r.body.data.items.some((i) => i.masked === true && i.to.length === 0 && i.subject === '' && i.by.name === '' && i.from === null), 'les envois de Sophie ne sont que des totaux');
   r = await req('GET', '/config', { user: 'sophie', root: `${origin}/emails` }); assert.equal(r.body.data.configured, true); assert.equal(r.body.data.provider, null);
   r = await req('GET', '/config', { user: 'paul', root: `${origin}/emails` }); assert.equal(r.status, 200);
 

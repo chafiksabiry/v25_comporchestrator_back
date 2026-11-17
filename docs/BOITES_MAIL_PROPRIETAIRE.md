@@ -69,9 +69,14 @@ Procédure :
 ## Propriétaire parti de la société
 Le **titulaire** peut déconnecter la connexion (ou retirer le compte partagé) d'un propriétaire qui n'est plus dans l'annuaire de la société (membres + agents, lu chez le service d'inscription avec le jeton du titulaire) ; `GET /connections` lui montre alors `orphan: true`, sans adresse ni jeton. Annuaire illisible ou vide : « inconnu », aucun retrait. Un rendez-vous n'écrit plus dans le calendrier d'un propriétaire parti ni dans celui d'une connexion à refaire : `not_connected`, sans erreur, identifiants conservés.
 
+## Réglages globaux, purge, journal, existence (revue indépendante)
+- **Réglages de société** : `inbound.*` et tout fournisseur externe (`email.provider`, `agenda.provider`, `visio.provider` ≠ platform/none/jitsi/custom) ne se changent que par le **titulaire** (`403` sinon). Un propriétaire de boîte non titulaire ne peut ni couper la lecture d'une autre boîte ni purger ses e-mails stockés. La désactivation par le titulaire purge tous les e-mails stockés de l'entreprise (`ALL_OWNERS`, jamais les messageries personnelles). Les réglages sans fournisseur (nom d'expéditeur, signature…) restent ouverts aux responsables.
+- **Purge ciblée** : `purgeInboundEmails(société, propriétaire)` — propriétaire explicite obligatoire ; sans propriétaire = seulement les anciens e-mails sans `connectionOwnerId` ; « tout » seulement avec `ALL_OWNERS`. Déconnexion : les e-mails de la boîte déconnectée ; reprise d'une orpheline : les anciens e-mails sans propriétaire.
+- **Journal d'envoi** (`GET /emails`) : destinataires, objet, nom de l'expéditeur et adresse de la boîte ne sont montrés qu'à l'auteur ; pour les autres (titulaire compris), entrée « totaux » (`masked: true` : date, modèle, état, élément lié).
+- **Anciens rendez-vous** (propriétaire d'agenda non mémorisé) : jamais deviné ; modification / annulation = `not_connected`, rien d'écrit.
+- **Fuite d'existence ACCEPTÉE et documentée** : un non-propriétaire apprend qu'une connexion existe chez un autre membre par `POST …/start` (`409 connection_owned`), `DELETE` (`403 not_owner`), le retour OAuth (`?error=not_owner`) et `email_in_use` (compte partagé) ; c'est inévitable tant qu'il ne peut y avoir qu'une connexion par fournisseur et par société (index unique) et que l'on doit lui dire pourquoi l'action est refusée. **Jamais l'adresse, le statut ni l'identité du propriétaire.** Pour les e-mails entrants, la réponse est identique à « aucune messagerie ».
+
 ## Points ouverts
-1. `inbound.*` est un réglage de société : tout propriétaire d'une boîte peut le régler (pas seulement celui du fournisseur visé).
-2. Agenda automatique : seules les connexions d'entreprise de la personne comptent ; la messagerie personnelle sert via l'agenda délégué (`calendarAccountId`).
-3. Index unique `InboundEmail` sans `connectionOwnerId` : purge à la reprise d'une orpheline ; à revoir si plusieurs propriétaires de fournisseurs différents.
-4. Journal d'envoi (`GET /emails`) : l'adresse de la boîte (`from`) n'est montrée qu'à l'expéditeur ; destinataires et objet restent visibles du titulaire / responsables (inchangé).
-5. La liaison au navigateur suppose que le portail envoie les identifiants (voir plus haut) ; non testable ici avec un vrai navigateur.
+1. Agenda automatique : seules les connexions d'entreprise de la personne comptent ; la messagerie personnelle sert via l'agenda délégué (`calendarAccountId`).
+2. Index unique `InboundEmail` sans `connectionOwnerId` (purge à la reprise d'une orpheline) : à revoir si plusieurs propriétaires de fournisseurs différents lisent en même temps.
+3. La liaison au navigateur suppose que le portail envoie les identifiants (voir plus haut) ; non testable ici avec un vrai navigateur.

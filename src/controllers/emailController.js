@@ -47,10 +47,17 @@ async function context(req, res) {
   return access;
 }
 
-const view = (l, userId) => ({
+/**
+ * Entrée du journal d'envoi. Un e-mail part TOUJOURS de la boîte de son auteur : destinataires, objet, nom de l'expéditeur et adresse de la boîte ne sont montrés qu'à lui ;
+ * pour les autres (titulaire compris) l'entrée n'est qu'un total : date, modèle, état et élément « À traiter » lié.
+ */
+const view = (l, userId) => (userId !== undefined && String(l.sentById) !== String(userId) ? {
+  id: String(l._id), at: l.createdAt, by: { id: '', name: '' }, to: [], subject: '', template: l.template,
+  followUpId: l.followUpId ? String(l.followUpId) : null, withIcs: l.withIcs === true, status: l.status, error: '', from: null, masked: true,
+} : {
   id: String(l._id), at: l.createdAt, by: { id: l.sentById, name: l.sentByName || '' }, to: l.to || [], subject: l.subject, template: l.template,
   followUpId: l.followUpId ? String(l.followUpId) : null, withIcs: l.withIcs === true, status: l.status, error: l.error || '',
-  from: l.accountId && (userId === undefined || String(l.sentById) === String(userId)) ? { accountId: String(l.accountId), email: l.fromEmail || '', label: l.fromLabel || '' } : null,
+  from: l.accountId ? { accountId: String(l.accountId), email: l.fromEmail || '', label: l.fromLabel || '' } : null,
 });
 
 async function usage(companyId) {
@@ -131,7 +138,7 @@ export const emailController = {
       const used = await usage(new mongoose.Types.ObjectId(access.companyId));
       if (access.role === 'agent') {
         // Une secrétaire n'a pas la messagerie de la société : « configuré » = au moins un compte utilisable pour écrire (délégué autorisé OU sa messagerie personnelle).
-        const usable = (await listAccounts(access.companyId, access)).filter((a) => a.can.send && !a.needsReauth);
+        const usable = (await listAccounts(access.companyId, access)).filter((a) => (a.can ? a.can.send : true) && !a.needsReauth);
         return res.json({ success: true, data: { configured: usable.length > 0, provider: null, account: null, limits: max, remainingThisHour: Math.max(0, max.perHour - used.hour), remainingToday: Math.max(0, max.perDay - used.day) } });
       }
       // Les e-mails ne partent que de la messagerie connectée du centre : `configured` = une messagerie active (aucune dépendance au service HARX).
