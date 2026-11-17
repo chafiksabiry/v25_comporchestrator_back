@@ -259,6 +259,18 @@ assert.equal(stepFromStage('Onboarding'), null);
   assert.equal(zoho.calls.notes[0].id, '848837000002087001');
 }
 
+// --- Événement « failure » de SalesIQ : cause journalisée, aucune donnée de visiteur ---
+{
+  const errors = [];
+  const cfg = cfgOf({ SALESIQ_LOG_PAYLOAD_SHAPE: '1' });
+  const agent = createAgent({ cfg, claude: fakeClaude([]), zoho: fakeZoho(), tools: createToolRunner({ zoho: fakeZoho(), logger: quiet }), knowledge, logger: { ...quiet, error: (m) => errors.push(m) } });
+  const r = agent.handleWebhookBody({ handler: 'failure', cause: { code: 7001, desc: 'Forward not allowed' }, failed_response: { action: 'forward', replies: ['x'] }, visitor: { email: 'a@b.com' } });
+  assert.deepEqual(r.response, { action: 'reply', replies: [] });
+  assert.match(errors[0], /code=7001 desc="Forward not allowed" action=forward replies=1/);
+  assert.ok(!errors[0].includes('a@b.com'));
+  assert.equal(parseWebhookPayload({ visitor: { active_conversation_id: '17-abc9' } }).activeConversationIdShape, '99-aaa9');
+}
+
 // --- Limite de débit et message vide ---
 {
   const { agent } = build({ env: { SALESIQ_RATE_LIMIT_PER_MINUTE: '2' } });
