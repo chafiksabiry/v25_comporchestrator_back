@@ -1387,12 +1387,18 @@ const RECONCILE_USER_LIMIT = 20;
 const RECONCILE_WINDOW_MS = 60 * 1000;
 const reconcileHits = new Map();
 export function takeReconcileSlot(companyId, now = Date.now()) {
-  const recent = (reconcileHits.get(companyId) || []).filter((t) => now - t < RECONCILE_WINDOW_MS);
-  if (recent.length >= RECONCILE_USER_LIMIT) { reconcileHits.set(companyId, recent); return false; }
+  for (const [id, hits] of reconcileHits) {
+    // Purge : une société sans demande dans la fenêtre ne garde aucune entrée (la table ne grossit pas avec le nombre de sociétés).
+    const kept = hits.filter((t) => now - t < RECONCILE_WINDOW_MS);
+    if (kept.length) reconcileHits.set(id, kept); else reconcileHits.delete(id);
+  }
+  const recent = reconcileHits.get(companyId) || [];
+  if (recent.length >= RECONCILE_USER_LIMIT) return false;
   recent.push(now);
   reconcileHits.set(companyId, recent);
   return true;
 }
+export function reconcileLimitSize() { return reconcileHits.size; }
 export function resetReconcileLimits() { reconcileHits.clear(); reconcileRuns.clear(); }
 
 export const escrowController = {
@@ -2957,13 +2963,15 @@ export const escrowController = {
     if (!callId || !repId) {
       return res.status(400).json({ error: 'callId and repId are required' });
     }
-    // Utilisateur (pas le service des appels) : il doit nommer SA société, contrôlée avant toute diffusion.
+    // Utilisateur (pas le service des appels) : il doit nommer SA société, contrôlée avant toute diffusion, et le `repId` qu'il fournit
+    // est IGNORÉ (rien ne prouve que ce rep est de sa société) : l'évènement ne part qu'aux connexions de sa société, jamais à un agent.
+    // Seul le service des appels (jeton de service) peut adresser l'évènement à un agent.
     if (!req.serviceCaller && !(await guardCompanyAccess(req, res, companyId))) return;
 
     broadcastUpdate({
       type: 'call_analysis_complete',
       callId: String(callId),
-      repId: String(repId),
+      repId: req.serviceCaller ? String(repId) : undefined,
       companyId: companyId ? String(companyId) : undefined,
       leadName: leadName || 'Client',
       ai_call_status: ai_call_status || 'scored',

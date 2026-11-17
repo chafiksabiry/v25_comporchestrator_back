@@ -17,7 +17,7 @@ process.env.TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || 'ACtest';
 process.env.TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || 'x';
 process.env.REGISTRATION_BACKEND_URL = 'https://registration.test';
 delete process.env.ESCROW_WS_AUTH_REQUIRED;
-const { escrowController: ctl, runReconciliationCoalesced, resetReconcileLimits } = await import('../controllers/escrowController.js');
+const { escrowController: ctl, runReconciliationCoalesced, resetReconcileLimits, takeReconcileSlot, reconcileLimitSize } = await import('../controllers/escrowController.js');
 const { clearCompanyCache } = await import('../middleware/companyScope.js');
 const { verifyServiceToken, userOrService, ESCROW_RECONCILE_SCOPE, CALL_ANALYSIS_NOTIFY_SCOPE } = await import('../middleware/serviceToken.js');
 const ws = await import('../websocket/escrowUpdates.js');
@@ -146,20 +146,21 @@ const lookup = async (req) => {
   return a;
 };
 const up = (headers = {}, url = '/escrow-updates') => ({ headers, url });
+const bearer = (t) => up({ 'sec-websocket-protocol': `bearer, ${t}` });
 
-test('jeton lu en sous-protocole « bearer, <jeton> » ou en paramètre token', () => {
+test('jeton lu UNIQUEMENT en sous-protocole « bearer, <jeton> » ; ?token= ignoré (fuite dans les journaux)', () => {
   assert.equal(ws.tokenFromUpgrade(up({ 'sec-websocket-protocol': 'bearer, abc.def' })), 'abc.def');
-  assert.equal(ws.tokenFromUpgrade(up({}, '/escrow-updates?token=xyz')), 'xyz');
+  assert.equal(ws.tokenFromUpgrade(up({}, '/escrow-updates?token=xyz')), null);
   assert.equal(ws.tokenFromUpgrade(up({ 'sec-websocket-protocol': 'bearer' })), null);
   assert.equal(ws.tokenFromUpgrade(up()), null);
 });
 test('poignée de main : sans jeton 401 ; jeton invalide / de service 401 ; sans société 403 ; inscription indisponible 503', async () => {
   assert.equal((await ws.authenticateUpgrade(up(), { lookup })).code, 401);
-  assert.equal((await ws.authenticateUpgrade(up({}, '/?token=garbage'), { lookup })).code, 401);
-  assert.equal((await ws.authenticateUpgrade(up({}, `/?token=${service(CALL_ANALYSIS_NOTIFY_SCOPE)}`), { lookup })).code, 401);
-  assert.equal((await ws.authenticateUpgrade(up({}, `/?token=${sign({ userId: 'o1' }, { expiresIn: -5 })}`), { lookup })).code, 401);
-  assert.equal((await ws.authenticateUpgrade(up({}, `/?token=${userTok('n1')}`), { lookup })).code, 403);
-  assert.equal((await ws.authenticateUpgrade(up({}, `/?token=${userTok('down')}`), { lookup })).code, 503);
+  assert.equal((await ws.authenticateUpgrade(bearer('garbage'), { lookup })).code, 401);
+  assert.equal((await ws.authenticateUpgrade(bearer(service(CALL_ANALYSIS_NOTIFY_SCOPE)), { lookup })).code, 401);
+  assert.equal((await ws.authenticateUpgrade(bearer(sign({ userId: 'o1' }, { expiresIn: -5 })), { lookup })).code, 401);
+  assert.equal((await ws.authenticateUpgrade(bearer(userTok('n1')), { lookup })).code, 403);
+  assert.equal((await ws.authenticateUpgrade(bearer(userTok('down')), { lookup })).code, 503);
   const ok = await ws.authenticateUpgrade(up({ 'sec-websocket-protocol': `bearer, ${userTok('o1')}` }), { lookup });
   assert.equal(ok.ok, true); assert.equal(ok.access.companyId, C1); assert.equal(ok.access.isOwner, true); assert.equal(ok.access.userId, 'o1');
 });
@@ -167,7 +168,7 @@ test('ESCROW_WS_AUTH_REQUIRED=false : connexion sans jeton acceptée (héritée)
   const env = { JWT_SECRET: 't', ESCROW_WS_AUTH_REQUIRED: 'false' };
   const legacy = await ws.authenticateUpgrade(up(), { lookup, env });
   assert.deepEqual(legacy, { ok: true, access: null });
-  assert.equal((await ws.authenticateUpgrade(up({}, '/?token=garbage'), { lookup, env })).code, 401);
+  assert.equal((await ws.authenticateUpgrade(bearer('garbage'), { lookup, env })).code, 401);
   assert.equal(ws.wsAuthRequired({}), true, 'défaut : authentification exigée');
 });
 
@@ -211,7 +212,7 @@ const open = (token, how = 'protocol') => new Promise((resolve) => {
 });
 const tick = () => new Promise((r) => setTimeout(r, 50));
 
-test('WebSocket réel : sans jeton refusé (401) ; jeton accepté en sous-protocole et en paramètre', async () => {
+test('WebSocket réel : sans jeton refusé (401) ; jeton accepté en sous-protocole, refusé en paramètre', async () => {
   const anon = await open(null);
   assert.equal(anon.ok, false); assert.equal(anon.status, 401);
   const bad = await open('garbage', 'query');
@@ -219,8 +220,8 @@ test('WebSocket réel : sans jeton refusé (401) ; jeton accepté en sous-protoc
   const a = await open(userTok('o1'));
   assert.equal(a.ok, true); assert.equal(a.c.protocol, 'bearer', 'le serveur choisit « bearer », jamais le jeton');
   const b = await open(userTok('o2'), 'query');
-  assert.equal(b.ok, true);
-  a.c.close(); b.c.close();
+  assert.equal(b.ok, false, '?token= n\'est plus accepté'); assert.equal(b.status, 401);
+  a.c.close();
 });
 test('WebSocket réel : chaque client ne reçoit que les évènements de SA société / de LUI-MÊME', async () => {
   const o1 = await open(userTok('o1')); const o2 = await open(userTok('o2')); const ag1 = await open(userTok(A1)); const ag2 = await open(userTok(A2));
@@ -274,4 +275,29 @@ test('routes /api/escrow : les trois routes refusent un appel anonyme (401) sans
     assert.equal(await post(`/api/escrow/reconcile/${C2}`, service(ESCROW_RECONCILE_SCOPE)), 200);
     assert.equal(await post('/api/escrow/call-analysis-help', service(CALL_ANALYSIS_NOTIFY_SCOPE)), 200);
   } finally { await new Promise((r) => srv.close(r)); }
+});
+
+test('call-analysis-complete par un UTILISATEUR : repId fourni ignoré, l\'évènement ne part qu\'à sa société, jamais à un agent', async () => {
+  const o1 = await open(userTok('o1')); const o2 = await open(userTok('o2')); const ag1 = await open(userTok(A1));
+  await tick();
+  who = { companyId: C1, isOwner: false }; clearCompanyCache();
+  const r = await route(CALL_ANALYSIS_NOTIFY_SCOPE, 'broadcastCallAnalysisComplete', { body: { companyId: C1, callId: 'k', repId: A1, leadName: 'Faux' }, auth: userTok('m1') });
+  assert.equal(r.code, 200);
+  await tick();
+  const got = (x) => x.got.filter((m) => m.type === 'call_analysis_complete');
+  assert.equal(got(ag1).length, 0, 'l\'agent ne reçoit pas un évènement forgé par un utilisateur');
+  assert.equal(got(o2).length, 0);
+  assert.equal(got(o1).length, 1); assert.equal(got(o1)[0].repId, undefined);
+  // Le service des appels, lui, l'adresse bien à l'agent.
+  await route(CALL_ANALYSIS_NOTIFY_SCOPE, 'broadcastCallAnalysisComplete', { body: { companyId: C1, callId: 'k', repId: A1 }, auth: service(CALL_ANALYSIS_NOTIFY_SCOPE) });
+  await tick();
+  assert.equal(got(ag1).length, 1);
+  for (const x of [o1, o2, ag1]) x.c.close();
+});
+test('plafond reconcile : les sociétés sans demande récente sont purgées de la table', () => {
+  const t0 = 1_000_000;
+  for (let i = 0; i < 50; i += 1) assert.equal(takeReconcileSlot(`co${i}`, t0), true);
+  assert.equal(reconcileLimitSize(), 50);
+  assert.equal(takeReconcileSlot('other', t0 + 61_000), true);
+  assert.equal(reconcileLimitSize(), 1, 'entrées expirées supprimées, pas seulement vidées');
 });

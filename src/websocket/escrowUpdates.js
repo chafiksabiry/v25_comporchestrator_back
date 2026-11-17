@@ -6,9 +6,9 @@ import { callerAccess } from '../middleware/companyScope.js';
  * WebSocket /escrow-updates : évènements temps réel du portefeuille (escrow_update, reconciliation_complete, rep_wallet_update,
  * ai_audit_flagged, call_analysis_complete, call_analysis_help_requested).
  *
- * Connexion : jeton UTILISATEUR obligatoire (celui de l'application, localStorage `token`), présenté
- *  - de préférence en sous-protocole : `new WebSocket(url, ['bearer', token])` (le serveur répond le sous-protocole `bearer`) ;
- *  - ou en paramètre `?token=…` (repli ; apparaît dans les journaux d'accès des proxys).
+ * Connexion : jeton UTILISATEUR obligatoire (celui de l'application, localStorage `token`), présenté UNIQUEMENT en sous-protocole :
+ * `new WebSocket(url, ['bearer', token])` (le serveur répond le sous-protocole `bearer`). Pas de `?token=` : l'URL finit dans les
+ * journaux d'accès des proxys.
  * La société de l'appelant vient du service d'inscription (callerAccess), jamais du client. Refus à la poignée de main :
  * 401 sans jeton ou jeton invalide / de service, 403 utilisateur sans société, 503 service d'inscription indisponible.
  * La connexion est fermée (code 4401) à l'expiration du jeton : le client se reconnecte avec un jeton frais.
@@ -26,7 +26,7 @@ export function wsAuthRequired(env = process.env) {
   return String(env.ESCROW_WS_AUTH_REQUIRED ?? 'true').trim().toLowerCase() !== 'false';
 }
 
-/** Jeton présenté à la poignée de main : sous-protocole `bearer, <jeton>` ou paramètre `token`. */
+/** Jeton présenté à la poignée de main : sous-protocole `bearer, <jeton>` uniquement (un `?token=` est ignoré). */
 export function tokenFromUpgrade(req) {
   const protocols = String(req.headers?.['sec-websocket-protocol'] || '')
     .split(',')
@@ -34,11 +34,6 @@ export function tokenFromUpgrade(req) {
     .filter(Boolean);
   const i = protocols.findIndex((p) => p.toLowerCase() === 'bearer');
   if (i >= 0 && protocols[i + 1]) return protocols[i + 1];
-  try {
-    const url = new URL(req.url || '/', 'http://localhost');
-    const q = url.searchParams.get('token');
-    if (q) return q;
-  } catch { /* ignore */ }
   return null;
 }
 
