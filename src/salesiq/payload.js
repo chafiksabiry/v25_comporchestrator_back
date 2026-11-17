@@ -26,6 +26,16 @@ export function parseWebhookPayload(body) {
     handler: String(b.handler || '').toLowerCase(),
     operation: String(b.operation || '').toLowerCase(),
     text: String(first(request.message?.text, b.message?.text, '') || ''),
+    // Événement « failure » : SalesIQ signale que la réponse du bot a été rejetée (code et texte de la cause, action refusée).
+    failure: b.cause || b.failed_response ? {
+      code: b.cause?.code ?? null,
+      desc: String(b.cause?.desc ?? '').slice(0, 300),
+      action: String(b.failed_response?.action ?? ''),
+      replies: Array.isArray(b.failed_response?.replies) ? b.failed_response.replies.length : 0,
+    } : null,
+    // Forme (chiffres -> 9, lettres -> a) de l'identifiant de conversation actif, pour le diagnostic : jamais sa valeur.
+    activeConversationIdShape: visitor.active_conversation_id != null
+      ? String(visitor.active_conversation_id).replace(/[0-9]/g, '9').replace(/[A-Za-z]/g, 'a').slice(0, 60) : null,
     hasAttachments: Array.isArray(b.attachments) && b.attachments.length > 0,
     requestId: first(request.request_id, request.id, b.request_id) ? String(first(request.request_id, request.id, b.request_id)) : null,
     // Seul un identifiant numérique est une conversation SalesIQ (un identifiant de session visiteur ne l'est pas) ;

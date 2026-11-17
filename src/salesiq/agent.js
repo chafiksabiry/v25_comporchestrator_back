@@ -167,6 +167,11 @@ export function createAgent({ cfg, claude, zoho, tools, knowledge, logger = cons
     const quiet = { response: { action: 'reply', replies: [] }, done: Promise.resolve() };
     if (cfg.logPayloadShape) logger.info?.('[salesiq] payload shape', JSON.stringify(payloadShape(body)));
     if (cfg.logPayloadShape) logger.info?.('[salesiq] payload received', JSON.stringify({ handler: evt.handler, operation: evt.operation, hasRequestId: Boolean(evt.requestId), hasConversationId: Boolean(evt.conversationId), hasEmail: Boolean(evt.visitorEmail) }));
+    if (evt.handler === 'failure') {
+      logger.error?.(`[salesiq] SalesIQ rejected our response: code=${evt.failure?.code} desc="${evt.failure?.desc}" action=${evt.failure?.action} replies=${evt.failure?.replies}`);
+    } else if (cfg.logPayloadShape && evt.activeConversationIdShape) {
+      logger.info?.(`[salesiq] active_conversation_id shape: ${evt.activeConversationIdShape}`);
+    }
     if (evt.handler && evt.handler !== 'message') return quiet;
 
     const forward = (done = Promise.resolve()) => ({ response: forwardResponse(evt.text.trim() ? langOf(evt.text) : 'fr'), done });
