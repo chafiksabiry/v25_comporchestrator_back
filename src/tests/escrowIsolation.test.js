@@ -39,8 +39,9 @@ beforeEach(() => {
   for (const m of ['find', 'findOne', 'findById', 'countDocuments', 'aggregate', 'distinct', 'exists']) mongoose.Model[m] = function () { touched += 1; return chain(m === 'find' || m === 'aggregate' || m === 'distinct' ? [] : m === 'countDocuments' ? 0 : null); };
   for (const m of ['findOneAndUpdate', 'updateOne', 'updateMany', 'create', 'deleteOne', 'deleteMany', 'insertMany', 'bulkWrite', 'findByIdAndUpdate', 'findOneAndDelete', 'replaceOne']) mongoose.Model[m] = function () { touched += 1; writes += 1; return chain(null); };
   mongoose.Model.prototype.save = async function () { touched += 1; writes += 1; return this; };
-  const coll = () => ({ find: () => { touched += 1; return { toArray: async () => [], sort() { return this; }, limit() { return this; }, project() { return this; } }; }, findOne: async () => { touched += 1; return null; }, updateOne: async () => { touched += 1; writes += 1; return {}; }, updateMany: async () => { touched += 1; writes += 1; return {}; }, aggregate: () => { touched += 1; return { toArray: async () => [] }; }, countDocuments: async () => { touched += 1; return 0; }, insertOne: async () => { touched += 1; writes += 1; return {}; } });
-  const db = { collection: coll };
+  // Fiche agent : `_id` PROPRE + `userId` (comme le service d'inscription) : A1 appartient au compte « agent-user-1 ».
+  const coll = (name) => ({ find: (q) => { touched += 1; const rows = name === 'agents' ? [{ _id: A1, userId: 'agent-user-1' }].filter((r) => (q?.userId?.$in || []).map(String).includes(String(r.userId))) : []; return { toArray: async () => rows, sort() { return this; }, limit() { return this; }, project() { return this; } }; }, findOne: async () => { touched += 1; return null; }, updateOne: async () => { touched += 1; writes += 1; return {}; }, updateMany: async () => { touched += 1; writes += 1; return {}; }, aggregate: () => { touched += 1; return { toArray: async () => [] }; }, countDocuments: async () => { touched += 1; return 0; }, insertOne: async () => { touched += 1; writes += 1; return {}; } });
+  const db = { collection: (name) => coll(name) };
   Object.defineProperty(mongoose.connection, 'db', { get: () => db, configurable: true });
   global.fetch = async () => { if (registrationDown) throw new Error('registration down'); return { ok: true, json: async () => ({ success: true, data: who }) }; };
 });
@@ -130,13 +131,20 @@ for (const [name, req] of Object.entries(OWN_OBJECT)) {
 }
 
 for (const [name, req] of Object.entries(AGENT_SELF)) {
-  test(`${name} : seul l'agent concerné (identité du jeton) ; un autre utilisateur ou un jeton sans identité : refus sans aucun appel base`, async () => {
+  test(`${name} : seul l'agent concerné (fiche agent liée au compte du jeton) ; un autre utilisateur ou un jeton sans identité : refus, aucune écriture`, async () => {
     const other = await call(name, { ...req, userId: A2 });
-    assert.equal(other.code, 403, name); assert.equal(touched, 0); assert.equal(writes, 0);
+    assert.equal(other.code, 403, name); assert.equal(writes, 0); assert.ok(touched <= 1, 'seule la lecture de la fiche agent a lieu');
+    touched = 0;
     const owner = await call(name, { ...req, userId: 'company-owner-1' });
-    assert.equal(owner.code, 403, name); assert.equal(touched, 0);
+    assert.equal(owner.code, 403, name); assert.equal(writes, 0); assert.ok(touched <= 1);
+    touched = 0;
     const anonymous = await call(name, { ...req, userId: null });
     assert.equal(anonymous.code, 401, name); assert.equal(touched, 0);
+  });
+
+  test(`${name} : l'agent légitime passe le contrôle (fiche agent liée à son compte, `+"`_id` ≠ `userId`"+`)`, async () => {
+    const r = await call(name, { ...req, userId: 'agent-user-1' });
+    assert.notEqual(r.code, 403, name); assert.notEqual(r.code, 401, name);
   });
 }
 

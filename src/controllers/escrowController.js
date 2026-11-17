@@ -2139,7 +2139,7 @@ export const escrowController = {
   getAgentTransactions: async (req, res) => {
     const { agentId } = req.params;
     if (!agentId) return res.status(400).json({ error: 'agentId is required' });
-    if (!guardAgentSelf(req, res, agentId)) return;
+    if (!(await guardAgentSelf(req, res, agentId))) return;
 
     try {
       const repId = mongoose.Types.ObjectId.isValid(agentId)
@@ -2426,7 +2426,7 @@ export const escrowController = {
   getAgentWallet: async (req, res) => {
     const { agentId } = req.params;
     if (!agentId) return res.status(400).json({ error: 'agentId is required' });
-    if (!guardAgentSelf(req, res, agentId)) return;
+    if (!(await guardAgentSelf(req, res, agentId))) return;
 
     try {
       await reconcileAgentRewards(agentId);
@@ -2441,7 +2441,7 @@ export const escrowController = {
   getAgentWithdrawals: async (req, res) => {
     const { agentId } = req.params;
     if (!agentId) return res.status(400).json({ error: 'agentId is required' });
-    if (!guardAgentSelf(req, res, agentId)) return;
+    if (!(await guardAgentSelf(req, res, agentId))) return;
 
     try {
       const withdrawals = await AgentWithdrawal.find({ agentId }).sort({ createdAt: -1 });
@@ -2458,7 +2458,7 @@ export const escrowController = {
     if (!agentId) {
       return res.status(400).json({ error: 'agentId is required' });
     }
-    if (!guardAgentSelf(req, res, agentId)) return;
+    if (!(await guardAgentSelf(req, res, agentId))) return;
 
     try {
       const db = mongoose.connection.db;
@@ -2498,7 +2498,7 @@ export const escrowController = {
     if (!agentId || !amount || amount <= 0 || !method) {
       return res.status(400).json({ error: 'agentId, positive amount, and method are required' });
     }
-    if (!guardAgentSelf(req, res, agentId)) return;
+    if (!(await guardAgentSelf(req, res, agentId))) return;
 
     const parsedAmount = parseFloat(amount);
     if (Number.isNaN(parsedAmount) || parsedAmount < MIN_WITHDRAWAL_AMOUNT) {
