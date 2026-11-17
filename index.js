@@ -36,6 +36,7 @@ import { lineCapacityRoutes } from './src/routes/lineCapacity.js';
 import { purgeExpiredBenchRecordings, migrateAiAgentSettings } from './src/services/aiInbound.js';
 import { companyNotificationRoutes } from './src/routes/companyNotifications.js';
 import { createWhatsAppModule } from './src/whatsapp/index.js';
+import { createSalesIqModule } from './src/salesiq/index.js';
 import { startMessageReminders } from './src/services/messageReminders.js';
 import { purgePhoneContactsAfterCancel } from './src/services/contactsRetention.js';
 import { removeTombstoneExpiry } from './src/models/ContactTombstone.js';
@@ -88,6 +89,10 @@ mongoose.connect(config.mongodbUri, {
 // CORS : liste blanche CORS_ALLOWED_ORIGINS (voir src/middleware/cors.js) ; absente = comportement historique.
 app.use(corsMiddleware());
 if (!parseAllowedOrigins()) console.warn('[security] CORS_ALLOWED_ORIGINS absent : toute origine est acceptée avec credentials (comportement historique)');
+
+// HARX SalesIQ Support Agent : webhook Zobot -> Claude -> réponse en temps réel (voir docs/SALESIQ_SUPPORT_AGENT.md).
+// Monté AVANT le contrôle de connexion MongoDB et avant express.json() : il n'utilise pas la base et lit le corps brut.
+app.use('/api/salesiq', createSalesIqModule().router);
 
 // Database connection health check middleware
 app.use((req, res, next) => {
