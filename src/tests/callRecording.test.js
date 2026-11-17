@@ -34,7 +34,7 @@ assert.equal(R.shouldRecordPlan(cc('full_scope')), true, 'Full Scope enregistré
 assert.equal(R.shouldRecordPlan(cc('multi_clients')), true, 'Multi-clients (contact centre) enregistré');
 assert.equal(R.shouldRecordPlan({ product: null, callcenterTier: null }), true, 'forfait TaaS enregistré');
 assert.equal(R.shouldRecordPlan(cc('nomad_solo')), false, 'Nomad Solo jamais enregistré');
-assert.equal(R.shouldRecordPlan(cc('accueil')), false, 'Accueil / Secrétariat jamais enregistré');
+assert.equal(R.shouldRecordPlan(cc('accueil')), false, 'Accueil : non enregistré sans l\'option de la société');
 assert.equal(R.shouldRecordPlan(cc(null)), false, 'Call Centre sans palier : doute = non');
 assert.equal(R.shouldRecordPlan(cc('inconnu')), false, 'palier inconnu : doute = non');
 assert.equal(R.shouldRecordPlan({ product: 'autre', callcenterTier: 'full_scope' }), false, 'produit inconnu : doute = non');

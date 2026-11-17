@@ -301,3 +301,17 @@ test('plafond reconcile : les sociétés sans demande récente sont purgées de 
   assert.equal(takeReconcileSlot('other', t0 + 61_000), true);
   assert.equal(reconcileLimitSize(), 1, 'entrées expirées supprimées, pas seulement vidées');
 });
+
+// ───────── Identité d'agent : le repId d'un évènement est l'_id de la FICHE agent (≠ userId du compte) ─────────
+test('agent : la connexion reçoit l\'évènement de SA fiche (agents._id lié au compte), jamais celui d\'une autre fiche', async () => {
+  const FICHE = '64b0000000000000000000f1'; const AUTRE = '64b0000000000000000000f2';
+  const res = await ws.authenticateUpgrade(bearer(userTok(A1)), { lookup, agentIds: async (uid) => new Set(uid === A1 ? [FICHE] : []) });
+  assert.equal(res.ok, true); assert.deepEqual(res.access.agentIds, [FICHE]);
+  assert.equal(ws.canReceive(res.access, { type: 'rep_wallet_update', repId: FICHE }), true, 'fiche liée au compte');
+  assert.equal(ws.canReceive(res.access, { type: 'rep_wallet_update', repId: AUTRE }), false, 'fiche d\'un autre agent');
+  assert.equal(ws.canReceive(res.access, { type: 'escrow_update', companyId: C1 }), false, 'un agent ne reçoit pas les évènements société');
+  // base des fiches illisible : aucun évènement d'agent (jamais ouvert)
+  const down = await ws.authenticateUpgrade(bearer(userTok(A1)), { lookup, agentIds: async () => { throw new Error('mongo down'); } });
+  assert.equal(down.ok, true); assert.deepEqual(down.access.agentIds, []);
+  assert.equal(ws.canReceive(down.access, { repId: FICHE }), false);
+});

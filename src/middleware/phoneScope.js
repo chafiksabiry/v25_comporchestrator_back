@@ -2,7 +2,7 @@ import { PhoneNumber } from '../models/PhoneNumber.js';
 import Voicemail from '../models/Voicemail.js';
 import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
 import { authenticate } from './auth.js';
-import { callerCompanyIds, ScopeError } from './companyScope.js';
+import { callerAccess, callerCompanyIds, ScopeError } from './companyScope.js';
 
 /**
  * Access control of the phone-number routes: a valid login, and for everything that targets a company, a line or
@@ -35,6 +35,13 @@ export const ofNumber = async (req) => {
   if (!line) return undefined;
   if (!line.companyId) throw new ScopeError(403, 'This line is not attached to a company', 'LINE_NOT_ATTACHED_TO_COMPANY');
   return line.companyId;
+};
+
+/** La société de l'appelant, EXIGÉE : une personne sans société ou un agent est refusé (403) ; sert aux routes qui ne désignent aucune société. */
+export const ofCaller = async (req) => {
+  const access = await callerAccess(req);
+  if (!access.companyId || access.role === 'agent') throw new ScopeError(403, 'A company account is required', 'COMPANY_REQUIRED');
+  return access.companyId;
 };
 
 /** Company of the voicemail designated by id. Not found: nothing to check (the handler answers 404). */
