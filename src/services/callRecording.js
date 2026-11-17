@@ -5,26 +5,47 @@ import { isTwilioRecordingUrl } from './voicemailMapping.js';
 import { resolveDashCallsApi, SERVICE_ISSUER } from './voicemailAnalysis.js';
 
 /**
- * Enregistrement des conversations (<Dial record>), réservé à certaines offres.
+ * Enregistrement des conversations (<Dial record>), selon l'offre et le réglage de la société.
  *
- * Décision du propriétaire : enregistrés = Full Scope / Multi-clients (Call Centre) et forfaits TaaS ; JAMAIS enregistrés =
- * Nomad Solo et Accueil / Secrétariat. Liste blanche explicite, défaut = ne pas enregistrer (offre inconnue, absente, erreur).
- * Chaque appel enregistré est précédé d'une annonce vocale (consentement) ; un appel non enregistré n'entend rien de plus.
+ * Décision du propriétaire, par offre (`recordingPolicy`) :
+ *  - Full Scope / Multi-clients (Call Centre) et forfaits TaaS : enregistrés par défaut ; la société peut le couper par sens
+ *    (réglage `recording.<sens>` à `false`). Comportement inchangé.
+ *  - Accueil : option de la société, DÉSACTIVÉE par défaut ; enregistré seulement si le titulaire l'a activée
+ *    (`recording.<sens>` strictement `true`).
+ *  - Nomad Solo, offre inconnue ou absente : jamais enregistrés.
+ * Toute erreur de lecture (offre, réglage) = ne pas enregistrer. Chaque appel enregistré est précédé d'une annonce vocale
+ * (consentement) ; un appel non enregistré n'entend rien de plus.
  * Module sans accès réseau sauf `attachCallRecording` (envoi de l'URL à dash_calls).
  */
 
-/** Paliers Call Centre dont les appels sont enregistrés (valeurs canoniques de callcenterTier.js). */
+/** Paliers Call Centre enregistrés par défaut (valeurs canoniques de callcenterTier.js). */
 export const RECORDED_CALLCENTER_TIERS = ['full_scope', 'multi_clients'];
+/** Paliers Call Centre où l'enregistrement est une option de la société, désactivée par défaut. */
+export const OPT_IN_CALLCENTER_TIERS = ['accueil'];
 
 /**
+ * Politique d'enregistrement d'une offre : 'default_on' (Full Scope, Multi-clients, TaaS sans `harx_product`),
+ * 'opt_in' (Accueil) ou 'never' (Nomad Solo, produit ou palier inconnu, pas de forfait).
  * @param {{product: string|null, callcenterTier: string|null}|null} limits résultat de loadCompanyPlanLimits
- * Call Centre : palier de la liste blanche uniquement. Forfait sans `harx_product` (TaaS) : enregistré. Tout autre produit
- * (valeur inconnue) ou palier absent / inconnu : non enregistré.
+ * @returns {'default_on'|'opt_in'|'never'}
  */
-export function shouldRecordPlan(limits) {
-  if (!limits || typeof limits !== 'object') return false;
-  if (limits.product === 'callcenter') return RECORDED_CALLCENTER_TIERS.includes(limits.callcenterTier);
-  return limits.product === null || limits.product === undefined;
+export function recordingPolicy(limits) {
+  if (!limits || typeof limits !== 'object') return 'never';
+  if (limits.product === 'callcenter') {
+    if (RECORDED_CALLCENTER_TIERS.includes(limits.callcenterTier)) return 'default_on';
+    if (OPT_IN_CALLCENTER_TIERS.includes(limits.callcenterTier)) return 'opt_in';
+    return 'never';
+  }
+  return limits.product === null || limits.product === undefined ? 'default_on' : 'never';
+}
+
+/**
+ * L'offre permet-elle d'enregistrer ? Offre enregistrée par défaut : oui. Accueil : seulement si la société l'a activé
+ * (`optedIn: true`). Sans `optedIn`, Accueil reste non enregistré (comportement d'avant pour un appel sans réglage).
+ */
+export function shouldRecordPlan(limits, { optedIn = false } = {}) {
+  const policy = recordingPolicy(limits);
+  return policy === 'default_on' || (policy === 'opt_in' && optedIn === true);
 }
 
 /** Motifs de la décision d'enregistrement, propagés à dash_calls (`recordingReason`). */
@@ -32,26 +53,32 @@ export const RECORDING_REASONS = ['recorded_planned', 'plan_excludes', 'disabled
 export const RECORDING_DIRECTIONS = ['inbound', 'outbound'];
 
 /**
- * Décision unique « enregistré = offre éligible ET réglage société » + motif. Ne lève jamais.
- * L'offre est un plafond : lue d'abord, offre exclue = `plan_excludes` (le réglage n'est pas lu). Offre éligible : le réglage
- * `recording.<direction>` à `false` (seule valeur qui désactive ; absent = activé, comme avant) donne `disabled_by_company`.
+ * Décision unique « enregistré = offre ET réglage société » + motif. Ne lève jamais.
+ * L'offre est lue d'abord : offre jamais enregistrée = `plan_excludes` (le réglage n'est pas lu).
+ *  - offre enregistrée par défaut : `recording.<direction>` à `false` (seule valeur qui désactive ; absent = activé) = `disabled_by_company` ;
+ *  - Accueil (option) : enregistré seulement si `recording.<direction>` vaut strictement `true`, sinon `disabled_by_company`
+ *    (y compris sans fonction de lecture du réglage).
  * Toute erreur de lecture (offre, réglage) ou entreprise inconnue : non enregistré, `lookup_failed`.
- * `loadLimits` et `loadSettings` (optionnel : sans lui, aucun réglage) sont injectés.
+ * `loadLimits` et `loadSettings` (optionnel) sont injectés.
  * @returns {Promise<{record: boolean, reason: 'recorded_planned'|'plan_excludes'|'disabled_by_company'|'lookup_failed'}>}
  */
 export async function decideRecording(companyId, { direction = 'inbound', loadLimits, loadSettings } = {}) {
   if (!companyId) return { record: false, reason: 'lookup_failed' };
+  let policy;
   try {
-    if (!shouldRecordPlan(await loadLimits(companyId))) return { record: false, reason: 'plan_excludes' };
+    policy = recordingPolicy(await loadLimits(companyId));
   } catch (e) {
     console.error('[call-recording] offre illisible, appel non enregistré:', e?.message || e);
     return { record: false, reason: 'lookup_failed' };
   }
-  if (typeof loadSettings !== 'function') return { record: true, reason: 'recorded_planned' };
+  if (policy === 'never') return { record: false, reason: 'plan_excludes' };
+  if (typeof loadSettings !== 'function') {
+    return policy === 'default_on' ? { record: true, reason: 'recorded_planned' } : { record: false, reason: 'disabled_by_company' };
+  }
   try {
-    const settings = await loadSettings(companyId);
-    if (settings?.recording?.[direction] === false) return { record: false, reason: 'disabled_by_company' };
-    return { record: true, reason: 'recorded_planned' };
+    const value = (await loadSettings(companyId))?.recording?.[direction];
+    const enabled = policy === 'opt_in' ? value === true : value !== false;
+    return enabled ? { record: true, reason: 'recorded_planned' } : { record: false, reason: 'disabled_by_company' };
   } catch (e) {
     console.error('[call-recording] réglage société illisible, appel non enregistré:', e?.message || e);
     return { record: false, reason: 'lookup_failed' };

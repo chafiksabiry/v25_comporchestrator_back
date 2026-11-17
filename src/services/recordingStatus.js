@@ -4,8 +4,11 @@ import { ATTACH_RETRY_DELAYS_MS, RECORDING_DIRECTIONS, RECORDING_REASONS, RECORD
 import { resolveDashCallsApi, SERVICE_ISSUER } from './voicemailAnalysis.js';
 
 /**
- * Statut d'enregistrement d'un appel : persistance (CallRecordingStatus) et signalement à dash_calls
- * (`POST /calls/recording-status`, contrat décrit dans la PR). Rien ici ne doit jamais gêner un appel : aucune fonction ne lève.
+ * Statut d'enregistrement d'un appel : persistance (CallRecordingStatus) et signalement à dash_calls, sur les routes de
+ * v25_dash_calls_backend (jeton de service HS256, portée `call-recording`) :
+ *  - `POST /calls/recording/intent` : décision { sid, companyId, recordingStatus: pending | not_recorded, recordingReason } ;
+ *  - `POST /calls/recording/failed` : audio non rattaché { sid, companyId } (dash passe l'appel en not_recorded / technical_failure).
+ * Rien ici ne doit jamais gêner un appel : aucune fonction ne lève.
  */
 
 const CALL_SID = /^CA[0-9a-zA-Z]{32}$/;
@@ -14,49 +17,52 @@ const serviceToken = (secret = process.env.JWT_SECRET) => {
   return jwt.sign({ scope: RECORDING_SERVICE_SCOPE }, secret, { algorithm: 'HS256', issuer: SERVICE_ISSUER, expiresIn: 120 });
 };
 
+export const INTENT_PATH = '/calls/recording/intent';
+export const FAILED_PATH = '/calls/recording/failed';
+
 /**
- * Corps envoyé à dash_calls. `recordingStatus` : planned (enregistrement lancé), not_recorded (jamais enregistré),
- * technical_failure (enregistré mais audio non rattaché). `recordingReason` est le motif de la décision, inchangé en cas d'échec.
+ * Corps de `POST /calls/recording/intent`. dash_calls n'accepte que `pending` + `recorded_planned`, ou `not_recorded` + un motif
+ * négatif (plan_excludes, disabled_by_company, not_applicable, lookup_failed).
  */
-export function buildStatusBody({ callSid, companyId, direction, reason, failure = false, failureCode, recordingSid }) {
+export function buildIntentBody({ callSid, companyId, reason }) {
   return {
     sid: String(callSid),
     companyId: String(companyId),
-    direction,
+    recordingStatus: reason === 'recorded_planned' ? 'pending' : 'not_recorded',
     recordingReason: reason,
-    recordingStatus: failure ? 'technical_failure' : reason === 'recorded_planned' ? 'planned' : 'not_recorded',
-    ...(failure && failureCode ? { failureCode } : {}),
-    ...(failure && recordingSid ? { recordingSid } : {}),
   };
 }
 
+/** Corps de `POST /calls/recording/failed` (retries d'attache épuisés ou refus). */
+export const buildFailureBody = ({ callSid, companyId }) => ({ sid: String(callSid), companyId: String(companyId) });
+
 /**
- * Envoie le statut à dash_calls ; 404 = l'appel n'est pas encore inscrit (le front l'écrit à la fin de l'appel) : nouvelle
- * tentative après chaque délai, comme le rattachement de l'audio. Les tentatives vivent en mémoire.
+ * Envoie un signalement à dash_calls (`path` : INTENT_PATH ou FAILED_PATH). Erreur réseau, 5xx ou 404 : nouvelle tentative après
+ * chaque délai ; autre 4xx (400 corps refusé, 401/403 jeton, 409 autre société) : abandon. Les tentatives vivent en mémoire.
  * @returns {Promise<'sent'|'pending'|'rejected'|'unconfigured'|'error'>}
  */
-export async function pushRecordingStatus(body, { fetchImpl = fetch, env = process.env, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), delays = ATTACH_RETRY_DELAYS_MS } = {}) {
+export async function pushToDash(path, body, { fetchImpl = fetch, env = process.env, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), delays = ATTACH_RETRY_DELAYS_MS } = {}) {
   const apiBase = resolveDashCallsApi(env);
   if (!apiBase) return 'unconfigured';
   let outcome = 'error';
   for (let i = 0; i <= delays.length; i++) {
     if (i > 0) await sleep(delays[i - 1]);
     try {
-      const res = await fetchImpl(`${apiBase}/calls/recording-status`, {
+      const res = await fetchImpl(`${apiBase}${path}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${serviceToken(env.JWT_SECRET)}` },
         body: JSON.stringify(body),
       });
       if (res.ok) return 'sent';
       if (res.status === 404) { outcome = 'pending'; continue; }
-      if (res.status >= 400 && res.status < 500) { console.warn(`[call-recording] statut ${body.sid} refusé par dash_calls (${res.status})`); return 'rejected'; }
+      if (res.status >= 400 && res.status < 500) { console.warn(`[call-recording] ${path} ${body.sid} refusé par dash_calls (${res.status})`); return 'rejected'; }
       outcome = 'error';
     } catch (e) {
-      console.error('[call-recording] statut non envoyé:', e?.message || e);
+      console.error(`[call-recording] ${path} non envoyé:`, e?.message || e);
       outcome = 'error';
     }
   }
-  console.warn(`[call-recording] statut ${body.sid} non reçu par dash_calls (${outcome})`);
+  console.warn(`[call-recording] ${path} ${body.sid} non reçu par dash_calls (${outcome})`);
   return outcome;
 }
 
@@ -74,7 +80,7 @@ export async function recordDecision({ callSid, companyId, direction, reason }, 
       { upsert: true }
     );
     if (!r?.upsertedCount) return 'already';
-    const sent = await pushRecordingStatus(buildStatusBody({ callSid, companyId, direction, reason }), net);
+    const sent = await pushToDash(INTENT_PATH, buildIntentBody({ callSid, companyId, reason }), net);
     await model.updateOne({ callSid }, { $set: { dashSynced: sent === 'sent' } }).catch((e) => console.error('[call-recording] synchro non consignée:', e?.message || e));
     return 'recorded';
   } catch (e) {
@@ -86,8 +92,8 @@ export async function recordDecision({ callSid, companyId, direction, reason }, 
 const FAILURE_CODE = { pending: 'attach_retries_exhausted', error: 'attach_retries_exhausted', rejected: 'attach_rejected', unconfigured: 'dash_unconfigured' };
 
 /**
- * Rattache l'audio (attachCallRecording) et consigne le résultat : attaché, ou échec PERSISTÉ puis signalé à dash_calls
- * (`recordingStatus: technical_failure`). Retourne le résultat de attachCallRecording.
+ * Rattache l'audio (attachCallRecording) et consigne le résultat : attaché, ou échec PERSISTÉ (code d'échec gardé ici) puis
+ * signalé à dash_calls (`POST /calls/recording/failed`). Retourne le résultat de attachCallRecording.
  */
 export async function attachRecordingTracked({ companyId, value }, { model = CallRecordingStatus, ...net } = {}) {
   const outcome = await attachCallRecording({ companyId, value }, net);
@@ -96,13 +102,7 @@ export async function attachRecordingTracked({ companyId, value }, { model = Cal
     await save({ attachStatus: 'attached', recordingSid: value.recordingSid });
     return outcome;
   }
-  await save({ attachStatus: 'technical_failure', attachOutcome: outcome, recordingSid: value.recordingSid });
-  const failureCode = FAILURE_CODE[outcome] || 'attach_retries_exhausted';
-  // Le motif de la décision est celui consigné au départ de l'appel ; à défaut (ligne absente), l'appel était forcément planifié.
-  await pushRecordingStatus(buildStatusBody({ callSid: value.callSid, companyId, direction: await directionOf(model, value.callSid), reason: 'recorded_planned', failure: true, failureCode, recordingSid: value.recordingSid }), net);
+  await save({ attachStatus: 'technical_failure', attachOutcome: outcome, failureCode: FAILURE_CODE[outcome] || 'attach_retries_exhausted', recordingSid: value.recordingSid });
+  await pushToDash(FAILED_PATH, buildFailureBody({ callSid: value.callSid, companyId }), net);
   return outcome;
-}
-
-async function directionOf(model, callSid) {
-  try { return (await model.findOne?.({ callSid }).select('direction').lean())?.direction || undefined; } catch { return undefined; }
 }

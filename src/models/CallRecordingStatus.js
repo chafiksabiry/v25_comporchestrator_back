@@ -16,6 +16,8 @@ const schema = new mongoose.Schema(
     attachStatus: { type: String, enum: ['planned', 'attached', 'technical_failure', 'not_recorded'], default: 'planned' },
     /** Dernier résultat de attachCallRecording quand il a échoué (pending, error, rejected, unconfigured). */
     attachOutcome: { type: String },
+    /** Code d'échec d'attache (attach_retries_exhausted, attach_rejected, dash_unconfigured) : gardé ici, dash ne reçoit que le fait. */
+    failureCode: { type: String },
     recordingSid: { type: String },
     /** dash_calls a bien reçu le statut de la décision. */
     dashSynced: { type: Boolean, default: false },

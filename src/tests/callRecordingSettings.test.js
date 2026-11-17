@@ -2,6 +2,7 @@
 // Réglage société de l'enregistrement, motif de la décision (recordingReason), persistance et signalement à dash_calls.
 // Base et réseau simulés : aucun appel réel.
 import assert from 'node:assert/strict';
+import jwt from 'jsonwebtoken';
 import { register } from 'node:module';
 
 process.env.JWT_SECRET = 'test-secret';
@@ -33,6 +34,19 @@ assert.deepEqual(toPublicSettings(null).recording, { inbound: true, outbound: tr
 assert.deepEqual(toPublicSettings({}).recording, { inbound: true, outbound: true });
 assert.deepEqual(toPublicSettings({ recording: { inbound: false } }).recording, { inbound: false, outbound: true });
 assert.deepEqual(toPublicSettings({ recording: { outbound: false } }).recording, { inbound: true, outbound: false });
+// Valeur publique selon l'offre : Call Centre / TaaS inchangé (absent = activé) ; Accueil désactivé par défaut ; Nomad toujours désactivé.
+for (const policy of [undefined, 'default_on']) {
+  assert.deepEqual(toPublicSettings(null, { recordingPolicy: policy }).recording, { inbound: true, outbound: true }, `${policy} : comportement d'avant`);
+  assert.deepEqual(toPublicSettings({ recording: { inbound: false } }, { recordingPolicy: policy }).recording, { inbound: false, outbound: true });
+}
+assert.deepEqual(toPublicSettings(null, { recordingPolicy: 'opt_in' }).recording, { inbound: false, outbound: false }, 'Accueil : désactivé par défaut');
+assert.deepEqual(toPublicSettings({ greetingEnabled: true }, { recordingPolicy: 'opt_in' }).recording, { inbound: false, outbound: false });
+assert.deepEqual(toPublicSettings({ recording: { inbound: true, outbound: true } }, { recordingPolicy: 'opt_in' }).recording, { inbound: true, outbound: true }, 'Accueil activé par le titulaire');
+assert.deepEqual(toPublicSettings({ recording: { inbound: true } }, { recordingPolicy: 'opt_in' }).recording, { inbound: true, outbound: false });
+assert.deepEqual(toPublicSettings({ recording: { inbound: true, outbound: true } }, { recordingPolicy: 'never' }).recording, { inbound: false, outbound: false }, 'Nomad : jamais');
+assert.deepEqual(toPublicSettings(null, { recordingPolicy: 'unknown' }).recording, { inbound: false, outbound: false }, 'offre illisible : désactivé');
+assert.equal(toPublicSettings(null, { recordingPolicy: 'opt_in' }).recordingPolicy, 'opt_in');
+assert.equal('recordingPolicy' in toPublicSettings(null), false, 'champ additif seulement quand la politique est connue');
 assert.deepEqual(validateSettingsInput({ recording: { inbound: false, outbound: true } }).value.recording, { inbound: false, outbound: true });
 assert.deepEqual(validateSettingsInput({ recording: { inbound: false } }).value.recording, { inbound: false }, 'mise à jour partielle');
 assert.deepEqual(validateSettingsInput({}).value.recording, undefined, 'champ absent ignoré');
@@ -51,12 +65,18 @@ const plans = {
   accueil: { product: 'callcenter', callcenterTier: 'accueil' },
   nomad_solo: { product: 'callcenter', callcenterTier: 'nomad_solo' },
 };
-const eligible = ['taas', 'multi_clients', 'full_scope'];
+const eligible = ['taas', 'multi_clients', 'full_scope', 'accueil'];
+const OPT_IN = ['accueil'];
+assert.deepEqual(Object.fromEntries(Object.entries(plans).map(([k, v]) => [k, R.recordingPolicy(v)])), { taas: 'default_on', multi_clients: 'default_on', full_scope: 'default_on', accueil: 'opt_in', nomad_solo: 'never' });
+assert.equal(R.recordingPolicy({ product: 'autre', callcenterTier: null }), 'never');
+assert.equal(R.recordingPolicy(null), 'never');
+// enabled : offres enregistrées par défaut ; enabledOptIn : Accueil (seul un `true` explicite active)
 const settingsCases = {
-  absent: { load: async () => null, enabled: true },
-  document_sans_recording: { load: async () => ({ greetingEnabled: true }), enabled: true },
-  active: { load: async () => ({ recording: { inbound: true, outbound: true } }), enabled: true },
-  les_deux_coupes: { load: async () => ({ recording: { inbound: false, outbound: false } }), enabled: false },
+  absent: { load: async () => null, enabled: true, enabledOptIn: false },
+  document_sans_recording: { load: async () => ({ greetingEnabled: true }), enabled: true, enabledOptIn: false },
+  active: { load: async () => ({ recording: { inbound: true, outbound: true } }), enabled: true, enabledOptIn: true },
+  les_deux_coupes: { load: async () => ({ recording: { inbound: false, outbound: false } }), enabled: false, enabledOptIn: false },
+  valeur_non_booleenne: { load: async () => ({ recording: { inbound: 'true', outbound: 1 } }), enabled: true, enabledOptIn: false },
 };
 for (const [offer, limits] of Object.entries(plans)) {
   for (const direction of ['inbound', 'outbound']) {
@@ -65,7 +85,7 @@ for (const [offer, limits] of Object.entries(plans)) {
       const ok = eligible.includes(offer);
       const label = `${offer}/${direction}/${name}`;
       if (!ok) assert.deepEqual(d, { record: false, reason: 'plan_excludes' }, `${label} : l'offre est un plafond`);
-      else if (sc.enabled) assert.deepEqual(d, { record: true, reason: 'recorded_planned' }, label);
+      else if (OPT_IN.includes(offer) ? sc.enabledOptIn : sc.enabled) assert.deepEqual(d, { record: true, reason: 'recorded_planned' }, label);
       else assert.deepEqual(d, { record: false, reason: 'disabled_by_company' }, label);
       assert.equal(await R.shouldRecordCompany(COMPANY, async () => limits, { direction, loadSettings: sc.load }), d.record, `${label} : booléen aligné`);
     }
@@ -83,8 +103,18 @@ assert.equal((await R.decideRecording(COMPANY, { direction: 'inbound', loadLimit
 assert.equal((await R.decideRecording(COMPANY, { direction: 'outbound', loadLimits: async () => plans.full_scope, loadSettings: inOnly })).reason, 'recorded_planned');
 // Entreprise inconnue
 assert.deepEqual(await R.decideRecording('', { direction: 'inbound', loadLimits: async () => plans.full_scope }), { record: false, reason: 'lookup_failed' });
-// Sans chargeur de réglage (ancien appel) : comportement d'avant
+// Sans chargeur de réglage (ancien appel) : comportement d'avant ; Accueil : jamais sans réglage lu
 assert.equal(await R.shouldRecordCompany(COMPANY, async () => plans.full_scope), true);
+assert.deepEqual(await R.decideRecording(COMPANY, { direction: 'inbound', loadLimits: async () => plans.accueil }), { record: false, reason: 'disabled_by_company' });
+// shouldRecordPlan : Accueil seulement avec l'option
+assert.equal(R.shouldRecordPlan(plans.accueil), false);
+assert.equal(R.shouldRecordPlan(plans.accueil, { optedIn: true }), true);
+assert.equal(R.shouldRecordPlan(plans.nomad_solo, { optedIn: true }), false);
+assert.equal(R.shouldRecordPlan(plans.taas, { optedIn: false }), true);
+// Accueil : un sens activé, l'autre non
+const inOn = async () => ({ recording: { inbound: true } });
+assert.equal((await R.decideRecording(COMPANY, { direction: 'inbound', loadLimits: async () => plans.accueil, loadSettings: inOn })).reason, 'recorded_planned');
+assert.equal((await R.decideRecording(COMPANY, { direction: 'outbound', loadLimits: async () => plans.accueil, loadSettings: inOn })).reason, 'disabled_by_company');
 // L'offre est lue AVANT le réglage : offre exclue, le réglage n'est même pas lu
 let read = false;
 await R.decideRecording(COMPANY, { direction: 'inbound', loadLimits: async () => plans.nomad_solo, loadSettings: async () => { read = true; return null; } });
@@ -126,10 +156,13 @@ const fakeModel = () => {
 };
 const okFetch = (calls, status = 200) => async (url, init) => { calls.push({ url, init, body: JSON.parse(init.body) }); return { ok: status < 300, status }; };
 
-assert.deepEqual(S.buildStatusBody({ callSid: CALL, companyId: COMPANY, direction: 'inbound', reason: 'recorded_planned' }), { sid: CALL, companyId: COMPANY, direction: 'inbound', recordingReason: 'recorded_planned', recordingStatus: 'planned' });
-assert.equal(S.buildStatusBody({ callSid: CALL, companyId: COMPANY, direction: 'outbound', reason: 'disabled_by_company' }).recordingStatus, 'not_recorded');
-assert.equal(S.buildStatusBody({ callSid: CALL, companyId: COMPANY, direction: 'inbound', reason: 'recorded_planned', failure: true }).recordingStatus, 'technical_failure');
-assert.equal(S.buildStatusBody({ callSid: CALL, companyId: COMPANY, direction: 'inbound', reason: 'recorded_planned', failure: true }).recordingReason, 'recorded_planned', 'le motif de décision ne change pas');
+assert.deepEqual(S.buildIntentBody({ callSid: CALL, companyId: COMPANY, reason: 'recorded_planned' }), { sid: CALL, companyId: COMPANY, recordingStatus: 'pending', recordingReason: 'recorded_planned' });
+for (const reason of ['plan_excludes', 'disabled_by_company', 'not_applicable', 'lookup_failed']) {
+  assert.deepEqual(S.buildIntentBody({ callSid: CALL, companyId: COMPANY, reason }), { sid: CALL, companyId: COMPANY, recordingStatus: 'not_recorded', recordingReason: reason });
+}
+assert.deepEqual(S.buildFailureBody({ callSid: CALL, companyId: COMPANY }), { sid: CALL, companyId: COMPANY });
+assert.equal(S.INTENT_PATH, '/calls/recording/intent');
+assert.equal(S.FAILED_PATH, '/calls/recording/failed');
 
 {
   const model = fakeModel(); const calls = [];
@@ -138,16 +171,20 @@ assert.equal(S.buildStatusBody({ callSid: CALL, companyId: COMPANY, direction: '
   assert.equal(model.docs.get(CALL).reason, 'disabled_by_company');
   assert.equal(model.docs.get(CALL).dashSynced, true);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, 'https://dash.test/api/calls/recording-status');
+  assert.equal(calls[0].url, 'https://dash.test/api/calls/recording/intent');
   assert.match(calls[0].init.headers.Authorization, /^Bearer /);
-  assert.deepEqual(calls[0].body, { sid: CALL, companyId: COMPANY, direction: 'inbound', recordingReason: 'disabled_by_company', recordingStatus: 'not_recorded' });
+  // Jeton de service attendu par dash_calls (callsAccess.callRecordingServiceAuth) : HS256, portée call-recording, exp
+  const claims = jwt.verify(calls[0].init.headers.Authorization.slice(7), env.JWT_SECRET, { algorithms: ['HS256'] });
+  assert.equal(claims.scope, 'call-recording');
+  assert.equal(typeof claims.exp, 'number');
+  assert.deepEqual(calls[0].body, { sid: CALL, companyId: COMPANY, recordingStatus: 'not_recorded', recordingReason: 'disabled_by_company' });
   // Même appel redécidé (étape suivante de la sonnerie) : rien de plus (la première décision fait foi)
   assert.equal(await S.recordDecision({ callSid: CALL, companyId: COMPANY, direction: 'inbound', reason: 'recorded_planned' }, { model, fetchImpl: okFetch(calls), env, sleep: noSleep }), 'already');
   assert.equal(calls.length, 1);
   assert.equal(model.docs.get(CALL).reason, 'disabled_by_company');
 }
 {
-  // dash ne connaît pas encore l'appel (404) : nouvelles tentatives, puis non synchronisé mais persisté
+  // 404 (dash indisponible / route absente) : nouvelles tentatives, puis non synchronisé mais persisté
   const model = fakeModel(); const calls = []; const slept = [];
   await S.recordDecision({ callSid: CALL, companyId: COMPANY, direction: 'outbound', reason: 'recorded_planned' }, { model, fetchImpl: okFetch(calls, 404), env, sleep: async (ms) => { slept.push(ms); } });
   assert.deepEqual(slept, R.ATTACH_RETRY_DELAYS_MS);
@@ -174,15 +211,15 @@ const respond = (...statuses) => { const seq = [...statuses]; const calls = []; 
   assert.equal(await S.attachRecordingTracked(attachArgs, { model, fetchImpl: f, env, sleep: noSleep }), 'attached');
   assert.equal(model.docs.get(CALL).attachStatus, 'attached');
   assert.equal(model.docs.get(CALL).recordingSid, REC);
-  assert.equal(f.calls.filter((c) => c.url.endsWith('/calls/recording-status')).length, 0);
+  assert.equal(f.calls.filter((c) => c.url.endsWith('/calls/recording/failed')).length, 0);
 }
 for (const [label, statuses, outcome] of [['404 jusqu\'à épuisement', [404], 'pending'], ['5xx jusqu\'à épuisement', [503], 'error'], ['refus 4xx', [403], 'rejected']]) {
   const model = fakeModel();
-  // Les tentatives vers /calls/recording échouent ; le signalement vers /calls/recording-status aboutit
+  // Les tentatives vers /calls/recording échouent ; le signalement vers /calls/recording/failed aboutit
   const calls = [];
   const f = async (url, init) => {
     const body = JSON.parse(init.body); calls.push({ url, body });
-    if (url.endsWith('/calls/recording-status')) return { ok: true, status: 200 };
+    if (url.endsWith('/calls/recording/failed')) return { ok: true, status: 200 };
     const s = statuses[0]; return { ok: s < 300, status: s };
   };
   const res = await S.attachRecordingTracked(attachArgs, { model, fetchImpl: f, env, sleep: noSleep });
@@ -191,19 +228,17 @@ for (const [label, statuses, outcome] of [['404 jusqu\'à épuisement', [404], '
   assert.equal(doc.attachStatus, 'technical_failure', `${label} : persisté`);
   assert.equal(doc.attachOutcome, outcome);
   assert.equal(doc.recordingSid, REC);
-  const sig = calls.filter((c) => c.url.endsWith('/calls/recording-status'));
+  const sig = calls.filter((c) => c.url.endsWith('/calls/recording/failed'));
   assert.equal(sig.length, 1, `${label} : signalé à dash`);
-  assert.equal(sig[0].body.recordingStatus, 'technical_failure');
-  assert.equal(sig[0].body.sid, CALL);
-  assert.equal(sig[0].body.recordingSid, REC, 'l\'identifiant Twilio aide au rattrapage');
-  assert.equal(sig[0].body.failureCode, outcome === 'pending' ? 'attach_retries_exhausted' : outcome === 'rejected' ? 'attach_rejected' : 'attach_retries_exhausted');
+  assert.deepEqual(sig[0].body, { sid: CALL, companyId: COMPANY }, `${label} : corps attendu par dash_calls`);
+  assert.equal(doc.failureCode, outcome === 'rejected' ? 'attach_rejected' : 'attach_retries_exhausted', `${label} : code gardé ici`);
 }
 {
   // Base indisponible pendant l'échec : le signalement part quand même, rien ne lève
   const calls = []; const model = { async updateOne() { throw new Error('mongo down'); } };
-  const f = async (url, init) => { calls.push(url); return { ok: url.endsWith('/calls/recording-status'), status: url.endsWith('/calls/recording-status') ? 200 : 500 }; };
+  const f = async (url, init) => { calls.push(url); return { ok: url.endsWith('/calls/recording/failed'), status: url.endsWith('/calls/recording/failed') ? 200 : 500 }; };
   assert.equal(await S.attachRecordingTracked(attachArgs, { model, fetchImpl: f, env, sleep: noSleep, delays: [1] }), 'error');
-  assert.ok(calls.some((u) => u.endsWith('/calls/recording-status')));
+  assert.ok(calls.some((u) => u.endsWith('/calls/recording/failed')));
 }
 {
   // dash_calls non configuré : persisté malgré tout

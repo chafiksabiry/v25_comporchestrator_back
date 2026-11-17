@@ -15,7 +15,10 @@ export const DEFAULTS = Object.freeze({
   /** Message d'accueil dit à l'appelant avant la sonnerie ; désactivé : l'appel entre directement. */
   greetingEnabled: true,
   secretaryOutbound: true,
-  /** Enregistrement des conversations voulu par la société, par sens ; ne s'applique qu'aux offres éligibles (voir callRecording). */
+  /**
+   * Enregistrement des conversations voulu par la société, par sens, pour une offre enregistrée par défaut (Full Scope,
+   * Multi-clients, TaaS). Accueil (option) : `false` par défaut ; Nomad Solo / offre inconnue : toujours `false` (voir toPublicSettings).
+   */
   recording: Object.freeze({ inbound: true, outbound: true }),
 });
 export const KINDS = ['greeting', 'voicemail'];
@@ -76,8 +79,22 @@ export function isAudioValidated(audio, text, voice) {
   return Boolean(audio && audio.version && text && audio.text === text && audio.voice === voice);
 }
 
-/** Réglages publics (sans octets) avec valeurs par défaut ; `doc` peut être null. */
-export function toPublicSettings(doc) {
+/**
+ * Valeur publique du réglage d'enregistrement d'un sens selon la politique de l'offre (callRecording.recordingPolicy) :
+ * 'default_on' ou politique non fournie : absent = activé (comportement d'avant) ; 'opt_in' (Accueil) : activé seulement si `true` ;
+ * 'never' : toujours désactivé ; toute autre valeur (offre illisible) : activé seulement si `true` (rien n'est enregistré sans offre lisible).
+ */
+function publicRecording(value, policy) {
+  if (policy === undefined || policy === 'default_on') return value ?? true;
+  if (policy === 'never') return false;
+  return value === true;
+}
+
+/**
+ * Réglages publics (sans octets) avec valeurs par défaut ; `doc` peut être null.
+ * `recordingPolicy` : politique d'enregistrement de l'offre de la société, pour la valeur par défaut de `recording` (voir publicRecording).
+ */
+export function toPublicSettings(doc, { recordingPolicy } = {}) {
   const d = doc || {};
   const s = {
     greetingText: d.greetingText ?? DEFAULTS.greetingText,
@@ -87,7 +104,7 @@ export function toPublicSettings(doc) {
     voicemailEnabled: d.voicemailEnabled ?? DEFAULTS.voicemailEnabled,
     greetingEnabled: d.greetingEnabled ?? DEFAULTS.greetingEnabled,
     secretaryOutbound: d.secretaryOutbound ?? DEFAULTS.secretaryOutbound,
-    recording: { inbound: d.recording?.inbound ?? DEFAULTS.recording.inbound, outbound: d.recording?.outbound ?? DEFAULTS.recording.outbound },
+    recording: { inbound: publicRecording(d.recording?.inbound, recordingPolicy), outbound: publicRecording(d.recording?.outbound, recordingPolicy) },
   };
   return {
     ...s,
@@ -96,6 +113,7 @@ export function toPublicSettings(doc) {
     greetingAudioVersion: d.greetingAudio?.version || null,
     voicemailAudioVersion: d.voicemailAudio?.version || null,
     validatedAt: d.validatedAt || null,
+    ...(recordingPolicy !== undefined ? { recordingPolicy } : {}),
   };
 }
 

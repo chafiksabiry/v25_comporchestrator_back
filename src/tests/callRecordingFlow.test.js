@@ -43,7 +43,9 @@ const OFFERS = {
   accueil: { harx_product: 'callcenter', callcenter_tier: 'accueil' },
   nomad_solo: { harx_product: 'callcenter', callcenter_tier: 'nomad_solo' },
 };
-const ELIGIBLE = ['taas', 'multi_clients', 'full_scope'];
+const ELIGIBLE = ['taas', 'multi_clients', 'full_scope', 'accueil'];
+/** Offres où l'enregistrement est une option de la société, désactivée par défaut. */
+const OPT_IN = ['accueil'];
 const lean = (v) => ({ lean: async () => v, select() { return this; }, sort() { return this; }, limit() { return this; }, then(r, j) { return Promise.resolve(v).then(r, j); } });
 // Seule la lecture du réglage d'enregistrement (select('recording')) échoue : les autres lectures de l'appel restent possibles.
 const settingsRead = (doc, fails) => { let only = false; const c = { select(arg) { only = arg === 'recording'; return c; }, lean: async () => { if (fails && only) throw new Error('base indisponible'); return doc; }, then(r, j) { return c.lean().then(r, j); } }; return c; };
@@ -94,13 +96,15 @@ const settle = () => new Promise((r) => setImmediate(r));
 const recorded = (twiml) => /record="record-from-answer-dual"/.test(twiml);
 // Entrant : <Say> avant la sonnerie ; sortant : annonce jouée à l'appelé via <Number url=…/call-announce>.
 const announced = (twiml) => /(peut être enregistré|may be recorded|call-announce\?l=)/.test(twiml);
-const statusOf = async (callSid) => { await settle(); await settle(); return { doc: statusDocs.get(callSid), push: dashCalls.filter((c) => c.url.endsWith('/calls/recording-status') && c.body.sid === callSid) }; };
+const statusOf = async (callSid) => { await settle(); await settle(); return { doc: statusDocs.get(callSid), push: dashCalls.filter((c) => c.url.endsWith('/calls/recording/intent') && c.body.sid === callSid) }; };
 
 const SETTINGS = {
-  absent: { doc: () => ({}), expectRecorded: true },
-  active: { doc: (dir) => ({ recording: { [dir]: true } }), expectRecorded: true },
-  desactive: { doc: (dir) => ({ recording: { [dir]: false } }), expectRecorded: false },
-  autre_sens_coupe: { doc: (dir) => ({ recording: { [dir === 'inbound' ? 'outbound' : 'inbound']: false } }), expectRecorded: true },
+  // expectRecorded : offres enregistrées par défaut ; expectOptIn : Accueil (seul `true` explicite pour ce sens)
+  absent: { doc: () => ({}), expectRecorded: true, expectOptIn: false },
+  active: { doc: (dir) => ({ recording: { [dir]: true } }), expectRecorded: true, expectOptIn: true },
+  desactive: { doc: (dir) => ({ recording: { [dir]: false } }), expectRecorded: false, expectOptIn: false },
+  autre_sens_coupe: { doc: (dir) => ({ recording: { [dir === 'inbound' ? 'outbound' : 'inbound']: false } }), expectRecorded: true, expectOptIn: false },
+  autre_sens_active: { doc: (dir) => ({ recording: { [dir === 'inbound' ? 'outbound' : 'inbound']: true } }), expectRecorded: true, expectOptIn: false },
 };
 
 for (const offer of Object.keys(OFFERS)) {
@@ -110,17 +114,18 @@ for (const offer of Object.keys(OFFERS)) {
         plan = offer; settingsDoc = sc.doc(dir);
         const callSid = sid('a');
         const twiml = await (dir === 'inbound' ? inbound(callSid) : outbound(callSid));
-        const expected = ELIGIBLE.includes(offer) && sc.expectRecorded;
+        const wanted = OPT_IN.includes(offer) ? sc.expectOptIn : sc.expectRecorded;
+        const expected = ELIGIBLE.includes(offer) && wanted;
         assert.equal(recorded(twiml), expected, 'record');
         assert.equal(announced(twiml), expected, "l'annonce accompagne TOUJOURS l'enregistrement, et seulement lui");
-        const reason = !ELIGIBLE.includes(offer) ? 'plan_excludes' : sc.expectRecorded ? 'recorded_planned' : 'disabled_by_company';
+        const reason = !ELIGIBLE.includes(offer) ? 'plan_excludes' : wanted ? 'recorded_planned' : 'disabled_by_company';
         if (offer === 'nomad_solo' && dir === 'inbound') return; // Nomad Solo entrant : traitement dédié, jamais enregistré, hors décision
         const { doc, push } = await statusOf(callSid);
         assert.equal(doc?.reason, reason, 'motif consigné');
         assert.equal(doc?.direction, dir);
         assert.equal(push.length, 1, 'un signalement à dash_calls');
         assert.equal(push[0].body.recordingReason, reason);
-        assert.equal(push[0].body.recordingStatus, reason === 'recorded_planned' ? 'planned' : 'not_recorded');
+        assert.equal(push[0].body.recordingStatus, reason === 'recorded_planned' ? 'pending' : 'not_recorded');
       });
     }
     test(`${offer} / ${dir} / erreur de lecture du réglage : jamais enregistré`, async () => {
@@ -180,11 +185,14 @@ test('PUT : le titulaire règle l\'enregistrement (mise à jour partielle, chemi
   assert.deepEqual(update.$set, { 'recording.inbound': false });
   assert.deepEqual(out.body.data.recording, { inbound: false, outbound: true });
 });
-test('PUT : une secrétaire (agent) ne peut pas régler l\'enregistrement ; le reste des réglages lui reste accessible comme avant', async () => {
-  const r = await put({ recording: { inbound: false } }, { role: 'agent' });
-  assert.equal(r.out.code, 403);
-  assert.equal(r.out.body.code, 'RECORDING_MANAGER_ONLY');
-  assert.equal(r.update, null, 'rien n\'est écrit');
+test('PUT : seul le titulaire règle l\'enregistrement ; une secrétaire (agent) ou un membre est refusé, le reste des réglages reste accessible comme avant', async () => {
+  for (const role of ['agent', 'member']) {
+    const r = await put({ recording: { inbound: true, outbound: true } }, { role });
+    assert.equal(r.out.code, 403, role);
+    assert.equal(r.out.body.code, 'RECORDING_OWNER_ONLY', role);
+    assert.equal(r.update, null, `${role} : rien n'est écrit`);
+  }
+  assert.equal((await put({ ringTimeoutSeconds: 40 }, { role: 'member' })).out.code, 200);
   const ok = await put({ ringTimeoutSeconds: 40 }, { role: 'agent' });
   assert.equal(ok.out.code, 200);
 });
@@ -198,4 +206,36 @@ test('PUT : valeurs invalides refusées (400) sans rien écrire', async () => {
 test('PUT sans le champ recording : la requête d\'avant est inchangée (aucune clé recording écrite)', async () => {
   const { update } = await put({ greetingEnabled: false });
   assert.deepEqual(update.$set, { greetingEnabled: false });
+});
+
+// ---------------------------------------------------------------- Accueil : option désactivée par défaut, lue par le GET
+const get = async () => {
+  clearCompanyCache();
+  let out = null;
+  const res = { status(c) { this.code = c; return this; }, json(x) { out = { code: this.code || 200, body: x }; return this; } };
+  await inboundSettingsController.get({ query: { companyId: C1 }, headers: { authorization: 'Bearer tok' }, user: { userId: 'u-owner' }, get: () => 'orch.test' }, res);
+  return out;
+};
+test('GET : Accueil sans réglage = désactivé ; Call Centre / TaaS sans réglage = activé (inchangé) ; Nomad = désactivé', async () => {
+  InboundSettings.findOne = () => lean(null);
+  const expect = { accueil: [false, 'opt_in'], full_scope: [true, 'default_on'], multi_clients: [true, 'default_on'], taas: [true, 'default_on'], nomad_solo: [false, 'never'] };
+  for (const [offer, [on, policy]] of Object.entries(expect)) {
+    plan = offer;
+    const r = await get();
+    assert.equal(r.code, 200, offer);
+    assert.deepEqual(r.body.data.recording, { inbound: on, outbound: on }, offer);
+    assert.equal(r.body.data.recordingPolicy, policy, offer);
+  }
+  plan = 'accueil';
+  InboundSettings.findOne = () => lean({ recording: { inbound: true, outbound: true } });
+  assert.deepEqual((await get()).body.data.recording, { inbound: true, outbound: true }, 'Accueil activé par le titulaire');
+});
+test('PUT Accueil : le titulaire active l\'option, la réponse le reflète', async () => {
+  plan = 'accueil';
+  const { out, update } = await put({ recording: { inbound: true, outbound: true } });
+  assert.equal(out.code, 200);
+  assert.deepEqual(update.$set, { 'recording.inbound': true, 'recording.outbound': true });
+  assert.deepEqual(out.body.data.recording, { inbound: true, outbound: true });
+  const off = await put({ recording: { inbound: false } });
+  assert.deepEqual(off.out.body.data.recording, { inbound: false, outbound: false }, 'sortant absent = désactivé pour Accueil');
 });
