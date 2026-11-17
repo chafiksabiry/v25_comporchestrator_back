@@ -1,6 +1,9 @@
 import { phoneNumberService } from '../services/phoneNumberService.js';
-import { callerAccess } from '../middleware/companyScope.js';
+import { callerAccess, ScopeError, scopeToCompany } from '../middleware/companyScope.js';
+import { AssignmentError, LINE_NOT_ASSIGNED, LINE_NOT_ASSIGNED_MESSAGE, agentLineStatus, inboundRingFilter, enforcementSettings, lineStatusView, agentCapacity, assertAgentCanHaveLine, assertReleasable, assignAgent, assignmentFields, offerKind, oldestOf, resolvePurchaseAssignment, unassignAgent, withCenterLock } from '../services/lineAssignment.js';
 import { listLinesFor } from '../services/phoneNumberList.js';
+import { callingInfoOf } from '../services/outboundDestinations.js';
+import { LINE_BUSY_CODE, LINE_BUSY_MESSAGE, LINE_CALL_END_PATH, hasFreeLine, signLineCallEnd, verifyLineCallEnd, lineCallsEnforced, releaseCall, staleCheckFor, takeFirstFreeLine, takeLine } from '../services/lineCalls.js';
 import { checkNumberCountry } from '../services/numberCountry.js';
 import { purchaseCurrency } from '../services/purchaseCurrency.js';
 import { checkCompanyDestination } from '../services/outboundPolicy.js';
@@ -13,6 +16,7 @@ import mongoose from 'mongoose';
 import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { getPhoneLinePricing } from '../services/platformPricingService.js';
+import { activateMonthlyLine, assertMonthlyLineBillable, BILLING_MODEL_MONTHLY, getLinePaymentState, markLineReleaseFailed, startMonthlyLineSubscription } from '../services/phoneLineSubscription.js';
 import { isFrenchCountry, resolvePhoneProvider } from '../utils/phoneProvider.js';
 import { isLineIncluded, isLineTrialAllowed, loadCompanyPlanLimits, localNumberLimitPayload } from '../services/planLimits.js';
 import { availableIdentities, isAvailable, markAvailable, markUnavailable, presenceSummary, voiceIdentity } from '../services/voicePresenceService.js';
@@ -31,7 +35,7 @@ import { createVoiceToken, pushCredentialFor, VOICE_TOKEN_TTL_S } from '../servi
 import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
-import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket } from '../services/browserOutbound.js';
+import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket, MINUTES_INSUFFICIENT_CODE, MINUTES_INSUFFICIENT_MESSAGE, spokenLanguage, spokenRefusal, SPOKEN_REFUSALS } from '../services/browserOutbound.js';
 import { transferResult } from './callTransferController.js';
 import { attachCallRecording, buildRecordingPlan, consentLanguageFor, consentTwiml, mapCallRecordingCallback, normalizeConsentLanguage, shouldRecordCompany, shouldRecordPlan, verifyRecordingToken } from '../services/callRecording.js';
 import { journalForwardedCall, journalUnansweredCall } from '../services/journalCall.js';
@@ -133,18 +137,52 @@ async function captureAuthorizedLinePayment(payment) {
 
 async function releaseLineAuthorization(payment, reason) {
   if (!payment || payment.status !== 'authorized') return { released: false };
-  try {
-    if (payment.provider === 'stripe' && payment.providerRef) {
-      await stripeService.cancelCheckoutAuthorization(payment.providerRef);
+  if (payment.provider === 'stripe' && payment.providerRef) {
+    let intent;
+    try {
+      intent = await stripeService.cancelCheckoutAuthorization(payment.providerRef);
+    } catch (err) {
+      // Autorisation non annulée : le paiement n'est PAS marqué « failed » (il reste « authorized », repris par la réconciliation).
+      console.warn('[telephony] could not release card authorization:', err.message);
+      return { released: false, provider: payment.provider };
     }
-  } catch (err) {
-    console.warn('[telephony] could not release card authorization:', err.message);
+    // Déjà encaissé (capture dont la réponse s'est perdue) : rien n'a été annulé, à rembourser par l'appelant.
+    if (intent?.status === 'succeeded') return { released: false, captured: true, provider: payment.provider };
   }
   payment.status = 'failed';
   payment.failureReason = reason || 'number_purchase_failed';
   await payment.save();
   return { released: true, provider: payment.provider };
 }
+
+/** Champs d'affectation à écrire sur la ligne achetée (rien si l'offre n'a pas le modèle d'agents). */
+const assignmentOptions = (a) => (a ? { assignedRole: a.assignedRole, assignedAgentId: a.assignedAgentId, assignedAt: a.assignedAt } : {});
+
+/**
+ * Commande du numéro (`run`) : quand un agent est demandé, sous le verrou du centre, avec l'affectation REVALIDÉE juste avant (un autre achat a pu
+ * prendre l'agent entre-temps). Renvoie { value } ou { failure } (AssignmentError : rien n'est commandé).
+ */
+async function purchaseUnderAssignment({ companyId, assignment, assignCtx, db, run }) {
+  if (!assignment?.assignedAgentId) return { value: await run(assignment) };
+  return withCenterLock(companyId, async () => {
+    let fresh;
+    try {
+      fresh = await resolvePurchaseAssignment({ companyId, limits: assignCtx.limits, existingCount: assignCtx.existingCount, assignedAgentId: assignment.assignedAgentId, db });
+    } catch (err) {
+      if (err instanceof AssignmentError) return { failure: err };
+      throw err;
+    }
+    return { value: await run(fresh) };
+  });
+}
+
+/** Refus (409) commun à checkout/init et checkout/config : offre Call Centre sans prix de ligne valable. */
+const PHONE_LINE_PRICE_NOT_CONFIGURED_BODY = {
+  error: 'Phone line price not configured',
+  code: 'PHONE_LINE_PRICE_NOT_CONFIGURED',
+  moneyStatus: 'not_charged',
+  message: "Le prix d'une ligne supplémentaire n'est pas configuré pour votre offre : l'achat est impossible pour le moment. Aucun paiement n'a été pris. Contactez le support."
+};
 
 const sessionPublicView = (session, callId) => ({
   callId,
@@ -243,6 +281,7 @@ class PhoneNumberController {
         return res.status(200).json({
           numbers: [],
           regulatoryBlocked: true,
+          code: 'REGULATORY_BUNDLE_REQUIRED',
           message: error.message,
           countryCode: error.countryCode || 'FR'
         });
@@ -290,12 +329,13 @@ class PhoneNumberController {
         return res.status(200).json({
           numbers: [],
           regulatoryBlocked: true,
+          code: 'REGULATORY_BUNDLE_REQUIRED',
           message: error.message,
           countryCode: error.countryCode
         });
       }
       console.error('Error searching Twilio phone numbers:', error);
-      res.status(error.status || 500).json({ error: error.message || 'Failed to search Twilio phone numbers' });
+      res.status(error.status || 500).json({ error: error.message || 'Failed to search Twilio phone numbers', ...(typeof error.code === 'string' ? { code: error.code } : {}) });
     }
   }
 
@@ -336,6 +376,8 @@ class PhoneNumberController {
       // ──────────────────────────────────────────────────────────────────
       let isTrial = false;
       let isIncluded = false;
+      let isMonthly = false;
+      let assignCtx = null; // forfait et nombre de lignes du centre (affectation de la ligne achetée)
       let payment = null;
 
       if (companyId && mongoose.Types.ObjectId.isValid(companyId)) {
@@ -345,6 +387,7 @@ class PhoneNumberController {
         if (blocked) return res.status(403).json(blocked);
         isTrial = existingCount === 0 && isLineTrialAllowed(limits);
         isIncluded = isLineIncluded(limits, existingCount);
+        assignCtx = { existingCount, limits };
       }
 
       const linePricing = await getPhoneLinePricing();
@@ -366,6 +409,7 @@ class PhoneNumberController {
         if (!payment || payment.phoneNumberRef || !['authorized', 'succeeded'].includes(payment.status)) {
           return res.status(402).json({
             error: 'Payment required',
+            code: 'PAYMENT_REQUIRED',
             message: "Approuvez d'abord la carte ou PayPal. Le montant n'est encaissé qu'après l'achat du numéro."
           });
         }
@@ -377,33 +421,82 @@ class PhoneNumberController {
             message: 'The payment was not authorized for this exact phone number.'
           });
         }
+        // Le paiement doit appartenir à l'entreprise qui achète : jamais le paiement (ni la capture) d'une autre entreprise.
+        if (String(payment.companyId) !== String(companyId)) {
+          return res.status(403).json({
+            error: 'Payment / company mismatch',
+            code: 'PAYMENT_COMPANY_MISMATCH',
+            message: "Ce paiement n'appartient pas à cette entreprise."
+          });
+        }
+        // Abonnement mensuel par ligne : le prix a été figé à l'initialisation du paiement. On s'assure AVANT de commander le
+        // numéro que les renouvellements pourront être prélevés ; sinon achat refusé, autorisation libérée / paiement remboursé.
+        isMonthly = payment.lineBilling === BILLING_MODEL_MONTHLY;
+        if (isMonthly) {
+          try {
+            await assertMonthlyLineBillable(companyId);
+          } catch (billableErr) {
+            return this.rejectMonthlyLine(res, payment, billableErr);
+          }
+          // Un paiement n'achète qu'une ligne : réservation atomique (rejeu ou double envoi -> 409).
+          if (!(await this.claimLinePayment(payment))) {
+            return res.status(409).json({ error: 'Payment already in use', code: 'PAYMENT_ALREADY_USED', message: 'Ce paiement est déjà utilisé pour un achat en cours ou terminé.' });
+          }
+        }
       } else if (isIncluded) {
         console.log(`🎁 Included plan line (first number) for company ${companyId} — no payment required.`);
       } else {
         console.log(`🎁 First phone line for company ${companyId} — granting ${linePricing.trialDays}-day free trial.`);
       }
 
+      // Affectation de la ligne (offres à agents) : rôle et agent éventuel, validés AVANT la commande du numéro ; refus = rien commandé, paiement libéré / remboursé.
+      const wantedAgent = req.body?.assignedAgentId ?? payment?.assignedAgentId ?? undefined;
+      let assignment = null;
+      try {
+        if (assignCtx) {
+          // Titulaire exigé quand l'agent est demandé dans CETTE requête ; un agent déjà validé par le titulaire à l'initialisation du paiement n'est pas redemandé.
+          const bodyAgent = req.body?.assignedAgentId;
+          if (bodyAgent !== undefined && bodyAgent !== null && bodyAgent !== '') await this.requireOwner(req, companyId);
+          assignment = await resolvePurchaseAssignment({ companyId, limits: assignCtx.limits, existingCount: assignCtx.existingCount, assignedAgentId: wantedAgent, db: mongoose.connection.db });
+        }
+      } catch (assignErr) {
+        return this.rejectAssignment(res, payment, assignErr);
+      }
+
       const paidPrice = !isTrial && payment?.amount > 0 ? payment.amount / 100 : 0;
       const trialExpiresAt = isTrial ? new Date(Date.now() + linePricing.trialDurationMs) : null;
 
-      const newNumber = await phoneNumberService.purchaseNumber(
-        phoneNumber,
-        resolvedProvider,
-        gigId,
-        resolvedProvider === 'telnyx' ? requirementGroupId : undefined,
-        companyId,
-        { 
-          bundleSid, 
-          addressSid,
-          price: paidPrice,
-          currency: !isTrial && payment?.currency ? payment.currency : await purchaseCurrency(req, companyId),
-          paymentRef: !isTrial ? payment?._id : undefined,
-          isTrial,
-          trialExpiresAt,
-        }
-      );
+      const purchaseCurrencyCode = !isTrial && payment?.currency ? payment.currency : await purchaseCurrency(req, companyId);
+      const purchased = await purchaseUnderAssignment({
+        companyId, assignment, assignCtx, db: mongoose.connection.db,
+        run: (a) => phoneNumberService.purchaseNumber(
+          phoneNumber,
+          resolvedProvider,
+          gigId,
+          resolvedProvider === 'telnyx' ? requirementGroupId : undefined,
+          companyId,
+          {
+            bundleSid,
+            addressSid,
+            price: paidPrice,
+            currency: purchaseCurrencyCode,
+            paymentRef: !isTrial ? payment?._id : undefined,
+            isTrial,
+            trialExpiresAt,
+            ...(isMonthly ? { billingModel: BILLING_MODEL_MONTHLY } : {}),
+            ...assignmentOptions(a),
+          }
+        ),
+      });
+      if (purchased.failure) return this.rejectAssignment(res, payment, purchased.failure);
+      const newNumber = purchased.value;
       numberPurchased = true;
-      if (!isTrial && payment?.status === 'authorized') {
+      if (isMonthly) {
+        // Abonnement créé, puis capture, puis ligne activée. Tout échec défait l'ensemble (ligne supprimée, abonnement annulé,
+        // autorisation libérée ou paiement remboursé) : jamais d'abonnement actif sans premier mois encaissé.
+        const outcome = await this.completeMonthlyLinePurchase(newNumber, payment, companyId);
+        if (outcome.error) return this.rejectMonthlyLine(res, payment, outcome.error, { releaseFailed: outcome.releaseFailed, pending: outcome.pending });
+      } else if (!isTrial && payment?.status === 'authorized') {
         await captureAuthorizedLinePayment(payment);
       }
 
@@ -439,6 +532,7 @@ class PhoneNumberController {
           return res.status(402).json({
             refunded: false,
             released: true,
+            moneyStatus: 'not_charged',
             error: 'Number purchase failed',
             code: error?.code || 'NUMBER_PURCHASE_FAILED',
             message: `L'achat du numéro a échoué. Aucun paiement n'a été encaissé. ${error?.message || ''}`.trim()
@@ -525,6 +619,8 @@ class PhoneNumberController {
       // ──────────────────────────────────────────────────────────────────
       let isTrial = false;
       let isIncluded = false;
+      let isMonthly = false;
+      let assignCtx = null; // forfait et nombre de lignes du centre (affectation de la ligne achetée)
       let payment = null;
 
       if (companyId && mongoose.Types.ObjectId.isValid(companyId)) {
@@ -534,6 +630,7 @@ class PhoneNumberController {
         if (blocked) return res.status(403).json(blocked);
         isTrial = existingCount === 0 && isLineTrialAllowed(limits);
         isIncluded = isLineIncluded(limits, existingCount);
+        assignCtx = { existingCount, limits };
       }
 
       const linePricing = await getPhoneLinePricing();
@@ -555,6 +652,7 @@ class PhoneNumberController {
         if (!payment || payment.phoneNumberRef || !['authorized', 'succeeded'].includes(payment.status)) {
           return res.status(402).json({
             error: 'Payment required',
+            code: 'PAYMENT_REQUIRED',
             message: "Approuvez d'abord la carte ou PayPal. Le montant n'est encaissé qu'après l'achat du numéro."
           });
         }
@@ -566,6 +664,28 @@ class PhoneNumberController {
             message: 'The payment was not authorized for this exact phone number.'
           });
         }
+        // Le paiement doit appartenir à l'entreprise qui achète : jamais le paiement (ni la capture) d'une autre entreprise.
+        if (String(payment.companyId) !== String(companyId)) {
+          return res.status(403).json({
+            error: 'Payment / company mismatch',
+            code: 'PAYMENT_COMPANY_MISMATCH',
+            message: "Ce paiement n'appartient pas à cette entreprise."
+          });
+        }
+        // Abonnement mensuel par ligne : le prix a été figé à l'initialisation du paiement. On s'assure AVANT de commander le
+        // numéro que les renouvellements pourront être prélevés ; sinon achat refusé, autorisation libérée / paiement remboursé.
+        isMonthly = payment.lineBilling === BILLING_MODEL_MONTHLY;
+        if (isMonthly) {
+          try {
+            await assertMonthlyLineBillable(companyId);
+          } catch (billableErr) {
+            return this.rejectMonthlyLine(res, payment, billableErr);
+          }
+          // Un paiement n'achète qu'une ligne : réservation atomique (rejeu ou double envoi -> 409).
+          if (!(await this.claimLinePayment(payment))) {
+            return res.status(409).json({ error: 'Payment already in use', code: 'PAYMENT_ALREADY_USED', message: 'Ce paiement est déjà utilisé pour un achat en cours ou terminé.' });
+          }
+        }
       } else if (isIncluded) {
         console.log(`🎁 Included plan line (first number) for company ${companyId} — no payment required.`);
       } else {
@@ -574,26 +694,53 @@ class PhoneNumberController {
 
       // Convert the Stripe / PayPal amount (stored in cents) to major units
       // for persistence on the PhoneNumber document (e.g. 500 -> 5.00€).
+      // Affectation de la ligne (offres à agents) : rôle et agent éventuel, validés AVANT la commande du numéro ; refus = rien commandé, paiement libéré / remboursé.
+      const wantedAgent = req.body?.assignedAgentId ?? payment?.assignedAgentId ?? undefined;
+      let assignment = null;
+      try {
+        if (assignCtx) {
+          // Titulaire exigé quand l'agent est demandé dans CETTE requête ; un agent déjà validé par le titulaire à l'initialisation du paiement n'est pas redemandé.
+          const bodyAgent = req.body?.assignedAgentId;
+          if (bodyAgent !== undefined && bodyAgent !== null && bodyAgent !== '') await this.requireOwner(req, companyId);
+          assignment = await resolvePurchaseAssignment({ companyId, limits: assignCtx.limits, existingCount: assignCtx.existingCount, assignedAgentId: wantedAgent, db: mongoose.connection.db });
+        }
+      } catch (assignErr) {
+        return this.rejectAssignment(res, payment, assignErr);
+      }
+
       const paidPrice = !isTrial && payment?.amount > 0 ? payment.amount / 100 : 0;
       const trialExpiresAt = isTrial ? new Date(Date.now() + linePricing.trialDurationMs) : null;
 
-      const newNumber = await phoneNumberService.purchaseTwilioNumber(
-        phoneNumber,
-        config.baseUrl,
-        gigId,
-        companyId,
-        {
-          bundleSid,
-          addressSid,
-          price: paidPrice,
-          currency: !isTrial && payment?.currency ? payment.currency : await purchaseCurrency(req, companyId),
-          paymentRef: !isTrial ? payment?._id : undefined,
-          isTrial,
-          trialExpiresAt,
-        }
-      );
+      const purchaseCurrencyCode = !isTrial && payment?.currency ? payment.currency : await purchaseCurrency(req, companyId);
+      const purchased = await purchaseUnderAssignment({
+        companyId, assignment, assignCtx, db: mongoose.connection.db,
+        run: (a) => phoneNumberService.purchaseTwilioNumber(
+          phoneNumber,
+          config.baseUrl,
+          gigId,
+          companyId,
+          {
+            bundleSid,
+            addressSid,
+            price: paidPrice,
+            currency: purchaseCurrencyCode,
+            paymentRef: !isTrial ? payment?._id : undefined,
+            isTrial,
+            trialExpiresAt,
+            ...(isMonthly ? { billingModel: BILLING_MODEL_MONTHLY } : {}),
+            ...assignmentOptions(a),
+          }
+        ),
+      });
+      if (purchased.failure) return this.rejectAssignment(res, payment, purchased.failure);
+      const newNumber = purchased.value;
       numberPurchased = true;
-      if (!isTrial && payment?.status === 'authorized') {
+      if (isMonthly) {
+        // Abonnement créé, puis capture, puis ligne activée. Tout échec défait l'ensemble (ligne supprimée, abonnement annulé,
+        // autorisation libérée ou paiement remboursé) : jamais d'abonnement actif sans premier mois encaissé.
+        const outcome = await this.completeMonthlyLinePurchase(newNumber, payment, companyId);
+        if (outcome.error) return this.rejectMonthlyLine(res, payment, outcome.error, { releaseFailed: outcome.releaseFailed, pending: outcome.pending });
+      } else if (!isTrial && payment?.status === 'authorized') {
         await captureAuthorizedLinePayment(payment);
       }
       console.log("newNumber", newNumber);
@@ -621,6 +768,7 @@ class PhoneNumberController {
           return res.status(402).json({
             refunded: false,
             released: true,
+            moneyStatus: 'not_charged',
             error: 'Number purchase failed',
             code: error?.code || 'NUMBER_PURCHASE_FAILED',
             message: `L'achat du numéro a échoué. Aucun paiement n'a été encaissé. ${error?.message || ''}`.trim()
@@ -669,15 +817,18 @@ class PhoneNumberController {
       : ' Contactez le support si le paiement a été débité.';
 
     const withRefund = (message) => `${message}${refundNote}`;
+    // `moneyStatus` : état de l'argent, pour que les clients composent eux-mêmes la phrase traduite (le message actuel est inchangé).
     const base = {
       refunded,
-      refundProvider: refundInfo?.provider || null
+      refundProvider: refundInfo?.provider || null,
+      moneyStatus: refunded ? 'refunded' : 'contact_support'
     };
 
     if (error?.code === 21649 || String(error?.message || '').includes('correct regulation type')) {
       return res.status(400).json({
         ...base,
         error: 'Regulatory Bundle Required',
+        code: 'NUMBER_REJECTED_BY_PROVIDER',
         message: withRefund(
           'L’opérateur a refusé ce numéro précis. Choisissez-en un autre ; si le refus se répète sur plusieurs numéros, contactez le support.'
         ),
@@ -689,6 +840,7 @@ class PhoneNumberController {
       return res.status(400).json({
         ...base,
         error: 'Twilio Trial Limit Reached',
+        code: 'PROVIDER_TRIAL_LIMIT',
         message: withRefund(
           'Les comptes Twilio trial ne peuvent provisionner qu’un seul numéro. Passez le compte Twilio en production pour en acheter d’autres.'
         )
@@ -710,22 +862,250 @@ class PhoneNumberController {
       });
     }
     if (msg.includes('already exists')) {
-      return res.status(409).json({ ...base, error: 'Conflict', message: withRefund(msg) });
+      return res.status(409).json({ ...base, error: 'Conflict', code: 'NUMBER_ALREADY_EXISTS', message: withRefund(msg) });
     }
     if (msg.includes('Insufficient balance')) {
-      return res.status(402).json({ ...base, error: 'Payment Required', message: withRefund(msg) });
+      return res.status(402).json({ ...base, error: 'Payment Required', code: 'PROVIDER_INSUFFICIENT_BALANCE', message: withRefund(msg) });
     }
     if (msg.includes('no longer available')) {
-      return res.status(410).json({ ...base, error: 'Gone', message: withRefund(msg) });
+      return res.status(410).json({ ...base, error: 'Gone', code: 'NUMBER_NO_LONGER_AVAILABLE', message: withRefund(msg) });
     }
     if (msg.toLowerCase().includes('invalid')) {
-      return res.status(400).json({ ...base, error: 'Bad Request', message: withRefund(msg) });
+      return res.status(400).json({ ...base, error: 'Bad Request', code: 'INVALID_NUMBER_REQUEST', message: withRefund(msg) });
     }
 
     return res.status(500).json({
       ...base,
       error: defaultError,
+      code: 'NUMBER_PROVISION_FAILED',
       message: withRefund(defaultMessage)
+    });
+  }
+
+  // ───────────── Affectation des lignes aux agents (lot 1) ─────────────
+
+  /** Le titulaire de l'entreprise visée, et personne d'autre (responsables et agents refusés). */
+  async requireOwner(req, companyId) {
+    const access = scopeToCompany(await callerAccess(req), String(companyId));
+    if (access.role !== 'owner') throw new AssignmentError(403, 'OWNER_ONLY', 'Seul le titulaire peut affecter ou libérer les lignes.');
+    return access;
+  }
+
+  /** Erreur d'affectation (ou d'accès) -> réponse JSON avec un code court. */
+  sendAssignmentError(res, error) {
+    // Erreur d'accès (ScopeError) : statut d'origine, `code` 'FORBIDDEN' comme avant ; son identifiant précis (ScopeError.code) est ADDITIF, dans `reason`.
+    if (error instanceof ScopeError) {
+      return res.status(error.status).json({ success: false, error: 'FORBIDDEN', code: 'FORBIDDEN', message: error.message, ...(error.code ? { reason: error.code } : {}) });
+    }
+    if (error instanceof AssignmentError || (error?.status && error?.message && !error.code)) {
+      const code = error.code || 'FORBIDDEN';
+      return res.status(error.status).json({ success: false, error: code, code, message: error.message });
+    }
+    console.error('line assignment:', error?.message);
+    return res.status(500).json({ success: false, error: 'SERVER_ERROR', code: 'SERVER_ERROR', message: 'Opération impossible.' });
+  }
+
+  /** Achat refusé à cause de l'affectation : le paiement autorisé est libéré (ou remboursé s'il était encaissé), puis la réponse d'erreur. */
+  async rejectAssignment(res, payment, error) {
+    let released = false;
+    let refunded = false;
+    if (payment?.status === 'authorized') {
+      const outcome = await releaseLineAuthorization(payment, `line_assignment_${String(error?.code || 'refused').toLowerCase()}`);
+      released = Boolean(outcome.released);
+    } else if (payment?._id) {
+      refunded = Boolean((await this.refundFailedLinePayment(payment._id, `line_assignment_${String(error?.code || 'refused').toLowerCase()}`)).refunded);
+    }
+    const status = error?.status || 400;
+    const money = payment ? (released ? " Aucun paiement n'a été encaissé." : refunded ? ' Votre paiement a été remboursé.' : ' Contactez le support si le paiement a été débité.') : '';
+    return res.status(status).json({ success: false, error: error?.code || 'ASSIGNMENT_REFUSED', code: error?.code || 'ASSIGNMENT_REFUSED', released, refunded, moneyStatus: payment ? (released ? 'not_charged' : refunded ? 'refunded' : 'contact_support') : 'none', message: `${error?.message || 'Affectation impossible.'}${money}` });
+  }
+
+  /** POST /phone-numbers/assign-agent { companyId, id, agentId } : titulaire seul ; la ligne est affectée à CET agent (une ligne par agent). */
+  async assignLineToAgent(req, res) {
+    try {
+      const { companyId, id, agentId } = req.body || {};
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ success: false, code: 'INVALID_COMPANY', error: 'INVALID_COMPANY', message: 'companyId invalide.' });
+      await this.requireOwner(req, companyId);
+      const limits = await loadCompanyPlanLimits(companyId);
+      const line = await withCenterLock(companyId, () => assignAgent({ companyId: String(companyId), lineId: id, agentId, limits, db: mongoose.connection.db }));
+      res.json({ success: true, data: this.lineAssignmentResponse(line) });
+    } catch (error) {
+      this.sendAssignmentError(res, error);
+    }
+  }
+
+  /** POST /phone-numbers/unassign-agent { companyId, id } : titulaire seul ; la ligne RESTE au centre, facturée, libre et réaffectable. */
+  async unassignLineAgent(req, res) {
+    try {
+      const { companyId, id } = req.body || {};
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ success: false, code: 'INVALID_COMPANY', error: 'INVALID_COMPANY', message: 'companyId invalide.' });
+      await this.requireOwner(req, companyId);
+      const limits = await loadCompanyPlanLimits(companyId);
+      const line = await withCenterLock(companyId, () => unassignAgent({ companyId: String(companyId), lineId: id, limits }));
+      res.json({ success: true, data: this.lineAssignmentResponse(line) });
+    } catch (error) {
+      this.sendAssignmentError(res, error);
+    }
+  }
+
+  /**
+   * POST /phone-numbers/release { companyId, id, confirm: true } : titulaire seul ; la SEULE façon de résilier une ligne. `confirm` doit valoir
+   * exactement true. Libère le numéro chez l'opérateur et annule l'abonnement mensuel de la ligne (idempotent, voir phoneNumberService.deletePhoneNumber).
+   */
+  async releaseLineExplicit(req, res) {
+    const { companyId, id, confirm } = req.body || {};
+    if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ success: false, code: 'INVALID_COMPANY', error: 'INVALID_COMPANY', message: 'companyId invalide.' });
+    return this.runExplicitRelease(req, res, { companyId, id, confirm });
+  }
+
+  /** Cœur de la libération explicite, commun à /release, DELETE /:id et POST /terminate : titulaire seul, confirm:true, ligne « management » refusée. */
+  async runExplicitRelease(req, res, { companyId, id, confirm }) {
+    try {
+      await this.requireOwner(req, companyId);
+      if (confirm !== true) return res.status(400).json({ success: false, code: 'CONFIRMATION_REQUIRED', error: 'CONFIRMATION_REQUIRED', message: 'La libération résilie la ligne : confirmez avec « confirm: true ».' });
+      const limits = await loadCompanyPlanLimits(companyId);
+      const result = await withCenterLock(companyId, async () => {
+        await assertReleasable({ companyId: String(companyId), lineId: id, limits }); // la ligne incluse (management) ne se libère pas tant que le forfait est actif
+        return phoneNumberService.deletePhoneNumber({ id, companyId });
+      });
+      res.json({ success: true, ...result });
+    } catch (error) {
+      if (error instanceof AssignmentError || error instanceof ScopeError) return this.sendAssignmentError(res, error);
+      if (error?.status) return res.status(error.status).json({ success: false, code: 'RELEASE_FAILED', error: 'RELEASE_FAILED', message: error.message, ...(typeof error.code === 'string' ? { reason: error.code } : {}) });
+      this.sendAssignmentError(res, error);
+    }
+  }
+
+  /** GET /phone-numbers/agent-capacity?companyId= : lecture seule (titulaire ou responsable du centre) : agents, lignes affectées, lignes libres. */
+  async getAgentCapacity(req, res) {
+    try {
+      const companyId = req.query?.companyId;
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ success: false, code: 'INVALID_COMPANY', error: 'INVALID_COMPANY', message: 'companyId invalide.' });
+      const access = scopeToCompany(await callerAccess(req), String(companyId));
+      if (!['owner', 'member'].includes(access.role)) throw new AssignmentError(403, 'OWNER_ONLY', 'Réservé au titulaire et aux responsables du centre.');
+      const limits = await loadCompanyPlanLimits(companyId);
+      res.json({ success: true, data: await agentCapacity({ companyId: String(companyId), limits, db: mongoose.connection.db }) });
+    } catch (error) {
+      this.sendAssignmentError(res, error);
+    }
+  }
+
+  lineAssignmentResponse(line) {
+    return { id: line._id, phoneNumber: line.phoneNumber, assignedRole: line.assignedRole || null, assignedAgentId: line.assignedAgentId ?? null, assignedAt: line.assignedAt ?? null };
+  }
+
+  /** Réserve atomiquement un paiement pour un achat de ligne mensuelle ; false si déjà réservé (rejeu, double envoi). */
+  async claimLinePayment(payment) {
+    const claimed = await PhoneNumberPayment.findOneAndUpdate(
+      { _id: payment._id, purchaseClaimedAt: null },
+      { $set: { purchaseClaimedAt: new Date() } },
+      { new: true }
+    );
+    return Boolean(claimed);
+  }
+
+  /**
+   * Défait l'achat d'une ligne mensuelle : suppression de la ligne (libère le numéro et annule son abonnement Stripe). Si la
+   * libération échoue, la ligne passe en `release_failed` (trace durable, reprise par la réconciliation) et on le signale.
+   */
+  async rollbackMonthlyLine(newNumber, companyId, cause) {
+    try {
+      await phoneNumberService.deletePhoneNumber({ id: newNumber?._id, companyId });
+      return { releaseFailed: false };
+    } catch (releaseErr) {
+      try {
+        const line = newNumber?._id ? await PhoneNumber.findById(newNumber._id) : null;
+        if (line) await markLineReleaseFailed(line, `${cause?.code || 'rollback'}: ${releaseErr.message}`);
+        else console.error(JSON.stringify({ event: 'phone_line_release_failed', lineId: String(newNumber?._id || ''), reason: releaseErr.message }));
+      } catch (markErr) {
+        console.error(JSON.stringify({ event: 'phone_line_release_failed_unmarked', lineId: String(newNumber?._id || ''), reason: markErr.message }));
+      }
+      return { releaseFailed: true };
+    }
+  }
+
+  /**
+   * Suite de l'achat d'une ligne mensuelle déjà commandée : abonnement (ligne « pending »), capture du premier mois, puis ligne
+   * active. Renvoie `{ line }` en cas de succès, sinon `{ error, releaseFailed }` après avoir défait l'achat.
+   */
+  async completeMonthlyLinePurchase(newNumber, payment, companyId) {
+    const fail = async (error) => ({ error, ...(await this.rollbackMonthlyLine(newNumber, companyId, error)) });
+    let line;
+    try {
+      if (!newNumber?._id) throw Object.assign(new Error('Ligne introuvable pour créer son abonnement.'), { code: 'LINE_SUBSCRIPTION_FAILED' });
+      line = typeof newNumber.save === 'function' ? newNumber : await PhoneNumber.findById(newNumber._id);
+      if (!line) throw Object.assign(new Error('Ligne introuvable pour créer son abonnement.'), { code: 'LINE_SUBSCRIPTION_FAILED' });
+      await startMonthlyLineSubscription({ line, amountCents: payment.amount, currency: payment.currency });
+    } catch (err) {
+      console.error('❌ Monthly line subscription failed, releasing the number:', err.message);
+      return fail(err.code ? err : Object.assign(err, { code: 'LINE_SUBSCRIPTION_FAILED' }));
+    }
+    if (payment.status === 'authorized') {
+      try {
+        await captureAuthorizedLinePayment(payment);
+      } catch (captureErr) {
+        // Capture ambiguë (réponse perdue après encaissement) : on relit l'état réel chez Stripe avant de défaire quoi que ce soit.
+        console.error('❌ Line payment capture failed after subscription, reading the real payment state:', captureErr.message);
+        let state = null;
+        try {
+          state = await getLinePaymentState(payment);
+        } catch (stateErr) {
+          console.error('❌ Payment state unreadable after capture error:', stateErr.message);
+        }
+        if (state === 'captured') {
+          payment.status = 'succeeded';
+          await payment.save();
+        } else if (state === null) {
+          // Inconnu : rien n'est défait ni remboursé ; la ligne reste « pending », la réconciliation tranchera.
+          return { error: Object.assign(new Error("L'état de votre paiement est en cours de vérification : ne relancez pas l'achat. La ligne sera activée, ou le paiement remboursé automatiquement, sous quelques minutes."), { code: 'LINE_PAYMENT_CAPTURE_UNKNOWN' }), pending: true };
+        } else {
+          return fail(Object.assign(new Error("Le paiement n'a pas pu être encaissé."), { code: 'LINE_PAYMENT_CAPTURE_FAILED', cause: captureErr }));
+        }
+      }
+    }
+    await activateMonthlyLine(line);
+    return { line };
+  }
+
+  /** Achat de ligne refusé car son abonnement mensuel ou son encaissement est impossible : rien n'est encaissé ou tout est remboursé. */
+  async rejectMonthlyLine(res, payment, error, { releaseFailed = false, pending = false } = {}) {
+    const code = String(error?.code || 'LINE_SUBSCRIPTION_FAILED');
+    if (pending) {
+      return res.status(409).json({ error: 'Line payment pending verification', code, pending: true, message: error.message });
+    }
+    const reason = code.startsWith('LINE_SUBSCRIPTION_') ? `line_subscription_${code.slice('LINE_SUBSCRIPTION_'.length).toLowerCase()}` : code.toLowerCase();
+    let released = false;
+    let refunded = false;
+    let authorizationPending = false;
+    if (payment?.status === 'authorized') {
+      const outcome = await releaseLineAuthorization(payment, reason);
+      released = Boolean(outcome.released);
+      if (outcome.captured) {
+        // Stripe avait déjà encaissé : on rembourse (jamais « failed » sur un paiement encaissé).
+        payment.status = 'succeeded';
+        await payment.save();
+        refunded = Boolean((await this.refundFailedLinePayment(payment._id, reason)).refunded);
+      } else {
+        authorizationPending = !released;
+      }
+    } else if (payment?._id) {
+      refunded = Boolean((await this.refundFailedLinePayment(payment._id, reason)).refunded);
+    }
+    const money = released ? "Aucun paiement n'a été encaissé."
+      : refunded ? 'Votre paiement a été remboursé.'
+        : authorizationPending ? "Aucun paiement n'a été encaissé ; l'autorisation bancaire sera libérée automatiquement sous peu."
+          : 'Contactez le support si le paiement a été débité.';
+    const note = releaseFailed
+      ? " Le numéro n'a pas pu être libéré automatiquement chez l'opérateur : notre équipe a été alertée et s'en occupe, vous n'avez rien à faire."
+      : '';
+    return res.status(402).json({
+      error: 'Line subscription unavailable',
+      code,
+      refunded,
+      released,
+      ...(releaseFailed ? { releaseFailed: true } : {}),
+      moneyStatus: released ? 'not_charged' : refunded ? 'refunded' : authorizationPending ? 'authorization_pending' : 'contact_support',
+      message: `${error?.message || "L'abonnement mensuel de la ligne est impossible."} ${money}${note}`
     });
   }
 
@@ -797,6 +1177,22 @@ class PhoneNumberController {
       const planLimits = await loadCompanyPlanLimits(companyId);
       const lineLimit = localNumberLimitPayload(planLimits, existingLines);
       if (lineLimit) return res.status(403).json(lineLimit);
+      // Première ligne comprise dans l'offre : aucun paiement à créer (elle s'achète directement, sans paymentId).
+      if (isLineIncluded(planLimits, existingLines)) {
+        return res.status(409).json({ success: false, error: 'Line included', code: 'LINE_INCLUDED_NO_PAYMENT', moneyStatus: 'not_charged', message: 'Your first line is included in your plan: no payment is needed. Purchase the number directly, without a payment.' });
+      }
+
+      // Affectation à l'achat (optionnelle) : le titulaire seul, un agent du centre sans ligne, offre à agents : refus AVANT tout paiement.
+      let initAgent = null;
+      const askedAgent = req.body?.assignedAgentId;
+      if (askedAgent !== undefined && askedAgent !== null && askedAgent !== '') {
+        try {
+          await this.requireOwner(req, companyId);
+          initAgent = (await resolvePurchaseAssignment({ companyId: String(companyId), limits: planLimits, existingCount: existingLines, assignedAgentId: askedAgent, db: mongoose.connection.db }))?.assignedAgentId || null;
+        } catch (assignErr) {
+          return this.sendAssignmentError(res, assignErr);
+        }
+      }
 
       // Twilio-only regulatory gate. France is provisioned on Twilio and can
       // be rejected (21649) after payment. Other markets (US, etc.) are
@@ -841,6 +1237,7 @@ class PhoneNumberController {
             return res.status(402).json({
               error: 'Provider credit insufficient',
               code: 'TELNYX_INSUFFICIENT_CREDIT',
+              moneyStatus: 'not_charged',
               message: "L'achat de numéro est temporairement indisponible. Aucun paiement n'a été pris. Réessayez plus tard ou contactez le support."
             });
           }
@@ -848,7 +1245,26 @@ class PhoneNumberController {
         }
       }
 
-      const linePricing = await getPhoneLinePricing();
+      // Prix de la ligne de l'offre (premier mois payé ici, puis abonnement mensuel du même montant pour les offres Call Centre
+      // qui portent `phone_line_price_cents`) ; prix par défaut sinon.
+      const linePricing = await getPhoneLinePricing(companyId, { limits: planLimits });
+      if (linePricing.unavailable) {
+        // Offre Call Centre sans prix de ligne valable : refus clair, jamais de repli silencieux sur 9,99 sans abonnement.
+        return res.status(409).json(PHONE_LINE_PRICE_NOT_CONFIGURED_BODY);
+      }
+      if (linePricing.monthly) {
+        // Refus avant tout paiement si les renouvellements ne pourront pas être prélevés.
+        try {
+          await assertMonthlyLineBillable(companyId);
+        } catch (billableErr) {
+          return res.status(402).json({
+            error: 'Line subscription unavailable',
+            code: billableErr.code || 'LINE_SUBSCRIPTION_FAILED',
+            moneyStatus: 'not_charged',
+            message: `${billableErr.message} Aucun paiement n'a été pris.`
+          });
+        }
+      }
       // Devise du pays de l'entreprise (mêmes montants dans les trois devises), EUR si le pays n'est pas lisible.
       const lineCurrency = await purchaseCurrency(req, companyId);
 
@@ -859,6 +1275,8 @@ class PhoneNumberController {
         provider,
         amount: linePricing.setupFeeCents,
         currency: lineCurrency,
+        ...(linePricing.monthly ? { lineBilling: BILLING_MODEL_MONTHLY } : {}),
+        ...(initAgent ? { assignedAgentId: initAgent } : {}),
         status: 'pending'
       });
 
@@ -871,6 +1289,7 @@ class PhoneNumberController {
           await PhoneNumberPayment.findByIdAndDelete(payment._id);
           return res.status(503).json({
             error: 'PayPal not configured',
+            code: 'PAYPAL_NOT_CONFIGURED',
             message: 'Définissez PAYPAL_CLIENT_ID et PAYPAL_CLIENT_SECRET sur le serveur.'
           });
         }
@@ -898,6 +1317,7 @@ class PhoneNumberController {
           await PhoneNumberPayment.findByIdAndDelete(payment._id);
           return res.status(502).json({
             error: 'PayPal order missing approval URL',
+            code: 'PAYPAL_APPROVAL_URL_MISSING',
             message: 'La commande PayPal a été créée sans URL d\'approbation.'
           });
         }
@@ -910,6 +1330,7 @@ class PhoneNumberController {
           await PhoneNumberPayment.findByIdAndDelete(payment._id);
           return res.status(503).json({
             error: 'Stripe not configured',
+            code: 'STRIPE_NOT_CONFIGURED',
             message: 'Définissez STRIPE_SECRET_KEY sur le serveur.'
           });
         }
@@ -945,6 +1366,7 @@ class PhoneNumberController {
             await PhoneNumberPayment.findByIdAndDelete(payment._id);
             return res.status(502).json({
               error: 'Stripe checkout URL missing',
+              code: 'STRIPE_CHECKOUT_URL_MISSING',
               message: "Stripe n'a pas renvoyé d'URL de paiement."
             });
           }
@@ -1033,6 +1455,7 @@ class PhoneNumberController {
         } else {
           return res.status(402).json({
             error: 'PayPal not approved',
+            code: 'PAYPAL_NOT_APPROVED',
             message: "Le paiement PayPal n'est pas encore approuvé. Le montant n'est encaissé qu'après l'achat du numéro."
           });
         }
@@ -1082,10 +1505,27 @@ class PhoneNumberController {
     }
   }
 
+  /** La première ligne du centre est-elle comprise dans son offre ? (même règle que l'achat : aucune ligne + offre Call Centre à ligne incluse). */
+  async isFirstLineIncluded(companyId) {
+    if (!companyId || !mongoose.Types.ObjectId.isValid(String(companyId))) return false;
+    try {
+      return isLineIncluded(await loadCompanyPlanLimits(companyId), await PhoneNumber.countDocuments({ companyId }));
+    } catch (error) {
+      console.warn('[phone-numbers] included check failed:', error?.message);
+      return false;
+    }
+  }
+
   /** Public checkout config for the telephony payment modal. */
   async getCheckoutConfig(req, res) {
     try {
-      const linePricing = await getPhoneLinePricing();
+      // `?companyId=` : prix de la ligne de l'offre de l'entreprise (même champ `pricing.amountCents`) et devise de son pays
+      // (mêmes montants) ; sans lui, prix et devise de base.
+      const linePricing = await getPhoneLinePricing(req.query?.companyId);
+      // `included` : la PREMIÈRE ligne du centre est comprise dans son offre (aucune ligne + offre Call Centre à ligne incluse) : rien à payer.
+      // Dans ce cas l'absence de prix configuré ne bloque pas (il n'y a rien à encaisser).
+      const included = await this.isFirstLineIncluded(req.query?.companyId);
+      if (linePricing.unavailable && !included) return res.status(409).json(PHONE_LINE_PRICE_NOT_CONFIGURED_BODY);
       // `?companyId=` : devise du pays de l'entreprise (mêmes montants) ; sans lui, la devise de base (EUR).
       const currency = req.query?.companyId ? await purchaseCurrency(req, req.query.companyId) : String(linePricing.currency || 'EUR').toUpperCase();
       res.json({
@@ -1098,10 +1538,11 @@ class PhoneNumberController {
         stripe: {
           enabled: stripeService.isConfigured()
         },
+        included,
         pricing: {
-          amountCents: linePricing.setupFeeCents,
+          amountCents: linePricing.unavailable ? null : linePricing.setupFeeCents,
           currency,
-          trialDays: linePricing.trialDays,
+          trialDays: linePricing.unavailable ? null : linePricing.trialDays,
         }
       });
     } catch (error) {
@@ -1196,6 +1637,33 @@ class PhoneNumberController {
       }
 
       const paidPrice = payment.amount > 0 ? payment.amount / 100 : 0;
+      const isMonthly = payment.lineBilling === BILLING_MODEL_MONTHLY;
+      if (isMonthly) {
+        // Paiement déjà encaissé : si les renouvellements ne sont plus possibles, il est remboursé et aucun numéro n'est commandé.
+        try {
+          await assertMonthlyLineBillable(payment.companyId);
+        } catch (billableErr) {
+          return this.rejectMonthlyLine(res, payment, billableErr);
+        }
+        if (!(await this.claimLinePayment(payment))) {
+          return res.status(409).json({ error: 'Payment already in use', code: 'PAYMENT_ALREADY_USED', message: 'Ce paiement est déjà utilisé pour un achat en cours ou terminé.' });
+        }
+      }
+      // Affectation : le rôle de la ligne et, si l'agent demandé à l'initialisation est toujours valable, son affectation ; sinon la ligne est créée LIBRE (jamais d'échec ici).
+      let recoverAssignment = null;
+      try {
+        const recoverLimits = await loadCompanyPlanLimits(payment.companyId);
+        const recoverCount = await PhoneNumber.countDocuments({ companyId: payment.companyId });
+        const db = mongoose.connection.db;
+        try {
+          recoverAssignment = await resolvePurchaseAssignment({ companyId: String(payment.companyId), limits: recoverLimits, existingCount: recoverCount, assignedAgentId: payment.assignedAgentId || undefined, db });
+        } catch (agentErr) {
+          if (!(agentErr instanceof AssignmentError)) throw agentErr;
+          recoverAssignment = await resolvePurchaseAssignment({ companyId: String(payment.companyId), limits: recoverLimits, existingCount: recoverCount, assignedAgentId: undefined, db });
+        }
+      } catch (assignErr) {
+        console.warn('[telephony] recover: line assignment skipped:', assignErr.message);
+      }
       const newNumber = await phoneNumberService.purchaseTwilioNumber(
         payment.phoneNumber,
         config.baseUrl,
@@ -1206,9 +1674,15 @@ class PhoneNumberController {
           addressSid,
           price: paidPrice,
           currency: payment.currency,
-          paymentRef: payment._id
+          paymentRef: payment._id,
+          ...(isMonthly ? { billingModel: BILLING_MODEL_MONTHLY } : {}),
+          ...assignmentOptions(recoverAssignment),
         }
       );
+      if (isMonthly) {
+        const outcome = await this.completeMonthlyLinePurchase(newNumber, payment, String(payment.companyId));
+        if (outcome.error) return this.rejectMonthlyLine(res, payment, outcome.error, { releaseFailed: outcome.releaseFailed, pending: outcome.pending });
+      }
 
       try {
         if (newNumber?._id) {
@@ -1271,23 +1745,24 @@ class PhoneNumberController {
   }
 
   async testCall(req, res) {
-    const friendlyProviderError = (raw) => {
+    // Classe l'erreur de l'opérateur : { code, message } ; le texte est EXACTEMENT celui d'avant, `code` est le nouvel identifiant stable.
+    const classifyProviderError = (raw, errorCode) => {
       const msg = String(raw || '');
       if (/authentication failed|is not active|account .* (suspended|closed)|20003|20005/i.test(msg)) {
-        return "Le compte de l'opérateur téléphonique est inactif ou suspendu : les appels sont impossibles tant qu'il n'est pas réactivé. Contactez le support HARX.";
+        return { code: 'PROVIDER_ACCOUNT_INACTIVE', message: "Le compte de l'opérateur téléphonique est inactif ou suspendu : les appels sont impossibles tant qu'il n'est pas réactivé. Contactez le support HARX." };
       }
       if (
         /unverified|not been verified|Origination number is not ready|requirement-info|identity.?verif/i.test(
           msg
         )
       ) {
-        return "Ce numéro est en attente de validation réglementaire. Vous ne pouvez pas encore l'utiliser pour des appels sortants.";
+        return { code: 'NUMBER_PENDING_REGULATORY_VALIDATION', message: "Ce numéro est en attente de validation réglementaire. Vous ne pouvez pas encore l'utiliser pour des appels sortants." };
       }
       if (/not.?owned|does not belong|invalid.?from|from.?number/i.test(msg)) {
-        return "Impossible de lancer l'appel avec ce numéro. Vérifiez qu'il est actif et correctement configuré.";
+        return { code: 'CALL_NOT_POSSIBLE_WITH_NUMBER', message: "Impossible de lancer l'appel avec ce numéro. Vérifiez qu'il est actif et correctement configuré." };
       }
       const cleaned = msg.replace(/telnyx|twilio/gi, 'fournisseur').trim();
-      return cleaned || "Échec du test d'appel.";
+      return { code: errorCode === 'CALL_ID_MISSING' ? 'CALL_ID_MISSING' : 'TEST_CALL_FAILED', message: cleaned || "Échec du test d'appel." };
     };
 
     try {
@@ -1304,6 +1779,7 @@ class PhoneNumberController {
       if (!e164 || !destE164) {
         return res.status(400).json({
           error: 'Bad Request',
+          code: 'INVALID_PHONE_NUMBERS',
           message: 'Numéros invalides. Utilisez le format international (+…).',
         });
       }
@@ -1325,6 +1801,7 @@ class PhoneNumberController {
       if (!line) {
         return res.status(404).json({
           error: 'Not Found',
+          code: 'LINE_NOT_OWNED',
           message: "Ce numéro n'est pas le vôtre ou n'est plus actif.",
         });
       }
@@ -1342,6 +1819,7 @@ class PhoneNumberController {
         if (!config.twilioAccountSid || !config.twilioAuthToken) {
           return res.status(500).json({
             error: 'Server Configuration',
+            code: 'TELEPHONY_NOT_CONFIGURED',
             message: "La configuration téléphonie du serveur est incomplète.",
           });
         }
@@ -1385,6 +1863,7 @@ class PhoneNumberController {
       if (!config.telnyxApiKey || !config.telnyxConnectionId) {
         return res.status(500).json({
           error: 'Server Configuration',
+          code: 'TELEPHONY_NOT_CONFIGURED',
           message: "La configuration téléphonie du serveur est incomplète.",
         });
       }
@@ -1417,7 +1896,7 @@ class PhoneNumberController {
         data?.call_control_id ||
         null;
       if (!callId) {
-        throw new Error("L'appel n'a pas pu être démarré (identifiant manquant).");
+        throw Object.assign(new Error("L'appel n'a pas pu être démarré (identifiant manquant)."), { code: 'CALL_ID_MISSING' });
       }
       upsertTestCallSession(callId, {
         provider: 'telnyx',
@@ -1433,10 +1912,11 @@ class PhoneNumberController {
       });
     } catch (error) {
       console.error('Error in testCall:', error.message);
-      const message = friendlyProviderError(error.message);
+      const { code, message } = classifyProviderError(error.message, error.code);
       const isFriendlyError = message.includes('validation réglementaire');
       res.status(isFriendlyError ? 403 : 500).json({
         error: 'Failed to test call',
+        code,
         message,
       });
     }
@@ -1656,17 +2136,17 @@ class PhoneNumberController {
       const { phoneNumber, companyId } = req.body || {};
       const { e164, line } = await this.findCompanyLine(phoneNumber, companyId);
       if (!e164) {
-        return res.status(400).json({ error: 'Bad Request', message: 'Numéro invalide. Utilisez le format international (+…).' });
+        return res.status(400).json({ error: 'Bad Request', code: 'INVALID_PHONE_NUMBER', message: 'Numéro invalide. Utilisez le format international (+…).' });
       }
       if (!line) {
-        return res.status(404).json({ error: 'Not Found', message: "Ce numéro n'est pas le vôtre ou n'est plus actif." });
+        return res.status(404).json({ error: 'Not Found', code: 'LINE_NOT_OWNED', message: "Ce numéro n'est pas le vôtre ou n'est plus actif." });
       }
       const provider = String(line.provider || (line.twilioId ? 'twilio' : line.telnyxId ? 'telnyx' : '')).toLowerCase();
       if (provider !== 'twilio' && !line.twilioId) {
-        return res.status(400).json({ error: 'Unsupported', message: "Le test d'appel entrant n'est pas disponible pour ce type de ligne." });
+        return res.status(400).json({ error: 'Unsupported', code: 'INBOUND_TEST_NOT_SUPPORTED', message: "Le test d'appel entrant n'est pas disponible pour ce type de ligne." });
       }
       if (!config.twilioAccountSid || !config.twilioAuthToken) {
-        return res.status(500).json({ error: 'Server Configuration', message: 'La configuration téléphonie du serveur est incomplète.' });
+        return res.status(500).json({ error: 'Server Configuration', code: 'TELEPHONY_NOT_CONFIGURED', message: 'La configuration téléphonie du serveur est incomplète.' });
       }
       const voiceUrl = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/inbound-call`;
       let sid = line.twilioId ? String(line.twilioId) : '';
@@ -1675,7 +2155,7 @@ class PhoneNumberController {
         sid = found[0]?.sid || '';
       }
       if (!sid) {
-        return res.status(404).json({ error: 'Not Found', message: "La ligne n'a pas été retrouvée chez l'opérateur." });
+        return res.status(404).json({ error: 'Not Found', code: 'LINE_NOT_FOUND_AT_PROVIDER', message: "La ligne n'a pas été retrouvée chez l'opérateur." });
       }
       await phoneNumberService.twilioClient.incomingPhoneNumbers(sid).update({ voiceUrl, voiceMethod: 'POST' });
       await PhoneNumber.updateOne({ _id: line._id }, { $set: { 'metadata.inboundWebhook': voiceUrl } });
@@ -1684,7 +2164,7 @@ class PhoneNumberController {
       res.json({ success: true, data: { phoneNumber: e164, status: session.status, startedAt: session.startedAt, expiresAt: session.expiresAt } });
     } catch (error) {
       console.error('Error in startInboundTest:', error.message);
-      res.status(500).json({ error: 'Failed to start inbound test', message: "Impossible de préparer le test d'appel entrant : " + String(error.message || '').replace(/telnyx|twilio/gi, 'opérateur') });
+      res.status(500).json({ error: 'Failed to start inbound test', code: 'INBOUND_TEST_FAILED', message: "Impossible de préparer le test d'appel entrant : " + String(error.message || '').replace(/telnyx|twilio/gi, 'opérateur') });
     }
   }
 
@@ -1694,7 +2174,7 @@ class PhoneNumberController {
       const { phoneNumber, companyId } = req.query || {};
       const { e164, line } = await this.findCompanyLine(phoneNumber, companyId);
       if (!e164 || !line) {
-        return res.status(404).json({ error: 'Not Found', message: "Ce numéro n'est pas le vôtre ou n'est plus actif." });
+        return res.status(404).json({ error: 'Not Found', code: 'LINE_NOT_OWNED', message: "Ce numéro n'est pas le vôtre ou n'est plus actif." });
       }
       const session = getInboundTest(e164);
       res.json({
@@ -1715,13 +2195,38 @@ class PhoneNumberController {
     }
   }
 
+  /** Réponse de refus « agent sans ligne ». */
+  lineNotAssigned(res, status = 403) {
+    return res.status(status).json({ success: false, error: LINE_NOT_ASSIGNED, code: LINE_NOT_ASSIGNED, message: LINE_NOT_ASSIGNED_MESSAGE, lineStatus: { required: true, hasLine: false, notice: null } });
+  }
+
+  /**
+   * Restriction des conseillers qui peuvent recevoir un appel entrant sur cette ligne (offres à agents, règle datée) : null = aucune.
+   * Toute anomalie (lecture du forfait ou de la base) : aucune restriction, l'appel suit le comportement habituel.
+   */
+  async inboundRingFilterFor(line) {
+    if (!line?.companyId) return null;
+    try {
+      if (enforcementSettings().from === null && enforcementSettings().ruleStarts === null) return null;
+      return await inboundRingFilter({ line, limits: await loadCompanyPlanLimits(line.companyId), db: mongoose.connection.db });
+    } catch (error) {
+      console.error('inbound ring filter (ignoré):', error?.message);
+      return null;
+    }
+  }
+
+  /** Blocage d'un agent sans ligne dans CE centre (offres à agents, règle active). Renvoie le statut ; `blocked` = refuser. */
+  async agentLineGate({ companyId, userId, limits }) {
+    return agentLineStatus({ companyId: String(companyId), userId, limits: limits ?? (await loadCompanyPlanLimits(companyId)), db: mongoose.connection.db });
+  }
+
   /** Jeton Twilio Voice pour que le navigateur d'un conseiller du centre reçoive les appels entrants. */
   async voiceToken(req, res) {
     try {
       const userId = req.user?.userId || req.user?.id;
       if (!userId) return res.status(401).json({ error: 'Authentication required' });
       if (!config.twilioAccountSid || !config.twilioAuthToken) {
-        return res.status(500).json({ error: 'Server Configuration', message: 'La configuration téléphonie du serveur est incomplète.' });
+        return res.status(500).json({ error: 'Server Configuration', code: 'TELEPHONY_NOT_CONFIGURED', message: 'La configuration téléphonie du serveur est incomplète.' });
       }
       const identity = voiceIdentity(userId);
       const client = phoneNumberService.twilioClient;
@@ -1731,23 +2236,43 @@ class PhoneNumberController {
       // de l'entreprise pour laquelle il est émis (le contrôle d'appartenance a été fait par le garde de la route).
       if (req.body?.outbound === true) {
         const companyId = String(req.body?.companyId || '');
-        if (!mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ error: 'Invalid companyId' });
+        if (!mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ error: 'Invalid companyId', code: 'invalid_company', messageEn: 'Invalid company.' });
         // Une secrétaire (rôle agent) n'appelle que si le responsable l'autorise ; son rôle est scellé dans la preuve.
         const secretary = (await callerAccess(req)).role === 'agent';
         if (secretary) {
           const settings = await InboundSettings.findOne({ companyId }).select('secretaryOutbound').lean();
-          if (!secretaryOutboundAllowed(settings)) return res.status(403).json({ success: false, error: 'secretary_outbound_disabled', message: SECRETARY_OUTBOUND_BLOCKED });
+          if (!secretaryOutboundAllowed(settings)) return res.status(403).json({ success: false, error: 'secretary_outbound_disabled', code: 'secretary_outbound_disabled', message: SECRETARY_OUTBOUND_BLOCKED, messageEn: SPOKEN_REFUSALS.en.secretary_outbound_disabled });
         }
+        // Offres à agents : un agent sans ligne affectée n'appelle pas (règle datée, voir enforcementSettings).
+        const gate = secretary ? await this.agentLineGate({ companyId, userId }) : null;
+        if (gate?.blocked) return this.lineNotAssigned(res);
+        // Plus de minutes : refus AVANT d'émettre le jeton (lecture du solde en échec : jamais de blocage).
+        const shortfall = await this.minutesShortfall(companyId);
+        if (shortfall) return res.status(402).json(shortfall);
         const appSid = await ensureOutboundApp(client, `https://${req.get('host')}${OUTBOUND_WEBHOOK_PATH}`);
         const outboundToken = await createVoiceToken({ client, accountSid: config.twilioAccountSid, identity, outgoingApplicationSid: appSid, pushCredentialSid });
         const ticket = signOutboundTicket({ secret: config.twilioAuthToken, companyId, identity, secretary });
-        return res.json({ success: true, data: { token: outboundToken, identity, expiresIn: VOICE_TOKEN_TTL_S, params: { CompanyId: companyId, Ticket: ticket } } });
+        return res.json({ success: true, data: { token: outboundToken, identity, expiresIn: VOICE_TOKEN_TTL_S, params: { CompanyId: companyId, Ticket: ticket }, ...(gate?.applicable ? { lineStatus: lineStatusView(gate) } : {}) } });
+      }
+      // Jeton entrant : un agent sans ligne n'est pas joignable. Aucun contrôle (ni appel au service d'inscription) tant que la règle n'est pas configurée.
+      const rule = enforcementSettings();
+      let lineStatus = null;
+      if (rule.from !== null || rule.ruleStarts !== null) {
+        const access = await callerAccess(req);
+        if (access.role === 'agent') {
+          const centres = access.companyIds?.length ? access.companyIds : access.companyId ? [access.companyId] : [];
+          const gates = await Promise.all(centres.map((c) => this.agentLineGate({ companyId: c, userId })));
+          // Agent de plusieurs centres : refusé seulement s'il est bloqué dans TOUS ceux où la règle s'applique.
+          const applicable = gates.filter((g) => g.applicable);
+          if (applicable.length && applicable.every((g) => g.blocked)) return this.lineNotAssigned(res);
+          if (applicable.length) lineStatus = lineStatusView(applicable.find((g) => !g.blocked) || applicable[0]);
+        }
       }
       const token = await createVoiceToken({ client, accountSid: config.twilioAccountSid, identity, pushCredentialSid });
-      res.json({ success: true, data: { token, identity, expiresIn: VOICE_TOKEN_TTL_S, ...(pushCredentialSid ? { push: true } : {}) } });
+      res.json({ success: true, data: { token, identity, expiresIn: VOICE_TOKEN_TTL_S, ...(pushCredentialSid ? { push: true } : {}), ...(lineStatus ? { lineStatus } : {}) } });
     } catch (error) {
       console.error('Error in voiceToken:', error.message);
-      res.status(500).json({ error: 'Failed to create voice token', message: 'Téléphone du navigateur indisponible pour le moment.' });
+      res.status(500).json({ error: 'Failed to create voice token', code: 'BROWSER_PHONE_UNAVAILABLE', message: 'Téléphone du navigateur indisponible pour le moment.' });
     }
   }
 
@@ -1758,13 +2283,29 @@ class PhoneNumberController {
   async outboundCheck(req, res) {
     try {
       const companyId = String(req.body?.companyId || '');
-      if (!mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ success: false, error: 'invalid_company', message: 'Entreprise invalide.' });
+      if (!mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ success: false, error: 'invalid_company', code: 'invalid_company', message: 'Entreprise invalide.', messageEn: 'Invalid company.' });
+      // Confort : même refus que le jeton / le webhook pour un agent sans ligne.
+      if (enforcementSettings().from !== null || enforcementSettings().ruleStarts !== null) {
+        const access = await callerAccess(req);
+        if (access.role === 'agent' && (await this.agentLineGate({ companyId, userId: access.userId })).blocked) return this.lineNotAssigned(res);
+      }
       const decision = await checkCompanyDestination(companyId, req.body?.to);
-      if (!decision.ok) return res.status(422).json({ success: false, error: decision.code, reason: decision.reason, message: decision.message });
+      if (!decision.ok) return res.status(422).json({ success: false, error: decision.code, code: decision.code, reason: decision.reason, message: decision.message, messageEn: decision.messageEn });
+      // Plus de minutes : refus avant l'appel, avec le pays de destination (lecture du solde en échec : jamais de blocage).
+      const shortfall = await this.minutesShortfall(companyId, decision.to);
+      if (shortfall) return res.status(402).json(shortfall);
+      // Offre Accueil, règle active : toutes les lignes occupées => 409 LINE_BUSY (confort ; le webhook refuse de toute façon). Aucune prise ici.
+      if (enforcementSettings().from !== null || enforcementSettings().ruleStarts !== null) {
+        try {
+          if (await lineCallsEnforced({ companyId, limits: await loadCompanyPlanLimits(companyId), db: mongoose.connection.db }) && !hasFreeLine(await this.twilioLinesOf(companyId))) {
+            return res.status(409).json({ success: false, error: LINE_BUSY_CODE, code: LINE_BUSY_CODE, message: LINE_BUSY_MESSAGE });
+          }
+        } catch (error) { console.warn('[outbound-check] contrôle de ligne ignoré :', error?.message || error); }
+      }
       return res.json({ success: true, data: { to: decision.to } });
     } catch (error) {
       console.error('Error in outboundCheck:', error.message);
-      res.status(500).json({ success: false, error: 'outbound_check_failed', message: 'Vérification de la destination impossible pour le moment.' });
+      res.status(500).json({ success: false, error: 'outbound_check_failed', code: 'outbound_check_failed', message: 'Vérification de la destination impossible pour le moment.' });
     }
   }
 
@@ -1781,17 +2322,17 @@ class PhoneNumberController {
       const companyId = String(CompanyId || '');
       const identity = String(From || Caller || '').replace(/^client:/, '');
       const role = mongoose.Types.ObjectId.isValid(companyId) ? outboundTicketRole({ secret: config.twilioAuthToken, companyId, identity, ticket: Ticket }) : null;
-      if (!role) return send(refusal('Appel non autorisé.'));
+      if (!role) return send(spokenRefusal('not_authorized'));
       // Le réglage est relu à chaque appel : si le responsable retire l'autorisation, la preuve encore valide (1 h) ne suffit plus.
       if (role === 'secretary') {
         const settings = await InboundSettings.findOne({ companyId }).select('secretaryOutbound').lean();
-        if (!secretaryOutboundAllowed(settings)) return send(refusal(SECRETARY_OUTBOUND_BLOCKED));
+        if (!secretaryOutboundAllowed(settings)) return send(spokenRefusal('secretary_outbound_disabled'));
       }
       // Destination : E.164 strict, pays activé pour CETTE entreprise, jamais de numéro surtaxé (décision du serveur).
       const destination = await checkCompanyDestination(companyId, To);
       if (!destination.ok) {
         console.warn(`[browser-outbound] destination refusée pour l'entreprise ${companyId} : ${destination.reason}`);
-        return send(refusal(destination.message));
+        return send(spokenRefusal(destination.reason));
       }
       const to = destination.to;
       const [limits, minutes, line] = await Promise.all([
@@ -1801,17 +2342,90 @@ class PhoneNumberController {
       ]);
       // Enregistrement selon l'offre (liste blanche) ; l'annonce est jouée à la personne appelée quand elle décroche.
       const recording = buildRecordingPlan({ record: shouldRecordPlan(limits), companyId, callSid: String(req.body?.CallSid || ''), baseUrl: `https://${req.get('host')}`, language: consentLanguageFor(to, languageForPhone(line?.phoneNumber)) });
-      const decision = decideOutboundCall({ to, line, subscribed: Boolean(limits), minutes, recording });
+      // Offres à agents : l'agent appelle depuis SA ligne, jamais depuis une autre ligne du centre ; sans ligne, refusé une fois la règle active.
+      let callerLine = line;
+      if (role === 'secretary' && offerKind(limits) === 'agents') {
+        const gate = await agentLineStatus({ companyId, userId: identity.replace(/^cc-/, ''), limits, db: mongoose.connection.db });
+        const own = gate.line;
+        const usable = own && own.provider === 'twilio' && own.twilioId && own.status === 'active' && own.billingStatus !== 'suspended';
+        if (gate.blocked || (own && !usable && gate.enforced)) return send(spokenRefusal('line_not_assigned'));
+        if (usable) callerLine = own;
+      }
+      let decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording });
       if (!decision.ok) {
         console.warn(`[browser-outbound] refusé pour l'entreprise ${companyId} : ${decision.message}`);
-        return send(refusal(decision.message));
+        return send(spokenRefusal(decision.key, spokenLanguage(callerLine?.phoneNumber)));
       }
-      console.log(`📞 Appel sortant du navigateur (entreprise ${companyId}) vers ${to.slice(0, 6)}… depuis ${line.phoneNumber}${recording ? ' (enregistré)' : ''}`);
+      // Offre Accueil, règle datée active : une ligne = un appel à la fois. L'appel prend la première ligne LIBRE du centre (sinon « ligne occupée ») ;
+      // elle est libérée à la fin de la numérotation (action du <Dial>). Règle inactive ou autre offre : rien de tout cela. Toute panne : l'appel passe comme avant.
+      const sidForLine = String(req.body?.CallSid || '').trim();
+      if (sidForLine && (await lineCallsEnforced({ companyId, limits, db: mongoose.connection.db }))) {
+        try {
+          const pool = await this.twilioLinesOf(companyId);
+          const taken = await takeFirstFreeLine({ lineIds: pool.map((l) => l._id), callSid: sidForLine, direction: 'outbound', isStale: staleCheckFor(phoneNumberService.twilioClient) });
+          if (!taken.ok) {
+            console.warn(`[browser-outbound] ${LINE_BUSY_CODE} pour l'entreprise ${companyId}`);
+            return send(spokenRefusal('line_busy'));
+          }
+          callerLine = pool.find((l) => String(l._id) === String(taken.lineId));
+          decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, action: `https://${req.get('host')}${LINE_CALL_END_PATH}?t=${signLineCallEnd({ secret: config.twilioAuthToken, callSid: sidForLine })}` });
+        } catch (error) {
+          console.error('[browser-outbound] contrôle de ligne ignoré :', error?.message || error);
+        }
+      }
+      console.log(`📞 Appel sortant du navigateur (entreprise ${companyId}) vers ${to.slice(0, 6)}… depuis ${callerLine.phoneNumber}${recording ? ' (enregistré)' : ''}`);
       return send(decision.twiml);
     } catch (error) {
       console.error('Error in handleBrowserOutbound:', error);
-      return send(refusal('Une erreur est survenue.'));
+      return send(spokenRefusal('error'));
     }
+  }
+
+  /** La règle datée des lignes est-elle configurée ? (sinon le contrôle « une ligne = un appel » n'existe pas : aucune lecture ni écriture en plus) */
+  lineRuleConfigured() {
+    const rule = enforcementSettings();
+    return rule.from !== null || rule.ruleStarts !== null;
+  }
+
+  /**
+   * Contrôle des minutes AVANT un appel sortant : solde frais inférieur à une minute entière => corps du refus 402
+   * `MINUTES_INSUFFICIENT_FOR_DESTINATION` (pays de la destination si connu ; zone null tant que le modèle de zones n'existe pas ; solde global).
+   * Lecture du solde en échec : null (jamais de blocage, comme le webhook). Sans portefeuille : solde 0, comme le webhook.
+   */
+  async minutesShortfall(companyId, to = null) {
+    let minutes;
+    try {
+      minutes = await freshMinutesBalance(companyId, { sync: syncMinutesFromCalls, grant: ensurePlanMinutesGranted, readWallet: (id) => MinutesCompany.findOne({ companyId: id }).select('minutes').lean() });
+    } catch (error) {
+      console.warn('[minutes] solde illisible, aucun contrôle préalable :', error?.message || error);
+      return null;
+    }
+    const balance = Number(minutes);
+    if (Number.isFinite(balance) && Math.floor(balance) >= 1) return null;
+    return {
+      success: false,
+      error: MINUTES_INSUFFICIENT_CODE,
+      code: MINUTES_INSUFFICIENT_CODE,
+      country: to ? callingInfoOf(to).countryIso : null,
+      zone: null,
+      balance: Number.isFinite(balance) ? balance : 0,
+      message: MINUTES_INSUFFICIENT_MESSAGE,
+    };
+  }
+
+  /** Lignes Twilio utilisables d'un centre, de la plus ancienne à la plus récente (réserve de lignes partagées de l'Accueil). */
+  async twilioLinesOf(companyId) {
+    return PhoneNumber.find({ companyId, provider: 'twilio', twilioId: { $exists: true, $ne: null }, status: 'active', billingStatus: { $ne: 'suspended' } }).sort({ createdAt: 1 }).lean();
+  }
+
+  /** Fin d'un appel sur une ligne (action du <Dial> sortant) : libère la ligne tenue par cet appel (idempotent) ; la réponse ne change rien à l'appel. */
+  async handleLineCallEnd(req, res) {
+    // Jeton signé de l'URL d'action (lié au CallSid) : sans lui, rien n'est libéré (403).
+    if (!verifyLineCallEnd({ secret: config.twilioAuthToken, callSid: String(req.body?.CallSid || ''), token: req.query?.t })) {
+      return res.type('text/xml').status(403).send('<?xml version="1.0" encoding="UTF-8"?><Response/>');
+    }
+    try { await releaseCall(req.body?.CallSid); } catch (error) { console.error('line-call-end:', error?.message || error); }
+    res.type('text/xml').status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response/>');
   }
 
   /** Signal de présence : le conseiller est (ou n'est plus) prêt à prendre les appels. Branche aussi les lignes de l'entreprise. */
@@ -1831,7 +2445,7 @@ class PhoneNumberController {
       res.json({ success: true, data: { available: true } });
     } catch (error) {
       console.error('Error in voicePresence:', error.message);
-      res.status(500).json({ error: 'Failed to update presence', message: 'Disponibilité non enregistrée.' });
+      res.status(500).json({ error: 'Failed to update presence', code: 'PRESENCE_NOT_SAVED', message: 'Disponibilité non enregistrée.' });
     }
   }
 
@@ -1878,17 +2492,31 @@ class PhoneNumberController {
           { $set: { 'metadata.inboundTest': realCallProof({ from, callSid }) } }
         ).then((r) => { if (r?.modifiedCount) console.log(`✅ Appel réel reçu sur ${to} depuis ${from} : ligne considérée comme testée en entrant`); }).catch((e) => console.error('inbound proof:', e.message));
       }
-      const online = line?.companyId ? availableIdentities(line.companyId) : [];
+      // Offre Accueil, règle datée active : une ligne = un appel actif. Ligne déjà tenue par un autre appel : traité comme « aucun conseiller disponible »
+      // (même branche : mobile du titulaire s'il est configuré, sinon répondeur / flux « no_agent » existant, sans file ni sonnerie). Règle inactive : rien de tout cela.
+      let lineBusy = false; let leaseTaken = false;
+      if (line?.companyId && callSid && this.lineRuleConfigured()) {
+        try {
+          if (await lineCallsEnforced({ companyId: line.companyId, limits: await loadCompanyPlanLimits(line.companyId), db: mongoose.connection.db })) {
+            const taken = await takeLine({ lineId: line._id, callSid, direction: 'inbound', isStale: staleCheckFor(phoneNumberService.twilioClient) });
+            leaseTaken = taken.ok; lineBusy = !taken.ok && taken.reason === 'busy';
+          }
+        } catch (error) { console.error('[inbound] contrôle de ligne ignoré :', error?.message || error); }
+      }
+      const ringAllow = await this.inboundRingFilterFor(line);
+      const online = line?.companyId && !lineBusy ? (ringAllow ? availableIdentities(line.companyId).filter(ringAllow) : availableIdentities(line.companyId)) : [];
       const settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
       const baseUrl = `https://${req.get('host')}`;
       const solo = await isSoloCompany(line?.companyId);
       const recording = solo ? null : await recordingPlanFor({ companyId: line?.companyId, callSid, baseUrl, from, language });
       // Files d'attente (routage par langues / compétences, menu vocal). null = aucune file, Nomad Solo ou erreur : comportement inchangé.
-      const queueRoute = !solo && line?.companyId ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'call', recording, language }) : null;
+      const queueRoute = !solo && line?.companyId && !lineBusy ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'call', recording, language, allow: ringAllow }) : null;
       // File choisie sans conseiller éligible (langues / compétences) : les conseillers présents sonnent quand même, plutôt que le répondeur.
       const identities = queueRoute ? (queueRoute.kind === 'ring' ? queueRoute.firstIds : queueRoute.kind === 'none' ? online : []) : online;
       const reach = line?.companyId ? await ReachSettings.findOne({ companyId: line.companyId }).lean().catch((e) => { console.error('ReachSettings read:', e.message); return null; }) : null;
       const route = queueRoute?.kind === 'menu' ? { first: 'browser', mobileNext: false, mobile: null } : decideInboundRoute({ identities, reach, linePhone: to });
+      // Aucun conseiller à faire sonner : l'appel va au répondeur, il ne tient pas la ligne (un message laissé n'est pas un appel actif).
+      if (leaseTaken && route.first === 'voicemail') await releaseCall(callSid).catch((e) => console.error('[inbound] libération :', e?.message || e));
       // Chaque appel est consigné : niveau de service, abandon et attente en sont calculés (inbound-stats).
       if (line?.companyId && callSid) {
         await InboundCall.updateOne(
@@ -1947,6 +2575,7 @@ class PhoneNumberController {
     let to = '';
     let from = '';
     let language = 'fr';
+    let ringAllow = null;
     try {
       to = toE164(req.body?.To || req.body?.Called);
       language = languageForPhone(to);
@@ -1956,14 +2585,15 @@ class PhoneNumberController {
       line = to ? (await PhoneNumber.findOne({ phoneNumber: to })) || (await PhoneNumber.findOne({ phoneNumber: to.replace(/^\+/, '') })) : null;
       settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
       solo = await isSoloCompany(line?.companyId);
+      ringAllow = await this.inboundRingFilterFor(line);
       const recording = solo ? null : await recordingPlanFor({ companyId: line?.companyId, callSid, baseUrl, from, language });
       const queueRoute = !solo && line?.companyId
-        ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'menu', digits: String(req.body?.Digits || '').trim(), attempt, recording, language })
+        ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'menu', digits: String(req.body?.Digits || '').trim(), attempt, recording, language, allow: ringAllow })
         : null;
       if (queueRoute && (queueRoute.kind === 'menu' || queueRoute.kind === 'ring')) return reply(queueRoute.body);
       // Aucune file ne couvre ce cas (ou personne d'éligible) : repli existant, sans rejouer l'accueil.
       // Personne d'éligible dans la file : les conseillers présents sonnent quand même (sinon l'appel tombait au répondeur alors qu'ils étaient en ligne).
-      const identities = line?.companyId ? availableIdentities(line.companyId) : [];
+      const identities = line?.companyId ? (ringAllow ? availableIdentities(line.companyId).filter(ringAllow) : availableIdentities(line.companyId)) : [];
       if (queueRoute?.kind === 'none' && identities.length) console.log(`📞 Aucun conseiller éligible dans la file sur ${to} : sonnerie chez les ${identities.length} conseiller(s) présent(s)`);
       const reach = line?.companyId ? await ReachSettings.findOne({ companyId: line.companyId }).lean().catch(() => null) : null;
       const route = decideInboundRoute({ identities, reach, linePhone: to });
@@ -1982,7 +2612,7 @@ class PhoneNumberController {
     } catch (error) {
       console.error('Error in handleTwilioInboundMenu:', error);
       try {
-        const identities = line?.companyId ? availableIdentities(line.companyId) : [];
+        const identities = line?.companyId ? (ringAllow ? availableIdentities(line.companyId).filter(ringAllow) : availableIdentities(line.companyId)) : [];
         return reply(buildInboundTwiml({ solo, settings, baseUrl, companyId: line?.companyId ? String(line.companyId) : '', identities, from, resultUrl: `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result`, linePhone: to, withGreeting: false, language }));
       } catch (e) {
         console.error('Error in handleTwilioInboundMenu (repli):', e);
@@ -2029,6 +2659,8 @@ class PhoneNumberController {
       const mobile = leg === 'browser' && call && !call.mobileTried ? mobileTarget(reach, call.phoneNumber) : null;
       const ringMobile = shouldRingMobileAfter({ leg, dialStatus, mobile });
       const baseUrl = `https://${req.get('host')}`;
+      // Fin de la sonnerie (décroché puis raccroché, non décroché, abandonné) : la ligne est libérée, sauf si le mobile du titulaire va encore sonner. Idempotent.
+      if (!ringMobile && callSid && this.lineRuleConfigured()) await releaseCall(callSid).catch((e) => console.error('[inbound] libération :', e?.message || e));
       if (call) {
         const elapsed = Math.max(0, (Date.now() - new Date(call.startedAt).getTime()) / 1000);
         if (ringMobile) {
@@ -2164,7 +2796,7 @@ class PhoneNumberController {
   async getInboundStats(req, res) {
     try {
       const { companyId, gigId } = req.query || {};
-      if (!mongoose.Types.ObjectId.isValid(String(companyId))) return res.status(400).json({ error: 'Bad Request', message: 'companyId invalide.' });
+      if (!mongoose.Types.ObjectId.isValid(String(companyId))) return res.status(400).json({ error: 'Bad Request', code: 'INVALID_COMPANY', message: 'companyId invalide.' });
       const days = Math.min(365, Math.max(1, Number(req.query.days) || 30));
       const slaSeconds = Math.min(600, Math.max(1, Number(req.query.slaSeconds) || 20));
       const filter = { companyId, startedAt: { $gte: new Date(Date.now() - days * 86400000) } };
@@ -2291,27 +2923,23 @@ class PhoneNumberController {
     }
   }
 
+  /**
+   * DELETE /phone-numbers/:id et POST /phone-numbers/terminate : même règle que /release (titulaire seul, `confirm: true` obligatoire, ligne
+   * « management » refusée, mêmes codes d'erreur). Le centre est celui de la LIGNE (jamais celui annoncé par l'appelant). `confirm` : corps JSON, ou
+   * `?confirm=true` pour un DELETE sans corps.
+   */
   async deleteNumber(req, res) {
     try {
-      const companyId =
-        req.body?.companyId ||
-        req.query?.companyId ||
-        req.headers['x-company-id'];
-      const phoneNumber = req.body?.phoneNumber || req.query?.phoneNumber;
       const id = req.params.id || req.body?.id || req.query?.id;
-      const result = await phoneNumberService.deletePhoneNumber({
-        id,
-        phoneNumber,
-        companyId,
-      });
-      res.json({ success: true, ...result });
+      const phoneNumber = req.body?.phoneNumber || req.query?.phoneNumber;
+      const query = id && mongoose.Types.ObjectId.isValid(String(id)) ? { _id: id } : phoneNumber ? { phoneNumber: String(phoneNumber).trim() } : null;
+      if (!query) return res.status(400).json({ success: false, code: 'LINE_REQUIRED', error: 'LINE_REQUIRED', message: 'id ou phoneNumber requis.' });
+      const line = await PhoneNumber.findOne(query).lean();
+      if (!line || !line.companyId) return res.status(404).json({ success: false, code: 'LINE_NOT_FOUND', error: 'LINE_NOT_FOUND', message: 'Ligne introuvable.' });
+      const confirm = req.body?.confirm === true || req.query?.confirm === 'true';
+      return this.runExplicitRelease(req, res, { companyId: String(line.companyId), id: String(line._id), confirm });
     } catch (error) {
-      console.error('Error deleting phone number:', error);
-      const status = error.status || (error.message === 'Phone number not found' ? 404 : 500);
-      res.status(status).json({
-        error: status === 404 ? 'Not Found' : 'Failed to terminate phone number',
-        message: error.message || 'Failed to terminate phone number',
-      });
+      this.sendAssignmentError(res, error);
     }
   }
 

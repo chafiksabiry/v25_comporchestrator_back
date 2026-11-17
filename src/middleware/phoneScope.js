@@ -17,11 +17,14 @@ export const companyFrom = (...sources) => async (req) => {
   const ids = [];
   for (const source of sources) {
     const value = typeof source === 'function' ? await source(req) : pick(req, source);
-    if (value === undefined || value === null || value === '') throw new ScopeError(400, 'companyId is required');
+    if (value === undefined || value === null || value === '') throw new ScopeError(400, 'companyId is required', 'COMPANY_ID_REQUIRED');
     ids.push(String(value));
   }
   return ids;
 };
+
+/** Like companyFrom('companyId'), but a request without companyId has nothing to check (public default values). */
+export const companyFromIfPresent = async (req) => (pick(req, 'companyId') ? companyFrom('companyId')(req) : []);
 
 /** Company of the line designated by id / phoneNumber (params, body or query). No line found: nothing to check. */
 export const ofNumber = async (req) => {
@@ -30,7 +33,7 @@ export const ofNumber = async (req) => {
   if (!id && !phoneNumber) return undefined;
   const line = id ? await PhoneNumber.findById(id).lean().catch(() => null) : await PhoneNumber.findOne({ phoneNumber }).lean();
   if (!line) return undefined;
-  if (!line.companyId) throw new ScopeError(403, 'This line is not attached to a company');
+  if (!line.companyId) throw new ScopeError(403, 'This line is not attached to a company', 'LINE_NOT_ATTACHED_TO_COMPANY');
   return line.companyId;
 };
 
@@ -62,11 +65,11 @@ export const requireCompany = (resolveCompanyIds) => async (req, res, next) => {
       console.warn(`[phoneScope] would deny user ${req.user?.userId} (companies ${mine.join(',')}) on ${req.method} ${req.originalUrl}`);
       return next();
     }
-    return res.status(403).json({ error: 'Not allowed for this company' });
+    return res.status(403).json({ error: 'Not allowed for this company', code: 'COMPANY_NOT_ALLOWED' });
   } catch (error) {
-    if (error.status) return res.status(error.status).json({ error: error.message });
+    if (error.status) return res.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
     console.error('[phoneScope] unexpected error', error);
-    return res.status(500).json({ error: 'Access check failed' });
+    return res.status(500).json({ error: 'Access check failed', code: 'ACCESS_CHECK_FAILED' });
   }
 };
 

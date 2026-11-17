@@ -109,6 +109,7 @@ assert.deepEqual(openPaths, [
   '/webhooks/twilio/inbound-dial-result',
   '/webhooks/twilio/inbound-menu',
   '/webhooks/twilio/inbound-queue-next',
+  '/webhooks/twilio/line-call-end',
   '/webhooks/twilio/test-call-gather',
   '/webhooks/twilio/test-call-twiml',
   '/webhooks/twilio/transfer-result',

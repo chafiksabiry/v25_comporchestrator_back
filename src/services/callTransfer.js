@@ -34,16 +34,17 @@ export function clockIn(timeZone, now = Date.now()) {
 export function entryAvailability(entry, absences, now = Date.now(), timeZone = DEFAULT_TIME_ZONE) {
   const clock = clockIn(timeZone, now);
   const absence = absenceOf(absences, entry.userId || '', clock.day);
-  if (absence) return { state: 'absent', label: `${entry.name} est absent·e jusqu’au ${absence.until.split('-').reverse().join('/')}.` };
+  // `label` (français) est inchangé. Champs additifs pour les clients qui traduisent : `labelEn` (anglais), `params` (valeurs brutes) et, quand `state` ne suffit pas, `reason`.
+  if (absence) return { state: 'absent', label: `${entry.name} est absent·e jusqu’au ${absence.until.split('-').reverse().join('/')}.`, labelEn: `${entry.name} is away until ${absence.until}.`, params: { name: entry.name, until: absence.until } };
   const hours = entry.hours || [];
-  if (!hours.length) return { state: 'unknown', label: 'Horaires non précisés.' };
+  if (!hours.length) return { state: 'unknown', label: 'Horaires non précisés.', labelEn: 'Hours not specified.', params: {} };
   const slots = hours.filter((h) => h.day === clock.weekday).sort((a, b) => a.start.localeCompare(b.start));
-  if (!slots.length) return { state: 'off', label: 'Pas de présence prévue aujourd’hui.' };
+  if (!slots.length) return { state: 'off', reason: 'no_slot_today', label: 'Pas de présence prévue aujourd’hui.', labelEn: 'No presence scheduled today.', params: {} };
   const current = slots.find((s) => s.start <= clock.time && clock.time < s.end);
-  if (current) return { state: 'available', label: `Disponible jusqu’à ${hhmm(current.end)}.` };
+  if (current) return { state: 'available', label: `Disponible jusqu’à ${hhmm(current.end)}.`, labelEn: `Available until ${current.end}.`, params: { until: current.end } };
   const next = slots.find((s) => s.start > clock.time);
-  if (next) return { state: 'later', label: `Pas encore là : disponible à partir de ${hhmm(next.start)}.` };
-  return { state: 'off', label: 'Plus disponible aujourd’hui.' };
+  if (next) return { state: 'later', label: `Pas encore là : disponible à partir de ${hhmm(next.start)}.`, labelEn: `Not here yet: available from ${next.start}.`, params: { from: next.start } };
+  return { state: 'off', reason: 'past_hours', label: 'Plus disponible aujourd’hui.', labelEn: 'No longer available today.', params: {} };
 }
 
 /** On peut lui passer l'appel maintenant : présente, ou sans horaires précisés. Les plages futures ou passées ne comptent pas (hors horaires). */
@@ -119,6 +120,12 @@ export const RESULT_LABEL = {
   caller_hung_up: 'L’appelant a raccroché', message_left: 'Message laissé', message_offered: 'Message proposé directement',
 };
 
+/** Libellés anglais des résultats (champ additif `resultLabelEn`) ; les clients traduisent d'après `result`. */
+export const RESULT_LABEL_EN = {
+  ringing: 'In progress', answered: 'Transferred', no_answer: 'No answer, message offered', busy: 'Busy, message offered', failed: 'Failed, message offered',
+  caller_hung_up: 'The caller hung up', message_left: 'Message left', message_offered: 'Message offered directly',
+};
+
 /** Entrée de journal affichée (jamais le numéro de la fiche). */
 export function toTransferLog(call) {
   const t = call.transfer || {};
@@ -126,5 +133,6 @@ export function toTransferLog(call) {
     callId: String(call._id), callSid: call.callSid, from: call.from || '', at: t.startedAt || null,
     byUserId: t.byUserId || '', byName: t.byName || '', toEntryId: t.entryId || '', toName: t.entryName || '',
     mode: t.mode || 'dial', result: t.result || 'ringing', resultLabel: RESULT_LABEL[t.result] || RESULT_LABEL.ringing,
+    resultLabelEn: RESULT_LABEL_EN[t.result] || RESULT_LABEL_EN.ringing,
   };
 }

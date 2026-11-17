@@ -3,18 +3,24 @@ export const PROVIDER_IDS = ['google', 'microsoft', 'zoom'];
 export const isProviderId = (v) => typeof v === 'string' && PROVIDER_IDS.includes(v);
 export const PROVIDER_LABEL = { google: 'Google', microsoft: 'Microsoft 365', zoom: 'Zoom' };
 
+/** Message du refus INCONDITIONNEL de lire ou de gérer une boîte Gmail (Google ne demande plus jamais ces autorisations). */
+export const GOOGLE_MAILBOX_ACCESS_REFUSED = 'HARX ne lit ni ne gère les e-mails Gmail : pour Google, seuls l’envoi d’e-mails et l’agenda sont disponibles. Utilisez Microsoft 365 pour la réception des e-mails.';
+
 /**
  * Scope de LECTURE de la boîte de réception (e-mails entrants), OPTIONNEL : demandé seulement avec `{ read: true }` au démarrage de la connexion,
  * jamais exigé (`requiredScopes` inchangés : une connexion d'envoi seul continue de fonctionner). Zoom : aucun.
+ * GOOGLE : AUCUN scope de lecture (gmail.readonly, scope restreint, n'est plus jamais demandé) : `hasReadScope('google', …)` est toujours faux,
+ * même pour un compte autorisé AVANT le retrait avec l'ancien scope.
  */
-export const READ_SCOPE = { google: 'https://www.googleapis.com/auth/gmail.readonly', microsoft: 'Mail.Read' };
+export const READ_SCOPE = { microsoft: 'Mail.Read' };
 const normScope = (s) => String(s).trim().toLowerCase().replace(/^https:\/\/graph\.microsoft\.com\//, '');
 /** Le scope de lecture est-il présent parmi les scopes obtenus ? (Microsoft peut renvoyer « Mail.Read » ou l'URI Graph complète.) */
 /**
  * Scope d'ÉCRITURE de la boîte (mise à la corbeille / archivage répercutés dans la messagerie), OPTIONNEL et SÉPARÉ : demandé seulement avec `{ write: true }`.
- * Il inclut la lecture (gmail.modify, Mail.ReadWrite) : sa présence suffit donc aussi à `hasReadScope`. Google : scope restreint (vérification Google requise).
+ * Il inclut la lecture (Mail.ReadWrite) : sa présence suffit donc aussi à `hasReadScope`. GOOGLE : aucun scope d'écriture (gmail.modify, scope restreint, n'est
+ * plus jamais demandé ; `hasWriteScope('google', …)` est toujours faux).
  */
-export const WRITE_SCOPE = { google: 'https://www.googleapis.com/auth/gmail.modify', microsoft: 'Mail.ReadWrite' };
+export const WRITE_SCOPE = { microsoft: 'Mail.ReadWrite' };
 const hasScope = (scopes, wanted) => Array.isArray(scopes) && scopes.some((s) => normScope(s) === normScope(wanted));
 export const hasWriteScope = (provider, scopes) => Boolean(WRITE_SCOPE[provider]) && hasScope(scopes, WRITE_SCOPE[provider]);
 export const hasReadScope = (provider, scopes) => Boolean(READ_SCOPE[provider]) && (hasScope(scopes, READ_SCOPE[provider]) || hasWriteScope(provider, scopes));

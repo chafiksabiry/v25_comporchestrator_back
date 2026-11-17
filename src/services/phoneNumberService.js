@@ -2,6 +2,7 @@ import { buildLocalSearchOptions } from './numberSearchOptions.js';
 import { addressSidFromAssignments, isRejectedRange, rememberRejectedRange } from './rejectedNumberRanges.js';
 import { countryOfE164 } from '../utils/e164Country.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
+import { cancelLineSubscription } from './phoneLineSubscription.js';
 import { config } from '../config/env.js';
 import telnyx from 'telnyx';
 import twilio from 'twilio';
@@ -136,14 +137,26 @@ class PhoneNumberService {
             voice: true,
             sms: false,
             mms: false
-          }
+          },
+          // Lignes à abonnement mensuel uniquement : prix payé, devise, paiement et marqueur. Les autres lignes Telnyx
+          // gardent exactement leur enregistrement actuel.
+          ...(options.billingModel === 'monthly'
+            ? {
+                billingModel: 'monthly',
+                billingStatus: 'pending',
+                price: typeof options.price === 'number' ? options.price : 0,
+                currency: typeof options.currency === 'string' && options.currency ? options.currency.toUpperCase() : 'EUR',
+                ...(options.paymentRef ? { paymentRef: options.paymentRef } : {}),
+              }
+            : {}),
+          ...(options.assignedRole ? { assignedRole: options.assignedRole, assignedAgentId: options.assignedAgentId || null, assignedAt: options.assignedAt || null } : {})
         };
 
         const newPhoneNumber = new PhoneNumber(phoneNumberData);
         await newPhoneNumber.save();
 
-        // 4. Retourner la réponse Telnyx
-        return response.data;
+        // 4. Retourner la réponse Telnyx (ligne mensuelle : avec l'id de la ligne HARX, pour son abonnement)
+        return options.billingModel === 'monthly' ? { ...response.data, _id: newPhoneNumber._id } : response.data;
       } else {
         throw new Error(`Unsupported provider: ${resolvedProvider}`);
       }
@@ -274,6 +287,7 @@ class PhoneNumberService {
       if (error.status === 403 || error.message?.includes('403') || error.message?.includes('Forbidden')) {
         const friendlyError = new Error(`Twilio Forbidden (403): Activez les Geo Permissions pour "${countryCode}" dans Twilio Console (Voice > Settings > Geo Permissions). La recherche de numéros en France (FR) requiert également un Regulatory Bundle approuvé.`);
         friendlyError.status = 403;
+        friendlyError.code = 'TWILIO_GEO_PERMISSIONS_REQUIRED';
         throw friendlyError;
       }
       throw error;
@@ -642,7 +656,7 @@ class PhoneNumberService {
     return { owned: true, claimable: free.length > 0, number: n };
   }
 
-  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId, { bundleSid, addressSid, type, price, currency, paymentRef, isTrial, trialExpiresAt } = {}) {
+  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId, { bundleSid, addressSid, type, price, currency, paymentRef, isTrial, trialExpiresAt, billingModel, assignedRole, assignedAgentId, assignedAt } = {}) {
     if (!companyId) {
       throw new Error('companyId is required to purchase a phone number');
     }
@@ -784,7 +798,11 @@ class PhoneNumberService {
       ...(trialExpiresAt ? { trialExpiresAt } : {}),
       // PAY-19: a trial line enters the post-trial billing lifecycle;
       // a paid-up-front line has no recurring charge to track here.
-      billingStatus: isTrial ? 'trial' : 'n/a',
+      billingStatus: isTrial ? 'trial' : billingModel === 'monthly' ? 'pending' : 'n/a',
+      // Abonnement mensuel par ligne : marqueur posé à la création ; l'abonnement Stripe est créé juste après l'achat.
+      ...(billingModel === 'monthly' ? { billingModel: 'monthly' } : {}),
+      // Affectation (offres à agents) : écrite seulement quand l'appelant la fournit ; sinon aucun champ (lignes historiques inchangées).
+      ...(assignedRole ? { assignedRole, assignedAgentId: assignedAgentId || null, assignedAt: assignedAt || null } : {}),
       metadata: {
         type: type, // Save the original type (local, national, mobile)
         ...(isTrial ? { trial: { granted: true, expiresAt: trialExpiresAt } } : {})
@@ -962,9 +980,22 @@ class PhoneNumberService {
           `Échec de la résiliation chez ${provider || 'le fournisseur'}: ${msg}`
         );
         err.status = status >= 400 ? status : 502;
+        err.code = 'LINE_RELEASE_FAILED';
         err.cause = providerErr;
         throw err;
       }
+    }
+
+    // Ligne à abonnement mensuel : l'abonnement Stripe est résilié (idempotent) AVANT de supprimer la ligne. Si Stripe échoue,
+    // la ligne reste : une nouvelle tentative (numéro déjà libéré chez l'opérateur, toléré ci-dessus) reprend ici.
+    try {
+      await cancelLineSubscription(doc);
+    } catch (stripeErr) {
+      const err = new Error(`Échec de la résiliation de l'abonnement de la ligne: ${stripeErr.message}`);
+      err.status = 502;
+      err.code = 'LINE_SUBSCRIPTION_CANCEL_FAILED';
+      err.cause = stripeErr;
+      throw err;
     }
 
     await PhoneNumber.deleteOne({ _id: doc._id });
