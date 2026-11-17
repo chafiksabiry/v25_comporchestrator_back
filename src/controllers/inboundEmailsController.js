@@ -24,10 +24,10 @@ async function readScope(req, companyId) {
   return connectionScope(companyId, req.companyAccess.userId);
 }
 
-/** 409 : inbound_disabled | no_mailbox | read_scope_missing | read_unavailable (plus émis, gardé pour compatibilité) | write_scope_missing | needs_reauth ; 502 provider_error ; jamais le détail du fournisseur, ni un contenu de message. */
+/** 409 : inbound_disabled | no_mailbox | read_scope_missing | read_unavailable (plus émis, gardé pour compatibilité) | write_scope_missing | needs_reauth | google_ai_disabled (corps Gmail demandé pour l'IA) ; 502 provider_error ; jamais le détail du fournisseur, ni un contenu de message. */
 function sendError(res, error, what) {
   if (error instanceof SecretariatError) {
-    if (['inbound_disabled', 'no_mailbox', 'read_scope_missing', 'read_unavailable', 'write_scope_missing', 'needs_reauth'].includes(error.code)) return fail(res, 409, error.code, error.message);
+    if (['inbound_disabled', 'no_mailbox', 'read_scope_missing', 'read_unavailable', 'write_scope_missing', 'needs_reauth', 'google_ai_disabled'].includes(error.code)) return fail(res, 409, error.code, error.message);
     if (['not_connected', 'unavailable'].includes(error.code)) return fail(res, 409, 'no_mailbox', 'Aucune messagerie n’est connectée. Connectez-la dans Paramétrage > Outils.');
     if (error.code === 'provider_refused') return fail(res, 409, 'read_scope_missing', 'Le fournisseur a refusé la lecture : l’autorisation de lecture est absente ou révoquée.');
     if (error.code === 'invalid_request') return fail(res, 400, 'invalid_request', error.message);
@@ -70,7 +70,7 @@ export const inboundEmailsController = {
   }, 'list'),
   refresh: guard(async (companyId, req, res) => res.json({ success: true, data: await refreshInbound(companyId) }), 'refresh'),
   body: guard(async (companyId, req, res) => {
-    const data = await readInboundBody(companyId, req.params.id);
+    const data = await readInboundBody(companyId, req.params.id, { purpose: req.query?.purpose });
     res.setHeader('Cache-Control', 'no-store');
     res.json({ success: true, data });
   }, 'body'),
@@ -152,7 +152,7 @@ export const mineInboundController = {
   }, 'list'),
   refresh: mineGuard(async (scope, req, res) => res.json({ success: true, data: await refreshInbound(scope) }), 'refresh'),
   body: mineGuard(async (scope, req, res) => {
-    const data = await readInboundBody(scope, req.params.id);
+    const data = await readInboundBody(scope, req.params.id, { purpose: req.query?.purpose });
     res.setHeader('Cache-Control', 'no-store');
     res.json({ success: true, data });
   }, 'body'),

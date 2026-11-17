@@ -461,7 +461,8 @@ try {
   assert.deepEqual(Object.keys(r.body.data.google).sort(), ['account', 'available', 'canModify', 'canRead', 'connected', 'connectedAt', 'needsReauth']);
   for (const user of ['agent1', 'member1', 'memberNoCalls']) {
     r = await req('GET', `/connections/${C1}`, { user });
-    assert.deepEqual(r.body.data.google, empty.google, `${user} : Google « non connecté »`); assert.deepEqual(r.body.data.microsoft, empty.microsoft, `${user} : Microsoft « non connecté »`);
+    // « non connecté » + seulement l'indicateur booléen ownedByOther (ni adresse, ni statut, ni identité)
+    assert.deepEqual(r.body.data.google, { ...empty.google, ownedByOther: true }, `${user} : Google « non connecté »`); assert.deepEqual(r.body.data.microsoft, { ...empty.microsoft, ownedByOther: true }, `${user} : Microsoft « non connecté »`);
     assert.ok(!r.text.includes('centre@'), 'aucune adresse');
   }
   assert.deepEqual((await req('GET', `/connections/${C2}`, { user: 'other1' })).body.data, empty, 'autre centre : aucune connexion visible');

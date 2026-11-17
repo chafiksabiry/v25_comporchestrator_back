@@ -239,7 +239,7 @@ try {
   assert.deepEqual([d.enabled, d.canRead], [true, true]); assert.match(d.lastSyncAt, /^\d{4}-\d\d-\d\dT.*Z$/);
   assert.equal(d.items.length, 2, 'un message disparu (404) est ignoré');
   assert.deepEqual(d.items.map((i) => i.subject), ['Facture', 'Demande de rendez-vous'], 'plus récents d’abord');
-  assert.deepEqual(d.items[1], { id: d.items[1].id, from: { name: 'Marie Durand', email: 'marie@exemple.fr' }, subject: 'Demande de rendez-vous', receivedAt: '2026-11-10T09:00:00.000Z', snippet: 'Bonjour, je voudrais un rendez-vous', status: 'new', archived: false, followUpIds: [] });
+  assert.deepEqual(d.items[1], { id: d.items[1].id, from: { name: 'Marie Durand', email: 'marie@exemple.fr' }, subject: 'Demande de rendez-vous', receivedAt: '2026-11-10T09:00:00.000Z', snippet: 'Bonjour, je voudrais un rendez-vous', status: 'new', archived: false, followUpIds: [], aiAllowed: true });
   assert.equal(d.items[0].snippet.length, 200); assert.deepEqual(d.items[0].from, { name: '', email: 'bob@exemple.fr' });
   assert.deepEqual(Object.keys(inbox[0]).filter((k) => /body|text|html|content/i.test(k)), [], 'aucun corps stocké');
   assert.equal(toolsDocs[0].inbound.lastSyncAt instanceof Date, true);
@@ -261,7 +261,7 @@ try {
   const [mid] = d.items.map((i) => i.id).slice(1);
   const stored = JSON.stringify(inbox);
   r = await req('GET', `/inbound-emails/${C1}/${mid}/body`, { user: 'owner1' });
-  assert.equal(r.status, 200); assert.deepEqual(r.body, { success: true, data: { text: BODY_SECRET } }, 'texte brut, historique cité tronqué');
+  assert.equal(r.status, 200); assert.deepEqual(r.body, { success: true, data: { text: BODY_SECRET, aiAllowed: true } }, 'texte brut, historique cité tronqué');
   assert.match(providerCalls().at(-1).url, /me\/messages\/g1\?/);
   assert.equal(JSON.stringify(inbox), stored, 'le corps n’est pas stocké'); assert.ok(!JSON.stringify(inbox).includes(BODY_SECRET));
   assert.equal((await req('GET', `/inbound-emails/${C1}/pas-un-id/body`, { user: 'owner1' })).status, 400);

@@ -174,9 +174,12 @@ export async function updateVideoResource(companyId, item, { actorId = null } = 
 }
 
 /** Supprime la réunion Zoom / l'événement dédié au lien. L'événement partagé avec l'agenda est supprimé par calendarSync. Au mieux. */
-export async function removeVideoResource(companyId, item, { actorId = null } = {}) {
+export async function removeVideoResource(companyId, item, { actorId = null, report = null } = {}) {
   if (!item.videoProvider || !item.videoExternalId || item.videoExternalId === item.calendarExternalId) return true;
-  if (VISIO_NEEDS[item.videoProvider] === 'google' && blocksGoogleDelegation('google', await videoOwnerOf(companyId, item, 'google'), actorId)) return false; // délégation Google suspendue
+  if (VISIO_NEEDS[item.videoProvider] === 'google' && blocksGoogleDelegation('google', await videoOwnerOf(companyId, item, 'google'), actorId)) { // délégation Google suspendue
+    if (report) report.blocked = true; // `report` (facultatif) : l'appelant distingue ce refus d'une panne du fournisseur
+    return false;
+  }
   try {
     if (item.videoProvider === 'zoom') await withConnection(companyId, 'zoom', (accessToken, http) => PROVIDERS.zoom.deleteMeeting({ http, accessToken, id: item.videoExternalId }));
     else {

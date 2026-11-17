@@ -369,6 +369,16 @@ assert.equal(r.body.data.videoUrl, '');
 r = await call(fu.patch, { params: { id: created._id }, body: { status: 'canceled' } });
 assert.equal(r.body.data.status, 'canceled'); assert.equal(r.body.data.sequence, 4);
 assert.match(I.buildAppointmentIcs(r.body.data) , /STATUS:CANCELLED/);
+// retrait du lien Meet DÉDIÉ d'un collègue (délégation Google suspendue) : rien n'est retiré chez Google, les champs visio sont CONSERVÉS, statut explicite
+{
+  const meet = 'https://meet.google.com/abc-defg-hij';
+  Object.assign(created, { videoUrl: meet, videoProvider: 'google_meet', videoExternalId: 'MEET1', videoOwnerId: 'collegue', calendarExternalId: null });
+  r = await call(fu.patch, { params: { id: created._id }, body: { videoLink: false } });
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  assert.equal(r.body.data.videoRemoval?.code, 'google_delegation_disabled'); assert.equal(r.body.data.videoRemoval.status, 'not_removed');
+  assert.deepEqual([created.videoUrl, created.videoProvider, created.videoExternalId], [meet, 'google_meet', 'MEET1'], 'lien conservé : il existe encore chez Google');
+  Object.assign(created, { videoUrl: '', videoProvider: '', videoExternalId: '', videoOwnerId: '' });
+}
 
 // signature : ajoutée une fois, jamais en double si le message se termine déjà par elle
 {

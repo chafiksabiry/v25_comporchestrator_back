@@ -12,7 +12,7 @@ import { oauthStatus } from '../integrations/oauth.js';
 import { call, GOOGLE_MAILBOX_WRITE_UNAVAILABLE, hasReadScope, hasWriteScope, isProviderId, PROVIDER_IDS, PROVIDER_LABEL, SecretariatError } from './secretariatProviders/common.js';
 import { purgeInboundEmails, purgePersonalInbox } from './inboundEmailStore.js';
 import { PROVIDERS } from './secretariatProviders/index.js';
-import { googleDelegationEnabled } from './googleDelegation.js';
+import { googleDelegationEnabled, googleDelegationError } from './googleDelegation.js';
 import { isValidTenant, tenantOf } from './secretariatProviders/microsoft.js';
 import { isMailProvider, isOwnerless, mayTakeOver, ownerOf, ownsRow } from './mailOwnership.js';
 
@@ -167,6 +167,8 @@ export async function finishAuthorization({ pendingId, userId, companyId, provid
   if (String(row.userId) !== String(userId || '')) throw new SecretariatError('wrong_user', 'Cette autorisation a été démarrée par une autre personne : elle a été annulée. Recommencez la connexion depuis votre compte.', { status: 403 });
   const state = { companyId: String(companyId), userId: String(row.userId), provider, returnTo: row.returnTo, ...(row.shared ? { shared: row.shared } : {}) };
   if (!mayStore(state)) throw new SecretariatError('forbidden', 'Vous n’avez plus le droit de connecter ce compte.', { status: 403 }); // droits revérifiés à la finalisation
+  // Délégation Google suspendue (googleDelegation.js), revérifiée à la finalisation : un compte PARTAGÉ Google n'est jamais enregistré (les jetons en attente sont jetés).
+  if (state.shared && state.shared.personal !== true && provider === 'google' && !googleDelegationEnabled()) throw googleDelegationError(409);
   const secrets = decryptJson(row.secretsEnc, { context: pendingContext(companyId, idHash), key: loadKey(env) });
   const done = await storeAuthorization({ state, accountEmail: row.accountEmail, secrets, scopes: row.scopes || [], env });
   return { provider, ...(done?.personal ? { personal: true, ...(done.read ? { read: true } : {}) } : done?.accountId ? { shared: true } : {}) };
@@ -545,6 +547,8 @@ export async function connectionsView(companyId, viewer = {}, env = process.env)
       available: isAvailable(p, env),
       connected: row?.status === 'connected',
       needsReauth: row?.status === 'needs_reauth',
+      // Additif, booléen seul (ni adresse, ni identité, ni statut) : la boîte de ce fournisseur appartient à un AUTRE membre (« Connecter » répondrait 409 connection_owned).
+      ...(hidden && !isOwnerless(found) ? { ownedByOther: true } : {}),
       ...(isMailProvider(p) && found && viewer.titulaire === true && !ownsRow(found, viewer.userId) && (isOwnerless(found) || (typeof viewer.ownerGone === 'function' && (await viewer.ownerGone(ownerOf(found))))) ? { orphan: true } : {}), // additif : seulement pour le titulaire ; connexion sans propriétaire OU dont le propriétaire a quitté la société (jamais d'adresse)
       /** Le scope (optionnel) de lecture de la boîte de réception est-il accordé ? (e-mails entrants) */
       canRead: row?.status === 'connected' && hasReadScope(p, row.scopes),

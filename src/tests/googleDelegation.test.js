@@ -145,3 +145,25 @@ test('[3] événement Meet dédié d’un collègue : ni modifié ni supprimé p
   assert.equal(await updateVideoResource(C1, item, { actorId: 'mgrB' }), false);
   assert.deepEqual(httpCalls, []);
 });
+
+// ───────── 4. finalisation OAuth, retrait de lien ─────────
+test('[4] finishAuthorization : un « compte partagé Google » en attente n’est jamais enregistré (409, revérifié à la finalisation) ; route complete : 409 google_delegation_disabled', async () => {
+  const { default: OAuthPending } = await import('../models/OAuthPending.js');
+  const pending = { companyId: C1, provider: 'google', userId: 'boss', returnTo: 'tools', createdAt: new Date(), secretsEnc: 'illisible', accountEmail: 'patron@google.test', scopes: [], shared: { label: 'Patron', ownerName: '', send: true, calendar: true } };
+  OAuthPending.findOneAndDelete = () => one(pending);
+  const id = 'a'.repeat(64);
+  await assert.rejects(() => S.finishAuthorization({ pendingId: id, userId: 'boss', companyId: C1, provider: 'google' }), (e) => e.code === 'google_delegation_disabled' && e.status === 409);
+  const res = { statusCode: 200, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; }, setHeader() {} };
+  const { secretariatConnectionsController } = await import('../controllers/secretariatConnectionsController.js');
+  await secretariatConnectionsController.complete({ params: { companyId: C1, provider: 'google' }, body: { pendingId: id }, companyAccess: as('boss', 'owner') }, res);
+  assert.deepEqual([res.statusCode, res.body.code], [409, 'google_delegation_disabled'], JSON.stringify(res.body));
+});
+
+test('[4] retrait d’un lien Meet : refus de délégation signalé (report.blocked) ; son propre lien (videoOwnerId = acteur) : jamais bloqué par la délégation', async () => {
+  const report = {};
+  assert.equal(await removeVideoResource(C1, { videoProvider: 'google_meet', videoExternalId: 'MEET1', videoOwnerId: 'mgrA' }, { actorId: 'mgrB', report }), false);
+  assert.equal(report.blocked, true);
+  const own = {};
+  await removeVideoResource(C1, { videoProvider: 'google_meet', videoExternalId: 'MEET1', videoOwnerId: 'mgrB' }, { actorId: 'mgrB', report: own });
+  assert.equal(own.blocked, undefined);
+});

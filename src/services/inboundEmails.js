@@ -8,6 +8,7 @@ import { MAILBOX_PROVIDERS, messages, withConnection } from './secretariatConnec
 import { purgeInboundEmails, purgePersonalInbox } from './inboundEmailStore.js';
 import { loadTools, mergedTools } from './secretariatTools.js';
 import { ownsRow } from './mailOwnership.js';
+import { aiAllowedFor, assertAiAllowed } from './googleAiPolicy.js';
 import { hasReadScope, hasWriteScope, SecretariatError } from './secretariatProviders/common.js';
 import { PROVIDERS } from './secretariatProviders/index.js';
 
@@ -161,6 +162,7 @@ export const toItem = (d) => ({
   status: d.status === 'handled' ? 'handled' : 'new',
   archived: Boolean(d.archivedAt),
   followUpIds: (d.followUpIds || []).map(String),
+  aiAllowed: aiAllowedFor(d.provider), // e-mail Gmail : jamais remis à une IA (googleAiPolicy.js)
 });
 
 export const MAX_BULK_IDS = 100;
@@ -232,15 +234,21 @@ export async function refreshInbound(scope, now = Date.now()) {
 }
 
 /** Corps d'un message lu EN DIRECT (texte, ≤ 20 000 caractères). Jamais stocké, jamais journalisé. */
-export async function readInboundBody(scope, id) {
+/**
+ * Corps d'un e-mail, relu en direct. `purpose: 'ai'` (corps demandé pour une analyse IA) : refusé pour un e-mail Google (409 `google_ai_disabled`, AVANT tout appel Gmail).
+ * @returns {Promise<{text: string, aiAllowed: boolean}>}
+ */
+export async function readInboundBody(scope, id, { purpose } = {}) {
   const s = asScope(scope);
   if (!isId(id)) throw new SecretariatError('invalid_request', 'Identifiant d’e-mail invalide.');
+  if (purpose !== undefined && purpose !== 'ai' && purpose !== 'display') throw new SecretariatError('invalid_request', 'Usage invalide : « display » ou « ai ».');
   const access = await requireReadAccess(s);
   const doc = await InboundEmail.findOne({ _id: oid(id), ...scopeFilter(s), deletedAt: null }).select('provider providerMessageId').lean();
   if (!doc) throw new SecretariatError('not_found', 'E-mail introuvable.');
   if (doc.provider !== access.provider) throw new SecretariatError('no_mailbox', ERRORS.no_mailbox); // la messagerie a changé depuis la lecture
+  if (purpose === 'ai') assertAiAllowed(doc.provider); // aucune donnée Google envoyée à une IA
   const text = await connect(s, access.provider, (accessToken, http) => PROVIDERS[access.provider].readBody({ http, accessToken, id: doc.providerMessageId }));
-  return { text };
+  return { text, aiAllowed: aiAllowedFor(doc.provider) };
 }
 
 const plainBody = (body) => (body && typeof body === 'object' && !Array.isArray(body) ? body : {});

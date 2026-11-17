@@ -183,3 +183,34 @@ test('[4] le serveur n’appelle plus la migration de purge au démarrage', () =
   const src = fs.readFileSync(new URL('../../index.js', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /neutralizeGoogleInbox/);
 });
+
+// ───────── 5. aucune donnée Google envoyée à une IA ─────────
+test('[5] corps d’un e-mail Gmail demandé pour l’IA (purpose=ai) : 409 google_ai_disabled AVANT tout appel Gmail ; usage invalide 400 ; aiAllowed signalé', async () => {
+  let bodyCalls = 0;
+  PROVIDERS.google.readBody = async () => { bodyCalls += 1; return 'corps'; };
+  accounts = [googleAcc()];
+  InboundEmail.findOne = () => ({ select() { return this; }, lean: async () => ({ provider: 'google', providerMessageId: 'gm1' }) });
+  const scope = I.mineScope(C1, USER, ACC);
+  await assert.rejects(() => I.readInboundBody(scope, '64b0000000000000000000e1', { purpose: 'ai' }), (e) => e.code === 'google_ai_disabled' && e.status === 409);
+  await assert.rejects(() => I.readInboundBody(scope, '64b0000000000000000000e1', { purpose: 'resume' }), (e) => e.code === 'invalid_request');
+  assert.equal(bodyCalls, 0, 'aucun appel Gmail pour une demande IA');
+  const res = mockRes();
+  await mineInboundController.body({ params: { companyId: C1, accountId: ACC, id: '64b0000000000000000000e1' }, query: { purpose: 'ai' }, companyAccess: agent }, res);
+  assert.deepEqual([res.statusCode, res.body.code], [409, 'google_ai_disabled']);
+  assert.equal(bodyCalls, 0);
+  assert.equal(I.toItem({ _id: 'x', provider: 'google', receivedAt: new Date() }).aiAllowed, false);
+  assert.equal(I.toItem({ _id: 'x', provider: 'microsoft', receivedAt: new Date() }).aiAllowed, true, 'Microsoft inchangé');
+});
+
+// ───────── 6. GET /connections : boîte d'un autre membre signalée sans rien révéler ─────────
+test('[6] connectionsView : ownedByOther (booléen seul) pour un non-propriétaire ; absent pour le propriétaire et pour une connexion orpheline', async () => {
+  conns = [googleConn([SEND, CAL, READ], 'owner1')];
+  const other = await S.connectionsView(C1, { userId: 'mgrA' });
+  assert.equal(other.google.ownedByOther, true);
+  assert.deepEqual([other.google.connected, other.google.account, other.google.connectedAt], [false, null, null], 'ni adresse, ni statut, ni date');
+  assert.equal((await S.connectionsView(C1, { userId: 'owner1' })).google.ownedByOther, undefined);
+  conns = [googleConn([SEND, CAL], '')];
+  assert.equal((await S.connectionsView(C1, { userId: 'mgrA' })).google.ownedByOther, undefined, 'orpheline : pas « à un autre membre »');
+  conns = [];
+  assert.equal((await S.connectionsView(C1, { userId: 'mgrA' })).google.ownedByOther, undefined);
+});

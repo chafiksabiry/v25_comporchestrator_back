@@ -18,7 +18,7 @@ const bearer = (req) => req.headers?.authorization?.split(' ')[1];
 const viewerOf = (req) => ({ userId: req.companyAccess?.userId || '', titulaire: req.companyAccess?.role === 'owner', ownerGone: (ownerId) => ownerHasLeft(req.params.companyId, ownerId, bearer(req)) });
 
 /** Codes courts renvoyés au portail (?error=…) : aucun détail technique. */
-const ERROR_CODES = new Set(['invalid_state', 'invalid_request', 'access_denied', 'unavailable', 'exchange_failed', 'no_refresh_token', 'missing_permissions', 'no_account', 'storage_failed', 'wrong_account', 'too_many_accounts', 'email_in_use', 'not_owner']);
+const ERROR_CODES = new Set(['invalid_state', 'invalid_request', 'access_denied', 'unavailable', 'exchange_failed', 'no_refresh_token', 'missing_permissions', 'no_account', 'storage_failed', 'wrong_account', 'too_many_accounts', 'email_in_use', 'not_owner', 'google_delegation_disabled']);
 
 export const secretariatConnectionsController = {
   /**
@@ -124,7 +124,7 @@ export const secretariatConnectionsController = {
       res.json({ success: true, data: { connected: data.provider, ...(data.personal ? { personal: true, ...(data.read ? { read: true } : {}) } : {}), ...(data.shared ? { shared: true } : {}) } });
     } catch (error) {
       if (error instanceof SecretariatError) {
-        const status = { invalid_request: 400, forbidden: 403, wrong_user: 403, not_owner: 403, pending_not_found: 404, email_in_use: 409, wrong_account: 409, too_many_accounts: 409, unavailable: 409 }[error.code] || 500;
+        const status = { invalid_request: 400, forbidden: 403, wrong_user: 403, not_owner: 403, pending_not_found: 404, email_in_use: 409, wrong_account: 409, too_many_accounts: 409, unavailable: 409, google_delegation_disabled: 409 }[error.code] || 500;
         return refuse(status, ERROR_CODES.has(error.code) || ['wrong_user', 'pending_not_found', 'forbidden'].includes(error.code) ? error.code : 'storage_failed', status === 500 ? 'Finalisation impossible.' : error.message);
       }
       console.error('secretariat connections complete: storage_failed');

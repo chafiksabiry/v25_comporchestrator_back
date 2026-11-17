@@ -258,7 +258,7 @@ export const followUpController = {
         });
       } catch (error) {
         // Enregistrement impossible : on ne laisse pas de réunion / d'événement orphelin chez le fournisseur.
-        if (video.externalId) await removeVideoResource(access.companyId, { videoProvider: video.provider, videoExternalId: video.externalId }, { actorId: access.userId });
+        if (video.externalId) await removeVideoResource(access.companyId, { videoProvider: video.provider, videoExternalId: video.externalId, videoOwnerId: video.ownerId || '' }, { actorId: access.userId }); // lien créé par cette personne, dans SA boîte
         if (delegated) await discardDelegatedEvent(access.companyId, delegated.account, delegated.eventId);
         throw error;
       }
@@ -301,9 +301,18 @@ export const followUpController = {
         item.videoUrl = video.url; item.videoProvider = video.provider; item.videoExternalId = video.externalId; item.videoOwnerId = video.ownerId || '';
         if (video.sharesCalendar && !item.calendarExternalId) { item.calendarProvider = video.eventProvider; item.calendarExternalId = video.externalId; item.calendarStatus = 'synced'; item.calendarOwnerId = video.ownerId || ''; }
       }
+      let videoRemoval = null;
       if (videoLink === false) {
-        await removeVideoResource(String(item.companyId), extView(item), { actorId: access.userId }); // réunion Zoom / événement dédié ; l'événement d'agenda reste
-        item.videoUrl = ''; item.videoProvider = ''; item.videoExternalId = '';
+        const report = {};
+        // réunion Zoom / événement dédié ; l'événement d'agenda reste. Échec (délégation Google suspendue ou panne) : le lien existe encore chez le fournisseur,
+        // donc les champs visio sont CONSERVÉS et la réponse le dit (`videoRemoval`), au lieu d'afficher un rendez-vous sans visio qui en a toujours une.
+        if (await removeVideoResource(String(item.companyId), extView(item), { actorId: access.userId, report })) {
+          item.videoUrl = ''; item.videoProvider = ''; item.videoExternalId = '';
+        } else {
+          videoRemoval = report.blocked
+            ? { status: 'not_removed', code: 'google_delegation_disabled', message: 'Le lien de visio est dans le compte Google d’un collègue : il n’a pas été retiré (délégation Google suspendue). Demandez-lui de le retirer.' }
+            : { status: 'not_removed', code: 'provider_error', message: 'Le lien de visio n’a pas pu être retiré chez le fournisseur : il est conservé. Réessayez dans un instant.' };
+        }
       }
       // Chaque modification d'un rendez-vous (déplacement, annulation, visio) fait monter la révision du fichier agenda.
       if (item.model === 'appointment') item.sequence = (item.sequence || 0) + 1;
@@ -317,7 +326,7 @@ export const followUpController = {
       if (checked.value.status === 'done' && item.model === 'voicemail_callback' && item.originType === 'voicemail') {
         await Voicemail.updateOne({ _id: item.originId, companyId: item.companyId, followUpStatus: { $in: ['new', 'to_call'] } }, { $set: { followUpStatus: 'called' } }).catch(() => {});
       }
-      res.json({ success: true, data: toItem(item) });
+      res.json({ success: true, data: { ...toItem(item), ...(videoRemoval ? { videoRemoval } : {}) } });
     } catch (error) {
       if (error instanceof SecretariatError) return providerFail(res, error);
       console.error('followUps patch:', error.message);
