@@ -1,25 +1,30 @@
-# Dette de sécurité : routes serveur-à-serveur sans jeton de service
+# Dette de sécurité : routes serveur-à-serveur encore sans jeton de service
 
-État au moment de l'écriture (branche `recette`, avant les PR #148 à #164). Ces routes sont appelées par `v25_dash_calls_backend` (et, pour `reconcile`, aussi par le front) **sans aucun jeton** ; leur donner une authentification casserait ces appelants. Elles restent donc ouvertes tant qu'un jeton de service n'est pas envoyé par `dash_calls`. Aucune n'accepte d'argent ni de crédit de la part de l'appelant (voir « Risque résiduel »).
+État vérifié dans `origin/recette` (après #148, #150, #152, #153, #166 et les PR fermant `reconcile`, `call-analysis-*` et le WebSocket).
 
-| Route | Fichier | Appelants (lus, branches par défaut) | Risque résiduel |
+## Déjà traité (ne plus considérer comme dette)
+| Sujet | État dans `recette` |
+|---|---|
+| `POST /api/escrow/reconcile/:companyId`, `/call-analysis-help`, `/call-analysis-complete` | exigent un jeton de service (portées `escrow-reconcile` / `call-analysis-notify`, `src/middleware/serviceToken.js`) **ou** un utilisateur de la société (`userOrService`, `src/routes/escrow.js:35-37`) |
+| WebSocket `/escrow-updates` | jeton utilisateur obligatoire en sous-protocole `bearer`, diffusion filtrée par société / fiche agent (#153, #166) |
+| `POST /api/tokens-company/charge-usage` | accepte la clé de service `x-service-key` (`TOKENS_SERVICE_KEY`) ou un JWT utilisateur ; `dash_calls` envoie ces jetons et la clé (dash_calls#34) ; `walletBalanceSync` du front passe par `authFetch` (front#62) |
+| `POST /api/minutes-company/charge-call` | durcie (#142) : le débit vient de l'appel stocké (société, durée, test exclu), jamais du corps |
+
+## Reste réellement ouvert
+| Route | Fichier | Appelant | Risque résiduel |
 |---|---|---|---|
-| `GET /api/internal/companies/:companyId/minutes-balance` | `src/routes/internal.js` | `dash_calls` `src/controllers/calls.js:68` (portillon avant appel, ouvert si échec) | lecture du solde de minutes et de l'historique de crédits de toute société |
-| `GET /api/internal/companies/:companyId/wallet-balance` | `src/routes/internal.js` | `dash_calls` `calls.js:92` | lecture du solde du portefeuille |
-| `GET /api/internal/companies/:companyId/tokens-balance` | `src/routes/internal.js` | `dash_calls` `src/services/voiceMenuAi.js:60` | lecture du solde de jetons IA |
-| `POST /api/escrow/reconcile/:companyId` | `src/routes/escrow.js` | `dash_calls` `calls.js:207, 3094`, `src/services/integrations/twilio.js:448` ; **front** `src/lib/walletBalanceSync.ts:130` (`fetch` nu) | rejoue l'état de la base (idempotent), mais déclenchable en boucle (charge) |
-| `POST /api/escrow/call-analysis-complete`, `/call-analysis-help` | `src/routes/escrow.js` | `dash_calls` `calls.js:1945`, `3297` | émission de messages WebSocket forgés vers les clients de la société nommée |
-| `POST /api/minutes-company/charge-call` | `src/routes/minutesCompany.js` | `dash_calls` `calls.js:1448`, `integrations/twilio.js:340` | durcie (#142) : le débit vient de l'appel stocké, jamais du corps |
-| `POST /api/tokens-company/charge-usage` | `src/routes/tokensCompany.js` | `dash_calls` `voiceMenuAi.js:83` | #150 : jeton de service ou JWT acceptés ; un appelant sans identité reste accepté tant que `TOKENS_CHARGE_USAGE_ENFORCE_AUTH` n'est pas posée ; les quantités restent déclarées par l'appelant |
+| `GET /api/internal/companies/:companyId/minutes-balance` | `src/routes/internal.js:15` (`getMinutesInternal`) | `dash_calls` portillon avant appel, **sans jeton**, ouvert si échec | lecture du solde de minutes et de l'historique de crédits de toute société |
+| `GET /api/internal/companies/:companyId/wallet-balance` | `internal.js:19` | `dash_calls`, sans jeton | lecture du solde du portefeuille |
+| `GET /api/internal/companies/:companyId/tokens-balance` | `internal.js:22` | `dash_calls` (`voiceMenuAi`), sans jeton | lecture du solde de jetons IA |
+| `POST /api/minutes-company/charge-call` | `src/routes/minutesCompany.js:13` | `dash_calls` | pas d'authentification ; risque borné par #142 (idempotent, durée et société relues en base), mais déclenchable en boucle |
+| `POST /api/tokens-company/charge-usage` | `src/routes/tokensCompany.js:17` | `dash_calls` | **un appelant sans identité reste accepté tant que `TOKENS_CHARGE_USAGE_ENFORCE_AUTH` n'est pas activée** ; les quantités restent déclarées par l'appelant |
 
-## Précédent à réutiliser
-`POST /api/internal/call-ended` utilise déjà un jeton de service : JWT HS256 signé avec `JWT_SECRET`, charge utile `{ scope: 'call-ended', exp }` (`src/controllers/callEndedController.js`, émetteur `dash_calls` `src/services/callEndedNotifier.js`). Et `requireCompanyParam` (`src/middleware/companyScope.js`) accepte déjà un jeton de service portant `service` et le `companyId` pour lequel il agit.
+## À activer (configuration, aucun code)
+1. Poser `TOKENS_SERVICE_KEY` (même valeur côté `dash_calls`) puis `TOKENS_CHARGE_USAGE_ENFORCE_AUTH=true` en recette, vérifier qu'aucun refus 401 n'apparaît dans les journaux de `dash_calls`, puis en production.
 
-## Plan proposé (3 étapes, réversibles)
-1. **Orchestrateur, mode observation** : fonction commune `verifyServiceToken(header, { scope, companyId })` (HS256, `exp` obligatoire et court, `scope` exact, `companyId` égal à celui de la route/du corps quand la route en porte un). Brancher les 7 routes ci-dessus en **observation** : un jeton valide est accepté, son absence est journalisée (`[service-token] absent sur <route>`) sans refus. Portées : `balance-read`, `reconcile`, `call-analysis`, `charge-call`, `charge-usage`.
-2. **dash_calls** : émettre ces jetons (durée 5 minutes, `scope` et `companyId`) sur chacun de ses appels listés (même mécanisme que `callEndedNotifier`). Côté **front**, remplacer le `fetch` nu de `walletBalanceSync.ts:130` par `authFetch` ; `reconcile` accepte alors un JWT utilisateur du propriétaire/membre de la société (`guardCompanyAccess`) **ou** un jeton de service.
-3. **Application** : variable `SERVICE_TOKEN_ENFORCE=true` en recette puis en production après quelques jours sans journal « absent » ; sans jeton valide : 401 ; service de jetons mal configuré (pas de secret) : 503, jamais ouvert.
-Autres durcissements à faire dans la foulée : `charge-usage` (quantités déclarées par l'appelant → les calculer côté serveur à partir de l'usage enregistré) ; WebSocket : voir #155.
-
-## Hors de ce dépôt
-Les étapes 2 (dash_calls, front) ne peuvent pas être faites ici. Aucune de ces PR n'a été écrite dans ces dépôts.
+## Plan pour les 4 routes restantes (étapes réversibles)
+Réutiliser `verifyServiceToken` (JWT HS256, `scope`, `exp` obligatoire, sans `userId`) et `userOrService` :
+1. **Observation** : nouvelles portées `balance-read` (3 routes `internal`) et `charge-call` ; accepter un jeton valide, journaliser son absence (`[service-token] absent sur <route>`) sans refuser.
+2. **`dash_calls`** émet ces jetons (5 minutes, portée, `companyId`) sur `calls.js` (portillon minutes et portefeuille), `voiceMenuAi.js` (jetons), `calls.js` et `integrations/twilio.js` (`charge-call`), comme pour `reconcile`.
+3. **Application** : `SERVICE_TOKEN_ENFORCE=true` en recette puis en production après quelques jours sans journal « absent » ; sans jeton valide : 401 ; secret absent : 503, jamais ouvert. Dans le même temps, `charge-usage` : calculer les quantités côté serveur plutôt que de les prendre au corps.
+Risque à garder en tête : le portillon de `dash_calls` laisse passer l'appel si la lecture échoue : activer l'étape 3 sans l'étape 2 désactiverait en silence le contrôle du solde (c'est déjà arrivé avec #147/#151).
