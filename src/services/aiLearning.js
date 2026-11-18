@@ -42,10 +42,17 @@ export function anonymize(text, { names = [] } = {}) {
   for (const n of [...known, ...parts].sort((a, b) => b.length - a.length)) {
     t = t.replace(new RegExp(`${START}${escapeRe(n)}${END}`, 'giu'), '[nom]');
   }
+  // Après une civilité ou une présentation explicite, un mot courant n'est pas un nom.
+  const NOT_NAME = `(?!(?:est|sont|a|ont|va|vont|vous|nous|sera|peut|doit|qui|que|et|ou|au|aux|en|y|ne|se|je|j|is|was|will|can|and|or)${END})`;
+  // Présentation explicite (« je m'appelle », « mon nom est », « my name is ») : le nom peut être en minuscules (« je m'appelle jean dupont »).
+  const ANY_SEQ = `${PARTICLES}*${NOT_NAME}${ANY_WORD}(?:[\\s-]+${NOT_NAME}${PARTICLES}*${ANY_WORD})?`;
+  t = t.replace(new RegExp(`${START}(${["je m'appelle", 'je m’appelle', 'mon nom est', 'my name is'].map(ci).join('|')})\\s+${ANY_SEQ}${END}`, 'gu'), (m, intro) => `${intro} [nom]`);
+  // Présentation moins sûre (« je suis », « this is ») : seulement un nom à majuscule (« je suis désolé » reste intact).
   const NAME_SEQ = `${PARTICLES}*${CAP_WORD}(?:[\\s-]+${PARTICLES}*${CAP_WORD})?`;
-  t = t.replace(new RegExp(`${START}([Jj]e m'appelle|[Jj]e m’appelle|[Mm]on nom est|[Jj]e suis|[Cc]'est|[Cc]’est|[Mm]y name is|[Tt]his is|[Ii]t's|I am|I'm)\\s+(?:${NAME_SEQ})`, 'gu'), (m, intro) => `${intro} [nom]`);
-  // Après une civilité, un mot courant (« le docteur est là ») n'est pas un nom.
-  const NOT_NAME = `(?!(?:est|sont|a|ont|va|vont|vous|nous|sera|peut|doit|qui|que|et|ou|au|aux|en|y|ne|se|is|was|will|can|and|or)${END})`;
+  t = t.replace(new RegExp(`${START}([Jj]e suis|[Tt]his is|I am|I'm)\\s+(?:${NAME_SEQ})`, 'gu'), (m, intro) => `${intro} [nom]`);
+  // « c'est X de la part de Y » : X et Y masqués ; un « c'est Paris » / « c'est mardi » isolé reste intact.
+  t = t.replace(new RegExp(`${START}([Cc]'est|[Cc]’est)\\s+${ANY_SEQ}(\\s+de la part d(?:e|'|’)\\s*)`, 'gu'), (m, intro, part) => `${intro} [nom]${part}`);
+  t = t.replace(new RegExp(`(de la part d(?:e|'|’)\\s*)${PARTICLES}*${NOT_NAME}${ANY_WORD}(?:[\\s-]+${CAP_WORD})?${END}`, 'gu'), (m, part) => `${part}[nom]`);
   t = t.replace(new RegExp(`${START}(${CIVILITIES})\\s+${NOT_NAME}${PARTICLES}*${ANY_WORD}(?:-${ANY_WORD}|\\s+${PARTICLES}*${CAP_WORD})?${END}`, 'gu'), (m, civ) => `${civ} [nom]`);
   return t.replace(/\[nom\](?:[\s-]*\[nom\])+/g, '[nom]').replace(/\s+/g, ' ').trim();
 }

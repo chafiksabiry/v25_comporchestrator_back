@@ -679,6 +679,9 @@ console.log('aiAgentPilot.test.js (formule agent IA) : OK');
   assert.equal(Lg.anonymize('je suis désolé, le docteur est là'), 'je suis désolé, le docteur est là', 'pas de faux positif');
   assert.equal(Lg.anonymize('IBAN FR76 3000 6000 0112 3456 7890 189 merci'), 'IBAN [numéro] merci', 'IBAN en entier');
   assert.equal(Lg.anonymize('Rappelez Jean-Pierre', { names: ['Jean-Pierre Dupont'] }), 'Rappelez [nom]');
+  assert.equal(Lg.anonymize("Je m'appelle jean dupont et je rappelle"), "Je m'appelle [nom] et je rappelle", 'nom en minuscules après une présentation explicite');
+  assert.equal(Lg.anonymize("Bonjour, c'est Jean de la part de Mme Martin"), "Bonjour, c'est [nom] de la part de [nom]");
+  assert.equal(Lg.anonymize("C'est Paris, c'est mardi"), "C'est Paris, c'est mardi", 'pas de faux positif après « c’est »');
   assert.equal(Lg.anonymize('Nous ouvrons de 9 h à 18 h, le 18/11/2026.'), 'Nous ouvrons de 9 h à 18 h, le 18/11/2026.');
 
   // B1 : ouverture par abonnement : `active` / `trialing` seulement, le plus récent.
@@ -686,18 +689,20 @@ console.log('aiAgentPilot.test.js (formule agent IA) : OK');
   const { loadAiAgentPlan } = await import('../services/planLimits.js');
   let seenQuery = null; let seenSort = null;
   const subs = [
-    { status: 'past_due', createdAt: new Date('2026-11-10'), planId: { metadata: { ai_agent: 'true' } } },
-    { status: 'active', createdAt: new Date('2026-10-01'), planId: { metadata: { ai_agent: 'false' } } },
-    { status: 'active', createdAt: new Date('2026-11-01'), planId: { metadata: { ai_agent: 'true', ai_agent_included_minutes: '200' } } },
+    { status: 'past_due', updatedAt: new Date('2026-11-10'), planId: { metadata: { ai_agent: 'true' } } },
+    { status: 'active', updatedAt: new Date('2026-11-05'), planId: { metadata: { ai_agent: 'false', callcenter_tier: 'full_scope' } } },
+    { status: 'active', updatedAt: new Date('2026-11-01'), planId: { metadata: { ai_agent: 'true', ai_agent_included_minutes: '200' } } },
   ];
-  Subscription.findOne = (f) => {
+  Subscription.find = (f) => {
     seenQuery = f;
-    return { sort(s2) { seenSort = s2; return this; }, populate: async () => subs.filter((x) => f.status.$in.includes(x.status)).sort((a, b) => b.createdAt - a.createdAt)[0] || null };
+    return { sort(s2) { seenSort = s2; return this; }, limit() { return this; }, populate: async () => subs.filter((x) => f.status.$in.includes(x.status)).sort((a, b) => b.updatedAt - a.updatedAt) };
   };
   const plan = await loadAiAgentPlan(A);
-  assert.deepEqual(seenQuery.status.$in, ['active', 'trialing'], 'past_due n’ouvre pas l’agent'); assert.deepEqual(seenSort, { createdAt: -1 }, 'le plus récent');
-  assert.deepEqual(plan, { status: 'active', aiAgent: true, aiAgentIncludedMinutes: 200, aiAgentOverageCentsTtc: null });
-  subs.splice(1, 2);
+  assert.deepEqual(seenQuery.status.$in, ['active', 'trialing'], 'past_due n’ouvre pas l’agent'); assert.deepEqual(seenSort, { updatedAt: -1 }, 'tri sur la mise à jour');
+  assert.deepEqual(plan, { status: 'active', aiAgent: true, aiAgentIncludedMinutes: 200, aiAgentOverageCentsTtc: null }, 'plusieurs abonnements actifs : le forfait ai_agent l’emporte');
+  subs.splice(2, 1);
+  assert.equal((await loadAiAgentPlan(A)).aiAgent, false, 'sans forfait ai_agent : le plus récent, agent non ouvert');
+  subs.splice(1, 1);
   assert.equal(await loadAiAgentPlan(A), null, 'seul un abonnement impayé : agent fermé');
   plans[B] = { status: 'trialing', aiAgent: true };
   assert.equal((await AI.resolveAvailability(B)).subscriptionStatus, 'trialing', 'statut exposé');

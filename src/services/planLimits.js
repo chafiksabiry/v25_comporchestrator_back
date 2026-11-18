@@ -36,17 +36,20 @@ export function aiAgentFromMetadata(metadata) {
 }
 
 /**
- * Formule agent IA de l'entreprise pour l'OUVERTURE de l'agent : abonnement le plus récent au statut `active` ou `trialing` seulement
- * (un abonnement impayé `past_due` n'ouvre pas l'agent). @returns {Promise<null|{ status, aiAgent, aiAgentIncludedMinutes, aiAgentOverageCentsTtc }>}
+ * Formule agent IA de l'entreprise pour l'OUVERTURE de l'agent : abonnements au statut `active` ou `trialing` seulement (un `past_due`
+ * impayé n'ouvre pas l'agent), du plus récemment mis à jour au plus ancien ; avec plusieurs abonnements actifs, celui dont le forfait porte
+ * `ai_agent=true` l'emporte. @returns {Promise<null|{ status, aiAgent, aiAgentIncludedMinutes, aiAgentOverageCentsTtc }>}
  */
 export async function loadAiAgentPlan(companyId) {
   if (!companyId) return null;
-  const subscription = await Subscription.findOne({ companyId: String(companyId), status: { $in: ['active', 'trialing'] } })
-    .sort({ createdAt: -1 })
+  const subscriptions = await Subscription.find({ companyId: String(companyId), status: { $in: ['active', 'trialing'] } })
+    .sort({ updatedAt: -1 })
+    .limit(10)
     .populate('planId');
-  const plan = subscription?.planId;
-  if (!plan || typeof plan === 'string') return null;
-  return { status: subscription.status, ...aiAgentFromMetadata(plan.metadata) };
+  const rows = (subscriptions || [])
+    .filter((s) => s?.planId && typeof s.planId !== 'string')
+    .map((s) => ({ status: s.status, ...aiAgentFromMetadata(s.planId.metadata) }));
+  return rows.find((r) => r.aiAgent) || rows[0] || null;
 }
 
 /**
