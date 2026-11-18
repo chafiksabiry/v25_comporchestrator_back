@@ -121,8 +121,11 @@ assert.equal(K.latencyStats([...Array(19).fill(500), 1600]).withinTarget, true, 
 assert.equal(K.latencyStats([]).withinTarget, null);
 
 // ================================================================ jetons
-const ct = K.signCallToken({ companyId: A, callSid: SID, aiCallId: 'x', maxCallSeconds: 480 });
-assert.deepEqual(K.verifyCallToken(`Bearer ${ct}`), { companyId: A, callSid: SID, aiCallId: 'x' });
+const ct = K.signCallToken({ companyId: A, callSid: SID });
+assert.deepEqual(K.verifyCallToken(`Bearer ${ct}`), { companyId: A, callSid: SID });
+assert.ok(jwt.decode(ct).exp - jwt.decode(ct).iat <= 120, 'jeton d’appel : 120 s au plus');
+assert.equal(K.verifyCallToken(`Bearer ${jwt.sign({ scope: 'ai-inbound-call', companyId: A, callSid: SID }, 't', { expiresIn: 600 })}`), null, 'durée de vie > 120 s refusée');
+assert.equal(K.verifyCallToken(`Bearer ${jwt.sign({ scope: 'ai-inbound-call', companyId: A, callSid: SID, iat: Math.floor(Date.now() / 1000) - 200, exp: Math.floor(Date.now() / 1000) + 60 }, 't')}`), null, 'jeton trop ancien (maxAge)');
 assert.equal(K.verifyCallToken(`Bearer ${jwt.sign({ scope: 'ai-inbound' }, 't', { expiresIn: 60 })}`), null, 'mauvaise portée');
 assert.equal(K.verifyCallToken(`Bearer ${jwt.sign({ scope: 'ai-inbound-call', companyId: A, callSid: SID, userId: 'u' }, 't', { expiresIn: 60 })}`), null, 'jeton utilisateur');
 assert.equal(K.verifyCallToken(`Bearer ${jwt.sign({ scope: 'ai-inbound-call', companyId: A, callSid: SID }, 't')}`), null, 'sans expiration');
@@ -188,7 +191,7 @@ let dashCalls = [];
 let dashReply = () => ({ ok: true, status: 201, json: async () => ({ sessionId: 's1', streamUrl: 'wss://dash.test/ai-voice-stream/abc', provider: 'gemini', model: 'gemini-live-2.5-flash-native-audio' }) });
 let twilioUpdates = [];
 let released = [];
-const env = { AI_INBOUND_ENABLED: 'true', AI_INBOUND_COMPANY_IDS: A, DASH_CALLS_API_URL: 'https://dash.test' };
+const env = { AI_INBOUND_ENABLED: 'true', AI_INBOUND_COMPANY_IDS: A, DASH_CALLS_API_URL: 'https://dash.test', PUBLIC_API_BASE_URL: 'https://orch.test/api', TWILIO_AUTH_TOKEN: 'x' };
 let NOW = EVENING;
 AI.setAiInboundDeps({
   env,
@@ -208,7 +211,7 @@ const reset = () => {
   store.settings.push({ companyId: B, enabled: true, level: 'total', actions: { appointment: true, request: true, transfer: true }, transferTargets: [E2] });
 };
 const line = { _id: 'l1', companyId: A, phoneNumber: '+33140000000', gigId: null };
-const route = (over = {}) => AI.tryAiInbound({ line, to: '+33140000000', from: '+33612345678', callSid: SID, baseUrl: 'https://orch.test', ...over });
+const route = (over = {}) => AI.tryAiInbound({ line, to: '+33140000000', from: '+33612345678', callSid: SID, signatureValid: () => true, ...over });
 
 // ================================================================ routage et repli
 reset();
@@ -235,7 +238,18 @@ assert.match(sent.announcement.text, /Cabinet Martin\. Je suis l'assistante virt
 assert.equal(sent.announcement.mode, 'engine');
 assert.deepEqual(sent.transferTargets, [{ id: E1, name: 'Mme Martin' }], 'noms seulement, jamais de numéro envoyé à l’IA');
 assert.ok(!JSON.stringify(sent).includes('+33611111111'));
-assert.deepEqual(K.verifyCallToken(`Bearer ${sent.callToken}`).companyId, A);
+assert.equal(sent.callToken, undefined, 'aucun jeton longue durée : dash signe un jeton de 120 s à chaque requête');
+assert.equal(sent.orchestratorUrl, 'https://orch.test/api', 'URL publique configurée, jamais l’en-tête Host');
+// B1 : signature Twilio invalide ou URL publique absente : pas d'IA, flux classique, rien d'écrit.
+reset();
+assert.equal(await route({ signatureValid: () => false }), null, 'requête non signée par Twilio : flux classique');
+delete env.PUBLIC_API_BASE_URL;
+assert.equal(await route(), null, 'PUBLIC_API_BASE_URL absente : IA désactivée');
+env.PUBLIC_API_BASE_URL = 'http://orch.test/api';
+assert.equal(await route(), null, 'URL publique non https : IA désactivée');
+env.PUBLIC_API_BASE_URL = 'https://orch.test/api';
+assert.equal(dashCalls.length, 0); assert.equal(store.calls.length, 0);
+reset(); await route();
 assert.equal(store.calls[0].status, 'in_progress'); assert.equal(store.calls[0].engine.provider, 'gemini');
 assert.equal(store.inbound[0].route, 'ai_agent', 'statistiques : décroché par l’agent IA');
 // Mode d'annonce TwiML : <Say> avant le flux.
@@ -256,7 +270,7 @@ reset(); store.usage.push({ companyId: A, period: '2026-11', minutesUsed: 200, c
 assert.equal(await route(), null, 'plafond atteint : flux classique'); assert.equal(dashCalls.length, 0);
 // Entreprise hors liste blanche.
 reset();
-assert.equal(await AI.tryAiInbound({ line: { ...line, companyId: B }, to: '+33150000000', from: '+33612345678', callSid: SID_B, baseUrl: 'https://orch.test' }), null, 'B hors liste blanche');
+assert.equal(await AI.tryAiInbound({ line: { ...line, companyId: B }, to: '+33150000000', from: '+33612345678', callSid: SID_B, signatureValid: () => true }), null, 'B hors liste blanche');
 
 // ================================================================ fin du flux : jamais de raccrochage sec
 const afterState = (sid = SID, company = A) => K.signAfterStreamState({ secret: 'x', companyId: company, callSid: sid });
@@ -269,8 +283,17 @@ reset(); await route(); store.calls[0].status = 'completed'; store.calls[0].endR
 assert.equal(await AI.afterStreamTwiml({ token: afterState(), callSid: SID, baseUrl: 'https://orch.test' }), '<Hangup/>');
 store.calls[0].endReason = 'max_duration';
 assert.match(await AI.afterStreamTwiml({ token: afterState(), callSid: SID, baseUrl: 'https://orch.test' }), /Au revoir\.<\/Say><Hangup\/>$/);
-assert.equal(await AI.afterStreamTwiml({ token: 'faux.jeton', callSid: SID, baseUrl: 'https://orch.test' }), '<Hangup/>', 'état non signé : rien');
-assert.equal(await AI.afterStreamTwiml({ token: afterState(SID_B), callSid: SID, baseUrl: 'https://orch.test' }), '<Hangup/>', 'état d’un autre appel');
+for (const [tw2, why] of [[await AI.afterStreamTwiml({ token: 'faux.jeton', callSid: SID, baseUrl: 'https://orch.test' }), 'état non signé'],
+  [await AI.afterStreamTwiml({ token: afterState(SID_B), callSid: SID, baseUrl: 'https://orch.test' }), 'état d’un autre appel'],
+  [await AI.afterStreamTwiml({ token: afterState(), callSid: SID, baseUrl: 'https://orch.test', signatureValid: false }), 'signature Twilio invalide']]) {
+  assert.ok(!tw2.startsWith('<Hangup/>') && /<Record /.test(tw2), `${why} : flux classique (répondeur), jamais de raccrochage sec`);
+}
+// Compte rendu de dash en retard : la fin normale est attendue, pas prise pour une coupure.
+reset(); await route();
+let polls = 0;
+AI.setAiInboundDeps({ sleep: async () => { polls += 1; if (polls === 3) Object.assign(store.calls[0], { status: 'completed', endReason: 'agent_end' }); } });
+assert.equal(await AI.afterStreamTwiml({ token: afterState(), callSid: SID, baseUrl: 'https://orch.test' }), '<Hangup/>', 'compte rendu arrivé pendant l’attente');
+AI.setAiInboundDeps({ sleep: async () => {} });
 
 // ================================================================ outils : isolement entre entreprises
 reset(); await route();
@@ -295,11 +318,21 @@ const bk = await AI.runTool('book_appointment', claimsA, { start: '2026-11-04T08
 const rdv = store.items.find((x) => x._id === bk.followUpId);
 assert.equal(rdv.model, 'appointment'); assert.equal(rdv.calendarStatus, 'not_connected', 'aucun agenda externe'); assert.equal(S2(rdv.companyId), A);
 await assert.rejects(AI.runTool('transfer_to_human', claimsA, { entryId: E2, reason: 'x' }).then((r) => { if (!r.ok && r.code === 'not_allowed') throw Object.assign(new Error(), { code: 'not_allowed' }); }), (e) => e.code === 'not_allowed', 'fiche de B : refus');
+let statusAtTwilio = null;
+AI.setAiInboundDeps({ twilio: async () => ({ calls: (sid) => ({ update: async (p) => { statusAtTwilio = store.calls.find((c) => c.callSid === SID).status; twilioUpdates.push({ sid, ...p }); } }) }) });
 const tr = await AI.runTool('transfer_to_human', claimsA, { entryId: E1, reason: 'Demande un humain' }, { baseUrl: 'https://orch.test' });
+assert.equal(statusAtTwilio, 'transferred', 'état de transfert posé AVANT la bascule Twilio (course avec « appelant parti »)');
 assert.deepEqual(tr, { transferring: true, name: 'Mme Martin' });
 assert.equal(twilioUpdates[0].sid, SID); assert.match(twilioUpdates[0].twiml, /<Number>\+33611111111<\/Number>/, 'numéro relu dans l’annuaire'); assert.match(twilioUpdates[0].twiml, /transfer-result\?s=/);
 assert.equal(store.calls.find((c) => c.callSid === SID).status, 'transferred');
-assert.equal((await AI.runTool('transfer_to_human', claimsA, { entryId: E1, reason: 'x' }, { baseUrl: 'https://orch.test' })).code, 'already_transferred');
+await assert.rejects(AI.runTool('transfer_to_human', claimsA, { entryId: E1, reason: 'x' }), (e) => e.code === 'call_ended', 'après un transfert : plus aucun outil');
+await assert.rejects(AI.runTool('create_request', claimsA, { reason: 'x' }), (e) => e.code === 'call_ended');
+// Compte rendu « appelant parti » reçu pendant le transfert : la ligne n'est pas libérée.
+released = [];
+await AI.finalizeCall(store.calls.find((c) => c.callSid === SID), { endReason: 'caller_hangup' });
+assert.deepEqual(released, [], 'transfert : la ligne reste tenue');
+assert.equal(store.calls.find((c) => c.callSid === SID).status, 'transferred');
+store.calls.find((c) => c.callSid === SID).counted = false; store.calls.find((c) => c.callSid === SID).endedAt = null;
 // Action désactivée : refus côté serveur même si l'IA appelle l'outil.
 store.settings[0].actions = { appointment: false, request: false, transfer: false };
 store.calls.find((c) => c.callSid === SID).status = 'in_progress';
@@ -307,6 +340,22 @@ for (const t of ['create_request', 'find_slots', 'book_appointment', 'transfer_t
 await assert.rejects(AI.runTool('rm_rf', claimsA, {}), (e) => e.code === 'unknown_tool');
 // « Parler à une personne » toujours possible : la demande de rappel par une personne passe même demandes désactivées.
 assert.ok((await AI.runTool('create_request', claimsA, { reason: 'Veut parler à une personne', humanCallback: true })).followUpId);
+// Plafond d'actions par appel : 3 demandes, 2 RDV.
+store.settings[0].actions = { appointment: true, request: true, transfer: false };
+const callA = store.calls.find((c) => c.callSid === SID);
+callA.actions = callA.actions.filter((a) => a.type !== 'create_request');
+for (let i = 0; i < 3; i += 1) await AI.runTool('create_request', claimsA, { reason: `Demande ${i}` });
+await assert.rejects(AI.runTool('create_request', claimsA, { reason: 'Une de trop' }), (e) => e.code === 'action_limit');
+callA.actions.push({ type: 'book_appointment', ok: true }, { type: 'book_appointment', ok: true });
+await assert.rejects(AI.runTool('book_appointment', claimsA, { start: '2026-11-04T09:00:00Z', callerName: 'X' }), (e) => e.code === 'action_limit');
+assert.ok(store.items.filter((x) => x.fromAiAgent).every((x) => x.aiExpiresAt instanceof Date), 'éléments « À faire » de l’IA : même rétention');
+// Banc d'écoute : enregistrement seulement à la demande de dash (après l'annonce), une seule fois.
+callA.status = 'in_progress'; callA.bench = { requested: true, recordingSid: '' };
+const recs = [];
+AI.setAiInboundDeps({ twilio: async () => ({ calls: (sid) => ({ recordings: { create: async (o) => { recs.push({ sid, ...o }); return { sid: 'RE9' }; } } }) }) });
+assert.deepEqual(await AI.runTool('start_bench_recording', claimsA, {}), { started: true });
+assert.deepEqual(await AI.runTool('start_bench_recording', claimsA, {}), { started: false });
+assert.equal(recs.length, 1); assert.equal(recs[0].recordingChannels, 'dual'); assert.equal(callA.bench.recorded, true);
 
 // ================================================================ compte rendu : minutes comptées une fois, un seul élément « À faire »
 reset(); await route();
@@ -339,8 +388,19 @@ r = res(); await aiInboundReport({ headers: { authorization: `Bearer ${K.signCal
 assert.equal(r.code, 401, 'compte rendu pour un autre appel');
 r = res(); await aiInboundReport({ headers: { authorization: `Bearer ${K.signCallToken({ companyId: A, callSid: SID, maxCallSeconds: 480 })}` }, params: { callSid: SID }, body: { endReason: 'agent_end' } }, r);
 assert.equal(r.code, 200); assert.equal(r.body.data.status, 'completed');
-r = res(); await aiInboundAfterStream({ query: { s: afterState() }, body: { CallSid: SID }, get: () => 'orch.test' }, r);
-assert.match(r.body, /<Response><Hangup\/><\/Response>/);
+{
+  const twilio = (await import('twilio')).default;
+  const url = `https://orch.test/api/phone-numbers/webhooks/twilio/ai-inbound/after-stream?s=${encodeURIComponent(afterState())}`;
+  const params = { CallSid: SID };
+  const reqAfter = (sig) => ({ query: { s: afterState() }, body: params, originalUrl: url.replace('https://orch.test', ''), headers: sig ? { 'x-twilio-signature': sig } : {}, get: () => 'orch.test' });
+  r = res(); await aiInboundAfterStream(reqAfter(twilio.getExpectedTwilioSignature('x', url, params)), r);
+  assert.match(r.body, /<Response><Hangup\/><\/Response>/, 'signature valide : fin normale');
+  r = res(); await aiInboundAfterStream(reqAfter('faux'), r);
+  assert.match(r.body, /<Record /, 'signature invalide : flux classique');
+  const { twilioRequestValid } = await import('../services/twilioSignature.js');
+  assert.equal(twilioRequestValid(reqAfter(twilio.getExpectedTwilioSignature('x', url, params)), { env: {} }), false, 'sans PUBLIC_API_BASE_URL : jamais authentique');
+  assert.equal(twilioRequestValid({ ...reqAfter(twilio.getExpectedTwilioSignature('x', url, params)), body: { CallSid: SID_B } }, { env }), false, 'paramètre modifié');
+}
 
 // Titulaire seulement (service d'inscription simulé).
 const userTok = (id) => jwt.sign({ userId: id }, 't', { expiresIn: 3600 });
@@ -358,6 +418,15 @@ assert.match(r.body.data.announcement['fr-FR'], /intelligence artificielle/);
 r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, triggers: { allBusy: true } } }), r); assert.equal(r.code, 200); assert.equal(r.body.data.settings.triggers.allBusy, true);
 r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, maxCallMinutes: 20 } }), r); assert.equal(r.code, 400); assert.equal(r.body.code, 'AI_SETTINGS_INVALID'); assert.equal(r.body.issues[0].field, 'maxCallMinutes');
 r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, transferTargets: [E2] } }), r); assert.equal(r.body.code, 'TRANSFER_TARGET_UNKNOWN');
+AI.setAiInboundDeps({ gigBelongsTo: async (c, g) => S2(c) === A && g === '64b0000000000000000000aa' });
+r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, knowledgeBase: { gigId: '64b0000000000000000000bb' } } }), r); assert.equal(r.code, 400); assert.equal(r.body.issues[0].code, 'invalid_gig', 'base d’une autre entreprise');
+r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, knowledgeBase: { gigId: '64b0000000000000000000aa' } } }), r); assert.equal(r.code, 200);
+// Nouvelle durée de conservation : appliquée aux fiches existantes et aux éléments « À faire » de l'IA.
+const pipelines = [];
+AiInboundCall.updateMany = async (f, u) => { pipelines.push(['calls', S2(f.companyId), u]); return {}; };
+FollowUpItem.updateMany = async (f, u) => { pipelines.push(['items', S2(f.companyId), f.fromAiAgent, u]); return {}; };
+r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, retentionDays: 90 } }), r); assert.equal(r.code, 200);
+assert.deepEqual(pipelines.map((p) => p[0]), ['calls', 'items']); assert.equal(pipelines[0][2][0].$set.expiresAt.$add[1], 90 * 86400000); assert.equal(pipelines[1][2], true);
 r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, voice: 'male', addressForm: 'tu', maxCallMinutes: 10 } }), r);
 assert.equal(r.code, 200); assert.equal(r.body.data.settings.voice, 'male'); assert.equal(r.body.data.settings.addressForm, 'tu'); assert.equal(r.body.data.settings.maxCallMinutes, 10);
 r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, enabled: true, businessHours: { slots: [] } } }), r); assert.equal(r.body.code, 'AI_BUSINESS_HOURS_REQUIRED');
@@ -379,8 +448,10 @@ r = res(); await ctl.getUsage(asUser('member1', { query: { companyId: A } }), r)
 const removed = [];
 AI.setAiInboundDeps({ twilio: async () => ({ recordings: (sid) => ({ remove: async () => { removed.push(sid); } }) }) });
 store.calls.push({ _id: '64b00000000000000000cccc', companyId: A, callSid: 'CAx', bench: { recorded: true, recordingSid: 'REold', expiresAt: new Date(NOW - 1000) }, actions: [], timeline: [] });
+assert.equal(await AI.purgeExpiredBenchRecordings(), 1, 'purge planifiée (toutes entreprises)');
+assert.deepEqual(removed, ['REold']);
 r = res(); await ctl.listBench(asUser('owner1', { query: { companyId: A } }), r);
-assert.equal(r.code, 200); assert.deepEqual(removed, ['REold']); assert.equal(r.body.data.items.length, 0);
+assert.equal(r.code, 200); assert.equal(r.body.data.items.length, 0);
 globalThis.fetch = realFetch;
 
 Object.assign(console, quiet);

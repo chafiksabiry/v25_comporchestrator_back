@@ -11,6 +11,7 @@ process.env.TELNYX_API_KEY = process.env.TELNYX_API_KEY || 'x';
 process.env.TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || 'ACtest';
 process.env.TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || 'x';
 process.env.REGISTRATION_BACKEND_URL = 'https://registration.test';
+process.env.PUBLIC_API_BASE_URL = 'https://orch.test/api';
 try { import.meta.resolve('web-push'); } catch {
   register('data:text/javascript,' + encodeURIComponent("export async function resolve(s,c,n){ if(s==='web-push') return {url:'data:text/javascript,export default {setVapidDetails(){},sendNotification(){}}',shortCircuit:true}; return n(s,c); }"));
 }
@@ -28,6 +29,7 @@ const { default: CallRecordingStatus } = await import('../models/CallRecordingSt
 const { Subscription } = await import('../models/Subscription.js');
 const { markAvailable, clearPresence } = await import('../services/voicePresenceService.js');
 const AI = await import('../services/aiInbound.js');
+const { default: twilio } = await import('twilio');
 const { phoneNumberController: pc } = await import('../controllers/phoneNumberController.js');
 
 const C1 = '64b0000000000000000000c1';
@@ -56,7 +58,7 @@ beforeEach(() => {
   AiInboundCall.create = async (doc) => { const r = { _id: '64b0000000000000000000f1', ...doc }; aiCalls.push(r); return r; };
   AiInboundCall.updateOne = async (f, u) => { Object.assign(aiCalls[0] || {}, u.$set || {}); return { modifiedCount: 1 }; };
   AiInboundCall.countDocuments = async () => 0;
-  env = { DASH_CALLS_API_URL: 'https://dash.test' }; dashOk = true; dashHits = 0; now = EVENING;
+  env = { DASH_CALLS_API_URL: 'https://dash.test', PUBLIC_API_BASE_URL: 'https://orch.test/api' }; dashOk = true; dashHits = 0; now = EVENING;
   AI.setAiInboundDeps({
     env, now: () => now, sleep: async () => {},
     fetch: async () => { dashHits += 1; if (!dashOk) return { ok: false, status: 503, json: async () => ({}) }; return { ok: true, status: 201, json: async () => ({ sessionId: 's', streamUrl: 'wss://dash.test/ai-voice-stream/t0k', provider: 'gemini', model: 'm' }) }; },
@@ -64,9 +66,12 @@ beforeEach(() => {
 });
 after(() => { Object.assign(console, savedLog); });
 
-const inbound = async () => {
+const PATH = '/api/phone-numbers/webhooks/twilio/inbound-call';
+const inbound = async ({ signed = true } = {}) => {
   let out = null; const res = { type() { return this; }, status() { return this; }, send(x) { out = x; return this; } };
-  await pc.handleTwilioInboundCall({ body: { To: LINE, From: CALLER, CallSid: `CA${'a'.repeat(32)}` }, query: {}, get: () => 'orch.test' }, res);
+  const body = { To: LINE, From: CALLER, CallSid: `CA${'a'.repeat(32)}` };
+  const headers = signed ? { 'x-twilio-signature': twilio.getExpectedTwilioSignature(process.env.TWILIO_AUTH_TOKEN, `https://orch.test${PATH}`, body) } : {};
+  await pc.handleTwilioInboundCall({ body, query: {}, headers, originalUrl: PATH, get: () => 'orch.test' }, res);
   return out;
 };
 
@@ -95,4 +100,15 @@ test('session IA en échec : repli sur la sonnerie classique, jamais de raccroch
   assert.match(x, /<Client>cc-owner1<\/Client>/); assert.ok(!x.includes('<Hangup/>')); assert.equal(aiCalls[0].status, 'fallback');
   clearPresence();
   assert.match(await inbound(), /<Record /, 'personne en ligne : répondeur');
+});
+
+test('B1 : requête forgée (sans signature Twilio valide) : jamais de session IA, flux classique inchangé', async () => {
+  Object.assign(env, { AI_INBOUND_ENABLED: 'true', AI_INBOUND_COMPANY_IDS: C1 });
+  const x = await inbound({ signed: false });
+  assert.match(x, /<Client>cc-owner1<\/Client>/); assert.ok(!x.includes('<Connect')); assert.equal(dashHits, 0); assert.equal(aiCalls.length, 0);
+});
+
+test('PUBLIC_API_BASE_URL absente : IA désactivée (jamais l’en-tête Host), flux classique', async () => {
+  Object.assign(env, { AI_INBOUND_ENABLED: 'true', AI_INBOUND_COMPANY_IDS: C1 }); delete env.PUBLIC_API_BASE_URL;
+  assert.ok(!(await inbound()).includes('<Connect')); assert.equal(dashHits, 0);
 });

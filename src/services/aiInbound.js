@@ -12,7 +12,7 @@ import {
   toPublicSettings, pilotAvailability, decideAiRoute, announcementText, greetingLanguage,
 } from './aiAgentSettings.js';
 import {
-  signAiInboundServiceToken, signCallToken, signAfterStreamState, verifyAfterStreamState, periodOf, billedMinutes,
+  signAiInboundServiceToken, signAfterStreamState, verifyAfterStreamState, periodOf, billedMinutes,
   computeFreeSlots, isBookableSlot, slotLabel, latencyStats,
 } from './aiInboundCore.js';
 import { say, buildNoAnswerTwiml, xmlEscape } from './inboundFlow.js';
@@ -22,6 +22,7 @@ import { normalizePhone, displayName } from './contacts.js';
 import { buildTransferTwiml, entryAvailability, isReachableNow, signTransferState, TRANSFER_WEBHOOK_PATH } from './callTransfer.js';
 import { normalizeOutboundDestination, maxSecondsForBalance } from './browserOutbound.js';
 import { loadTools, mergedTools } from './secretariatTools.js';
+import { publicApiBase, publicOrigin } from './twilioSignature.js';
 
 /**
  * Pilote agent IA entrant (recette) : routage Twilio, repli, outils de l'IA et compte rendu de fin d'appel.
@@ -42,6 +43,13 @@ export const deps = {
   now: () => Date.now(),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   env: process.env,
+  /** La base de connaissances (gig) appartient-elle à l'entreprise ? */
+  gigBelongsTo: async (companyId, gigId) => {
+    const db = mongoose.connection.db;
+    if (!db || !mongoose.Types.ObjectId.isValid(String(gigId))) return false;
+    const row = await db.collection('gigs').findOne({ _id: oid(gigId), companyId: { $in: [oid(companyId), String(companyId)] } }, { projection: { _id: 1 } });
+    return Boolean(row);
+  },
 };
 export const setAiInboundDeps = (over) => Object.assign(deps, over);
 
@@ -75,7 +83,7 @@ const pushTimeline = (type, label) => ({ $push: { timeline: { at: new Date(deps.
 async function benchProvider(companyId, settings) {
   if (!settings.listeningBench.enabled) return null;
   if (settings.listeningBench.provider !== 'alternate') return settings.listeningBench.provider;
-  const n = await AiInboundCall.countDocuments({ companyId: oid(companyId), 'bench.recorded': true });
+  const n = await AiInboundCall.countDocuments({ companyId: oid(companyId), 'bench.requested': true });
   return n % 2 === 0 ? 'gemini' : 'openai';
 }
 
@@ -83,11 +91,16 @@ async function benchProvider(companyId, settings) {
  * Branche agent IA de handleTwilioInboundCall. Renvoie le corps TwiML (<Connect><Stream>) si l'IA décroche, sinon null :
  * l'appelant suit alors le flux classique INCHANGÉ (sonnerie, puis répondeur). Ne lève jamais.
  */
-export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, concurrent = false, baseUrl }) {
+export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, concurrent = false, signatureValid = () => false }) {
   const companyId = line?.companyId ? String(line.companyId) : '';
   if (!companyId || !callSid) return null;
   const availability = pilotAvailability(companyId, deps.env);
   if (!availability.available) return null; // pilote fermé : aucun accès base, flux classique strictement inchangé
+  // URL publique obligatoire (jamais l'en-tête Host) et requête signée par Twilio : sinon, pas d'IA (flux classique).
+  const apiBase = publicApiBase(deps.env);
+  if (!apiBase) { console.error(`[ai-inbound] ${callSid} : PUBLIC_API_BASE_URL absente, agent IA désactivé`); return null; }
+  if (!signatureValid()) { console.error(`[ai-inbound] ${callSid} : signature Twilio invalide, agent IA non proposé`); return null; }
+  const baseUrl = new URL(apiBase).origin;
   let aiCall = null;
   try {
     const { settings, directory } = await loadSettings(companyId);
@@ -107,26 +120,25 @@ export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, 
       language, announcement: { mode, language, text, verified: mode === 'twiml' ? true : null }, expiresAt: retentionDate(settings.retentionDays),
       timeline: [{ at: new Date(deps.now()), type: 'session_started', label: `Agent IA (${{ total: 'niveau total', outside_hours: 'hors horaires', all_busy: 'tous occupés' }[decision.trigger]})` }],
     });
-    const callToken = signCallToken({ companyId, callSid, aiCallId: aiCall._id, maxCallSeconds });
     const entries = directory?.entries || [];
     const transferTargets = settings.actions.transfer
       ? settings.transferTargets.map((id) => entries.find((e) => String(e._id) === id)).filter(Boolean).map((e) => ({ id: String(e._id), name: e.name }))
       : [];
-    const apiBase = resolveDashCallsApi(deps.env);
-    if (!apiBase) throw new Error('dash_calls URL not configured');
+    const dashApi = resolveDashCallsApi(deps.env);
+    if (!dashApi) throw new Error('dash_calls URL not configured');
     const body = {
       callSid, companyId, from, to, level: settings.level, trigger: decision.trigger, language, languages: settings.languages,
       voice: settings.voice, addressForm: settings.addressForm, tone: settings.tone, companyName: settings.companyName,
       instructions: settings.instructions, knowledgeBase: settings.knowledgeBase, actions: settings.actions, transferTargets,
-      maxCallSeconds, announcement: { mode, text }, provider, record: recorded, callToken, timeZone: settings.businessHours.timeZone,
-      orchestratorUrl: (deps.env.PUBLIC_API_BASE_URL || `${baseUrl}/api`).replace(/\/+$/, ''),
+      maxCallSeconds, announcement: { mode, text }, provider, record: recorded, timeZone: settings.businessHours.timeZone,
+      orchestratorUrl: apiBase,
     };
     const timeoutMs = Math.min(10000, Math.max(1000, int(deps.env.AI_INBOUND_SESSION_TIMEOUT_MS, 5000)));
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let session;
     try {
-      const res = await deps.fetch(`${apiBase}/internal/ai-inbound/sessions`, {
+      const res = await deps.fetch(`${dashApi}/internal/ai-inbound/sessions`, {
         method: 'POST', signal: controller.signal,
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${signAiInboundServiceToken()}` },
         body: JSON.stringify(body),
@@ -137,12 +149,11 @@ export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, 
     if (!session?.streamUrl || !/^wss:\/\//.test(session.streamUrl)) throw new Error('no stream url');
 
     await AiInboundCall.updateOne({ _id: aiCall._id }, {
-      $set: { status: 'in_progress', sessionId: String(session.sessionId || ''), engine: { provider: session.provider || '', model: session.model || '', fallbackUsed: session.fallbackUsed === true }, ...(recorded ? { 'bench.recorded': true, 'bench.expiresAt': new Date(deps.now() + benchRetentionDays() * 86400000) } : {}) },
+      $set: { status: 'in_progress', sessionId: String(session.sessionId || ''), engine: { provider: session.provider || '', model: session.model || '', fallbackUsed: session.fallbackUsed === true }, ...(recorded ? { 'bench.requested': true, 'bench.expiresAt': new Date(deps.now() + benchRetentionDays() * 86400000) } : {}) },
       ...pushTimeline('engine', `Moteur ${session.provider || '?'} ${session.model || ''}${session.fallbackUsed ? ' (repli)' : ''}`),
     });
     // Statistiques d'accueil : l'appel est décroché, par l'agent IA.
     await InboundCall.updateOne({ callSid }, { $setOnInsert: { companyId: oid(companyId), gigId: line.gigId || null, phoneNumber: to, from, callSid, startedAt: new Date(deps.now()), status: 'answered', route: 'ai_agent', answeredOn: 'ai_agent', answeredBy: 'ai-agent', waitSeconds: 0 } }, { upsert: true }).catch((e) => console.error('[ai-inbound] InboundCall:', e.message));
-    if (recorded) void startBenchRecording(callSid, aiCall._id);
 
     const action = `${baseUrl}${AFTER_STREAM_PATH}?s=${encodeURIComponent(signAfterStreamState({ secret: config.twilioAuthToken || deps.env.TWILIO_AUTH_TOKEN, companyId, callSid }))}`;
     const announce = mode === 'twiml' ? say(text, settings.voice === 'male' ? 'onyx' : 'nova', short) : '';
@@ -155,21 +166,13 @@ export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, 
   }
 }
 
-/** Banc d'écoute : enregistrement double canal de l'appel en cours (après l'annonce de consentement). */
-async function startBenchRecording(callSid, aiCallId) {
-  try {
-    await deps.sleep(1500);
-    const client = await deps.twilio();
-    const rec = await client.calls(callSid).recordings.create({ recordingChannels: 'dual' });
-    await AiInboundCall.updateOne({ _id: aiCallId }, { $set: { 'bench.recordingSid': String(rec?.sid || '') } });
-  } catch (e) {
-    console.error('[ai-inbound] banc d\'écoute : enregistrement impossible', e?.message || e);
-  }
-}
 
-/** Banc d'écoute : supprime chez Twilio les enregistrements dont la durée de conservation est passée (CNIL : 6 mois au plus). */
-export async function purgeExpiredBenchRecordings(companyId) {
-  const rows = await AiInboundCall.find({ companyId: oid(companyId), 'bench.recordingSid': { $ne: '' }, 'bench.expiresAt': { $lt: new Date(deps.now()) } }).select('bench').lean();
+/**
+ * Banc d'écoute : supprime chez Twilio les enregistrements dont la durée de conservation est passée (CNIL : 6 mois au plus).
+ * Lancée par une tâche planifiée (index.js), toutes entreprises ; `companyId` facultatif (tests).
+ */
+export async function purgeExpiredBenchRecordings(companyId = null) {
+  const rows = await AiInboundCall.find({ ...(companyId ? { companyId: oid(companyId) } : {}), 'bench.recordingSid': { $ne: '' }, 'bench.expiresAt': { $lt: new Date(deps.now()) } }).select('bench').lean();
   if (!rows.length) return 0;
   const client = await deps.twilio();
   let n = 0;
@@ -179,6 +182,15 @@ export async function purgeExpiredBenchRecordings(companyId) {
     n += 1;
   }
   return n;
+}
+
+/**
+ * Changement de durée de conservation : recalcule l'échéance des fiches IA existantes (début + durée) et des éléments « À faire » créés par l'IA.
+ */
+export async function applyRetention(companyId, days) {
+  const ms = Math.min(365, Math.max(30, Number(days) || 365)) * 86400000;
+  await AiInboundCall.updateMany({ companyId: oid(companyId) }, [{ $set: { expiresAt: { $add: ['$startedAt', ms] } } }]);
+  await FollowUpItem.updateMany({ companyId: oid(companyId), fromAiAgent: true }, [{ $set: { aiExpiresAt: { $add: ['$createdAt', ms] } } }]);
 }
 
 /** Compte les minutes d'un appel une seule fois (idempotent) dans le compteur mensuel. */
@@ -202,7 +214,7 @@ async function ensureFollowUp(doc, summary) {
     return doc.followUpId;
   }
   const item = await FollowUpItem.create({
-    companyId, model: 'message_taken', originType: 'call', originId: doc._id, fromAiAgent: true,
+    companyId, model: 'message_taken', originType: 'call', originId: doc._id, fromAiAgent: true, aiExpiresAt: doc.expiresAt || retentionDate(365),
     title: clip(`Appel traité par l'agent IA${doc.caller?.name ? ` : ${doc.caller.name}` : ''}`, 120), note: clip(line, 1000),
     contactName: clip(doc.caller?.name, 120), contactPhone: clip(doc.from, 40), createdById: 'ai-agent', createdByName: 'Agent IA',
   });
@@ -268,11 +280,18 @@ function sanitizeNumbers(o, depth = 0) {
  * Action du <Connect> : le flux IA est terminé. Appel clos normalement → au revoir / raccrochage ; sinon REPLI : excuse puis
  * répondeur classique (jamais de raccrochage sec). @returns {Promise<string>} corps TwiML
  */
-export async function afterStreamTwiml({ token, callSid, baseUrl }) {
+export async function afterStreamTwiml({ token, callSid, baseUrl, signatureValid = true }) {
   const state = verifyAfterStreamState({ secret: config.twilioAuthToken || deps.env.TWILIO_AUTH_TOKEN, token });
-  if (!state || state.callSid !== callSid) return '<Hangup/>';
+  // État ou signature invalide : jamais de raccrochage sec, flux classique (répondeur) sans rien lire ni écrire.
+  if (!signatureValid || !state || state.callSid !== callSid) return buildNoAnswerTwiml({ settings: null, baseUrl, companyId: '', dialStatus: 'no-answer' });
   const companyId = state.companyId;
-  const doc = await AiInboundCall.findOne({ callSid, companyId: oid(companyId) }).lean();
+  let doc = await AiInboundCall.findOne({ callSid, companyId: oid(companyId) }).lean();
+  // Fin normale dont le compte rendu de dash est en retard : on l'attend un peu avant de conclure à une coupure.
+  const waitMs = Math.min(8000, Math.max(0, int(deps.env.AI_AFTER_STREAM_WAIT_MS, 3000)));
+  for (let waited = 0; doc && ['in_progress', 'starting'].includes(doc.status) && waited < waitMs; waited += 250) {
+    await deps.sleep(250);
+    doc = await AiInboundCall.findOne({ callSid, companyId: oid(companyId) }).lean();
+  }
   const settings = await InboundSettings.findOne({ companyId: oid(companyId) }).select(NO_BYTES).lean().catch(() => null);
   const language = String(doc?.language || 'fr-FR').startsWith('en') ? 'en' : 'fr';
   if (doc && doc.status === 'completed') {
@@ -322,7 +341,7 @@ const TOOLS = {
     const urgent = b.urgency === 'urgent';
     const callerName = clip(b.callerName, 120) || doc.caller?.name || '';
     const item = await FollowUpItem.create({
-      companyId: oid(claims.companyId), model: 'message_taken', originType: 'call', originId: doc._id, fromAiAgent: true,
+      companyId: oid(claims.companyId), model: 'message_taken', originType: 'call', originId: doc._id, fromAiAgent: true, aiExpiresAt: doc.expiresAt || retentionDate(365),
       title: clip(`${urgent ? 'URGENT – ' : ''}Demande prise par l'agent IA${callerName ? ` : ${callerName}` : ''}`, 120), note: reason,
       contactName: callerName, contactPhone: clip(normalizePhone(b.callbackNumber) || doc.from, 40), urgency: urgent ? 'urgent' : 'normal',
       forEntryId: entry ? String(entry._id) : '', forName: entry?.name || '', assigneeId: entry?.userId || '', assigneeName: entry?.name || '',
@@ -350,7 +369,7 @@ const TOOLS = {
     const tz = settings.businessHours.timeZone;
     // RDV INTERNE à HARX : aucun agenda externe (Google / Microsoft) n'est lu ni écrit par l'agent IA.
     const item = await FollowUpItem.create({
-      companyId: oid(claims.companyId), model: 'appointment', originType: 'call', originId: doc._id, fromAiAgent: true,
+      companyId: oid(claims.companyId), model: 'appointment', originType: 'call', originId: doc._id, fromAiAgent: true, aiExpiresAt: doc.expiresAt || retentionDate(365),
       title: clip(`Rendez-vous (agent IA) : ${callerName}`, 120), note: clip(b.reason, 1000), contactName: callerName, contactPhone: clip(doc.from, 40),
       dueAt: start, durationMinutes: settings.appointment.durationMinutes, timeZone: tz, createdById: 'ai-agent', createdByName: 'Agent IA', calendarStatus: 'not_connected',
     });
@@ -378,26 +397,37 @@ const TOOLS = {
     if (!maxSeconds) return { ok: false, code: 'no_minutes' };
     const claim = await InboundCall.updateOne({ callSid: claims.callSid, companyId: oid(claims.companyId), 'transfer.startedAt': null }, { $set: { transfer: { startedAt: new Date(deps.now()), byUserId: 'ai-agent', byName: 'Agent IA', entryId, entryName: entry.name, mode: 'dial', result: 'ringing', endedAt: null } } });
     if (!claim?.modifiedCount) return { ok: false, code: 'already_transferred' };
-    const baseUrl = String(ctx.baseUrl || '');
+    const baseUrl = publicOrigin(deps.env) || String(ctx.baseUrl || '');
     const settingsIn = await InboundSettings.findOne({ companyId: oid(claims.companyId) }).select(NO_BYTES).lean().catch(() => null);
     const language = String(doc.language).startsWith('en') ? 'en' : 'fr';
     const twiml = buildTransferTwiml({
       name: entry.name, number, extension: entry.extension, callerId: doc.to, voice: settingsIn?.voice, maxSeconds, language,
       resultUrl: `${baseUrl}${TRANSFER_WEBHOOK_PATH}?s=${encodeURIComponent(signTransferState({ secret: config.twilioAuthToken || deps.env.TWILIO_AUTH_TOKEN, companyId: claims.companyId, callSid: claims.callSid, entryId, userId: 'ai-agent', now: deps.now() }))}`,
     });
-    // Laisse l'IA finir sa phrase (« je vous passe… ») avant de basculer l'appel.
+    // État « transféré » posé AVANT la bascule Twilio : un compte rendu « appelant parti » reçu pendant le transfert ne libère pas la ligne.
+    await AiInboundCall.updateOne({ _id: doc._id }, { $set: { status: 'transferred', transfer: { entryId, entryName: entry.name, result: 'ringing' } } });
+    // Laisse l'IA finir sa phrase (« je vous passe… ») avant de basculer l'appel (le délai de l'outil côté dash couvre pause + Twilio).
     await deps.sleep(Math.min(3000, Math.max(0, int(deps.env.AI_TRANSFER_DELAY_MS, 1200))));
     try {
       const client = await deps.twilio();
       await client.calls(claims.callSid).update({ twiml });
     } catch (e) {
       await InboundCall.updateOne({ callSid: claims.callSid, companyId: oid(claims.companyId) }, { $set: { 'transfer.startedAt': null, 'transfer.result': 'failed' } }).catch(() => undefined);
-      await AiInboundCall.updateOne({ _id: doc._id }, actionLog('transfer_to_human', false, `Transfert vers ${entry.name} impossible`));
+      await AiInboundCall.updateOne({ _id: doc._id, status: 'transferred' }, { $set: { status: 'in_progress', 'transfer.result': 'failed' }, ...actionLog('transfer_to_human', false, `Transfert vers ${entry.name} impossible`) });
       return { ok: false, code: 'provider_failed' };
     }
-    await AiInboundCall.updateOne({ _id: doc._id }, { $set: { status: 'transferred', transfer: { entryId, entryName: entry.name, result: 'ringing' } }, ...actionLog('transfer_to_human', true, `Transfert vers ${entry.name} (${clip(b.reason, 80)})`) });
+    await AiInboundCall.updateOne({ _id: doc._id }, actionLog('transfer_to_human', true, `Transfert vers ${entry.name} (${clip(b.reason, 80)})`));
     await AiInboundCall.updateOne({ _id: doc._id }, pushTimeline('transfer', `Transfert à chaud vers ${entry.name}`));
     return { transferring: true, name: entry.name };
+  },
+
+  /** Appelé par dash (jamais par le modèle) APRÈS l'annonce et sa phrase de consentement : démarre l'enregistrement du banc d'écoute. */
+  async start_bench_recording(claims, _b, doc) {
+    if (!doc.bench?.requested || doc.bench?.recordingSid) return { started: false };
+    const client = await deps.twilio();
+    const rec = await client.calls(claims.callSid).recordings.create({ recordingChannels: 'dual' });
+    await AiInboundCall.updateOne({ _id: doc._id }, { $set: { 'bench.recorded': true, 'bench.recordingSid': String(rec?.sid || '') }, ...pushTimeline('bench', "Enregistrement du banc d'écoute démarré après l'annonce") });
+    return { started: true };
   },
 
   async end_call(claims, b, doc) {
@@ -418,7 +448,11 @@ async function busySlots(companyId, settings) {
 export async function runTool(name, claims, body = {}, ctx = {}) {
   if (!Object.prototype.hasOwnProperty.call(TOOLS, name)) throw new ToolError(404, 'unknown_tool', 'Outil inconnu.');
   const doc = await callOf(claims);
-  if (['completed', 'failed', 'fallback'].includes(doc.status)) throw new ToolError(409, 'call_ended', 'Appel terminé.');
+  // Appel terminé ou transféré : plus aucun outil (l'IA n'a plus la main).
+  if (['completed', 'failed', 'fallback', 'transferred'].includes(doc.status)) throw new ToolError(409, 'call_ended', 'Appel terminé ou transféré.');
+  // Plafond d'actions par appel (anti-abus) : 2 RDV et 3 demandes au plus par défaut.
+  const cap = { book_appointment: int(deps.env.AI_MAX_APPOINTMENTS_PER_CALL, 2), create_request: int(deps.env.AI_MAX_REQUESTS_PER_CALL, 3) }[name];
+  if (cap !== undefined && (doc.actions || []).filter((a) => a.type === name && a.ok).length >= cap) throw new ToolError(409, 'action_limit', 'Nombre maximal atteint pour cet appel.');
   const { settings, directory } = await loadSettings(claims.companyId);
   const b = body && typeof body === 'object' ? { ...body } : {};
   delete b.companyId; // l'entreprise vient du jeton, jamais du corps

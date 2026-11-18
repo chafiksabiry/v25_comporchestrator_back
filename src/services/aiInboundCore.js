@@ -18,11 +18,14 @@ export function signAiInboundServiceToken(secret = process.env.JWT_SECRET) {
   return jwt.sign({ scope: AI_INBOUND_SCOPE }, secret, { algorithm: 'HS256', expiresIn: 120 });
 }
 
-/** Jeton d'appel : valable la durée maximale de l'appel + 5 minutes (compte rendu tardif). */
-export function signCallToken({ companyId, callSid, aiCallId, maxCallSeconds, secret = process.env.JWT_SECRET }) {
+/**
+ * Jeton d'appel (signé par dash à CHAQUE requête, 120 s au plus) : entreprise et appel de la session créée par orch. Durée de vie contrôlée
+ * des deux côtés (maxAge sur `iat`, exp - iat ≤ 120 s).
+ */
+export const SERVICE_TOKEN_MAX_AGE_S = 120;
+export function signCallToken({ companyId, callSid, secret = process.env.JWT_SECRET }) {
   if (!secret) throw new Error('JWT_SECRET is not configured');
-  return jwt.sign({ scope: AI_INBOUND_CALL_SCOPE, companyId: String(companyId), callSid: String(callSid), aiCallId: String(aiCallId || '') },
-    secret, { algorithm: 'HS256', expiresIn: Math.max(60, Math.floor(Number(maxCallSeconds) || 0)) + 300 });
+  return jwt.sign({ scope: AI_INBOUND_CALL_SCOPE, companyId: String(companyId), callSid: String(callSid) }, secret, { algorithm: 'HS256', expiresIn: SERVICE_TOKEN_MAX_AGE_S });
 }
 
 /** @returns {{companyId: string, callSid: string, aiCallId: string}|null} */
@@ -30,10 +33,10 @@ export function verifyCallToken(authorizationHeader, secret = process.env.JWT_SE
   const token = String(authorizationHeader || '').replace(/^Bearer\s+/i, '').trim();
   if (!token || !secret) return null;
   try {
-    const d = jwt.verify(token, secret, { algorithms: ['HS256'] });
-    if (d.scope !== AI_INBOUND_CALL_SCOPE || typeof d.exp !== 'number' || d.userId || d.id) return null;
+    const d = jwt.verify(token, secret, { algorithms: ['HS256'], maxAge: `${SERVICE_TOKEN_MAX_AGE_S}s` });
+    if (d.scope !== AI_INBOUND_CALL_SCOPE || typeof d.exp !== 'number' || typeof d.iat !== 'number' || d.exp - d.iat > SERVICE_TOKEN_MAX_AGE_S || d.userId || d.id) return null;
     if (!/^[0-9a-fA-F]{24}$/.test(String(d.companyId || '')) || !d.callSid) return null;
-    return { companyId: String(d.companyId), callSid: String(d.callSid), aiCallId: String(d.aiCallId || '') };
+    return { companyId: String(d.companyId), callSid: String(d.callSid) };
   } catch {
     return null;
   }

@@ -34,6 +34,7 @@ import { startIntegrationsWorker } from './src/integrations/runtime.js';
 import { internalRoutes } from './src/routes/internal.js';
 import { aiAgentRoutes } from './src/routes/aiAgent.js';
 import { lineCapacityRoutes } from './src/routes/lineCapacity.js';
+import { purgeExpiredBenchRecordings } from './src/services/aiInbound.js';
 import { companyNotificationRoutes } from './src/routes/companyNotifications.js';
 import { startMessageReminders } from './src/services/messageReminders.js';
 import { scanLowResources } from './src/services/companyNotificationService.js';
@@ -207,6 +208,8 @@ setInterval(() => {
 // webhook product.updated, pour qu'un webhook manqué ne laisse pas un prix de ligne périmé.
 setTimeout(() => { syncPlanMetadataFromStripe(); }, 30 * 1000);
 setInterval(() => { syncPlanMetadataFromStripe(); }, 6 * 60 * 60 * 1000);
+// Pilote agent IA : purge planifiée des enregistrements du banc d'écoute arrivés à échéance (CNIL, 6 mois au plus).
+setInterval(() => { purgeExpiredBenchRecordings().catch((e) => console.error('[ai-inbound] purge planifiée :', e?.message || e)); }, 6 * 60 * 60 * 1000);
 
 // Warn companies whose wallet / minutes / tokens run short (the first check runs a minute after boot).
 const runLowResourceScan = () =>

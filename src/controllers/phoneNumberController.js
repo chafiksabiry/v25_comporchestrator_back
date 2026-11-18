@@ -52,6 +52,7 @@ import { languageForPhone } from '../services/companyLanguage.js';
 import { getInboundTest, needsInboundTestProof, realCallProof, receiveInboundCall, startInboundTest as startInboundTestSession } from '../services/inboundTestService.js';
 import { stripeLocaleFromRequest } from '../services/stripeLocale.js';
 import { tryAiInbound } from '../services/aiInbound.js';
+import { twilioRequestValid } from '../services/twilioSignature.js';
 
 /** Titulaire Nomad Solo (une seule personne) : l'appelant entend des messages à la première personne. Toute erreur = texte entreprise. */
 const isSoloCompany = async (companyId) => {
@@ -2620,7 +2621,7 @@ class PhoneNumberController {
       // (AI_INBOUND_ENABLED + AI_INBOUND_COMPANY_IDS), le réglage activé et le déclencheur rempli. null (tous les autres cas, ou
       // échec du moteur / de la session) : flux classique ci-dessous, inchangé. Ligne déjà tenue : jamais l'IA (« une ligne = un appel »).
       if (line?.companyId && callSid) {
-        const aiBody = await tryAiInbound({ line, to, from, callSid, lineBusy, concurrent, baseUrl: `https://${req.get('host')}` });
+        const aiBody = await tryAiInbound({ line, to, from, callSid, lineBusy, concurrent, signatureValid: () => twilioRequestValid(req) });
         if (aiBody) return reply(aiBody);
       }
       const ringAllow = await this.inboundRingFilterFor(line);

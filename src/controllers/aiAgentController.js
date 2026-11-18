@@ -4,7 +4,8 @@ import AiInboundCall from '../models/AiInboundCall.js';
 import { guardCompanyAccess } from '../middleware/companyGuard.js';
 import { validateSettingsUpdate, toPublicSettings, pilotAvailability, announcementText, LANGUAGES } from '../services/aiAgentSettings.js';
 import { usageView, verifyCallToken, latencyStats } from '../services/aiInboundCore.js';
-import { loadSettings, monthUsage, engines, runTool, finalizeCall, callOf, ToolError, afterStreamTwiml, deps, purgeExpiredBenchRecordings } from '../services/aiInbound.js';
+import { loadSettings, monthUsage, engines, runTool, finalizeCall, callOf, ToolError, afterStreamTwiml, deps, applyRetention } from '../services/aiInbound.js';
+import { publicOrigin, twilioRequestValid } from '../services/twilioSignature.js';
 import { CONSENT_TEXTS } from '../services/callRecording.js';
 
 /**
@@ -73,10 +74,17 @@ export const aiAgentController = {
       if (checked.unknownTarget) return fail(res, 400, 'TRANSFER_TARGET_UNKNOWN', "Un destinataire du transfert ne figure pas dans l'annuaire de l'entreprise.");
       if (!checked.ok) return fail(res, 400, 'AI_SETTINGS_INVALID', checked.issues[0].message, { issues: checked.issues });
       const v = checked.value;
+      // La base de connaissances choisie doit appartenir à l'entreprise.
+      if (v['knowledgeBase.gigId'] && !(await deps.gigBelongsTo(companyId, v['knowledgeBase.gigId']))) {
+        const issue = { field: 'knowledgeBase.gigId', code: 'invalid_gig', message: 'Base de connaissances inconnue pour cette entreprise.' };
+        return fail(res, 400, 'AI_SETTINGS_INVALID', issue.message, { issues: [issue] });
+      }
       const next = { enabled: v.enabled ?? current.enabled, level: v.level ?? current.level, outside: v['triggers.outsideHours'] ?? current.triggers.outsideHours, slots: v['businessHours.slots'] ?? current.businessHours.slots };
       if (v.enabled === true && !pilotAvailability(companyId, deps.env).available) return fail(res, 409, 'AI_AGENT_NOT_AVAILABLE', "L'agent IA n'est pas encore ouvert pour votre entreprise.");
       if (next.enabled && next.level === 'partial' && next.outside && !next.slots.length) return fail(res, 409, 'AI_BUSINESS_HOURS_REQUIRED', "Indiquez vos horaires d'ouverture pour le déclencheur « hors horaires ».");
       await AiAgentSettings.findOneAndUpdate({ companyId: oid(companyId) }, { $set: { ...v, updatedById: access.userId }, $setOnInsert: { companyId: oid(companyId) } }, { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true });
+      // Nouvelle durée de conservation : appliquée aussi aux fiches existantes et aux éléments « À faire » créés par l'IA.
+      if (v.retentionDays !== undefined && v.retentionDays !== current.retentionDays) await applyRetention(companyId, v.retentionDays);
       res.json({ success: true, data: await settingsView(companyId) });
     } catch (e) {
       console.error('ai-agent settings put:', e.message);
@@ -144,7 +152,6 @@ export const aiAgentController = {
     if (!validId(companyId)) return fail(res, 400, 'INVALID_COMPANY', 'companyId invalide.');
     if (!(await guardCompanyAccess(req, res, companyId, { ownerOnly: true }))) return;
     try {
-      await purgeExpiredBenchRecordings(companyId).catch((e) => console.error('ai-agent bench purge:', e.message));
       const rows = await AiInboundCall.find({ companyId: oid(companyId), 'bench.recorded': true, 'bench.expiresAt': { $gt: new Date(deps.now()) } }).sort({ _id: -1 }).limit(100).select('startedAt durationSeconds bench engine latency').lean();
       res.json({ success: true, data: { items: rows.map((r, i) => {
         const voted = Number.isFinite(r.bench?.score);
@@ -183,7 +190,7 @@ export const aiAgentController = {
   },
 };
 
-const baseUrlOf = (req) => `https://${req.get ? req.get('host') : req.headers?.host}`;
+const baseUrlOf = (req) => publicOrigin(deps.env) || `https://${req.get ? req.get('host') : req.headers?.host}`;
 
 /** API interne : outils de l'IA. L'entreprise et l'appel viennent UNIQUEMENT du jeton d'appel signé. */
 export async function aiInboundTool(req, res) {
@@ -219,7 +226,7 @@ export async function aiInboundReport(req, res) {
 export async function aiInboundAfterStream(req, res) {
   const xml = (body) => res.type('text/xml').status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response>${body}</Response>`);
   try {
-    return xml(await afterStreamTwiml({ token: req.query?.s, callSid: String(req.body?.CallSid || ''), baseUrl: baseUrlOf(req) }));
+    return xml(await afterStreamTwiml({ token: req.query?.s, callSid: String(req.body?.CallSid || ''), baseUrl: baseUrlOf(req), signatureValid: twilioRequestValid(req, { env: deps.env }) }));
   } catch (e) {
     console.error('ai-inbound after-stream:', e.message);
     const { buildNoAnswerTwiml } = await import('../services/inboundFlow.js');
