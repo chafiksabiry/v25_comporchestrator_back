@@ -256,13 +256,22 @@ test('le prix vient de la métadonnée Stripe quand elle existe (priceSource str
   assert.deepEqual([p.setupFeeCents, p.priceSource], [1799, 'stripe_metadata'], 'un autre prix Stripe est suivi tel quel');
 });
 
-test('repli réglable par PHONE_LINE_MONTHLY_PRICE_CENTS ; valeur absente ou invalide -> 1499', () => {
+test('repli réglable par PHONE_LINE_FALLBACK_PRICE_CENTS (PHONE_LINE_MONTHLY_PRICE_CENTS n\'est plus lu) ; valeur absente ou invalide -> 1499', () => {
   assert.equal(sub.DEFAULT_CLOUD_PHONE_LINE_PRICE_CENTS, 1499);
   assert.equal(sub.cloudPhoneLineFallbackCents({}), 1499);
-  for (const bad of ['', '0', '-5', '14.99', 'abc', undefined, null]) assert.equal(sub.cloudPhoneLineFallbackCents({ phoneLineMonthlyPriceCents: bad }), 1499, String(bad));
-  assert.equal(sub.cloudPhoneLineFallbackCents({ phoneLineMonthlyPriceCents: '1599' }), 1599);
+  for (const bad of ['', '0', '-5', '14.99', 'abc', undefined, null]) assert.equal(sub.cloudPhoneLineFallbackCents({ phoneLineFallbackPriceCents: bad }), 1499, String(bad));
+  assert.equal(sub.cloudPhoneLineFallbackCents({ phoneLineFallbackPriceCents: '1599' }), 1599);
+  assert.equal(sub.cloudPhoneLineFallbackCents({ phoneLineMonthlyPriceCents: '999' }), 1499, 'ancienne variable de recette (999) ignorée');
+  assert.equal(config.phoneLineMonthlyPriceCents, undefined, 'ancienne clé retirée de la configuration');
   assert.deepEqual(sub.cloudPhoneLinePrice({ phoneLinePriceCents: 1999 }, {}), { cents: 1999, source: 'stripe_metadata' });
-  assert.deepEqual(sub.cloudPhoneLinePrice({ phoneLinePriceCents: null }, {}), { cents: 1499, source: 'default' });
+  const warned = []; const origWarn = console.warn; console.warn = (m) => warned.push(String(m));
+  try {
+    assert.deepEqual(sub.cloudPhoneLinePrice({ phoneLinePriceCents: 1999, planId: 'p1' }, {}), { cents: 1999, source: 'stripe_metadata' });
+    assert.equal(warned.length, 0, 'prix Stripe présent : aucun avertissement');
+    assert.deepEqual(sub.cloudPhoneLinePrice({ phoneLinePriceCents: null, planId: 'plan_accueil', stripePriceId: 'price_acc', callcenterTier: 'accueil' }, {}), { cents: 1499, source: 'default' });
+  } finally { console.warn = origWarn; }
+  assert.equal(warned.length, 1);
+  assert.match(warned[0], /phone_line_price_cents.*plan_accueil.*price_acc/);
 });
 
 test('TaaS (pas de harx_product callcenter), même avec la clé : prix 999 inchangé', async () => {
