@@ -1,6 +1,6 @@
 import Stripe from 'stripe';
 import { config } from '../config/env.js';
-import { resolvePromotionCodeId, withPromotion } from './promotionCode.js';
+import { promotionCodesAllowed, resolvePromotionCodeId, withPromotion } from './promotionCode.js';
 import { resolveStripeLocale } from './stripeLocale.js';
 
 let stripeOverride = null;
@@ -548,7 +548,7 @@ export const stripeService = {
   cancelCheckoutAuthorization,
   getCheckoutPaymentState,
   refundCheckoutSession,
-  createCheckoutSession: async (userId, priceId, successUrl, cancelUrl, metadata = {}, promotionCodeId = null, currency = null, { locale = null } = {}) => {
+  createCheckoutSession: async (userId, priceId, successUrl, cancelUrl, metadata = {}, promotionCodeId = null, currency = null, { locale = null, allowPromotionCodes = true } = {}) => {
     try {
       const session = await getStripe().checkout.sessions.create(withPromotion({
         payment_method_types: ['card'],
@@ -579,7 +579,7 @@ export const stripeService = {
             ...metadata
           },
         },
-      }, promotionCodeId));
+      }, promotionCodeId, { allowPromotionCodes }));
       return session;
     } catch (error) {
       console.error('Error creating Stripe checkout session:', error);
@@ -591,7 +591,7 @@ export const stripeService = {
    * Create an EMBEDDED Stripe Checkout Session (UI rendered inside HARX as a modal).
    * No redirect: the front uses onComplete + confirm endpoint.
    */
-  createEmbeddedSubscriptionSession: async (userId, priceId, metadata = {}, promotionCodeId = null, currency = null, { locale = null } = {}) => {
+  createEmbeddedSubscriptionSession: async (userId, priceId, metadata = {}, promotionCodeId = null, currency = null, { locale = null, allowPromotionCodes = true } = {}) => {
     return getStripe().checkout.sessions.create(withPromotion({
       ui_mode: 'embedded_page',
       mode: 'subscription',
@@ -607,7 +607,22 @@ export const stripeService = {
       subscription_data: {
         metadata: { userId: userId.toString(), ...metadata },
       },
-    }, promotionCodeId));
+    }, promotionCodeId, { allowPromotionCodes }));
+  },
+
+  /**
+   * Le prix accepte-t-il un code promotionnel ? Lit le produit du prix : non pour une offre CLOUD ou NOMAD (`harx_product=callcenter`).
+   * Prix illisible : non (par prudence ; la création de la session échouera de toute façon sur un prix inconnu).
+   */
+  priceAllowsPromotionCodes: async (priceId) => {
+    try {
+      const price = await getStripe().prices.retrieve(String(priceId), { expand: ['product'] });
+      const product = price?.product;
+      return promotionCodesAllowed(product && typeof product === 'object' ? product.metadata : null);
+    } catch (err) {
+      console.warn('[subscription] priceAllowsPromotionCodes:', err?.message);
+      return false;
+    }
   },
 
   /** Résout un code promotionnel d'abonnement en id Stripe (null si aucun code) ; lève `invalid_promotion_code`. */
