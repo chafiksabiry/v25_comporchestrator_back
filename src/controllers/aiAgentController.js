@@ -70,7 +70,6 @@ export const aiAgentController = {
     try {
       const { settings: current, directory } = await loadSettings(companyId);
       const checked = validateSettingsUpdate(req.body, { directoryEntryIds: (directory?.entries || []).map((e) => String(e._id)) });
-      if (checked.unsupported) return fail(res, 400, 'AI_TRIGGER_NOT_SUPPORTED', "« Tous occupés » n'est pas disponible pendant le pilote (règle « une ligne = un appel »).");
       if (checked.unknownTarget) return fail(res, 400, 'TRANSFER_TARGET_UNKNOWN', "Un destinataire du transfert ne figure pas dans l'annuaire de l'entreprise.");
       if (!checked.ok) return fail(res, 400, 'AI_SETTINGS_INVALID', checked.issues[0].message, { issues: checked.issues });
       const v = checked.value;

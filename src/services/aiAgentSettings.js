@@ -61,7 +61,7 @@ export function toPublicSettings(doc, { companyNameFallback = '' } = {}) {
   return {
     enabled: s.enabled === true,
     level: LEVELS.includes(s.level) ? s.level : d.level,
-    triggers: { outsideHours: pick(s.triggers?.outsideHours, d.triggers.outsideHours) === true, allBusy: false },
+    triggers: { outsideHours: pick(s.triggers?.outsideHours, d.triggers.outsideHours) === true, allBusy: s.triggers?.allBusy === true },
     businessHours: {
       timeZone: normalizeTimeZone(s.businessHours?.timeZone) || d.businessHours.timeZone,
       slots: Array.isArray(s.businessHours?.slots) ? s.businessHours.slots.map(({ day, start, end }) => ({ day, start, end })) : d.businessHours.slots,
@@ -104,7 +104,7 @@ function intIn(field, value, issues) {
 /**
  * Valide une mise à jour PARTIELLE. Seuls les champs présents sont contrôlés et renvoyés dans `value` (chemins à plat pour $set).
  * `directoryEntryIds` : ids des fiches de l'annuaire de l'entreprise (destinataires de transfert autorisés).
- * @returns {{ ok: boolean, value: object, issues: object[], unsupported?: boolean, unknownTarget?: boolean }}
+ * @returns {{ ok: boolean, value: object, issues: object[], unknownTarget?: boolean }}
  */
 export function validateSettingsUpdate(body, { directoryEntryIds = [] } = {}) {
   const b = body && typeof body === 'object' ? body : {};
@@ -115,11 +115,10 @@ export function validateSettingsUpdate(body, { directoryEntryIds = [] } = {}) {
 
   if (has('enabled')) bool('enabled', b.enabled);
   if (has('level')) { if (LEVELS.includes(b.level)) v.level = b.level; else issues.push(issue('level', 'invalid_level', 'Niveau inconnu.')); }
-  let unsupported = false;
   if (has('triggers')) {
     const t = b.triggers || {};
-    if (t.allBusy === true) unsupported = true;
-    else if (t.allBusy !== undefined && t.allBusy !== false) issues.push(issue('triggers.allBusy', 'invalid_type', 'triggers.allBusy : vrai ou faux.'));
+    // « Tous occupés » : limité par la capacité d'appels simultanés de la ligne (une ligne = un appel à la fois au-delà).
+    if (t.allBusy !== undefined) bool('triggers.allBusy', t.allBusy);
     if (t.outsideHours !== undefined) bool('triggers.outsideHours', t.outsideHours);
   }
   if (has('businessHours')) {
@@ -184,7 +183,7 @@ export function validateSettingsUpdate(body, { directoryEntryIds = [] } = {}) {
     if (lb.enabled !== undefined) bool('listeningBench.enabled', lb.enabled);
     if (lb.provider !== undefined) { if (BENCH_PROVIDERS.includes(lb.provider)) v['listeningBench.provider'] = lb.provider; else issues.push(issue('listeningBench.provider', 'invalid_provider', 'Moteur inconnu.')); }
   }
-  return { ok: !issues.length && !unsupported && !unknownTarget, value: v, issues, unsupported, unknownTarget };
+  return { ok: !issues.length && !unknownTarget, value: v, issues, unknownTarget };
 }
 
 // ---------------------------------------------------------------- disponibilité du pilote (recette)
@@ -209,17 +208,19 @@ export function isWithinBusinessHours(businessHours, now = Date.now()) {
 }
 
 /**
- * L'agent IA décroche-t-il cet appel ? Ordre des contrôles : pilote ouvert, réglage activé, ligne libre (« une ligne = un appel »),
- * déclencheur (total, ou partiel hors horaires), plafond mensuel.
+ * L'agent IA décroche-t-il cet appel ? Ordre des contrôles : pilote ouvert, réglage activé, capacité de la ligne (appels simultanés choisis
+ * par l'entreprise ; capacité épuisée = flux classique), déclencheur (total ; partiel : hors horaires, ou « tous occupés » = appel simultané
+ * pris dans la capacité restante alors qu'un autre appel tient déjà la ligne), plafond mensuel.
  * @returns {{ route: boolean, reason: string, trigger?: string }}
  */
-export function decideAiRoute({ settings, availability, lineBusy = false, minutesUsed = 0, now = Date.now() }) {
+export function decideAiRoute({ settings, availability, lineBusy = false, concurrent = false, minutesUsed = 0, now = Date.now() }) {
   if (!availability?.available) return { route: false, reason: 'pilot_closed' };
   if (!settings?.enabled) return { route: false, reason: 'disabled' };
   if (lineBusy) return { route: false, reason: 'line_busy' };
   let trigger = null;
   if (settings.level === 'total') trigger = 'total';
   else if (settings.triggers?.outsideHours && !isWithinBusinessHours(settings.businessHours, now)) trigger = 'outside_hours';
+  else if (settings.triggers?.allBusy && concurrent) trigger = 'all_busy';
   if (!trigger) return { route: false, reason: 'no_trigger' };
   if (Number(minutesUsed) >= Number(settings.monthlyMinutesCap)) return { route: false, reason: 'cap_reached' };
   return { route: true, reason: 'ok', trigger };

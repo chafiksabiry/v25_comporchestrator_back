@@ -11,6 +11,23 @@ import { enforcementFor, offerKind } from './lineAssignment.js';
  */
 export const LINE_CALL_TTL_MS = 2 * 60 * 60 * 1000;
 
+/**
+ * Appels simultanés choisis par l'entreprise (`PhoneNumber.maxConcurrentCalls`, 1 par défaut) : chaque appel simultané au-delà du premier est
+ * une ligne supplémentaire facturée (décidée à l'avance par ce choix, jamais ajoutée au moment de l'appel). Chaque appel en cours occupe un
+ * EMPLACEMENT de la ligne : `activeCall` (le 1er, historique et inchangé), puis `activeCall2` … `activeCall10`. Même prise conditionnelle
+ * atomique par emplacement, même libération par callSid, même expiration de sécurité. Capacité 1 : exactement le comportement d'avant.
+ */
+export const MAX_CONCURRENT_CALLS = 10;
+export const LEASE_SLOTS = ['activeCall', ...Array.from({ length: MAX_CONCURRENT_CALLS - 1 }, (_, i) => `activeCall${i + 2}`)];
+/** Capacité d'une ligne (entier 1 à 10 ; absente ou invalide : 1). */
+export const capacityOf = (line) => {
+  const n = Number(line?.maxConcurrentCalls);
+  return Number.isInteger(n) && n >= 1 ? Math.min(n, MAX_CONCURRENT_CALLS) : 1;
+};
+const slotLive = (lease, now) => Boolean(lease?.callSid) && (lease.expiresAt ? new Date(lease.expiresAt).getTime() : 0) > now;
+/** Nombre d'appels en cours (emplacements non expirés) sur la ligne. */
+export const liveCallCount = (line, now = Date.now()) => LEASE_SLOTS.reduce((n, k) => n + (slotLive(line?.[k], now) ? 1 : 0), 0);
+
 /** Le bail est-il en cours (présent et non expiré) ? */
 export function isLeaseLive(line, now = Date.now()) {
   const lease = line?.activeCall;
@@ -31,28 +48,38 @@ export function busyView(line, now = Date.now()) {
  * ce bail est libéré puis la prise est retentée UNE fois. `isStale` qui échoue : la ligne reste occupée (jusqu'à l'expiration).
  * @returns {Promise<{ok: boolean, reason?: 'busy'|'no_call_sid'}>}
  */
-export async function takeLine({ lineId, callSid, direction, now = Date.now(), ttlMs = LINE_CALL_TTL_MS, isStale = null, Model = PhoneNumber }) {
+export async function takeLine({ lineId, callSid, direction, now = Date.now(), ttlMs = LINE_CALL_TTL_MS, isStale = null, Model = PhoneNumber, capacity = 1 }) {
   const sid = String(callSid || '').trim();
   if (!sid) return { ok: false, reason: 'no_call_sid' };
   const at = new Date(now);
   const lease = { callSid: sid, direction, startedAt: at, expiresAt: new Date(now + ttlMs) };
-  const attempt = async () => {
+  const slots = LEASE_SLOTS.slice(0, Math.min(MAX_CONCURRENT_CALLS, Math.max(1, Number.parseInt(capacity, 10) || 1)));
+  const attempt = async (k) => {
     const r = await Model.updateOne(
-      { _id: lineId, $or: [{ activeCall: { $exists: false } }, { activeCall: null }, { 'activeCall.expiresAt': { $lte: at } }, { 'activeCall.callSid': sid }] },
-      { $set: { activeCall: lease } }
+      { _id: lineId, $or: [{ [k]: { $exists: false } }, { [k]: null }, { [`${k}.expiresAt`]: { $lte: at } }, { [`${k}.callSid`]: sid }] },
+      { $set: { [k]: lease } }
     );
     return (r?.matchedCount ?? r?.n ?? 0) === 1;
   };
-  if (await attempt()) return { ok: true };
+  // Nouvelle livraison du même webhook : l'appel garde son emplacement (jamais deux emplacements pour un appel).
+  if (slots.length > 1) {
+    const line = await Model.findOne({ _id: lineId }).lean();
+    const own = slots.findIndex((k) => line?.[k]?.callSid === sid);
+    if (own >= 0) return { ok: true, slot: own + 1 };
+  }
+  // Capacité 1 : réponse historique `{ ok: true }` ; au-delà, `slot` dit quel appel simultané c'est (1 = le premier).
+  const won = (i) => (slots.length > 1 ? { ok: true, slot: i + 1 } : { ok: true });
+  for (let i = 0; i < slots.length; i += 1) if (await attempt(slots[i])) return won(i);
   if (typeof isStale === 'function') {
     const line = await Model.findOne({ _id: lineId }).lean();
-    const current = line?.activeCall;
-    if (current?.callSid) {
+    for (let i = 0; i < slots.length; i += 1) {
+      const current = line?.[slots[i]];
+      if (!current?.callSid) continue;
       let stale = false;
       try { stale = (await isStale(current)) === true; } catch { stale = false; }
       if (stale) {
         await releaseCall(current.callSid, { Model });
-        if (await attempt()) return { ok: true };
+        if (await attempt(slots[i])) return won(i);
       }
     }
   }
@@ -64,19 +91,36 @@ export async function releaseCall(callSid, { Model = PhoneNumber } = {}) {
   const sid = String(callSid || '').trim();
   if (!sid) return { released: 0 };
   const r = await Model.updateMany({ 'activeCall.callSid': sid }, { $unset: { activeCall: 1 } });
-  return { released: r?.modifiedCount ?? r?.nModified ?? 0 };
+  let released = r?.modifiedCount ?? r?.nModified ?? 0;
+  // Emplacements des appels simultanés (lignes supplémentaires) : une seule requête de recherche, puis libération ciblée.
+  const extra = LEASE_SLOTS.slice(1);
+  // Sans recherche possible (find absent ou en échec) : chaque emplacement est libéré par sa propre requête (idempotent).
+  const holders = typeof Model.find === 'function' ? await Promise.resolve(Model.find({ $or: extra.map((k) => ({ [`${k}.callSid`]: sid })) })).then((q) => (q && typeof q.lean === 'function' ? q.lean() : q)).catch(() => null) : null;
+  for (const k of extra) {
+    if (Array.isArray(holders) && !holders.some((d) => d?.[k]?.callSid === sid)) continue;
+    const x = await Model.updateMany({ [`${k}.callSid`]: sid }, { $unset: { [k]: 1 } });
+    released += x?.modifiedCount ?? x?.nModified ?? 0;
+  }
+  return { released };
 }
 
 /** Prend la première ligne libre de la liste (ordre donné). @returns {Promise<{ok: boolean, lineId?: any}>} */
-export async function takeFirstFreeLine({ lineIds, ...rest }) {
+export async function takeFirstFreeLine({ lineIds, capacityFor = null, ...rest }) {
+  // 1er passage : une ligne libre (emplacement 1) ; 2e passage seulement si l'entreprise a choisi des appels simultanés : un emplacement libre.
   for (const lineId of lineIds) {
     if ((await takeLine({ ...rest, lineId })).ok) return { ok: true, lineId };
+  }
+  if (typeof capacityFor === 'function') {
+    for (const lineId of lineIds) {
+      const capacity = capacityFor(lineId);
+      if (capacity > 1 && (await takeLine({ ...rest, lineId, capacity })).ok) return { ok: true, lineId };
+    }
   }
   return { ok: false };
 }
 
 /** Au moins une de ces lignes est-elle libre ? (lecture seule, sans prise : contrôle de confort avant un appel sortant) */
-export const hasFreeLine = (lines, now = Date.now()) => lines.some((l) => !isLeaseLive(l, now));
+export const hasFreeLine = (lines, now = Date.now()) => lines.some((l) => liveCallCount(l, now) < capacityOf(l));
 
 /** Code et message (anglais, stables) quand toutes les lignes de l'Accueil sont occupées. */
 export const LINE_BUSY_CODE = 'LINE_BUSY';

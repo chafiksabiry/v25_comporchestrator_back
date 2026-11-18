@@ -6,7 +6,7 @@ import { bundleFriendlyName, CONTACT_EMAIL_REQUIRED, CONTACT_EMAIL_REQUIRED_MESS
 import { AssignmentError, LINE_NOT_ASSIGNED, LINE_NOT_ASSIGNED_MESSAGE, agentLineStatus, inboundRingFilter, enforcementSettings, lineStatusView, agentCapacity, assertAgentCanHaveLine, assertReleasable, assignAgent, assignmentFields, offerKind, oldestOf, resolvePurchaseAssignment, unassignAgent, withCenterLock } from '../services/lineAssignment.js';
 import { listLinesFor } from '../services/phoneNumberList.js';
 import { callingInfoOf } from '../services/outboundDestinations.js';
-import { LINE_BUSY_CODE, LINE_BUSY_MESSAGE, LINE_CALL_END_PATH, hasFreeLine, signLineCallEnd, verifyLineCallEnd, lineCallsEnforced, releaseCall, staleCheckFor, takeFirstFreeLine, takeLine } from '../services/lineCalls.js';
+import { LINE_BUSY_CODE, LINE_BUSY_MESSAGE, LINE_CALL_END_PATH, capacityOf, hasFreeLine, signLineCallEnd, verifyLineCallEnd, lineCallsEnforced, releaseCall, staleCheckFor, takeFirstFreeLine, takeLine } from '../services/lineCalls.js';
 import { checkNumberCountry } from '../services/numberCountry.js';
 import { purchaseCurrency } from '../services/purchaseCurrency.js';
 import { checkCompanyDestination } from '../services/outboundPolicy.js';
@@ -2444,7 +2444,7 @@ class PhoneNumberController {
       if (sidForLine && (await lineCallsEnforced({ companyId, limits, db: mongoose.connection.db }))) {
         try {
           const pool = await this.twilioLinesOf(companyId);
-          const taken = await takeFirstFreeLine({ lineIds: pool.map((l) => l._id), callSid: sidForLine, direction: 'outbound', isStale: staleCheckFor(phoneNumberService.twilioClient) });
+          const taken = await takeFirstFreeLine({ lineIds: pool.map((l) => l._id), callSid: sidForLine, direction: 'outbound', isStale: staleCheckFor(phoneNumberService.twilioClient), capacityFor: (id) => capacityOf(pool.find((l) => String(l._id) === String(id))) });
           if (!taken.ok) {
             console.warn(`[browser-outbound] ${LINE_BUSY_CODE} pour l'entreprise ${companyId}`);
             return send(spokenRefusal('line_busy'));
@@ -2606,12 +2606,13 @@ class PhoneNumberController {
       }
       // Offre Accueil, règle datée active : une ligne = un appel actif. Ligne déjà tenue par un autre appel : traité comme « aucun conseiller disponible »
       // (même branche : mobile du titulaire s'il est configuré, sinon répondeur / flux « no_agent » existant, sans file ni sonnerie). Règle inactive : rien de tout cela.
-      let lineBusy = false; let leaseTaken = false;
+      let lineBusy = false; let leaseTaken = false; let concurrent = false;
       if (line?.companyId && callSid && this.lineRuleConfigured()) {
         try {
           if (await lineCallsEnforced({ companyId: line.companyId, limits: await loadCompanyPlanLimits(line.companyId), db: mongoose.connection.db })) {
-            const taken = await takeLine({ lineId: line._id, callSid, direction: 'inbound', isStale: staleCheckFor(phoneNumberService.twilioClient) });
-            leaseTaken = taken.ok; lineBusy = !taken.ok && taken.reason === 'busy';
+            // Capacité choisie par l'entreprise (appels simultanés, 1 par défaut) : au-delà, flux classique de la règle comme avant.
+            const taken = await takeLine({ lineId: line._id, callSid, direction: 'inbound', isStale: staleCheckFor(phoneNumberService.twilioClient), capacity: capacityOf(line) });
+            leaseTaken = taken.ok; lineBusy = !taken.ok && taken.reason === 'busy'; concurrent = taken.ok && (taken.slot || 1) > 1;
           }
         } catch (error) { console.error('[inbound] contrôle de ligne ignoré :', error?.message || error); }
       }
@@ -2619,7 +2620,7 @@ class PhoneNumberController {
       // (AI_INBOUND_ENABLED + AI_INBOUND_COMPANY_IDS), le réglage activé et le déclencheur rempli. null (tous les autres cas, ou
       // échec du moteur / de la session) : flux classique ci-dessous, inchangé. Ligne déjà tenue : jamais l'IA (« une ligne = un appel »).
       if (line?.companyId && callSid) {
-        const aiBody = await tryAiInbound({ line, to, from, callSid, lineBusy, baseUrl: `https://${req.get('host')}` });
+        const aiBody = await tryAiInbound({ line, to, from, callSid, lineBusy, concurrent, baseUrl: `https://${req.get('host')}` });
         if (aiBody) return reply(aiBody);
       }
       const ringAllow = await this.inboundRingFilterFor(line);

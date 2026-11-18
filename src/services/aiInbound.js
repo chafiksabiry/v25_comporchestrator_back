@@ -83,7 +83,7 @@ async function benchProvider(companyId, settings) {
  * Branche agent IA de handleTwilioInboundCall. Renvoie le corps TwiML (<Connect><Stream>) si l'IA décroche, sinon null :
  * l'appelant suit alors le flux classique INCHANGÉ (sonnerie, puis répondeur). Ne lève jamais.
  */
-export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, baseUrl }) {
+export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, concurrent = false, baseUrl }) {
   const companyId = line?.companyId ? String(line.companyId) : '';
   if (!companyId || !callSid) return null;
   const availability = pilotAvailability(companyId, deps.env);
@@ -92,7 +92,7 @@ export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, 
   try {
     const { settings, directory } = await loadSettings(companyId);
     const usage = await monthUsage(companyId, settings.businessHours.timeZone);
-    const decision = decideAiRoute({ settings, availability, lineBusy, minutesUsed: usage.minutesUsed, now: deps.now() });
+    const decision = decideAiRoute({ settings, availability, lineBusy, concurrent, minutesUsed: usage.minutesUsed, now: deps.now() });
     if (!decision.route) { console.log(`[ai-inbound] ${callSid} : flux classique (${decision.reason})`); return null; }
 
     const language = greetingLanguage(settings);
@@ -105,7 +105,7 @@ export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, 
     aiCall = await AiInboundCall.create({
       companyId: oid(companyId), callSid, from, to, startedAt: new Date(deps.now()), status: 'starting', level: settings.level, trigger: decision.trigger,
       language, announcement: { mode, language, text, verified: mode === 'twiml' ? true : null }, expiresAt: retentionDate(settings.retentionDays),
-      timeline: [{ at: new Date(deps.now()), type: 'session_started', label: `Agent IA (${decision.trigger === 'total' ? 'niveau total' : 'hors horaires'})` }],
+      timeline: [{ at: new Date(deps.now()), type: 'session_started', label: `Agent IA (${{ total: 'niveau total', outside_hours: 'hors horaires', all_busy: 'tous occupés' }[decision.trigger]})` }],
     });
     const callToken = signCallToken({ companyId, callSid, aiCallId: aiCall._id, maxCallSeconds });
     const entries = directory?.entries || [];

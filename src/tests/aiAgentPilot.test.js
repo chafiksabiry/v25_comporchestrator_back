@@ -39,7 +39,8 @@ assert.equal(S.toPublicSettings(null, { companyNameFallback: 'Cabinet Martin' })
 let v = S.validateSettingsUpdate({ maxCallMinutes: 2 }); assert.equal(v.ok, false); assert.equal(v.issues[0].code, 'out_of_range'); assert.equal(v.issues[0].min, 3);
 assert.equal(S.validateSettingsUpdate({ maxCallMinutes: 16 }).ok, false);
 assert.equal(S.validateSettingsUpdate({ maxCallMinutes: 15 }).value.maxCallMinutes, 15);
-assert.equal(S.validateSettingsUpdate({ triggers: { allBusy: true } }).unsupported, true, '« tous occupés » refusé pendant le pilote');
+assert.equal(S.validateSettingsUpdate({ triggers: { allBusy: true } }).value['triggers.allBusy'], true, '« tous occupés » : accepté, limité par la capacité');
+assert.equal(S.validateSettingsUpdate({ triggers: { allBusy: 'oui' } }).issues[0].code, 'invalid_type');
 assert.equal(S.validateSettingsUpdate({ languages: ['fr-FR', 'de-DE'] }).issues[0].code, 'invalid_language');
 assert.deepEqual(S.validateSettingsUpdate({ languages: ['en-GB', 'fr-FR'] }).value.languages, ['en-GB', 'fr-FR']);
 assert.equal(S.validateSettingsUpdate({ addressForm: 'toi' }).issues[0].code, 'invalid_address_form');
@@ -72,6 +73,12 @@ assert.equal(S.decideAiRoute({ settings: on, availability: open, lineBusy: true,
 assert.equal(S.decideAiRoute({ settings: on, availability: open, minutesUsed: 200, now: EVENING }).reason, 'cap_reached', 'plafond mensuel');
 assert.equal(S.decideAiRoute({ settings: on, availability: open, minutesUsed: 199, now: EVENING }).route, true);
 assert.equal(S.decideAiRoute({ settings: { ...on, triggers: { outsideHours: false } }, availability: open, now: EVENING }).route, false);
+// « Tous occupés » : seulement pour un appel simultané pris dans la capacité restante de la ligne.
+const busyOn = { ...on, triggers: { outsideHours: true, allBusy: true } };
+assert.equal(S.decideAiRoute({ settings: busyOn, availability: open, concurrent: true, now: MORNING }).trigger, 'all_busy');
+assert.equal(S.decideAiRoute({ settings: busyOn, availability: open, concurrent: false, now: MORNING }).reason, 'no_trigger', 'premier appel : humains');
+assert.equal(S.decideAiRoute({ settings: on, availability: open, concurrent: true, now: MORNING }).reason, 'no_trigger', 'déclencheur non coché');
+assert.equal(S.decideAiRoute({ settings: busyOn, availability: open, lineBusy: true, now: MORNING }).reason, 'line_busy', 'capacité épuisée : flux classique');
 
 // ================================================================ annonce IA obligatoire
 const fr = S.announcementText({ language: 'fr-FR', companyName: 'Cabinet Martin' });
@@ -213,6 +220,11 @@ NOW = MORNING;
 assert.equal(await route(), null, 'partiel, heures ouvrées : humains');
 NOW = EVENING;
 assert.equal(await route({ lineBusy: true }), null, 'ligne tenue : flux classique');
+NOW = MORNING; store.settings[0].triggers = { outsideHours: true, allBusy: true };
+assert.equal(await route(), null, 'heures ouvrées, premier appel : humains');
+assert.match(await route({ concurrent: true }), /<Connect /, 'appel simultané dans la capacité : agent IA « tous occupés »');
+assert.equal(JSON.parse(dashCalls.at(-1).init.body).trigger, 'all_busy');
+reset(); NOW = EVENING;
 let twiml = await route();
 assert.match(twiml, /^<Connect action="https:\/\/orch\.test\/api\/phone-numbers\/webhooks\/twilio\/ai-inbound\/after-stream\?s=[^"]+" method="POST"><Stream url="wss:\/\/dash\.test\/ai-voice-stream\/abc"\/><\/Connect>$/);
 const sent = JSON.parse(dashCalls[0].init.body);
@@ -343,7 +355,7 @@ r = res(); await ctl.getSettings(asUser('owner1', { query: { companyId: B } }), 
 r = res(); await ctl.getSettings(asUser('owner1', { query: { companyId: A } }), r);
 assert.equal(r.code, 200); assert.equal(r.body.data.availability.available, true); assert.equal(r.body.data.engines.primary, 'gemini'); assert.equal(r.body.data.engines.fallback, 'openai');
 assert.match(r.body.data.announcement['fr-FR'], /intelligence artificielle/);
-r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, triggers: { allBusy: true } } }), r); assert.equal(r.body.code, 'AI_TRIGGER_NOT_SUPPORTED');
+r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, triggers: { allBusy: true } } }), r); assert.equal(r.code, 200); assert.equal(r.body.data.settings.triggers.allBusy, true);
 r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, maxCallMinutes: 20 } }), r); assert.equal(r.code, 400); assert.equal(r.body.code, 'AI_SETTINGS_INVALID'); assert.equal(r.body.issues[0].field, 'maxCallMinutes');
 r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, transferTargets: [E2] } }), r); assert.equal(r.body.code, 'TRANSFER_TARGET_UNKNOWN');
 r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, voice: 'male', addressForm: 'tu', maxCallMinutes: 10 } }), r);
@@ -373,3 +385,35 @@ globalThis.fetch = realFetch;
 
 Object.assign(console, quiet);
 console.log('aiAgentPilot.test.js : OK');
+
+// ================================================================ appels simultanés (maxConcurrentCalls) : lignes facturables, titulaire seulement
+{
+  const { capacityView, validateMaxConcurrentCalls } = await import('../services/lineCapacity.js');
+  const { capacityOf, liveCallCount, hasFreeLine } = await import('../services/lineCalls.js');
+  const { lineCapacityController: lc, lineCapacityDeps } = await import('../controllers/lineCapacityController.js');
+  const { PhoneNumber } = await import('../models/PhoneNumber.js');
+  assert.equal(capacityOf({}), 1); assert.equal(capacityOf({ maxConcurrentCalls: 3 }), 3); assert.equal(capacityOf({ maxConcurrentCalls: 0 }), 1);
+  const fut = new Date(Date.now() + 60000);
+  assert.equal(liveCallCount({ activeCall: { callSid: 'a', expiresAt: fut }, activeCall2: { callSid: 'b', expiresAt: new Date(0) } }), 1);
+  assert.equal(hasFreeLine([{ activeCall: { callSid: 'a', expiresAt: fut } }]), false, 'capacité 1 : inchangé');
+  assert.equal(hasFreeLine([{ maxConcurrentCalls: 2, activeCall: { callSid: 'a', expiresAt: fut } }]), true);
+  assert.equal(validateMaxConcurrentCalls(0).ok, false); assert.equal(validateMaxConcurrentCalls(1.5).ok, false); assert.equal(validateMaxConcurrentCalls(11).ok, false);
+  const cv = capacityView([{ _id: 'l1', phoneNumber: '+331', maxConcurrentCalls: 3 }, { _id: 'l2', phoneNumber: '+332' }], { env: {} });
+  assert.deepEqual([cv.billableLines, cv.unitPriceTtcCents, cv.monthlyCostTtcCents, cv.billingEnabled], [2, 1499, 2998, false]);
+  assert.deepEqual(cv.lines.map((l) => l.billableLines), [2, 0]);
+  const L1 = '64b0000000000000000001a1'; const LB = '64b0000000000000000001b1';
+  const phones = [{ _id: L1, companyId: A, phoneNumber: '+33140000000', status: 'active' }, { _id: LB, companyId: B, phoneNumber: '+33150000000', status: 'active' }];
+  PhoneNumber.find = (f) => q(phones.filter((p) => S2(p.companyId) === S2(f.companyId)));
+  PhoneNumber.updateOne = async (f, u) => { const p = phones.find((x) => S2(x._id) === S2(f._id) && S2(x.companyId) === S2(f.companyId)); if (!p) return { matchedCount: 0 }; Object.assign(p, u.$set); return { matchedCount: 1 }; };
+  lineCapacityDeps.enforced = async () => true;
+  globalThis.fetch = async (url) => { const id = new URL(url).searchParams.get('userId'); return { ok: true, json: async () => ({ data: who[id] || {} }) }; };
+  r = res(); await lc.put(asUser('member1', { body: { companyId: A, lineId: L1, maxConcurrentCalls: 2 } }), r); assert.equal(r.code, 403, 'membre : refus');
+  r = res(); await lc.put(asUser('owner1', { body: { companyId: A, lineId: L1, maxConcurrentCalls: 0 } }), r); assert.equal(r.body.code, 'LINE_CAPACITY_INVALID');
+  r = res(); await lc.put(asUser('owner1', { body: { companyId: A, lineId: LB, maxConcurrentCalls: 2 } }), r); assert.equal(r.code, 404, 'ligne d’une autre entreprise');
+  assert.equal(phones[1].maxConcurrentCalls, undefined);
+  r = res(); await lc.put(asUser('owner1', { body: { companyId: A, lineId: L1, maxConcurrentCalls: 2 } }), r);
+  assert.equal(r.code, 200); assert.equal(r.body.data.billableLines, 1); assert.equal(r.body.data.monthlyCostTtcCents, 1499); assert.equal(r.body.data.enforced, true);
+  r = res(); await lc.get(asUser('member1', { query: { companyId: A } }), r); assert.equal(r.code, 200); assert.equal(r.body.data.lines[0].maxConcurrentCalls, 2);
+  globalThis.fetch = realFetch;
+}
+console.log('aiAgentPilot.test.js (appels simultanés) : OK');

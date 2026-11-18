@@ -11,7 +11,7 @@ const schema = new mongoose.Schema(
     companyId: { type: mongoose.Schema.Types.ObjectId, required: true, unique: true },
     enabled: { type: Boolean, default: false },
     level: { type: String, enum: ['partial', 'total'], default: 'partial' },
-    triggers: { outsideHours: { type: Boolean, default: true } },
+    triggers: { outsideHours: { type: Boolean, default: true }, allBusy: { type: Boolean, default: false } },
     /** Horaires d'ouverture de l'entreprise (nouveau réglage au niveau de la société) : déclencheur « hors horaires » et créneaux de RDV. */
     businessHours: { timeZone: { type: String, default: 'Europe/Paris' }, slots: { type: [slotSchema], default: undefined } },
     languages: { type: [String], default: undefined },
