@@ -2,9 +2,9 @@ import mongoose from 'mongoose';
 import { callcenterTierFromMetadata } from './callcenterTier.js';
 
 /**
- * Sièges en plus : Full Scope et Multi-clients incluent 1 siège (le titulaire). Accueil / Secrétariat compte les SECRÉTAIRES
- * seulement (ni le titulaire ni les responsables) et en inclut 2 pour la ligne comprise ; au-delà, chaque secrétaire est facturée.
- * Pour les autres offres : 1 siège inclus (le titulaire). Un siège = une personne rattachée au centre
+ * Sièges en plus : Full Scope et Multi-clients incluent 2 sièges (le titulaire et un responsable, décision du 18/11/2026).
+ * Accueil / Secrétariat compte les SECRÉTAIRES seulement (ni le titulaire ni les responsables) et en inclut 2 pour la ligne comprise ;
+ * au-delà, chaque secrétaire est facturée. Pour les autres offres : 1 siège inclus (le titulaire). Un siège = une personne rattachée au centre
  * (membres et agents, invités ou actifs, titulaire compris). Au-delà du premier, chaque siège est facturé chaque mois
  * (Accueil, Full Scope, Multi-clients) ; Nomad Solo n'en accepte aucun. Le code de lancement ne s'applique pas aux sièges.
  *
@@ -15,8 +15,11 @@ import { callcenterTierFromMetadata } from './callcenterTier.js';
 
 export const SEAT_PRODUCT = 'callcenter_seat';
 export const INCLUDED_SEATS = 1;
-/** Offre Accueil / Secrétariat : deux secrétaires comprises pour une ligne. */
-export const INCLUDED_SEATS_BY_TIER = { accueil: 2 };
+/**
+ * Accueil / Secrétariat : deux secrétaires comprises pour une ligne. Full Scope et Multi-clients : deux sièges compris, le titulaire
+ * et un responsable (décision du 18/11/2026).
+ */
+export const INCLUDED_SEATS_BY_TIER = { accueil: 2, full_scope: 2, multi_clients: 2 };
 export const SECRETARIES_ONLY_TIERS = ['accueil'];
 export const includedSeatsFor = (tier) => INCLUDED_SEATS_BY_TIER[tier] ?? INCLUDED_SEATS;
 export const SEAT_TIERS = ['accueil', 'full_scope', 'multi_clients'];
@@ -28,6 +31,8 @@ export const NOT_CONFIGURED_MESSAGE =
  * Décision du fondateur du 18/11/2026 (arbitrage 9) : les sièges supplémentaires n'ont pas de prix décidé, ils ne sont donc plus vendus.
  * Tant que ce drapeau vaut false : aucun siège en plus n'est créé ni augmenté dans Stripe, leur prix n'est jamais renvoyé, et la
  * synchronisation répond SEATS_NOT_AVAILABLE. Les sièges déjà facturés restent tels quels (seule une baisse est appliquée).
+ * Décision du 18/11/2026 : un centre déjà facturé pour des sièges en plus peut remplacer des personnes dans la limite des places déjà
+ * payées (places = sièges inclus + sièges déjà facturés), sans aucune hausse de facturation.
  */
 export const EXTRA_SEATS_FOR_SALE = false;
 export const SEATS_NOT_AVAILABLE_CODE = 'SEATS_NOT_AVAILABLE';
@@ -213,11 +218,11 @@ function notApplicable(reason, used, tier, message) {
 export async function getSeatsState({ db, stripe, companyId, forSale = EXTRA_SEATS_FOR_SALE }) {
   const state = await readSeatsState({ db, stripe, companyId });
   if (forSale) return { ...state, forSale: true, canAddSeat: state.applicable && state.tier !== 'nomad_solo' };
-  // Sièges en plus hors vente : prix masqué, une personne de plus seulement dans les sièges inclus.
+  // Sièges en plus hors vente : prix masqué, une personne de plus seulement dans les places déjà payées (sièges inclus + sièges déjà facturés).
   return {
     ...state,
     forSale: false,
-    canAddSeat: state.used < state.included,
+    canAddSeat: state.used < state.included + (state.billedQuantity || 0),
     unitPrice: null,
     unitAmount: null,
     monthlyTotal: null,
