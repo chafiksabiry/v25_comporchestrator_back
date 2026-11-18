@@ -1,7 +1,11 @@
 import mongoose from 'mongoose';
 
 async function run() {
-  const uri = 'mongodb://harx:gcZ62rl8hoME@38.242.208.242:27018/harx';
+  const uri = process.env.MONGODB_URI;
+  if (!uri) {
+    console.error('MONGODB_URI environment variable is required (set it in your shell, never in the code).');
+    process.exit(1);
+  }
   await mongoose.connect(uri);
   const db = mongoose.connection.db;
 

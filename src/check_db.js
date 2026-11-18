@@ -2,7 +2,11 @@ import mongoose from 'mongoose';
 import EscrowWallet from './models/EscrowWallet.js';
 import EscrowTransaction from './models/EscrowTransaction.js';
 
-const mongoURI = "mongodb://mongo:DiGaBWUZXCkIxlZMuntztBaFJcOlUJIg@maglev.proxy.rlwy.net:40270/harx?authSource=admin";
+const mongoURI = process.env.MONGODB_URI;
+if (!mongoURI) {
+  console.error('MONGODB_URI environment variable is required (set it in your shell, never in the code).');
+  process.exit(1);
+}
 
 async function run() {
   await mongoose.connect(mongoURI);
