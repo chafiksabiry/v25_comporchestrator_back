@@ -156,7 +156,8 @@ export async function lineCallsEnforced({ companyId, limits, db, env = process.e
   }
 }
 
-const ENDED = ['completed', 'failed', 'busy', 'no-answer', 'canceled'];
+/** Statuts Twilio d'un appel terminé. */
+export const ENDED = ['completed', 'failed', 'busy', 'no-answer', 'canceled'];
 /** Fabrique le constat « bail périmé » : l'appel du bail est-il terminé côté Twilio ? Toute erreur : on ne sait pas, donc pas périmé. */
 export const staleCheckFor = (client) => async (lease) => {
   if (!client?.calls || !lease?.callSid) return false;

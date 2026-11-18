@@ -267,12 +267,34 @@ const outState = new URL(updates[0].twiml.match(/action="([^"]+)"/)[1].replace(/
 assert.match(await hook({ s: outState }, { CallSid: SID_OUT_CHILD, DialCallStatus: 'no-answer' }), /<Record /, 'sans réponse : message proposé au correspondant');
 assert.equal(locks.get(SID_OUT_CHILD).result, 'no_answer', 'résultat consigné sur le verrou sortant');
 // échec du fournisseur : verrou levé et bail rendu à la jambe navigateur
-locks.clear(); updates.length = 0; leaseMoves.length = 0; failUpdate = true;
-r = await call(ctl.transfer, { body: { callSid: SID_OUT, entryId: E_ONE } });
-assert.equal(r.code, 502); assert.equal(locks.size, 0); assert.deepEqual(leaseMoves, [[SID_OUT, SID_OUT_CHILD]]); assert.deepEqual(released, [SID_OUT_CHILD], 'ligne libérée directement');
+// Statuts lus chez Twilio après l'échec (séquence par jambe ; 'throw' = lecture impossible). La 1re lecture du navigateur est celle
+// du contrôle d'entrée (in-progress).
+const seq = {};
+const baseCalls = client.calls;
+client.calls = Object.assign((sid) => { const b = baseCalls(sid); return { ...b, fetch: async () => { const q = seq[sid]; if (q && q.length) { const v = q.shift(); if (v === 'throw') throw new Error('lecture impossible'); return { ...(legs[sid] || {}), status: v }; } return b.fetch(); } }; }, { list: baseCalls.list });
+const failCase = async (browserSeq, childSeq) => {
+  locks.clear(); updates.length = 0; leaseMoves.length = 0; released.length = 0; failUpdate = true;
+  seq[SID_OUT] = ['in-progress', ...browserSeq]; seq[SID_OUT_CHILD] = [...childSeq];
+  const res = await call(ctl.transfer, { body: { callSid: SID_OUT, entryId: E_ONE } });
+  failUpdate = false;
+  assert.equal(res.code, 502); assert.equal(locks.size, 0, 'verrou levé');
+  return { moves: leaseMoves.slice(), freed: released.slice() };
+};
+let fc = await failCase(['in-progress', 'in-progress'], []);
+assert.deepEqual(fc.moves, [[SID_OUT, SID_OUT_CHILD], [SID_OUT_CHILD, SID_OUT]], 'navigateur en cours : bail rendu'); assert.deepEqual(fc.freed, [], 'rien libéré');
+fc = await failCase(['in-progress', 'completed'], []);
+assert.deepEqual(fc.moves, [[SID_OUT, SID_OUT_CHILD], [SID_OUT_CHILD, SID_OUT]]); assert.deepEqual(fc.freed, [SID_OUT], 'navigateur terminé entre-temps : ligne libérée');
+fc = await failCase(['completed'], ['completed']);
+assert.deepEqual(fc.moves, [[SID_OUT, SID_OUT_CHILD]]); assert.deepEqual(fc.freed, [SID_OUT_CHILD], 'les deux terminés : ligne libérée');
+fc = await failCase(['completed'], ['in-progress']);
+assert.deepEqual(fc.moves, [[SID_OUT, SID_OUT_CHILD]]); assert.deepEqual(fc.freed, [], 'correspondant en cours : bail laissé au correspondant');
+fc = await failCase(['throw', 'throw'], []);
+assert.deepEqual(fc.moves, [[SID_OUT, SID_OUT_CHILD], [SID_OUT_CHILD, SID_OUT]], 'état inconnu : bail rendu au navigateur'); assert.deepEqual(fc.freed, []);
+client.calls = baseCalls;
+const { ENDED } = await import('../services/lineCalls.js');
+assert.deepEqual(ENDED, ['completed', 'failed', 'busy', 'no-answer', 'canceled']);
 const ttl = OutboundTransfer.schema.path('startedAt').options.expires; assert.equal(ttl, 24 * 60 * 60, 'index TTL de 24 h');
 assert.ok(OutboundTransfer.schema.indexes().some(([f, o]) => f.startedAt === 1 && o.expireAfterSeconds === 86400), 'index TTL déclaré');
-failUpdate = false;
 // le déplacement réel du bail : emplacement par emplacement, idempotent
 const moves = [];
 const { transferLease } = await import('../services/lineCalls.js');

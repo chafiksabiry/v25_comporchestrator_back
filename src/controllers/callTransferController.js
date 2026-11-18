@@ -4,7 +4,7 @@ import InboundSettings from '../models/InboundSettings.js';
 import ReceptionDirectory from '../models/ReceptionDirectory.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import OutboundTransfer from '../models/OutboundTransfer.js';
-import { LINE_CALL_END_PATH, releaseCall, signLineCallEnd, transferLease } from '../services/lineCalls.js';
+import { ENDED, LINE_CALL_END_PATH, releaseCall, signLineCallEnd, transferLease } from '../services/lineCalls.js';
 import { config } from '../config/env.js';
 import { callerAccess, scopeToCompany, ScopeError } from '../middleware/companyScope.js';
 import { canUse } from '../services/followUps.js';
@@ -80,6 +80,31 @@ async function context(req, res) {
 }
 
 const baseUrlOf = (req) => `https://${req.get ? req.get('host') : req.headers?.host}`;
+
+/** Statut Twilio d'une jambe : 'ended', 'live' ou 'unknown' (erreur de lecture). */
+async function legState(client, sid) {
+  try {
+    const leg = await client.calls(sid).fetch();
+    return ENDED.includes(String(leg?.status || '').toLowerCase()) ? 'ended' : 'live';
+  } catch { return 'unknown'; }
+}
+
+/**
+ * Redirection refusée par Twilio alors que le bail de ligne était déjà passé à la jambe du correspondant. Logique prudente :
+ *  - navigateur en cours ou état inconnu : bail rendu au navigateur (son action de <Dial> le libérera), puis revérification : s'il s'est
+ *    terminé entre-temps, la ligne est libérée ;
+ *  - navigateur terminé et correspondant en cours : le bail reste au correspondant (son statusCallback signé le libérera) ;
+ *  - les deux terminés : ligne libérée.
+ */
+async function restoreLeaseAfterFailure(client, { browserSid, childSid }) {
+  const browser = await legState(client, browserSid);
+  if (browser !== 'ended') {
+    await deps.moveLease(childSid, browserSid);
+    if ((await legState(client, browserSid)) === 'ended') await deps.releaseLine(browserSid);
+    return;
+  }
+  if ((await legState(client, childSid)) === 'ended') await deps.releaseLine(childSid);
+}
 
 export const callTransferController = {
   async transfer(req, res) {
@@ -184,9 +209,7 @@ export const callTransferController = {
         console.error('reception transfer (Twilio):', e?.message);
         if (outbound) {
           await deps.unlockOutbound(parentSid).catch(() => undefined);
-          // Bail déjà passé à la jambe du correspondant, que Twilio n'a pas redirigée : la ligne est libérée directement (jamais rendue
-          // à une jambe navigateur qu'on ne suit plus).
-          if (leaseMoved) await deps.releaseLine(parentSid).catch(() => undefined);
+          if (leaseMoved) await restoreLeaseAfterFailure(client, { browserSid: callSid, childSid: parentSid }).catch((err) => console.warn('reception transfer (ligne) :', err?.message));
         }
         if (call) await InboundCall.updateOne({ _id: call._id, companyId }, { $set: { transfer: { startedAt: null, byUserId: '', byName: '', entryId: '', entryName: '', mode: 'dial', result: 'ringing', endedAt: null } } }).catch(() => undefined);
         return fail(res, 502, 'Le transfert a échoué : l’appel est resté avec vous. Réessayez ou prenez un message.', { code: 'provider_failed' });
