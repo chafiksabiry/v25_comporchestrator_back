@@ -27,6 +27,7 @@ router.get('/inbound-emails/:companyId/access', authenticate, requireCompanyPara
 router.get('/inbound-emails/:companyId', authenticate, requireCompanyParam, ib.list);
 router.post('/inbound-emails/:companyId/refresh', authenticate, requireCompanyParam, ib.refresh);
 router.get('/inbound-emails/:companyId/:id/body', authenticate, requireCompanyParam, ib.body);
+router.get('/inbound-emails/:companyId/:id/reply-all', authenticate, requireCompanyParam, ib.replyAll);
 router.patch('/inbound-emails/:companyId/:id', authenticate, requireCompanyParam, ib.update);
 router.delete('/inbound-emails/:companyId/:id', authenticate, requireCompanyParam, ib.remove);
 router.post('/inbound-emails/:companyId/delete-many', authenticate, requireCompanyParam, ib.deleteMany);
@@ -43,6 +44,7 @@ router.post('/accounts/:companyId/mine/inbound/:accountId/refresh', authenticate
 router.post('/accounts/:companyId/mine/inbound/:accountId/delete-many', authenticate, requireCompanyParam, mi.deleteMany);
 router.post('/accounts/:companyId/mine/inbound/:accountId/archive-many', authenticate, requireCompanyParam, mi.archiveMany);
 router.get('/accounts/:companyId/mine/inbound/:accountId/emails/:id/body', authenticate, requireCompanyParam, mi.body);
+router.get('/accounts/:companyId/mine/inbound/:accountId/emails/:id/reply-all', authenticate, requireCompanyParam, mi.replyAll);
 router.patch('/accounts/:companyId/mine/inbound/:accountId/emails/:id', authenticate, requireCompanyParam, mi.update);
 router.delete('/accounts/:companyId/mine/inbound/:accountId/emails/:id', authenticate, requireCompanyParam, mi.remove);
 router.post('/accounts/:companyId/mine/:provider/start', authenticate, requireCompanyParam, ac.startMine);

@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import { canManage, canUse } from '../services/followUps.js';
-import { archiveManyInbound, connectionScope, deleteInbound, deleteManyInbound, inboundView, loadMine, markHandled, mineReadEnabled, mineScope, readInboundBody, refreshInbound, stopMineReading } from '../services/inboundEmails.js';
+import { archiveManyInbound, connectionScope, deleteInbound, deleteManyInbound, inboundView, loadMine, markHandled, mineReadEnabled, mineScope, readInboundBody, readReplyAll, refreshInbound, stopMineReading } from '../services/inboundEmails.js';
 import { scopeToCompany } from '../middleware/companyScope.js';
 import { loadUserName } from '../services/followUpDirectory.js';
 import SecretariatSharedAccount from '../models/SecretariatSharedAccount.js';
@@ -74,6 +74,8 @@ export const inboundEmailsController = {
     res.setHeader('Cache-Control', 'no-store');
     res.json({ success: true, data });
   }, 'body'),
+  /** « Répondre à tous » : destinataires (to / cc) et en-têtes de fil lus en direct ; rien n'est stocké. */
+  replyAll: guard(async (scope, req, res) => res.json({ success: true, data: await readReplyAll(scope, req.params.id) }), 'replyAll'),
   update: guard(async (companyId, req, res) => res.json({ success: true, data: await markHandled(companyId, req.params.id, req.body) }), 'update'),
   /** Suppression dans l'application ; avec `inbound.mailboxActions` + scope d'écriture : mise à la corbeille chez le fournisseur d'abord. Re-suppression : 404. */
   remove: guard(async (companyId, req, res) => res.json({ success: true, data: await deleteInbound(companyId, req.params.id) }), 'remove'),
@@ -156,6 +158,7 @@ export const mineInboundController = {
     res.setHeader('Cache-Control', 'no-store');
     res.json({ success: true, data });
   }, 'body'),
+  replyAll: mineGuard(async (scope, req, res) => res.json({ success: true, data: await readReplyAll(scope, req.params.id) }), 'replyAll'),
   update: mineGuard(async (scope, req, res) => res.json({ success: true, data: await markHandled(scope, req.params.id, req.body) }), 'update'),
   remove: mineGuard(async (scope, req, res) => res.json({ success: true, data: await deleteInbound(scope, req.params.id) }), 'remove'),
   deleteMany: mineGuard(async (scope, req, res) => res.json({ success: true, data: await deleteManyInbound(scope, req.body) }), 'deleteMany'),
