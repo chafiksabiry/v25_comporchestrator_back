@@ -1,5 +1,7 @@
+import { stripeLocaleFromRequest } from '../services/stripeLocale.js';
 import { findCompanyStripeCustomerId } from '../services/billingCustomer.js';
 import mongoose from 'mongoose';
+import { guardCompanyAccess } from '../middleware/companyGuard.js';
 import CompanyPayment from '../models/CompanyPayment.js';
 import { paypalService } from '../services/paypalService.js';
 import { stripeService } from '../services/stripeService.js';
@@ -130,6 +132,8 @@ export const paymentCheckoutController = {
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) {
         return res.status(400).json({ error: 'Valid companyId is required' });
       }
+      // On ne déclenche un paiement que pour SA société (propriétaire) : 403 avant toute création de paiement ou de session chez Stripe/PayPal.
+      if (!(await guardCompanyAccess(req, res, companyId, { ownerOnly: true }))) return;
       if (!['wallet_deposit', 'minutes_purchase', 'tokens_purchase', 'bundle_purchase'].includes(purpose)) {
         return res.status(400).json({
           error: "purpose must be 'wallet_deposit', 'minutes_purchase', 'tokens_purchase' or 'bundle_purchase'"
@@ -254,6 +258,7 @@ export const paymentCheckoutController = {
             cancelUrl,
             clientReferenceId: payment._id,
             customerId: await findCompanyStripeCustomerId(companyId),
+            locale: stripeLocaleFromRequest(req),
             metadata: { purpose, companyId: String(companyId) }
           });
 

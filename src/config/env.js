@@ -58,16 +58,5 @@ export const config = {
   twilioPushCredentialSidIos: process.env.TWILIO_PUSH_CREDENTIAL_SID_IOS || '',
   twilioPushCredentialSidAndroid: process.env.TWILIO_PUSH_CREDENTIAL_SID_ANDROID || '',
   twilioFrenchNationalBundleSid: process.env.TWILIO_FRENCH_NATIONAL_BUNDLE_SID || 'BUe5aead3361e804e3aa18d455178dd069',
-  twilioFrenchNationalAddressSid: process.env.TWILIO_FRENCH_NATIONAL_ADDRESS_SID || 'AD5d0160ef54cf901e419ac73e873b970e',
-  twilioFrenchBusinessInfo: {
-    businessName: 'AI AGENTS & CO',
-    registrationNumber: '942597915',
-    website: 'https://aiagentsco.tech/',
-    email: 'chafik.sabiry@aiagentsco.tech',
-    street: '229 Rue Saint-Honoré',
-    city: 'Paris',
-    region: 'IDF',
-    country: 'FR',
-    postalCode: '75001'
-  }
+  twilioFrenchNationalAddressSid: process.env.TWILIO_FRENCH_NATIONAL_ADDRESS_SID || 'AD5d0160ef54cf901e419ac73e873b970e'
 };

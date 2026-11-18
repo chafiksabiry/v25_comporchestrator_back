@@ -1043,7 +1043,7 @@ class PhoneNumberService {
     }
   }
 
-  async createTwilioBundle(friendlyName, email, statusCallback) {
+  async createTwilioBundle(friendlyName, email, statusCallback, regulationSid, isoCountry) {
     try {
       console.log(`📦 Creating Twilio Bundle: ${friendlyName} `);
       const bundle = await this.twilioClient.numbers.v2.regulatoryCompliance
@@ -1052,8 +1052,8 @@ class PhoneNumberService {
           friendlyName: friendlyName,
           email: email,
           statusCallback: statusCallback,
-          regulationSid: arguments[3], // Hack if we pass more args
-          isoCountry: arguments[4]
+          regulationSid,
+          isoCountry
         });
       return bundle;
     } catch (error) {

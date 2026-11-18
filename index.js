@@ -4,6 +4,7 @@ import express from 'express';
 import http from 'http';
 import { setupEscrowWebSocket } from './src/websocket/escrowUpdates.js';
 import { corsMiddleware, parseAllowedOrigins } from './src/middleware/cors.js';
+import { demoBodyQueryAlias, idParam, demoAliasEnabled } from './src/middleware/demoAlias.js';
 import mongoose from 'mongoose';
 import { requirementRoutes } from './src/routes/requirement.js';
 import { addressRoutes } from './src/routes/address.js';
@@ -38,7 +39,7 @@ import { clearExpiredRetractions } from './src/services/retractionService.js';
 import { resolveExpiredPendingReviews, flagWeeklyAiAudits } from './src/controllers/escrowController.js';
 import { billExpiredTrialLines, reconcilePendingMonthlyLines, terminateSuspendedLines } from './src/services/phoneLineBillingService.js';
 import { syncPlanMetadataFromStripe } from './src/services/planMetadataSync.js';
-import { neutralizeGoogleInbox } from './src/services/googleInboxMigration.js';
+import { applyMailOwnership } from './src/services/mailOwnershipMigration.js';
 
 const app = express();
 
@@ -51,8 +52,8 @@ mongoose.connect(config.mongodbUri, {
   useUnifiedTopology: true,
 }).then(() => {
   console.log('✅ Connected to MongoDB');
-  // Google ne demande plus jamais la lecture de la boîte : lecture coupée et e-mails Google purgés pour les comptes déjà autorisés (idempotent, journalisé).
-  neutralizeGoogleInbox();
+  // Une boîte mail connectée n'est utilisable que par la personne qui l'a connectée : anciennes connexions sans propriétaire marquées (inutilisables jusqu'à reconnexion), e-mails stockés partagés purgés (idempotent, journalisé sans donnée personnelle).
+  applyMailOwnership();
 }).catch((error) => {
   console.error('❌ MongoDB connection error:', error);
   process.exit(1); // Exit if we can't connect to database
@@ -87,38 +88,12 @@ app.use((req, res, next) => {
 });
 app.use(express.urlencoded({ extended: true }));
 
-// Map and Validate companyId / agentId parameters to prevent Mongoose CastErrors
-app.use((req, res, next) => {
-  if (req.body && req.body.companyId === 'demo_company_id') {
-    req.body.companyId = '6a0bfd35d605ccca8b51e13b';
-  }
-  if (req.query && req.query.companyId === 'demo_company_id') {
-    req.query.companyId = '6a0bfd35d605ccca8b51e13b';
-  }
-  next();
-});
-
-app.param('companyId', (req, res, next, value) => {
-  if (value === 'demo_company_id') {
-    req.params.companyId = '6a0bfd35d605ccca8b51e13b';
-    return next();
-  }
-  if (!mongoose.Types.ObjectId.isValid(value)) {
-    return res.status(400).json({ error: 'Invalid companyId format' });
-  }
-  next();
-});
-
-app.param('agentId', (req, res, next, value) => {
-  if (value === 'demo_company_id') {
-    req.params.agentId = '6a0bfd35d605ccca8b51e13b';
-    return next();
-  }
-  if (!mongoose.Types.ObjectId.isValid(value)) {
-    return res.status(400).json({ error: 'Invalid agentId format' });
-  }
-  next();
-});
+// Map and Validate companyId / agentId parameters to prevent Mongoose CastErrors (alias de démonstration : voir src/middleware/demoAlias.js ;
+// désactivé par défaut, réactivable avec DEMO_COMPANY_ID_ENABLED=true).
+app.use(demoBodyQueryAlias());
+app.param('companyId', idParam('companyId'));
+app.param('agentId', idParam('agentId'));
+if (demoAliasEnabled()) console.warn('[security] alias « demo_company_id » ACTIVÉ par DEMO_COMPANY_ID_ENABLED=true (donne accès à une société réelle sur les routes non protégées)');
 
 // Routes API
 app.use('/api/requirements', requirementRoutes);

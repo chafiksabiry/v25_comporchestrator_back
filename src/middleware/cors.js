@@ -39,7 +39,7 @@ export function corsMiddleware(env = process.env) {
     res.header('Access-Control-Allow-Methods', METHODS);
     res.header('Access-Control-Allow-Headers', HEADERS);
     if (!allowed || !isPublicApi) res.header('Access-Control-Allow-Credentials', 'true');
-    res.header('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.header('Access-Control-Expose-Headers', 'Content-Disposition, X-Journal-Truncated');
     if (req.method === 'OPTIONS') return res.sendStatus(200);
     return next();
   };

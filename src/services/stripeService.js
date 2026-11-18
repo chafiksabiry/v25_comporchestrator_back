@@ -1,6 +1,7 @@
 import Stripe from 'stripe';
 import { config } from '../config/env.js';
 import { resolvePromotionCodeId, withPromotion } from './promotionCode.js';
+import { resolveStripeLocale } from './stripeLocale.js';
 
 let stripeOverride = null;
 /** Réservé aux tests : injecte un faux client Stripe (null pour revenir au vrai). */
@@ -38,6 +39,7 @@ function getSharedClient() {
  * @param {string} opts.cancelUrl     Where Stripe redirects on cancel.
  * @param {string} opts.clientReferenceId  Our internal CompanyPayment id (used to reconcile).
  * @param {object} [opts.metadata]
+ * @param {string} [opts.locale]  Langue de l'interface (voir stripeLocale.js) ; anglais par défaut.
  */
 async function createOneShotCheckoutSession({
   amountCents,
@@ -49,7 +51,8 @@ async function createOneShotCheckoutSession({
   metadata = {},
   captureMethod = 'automatic',
   customerId = null,
-  invoiceDescription = null
+  invoiceDescription = null,
+  locale = null
 }) {
   const manual = captureMethod === 'manual';
   // Facture téléchargeable pour les achats ponctuels. Non activée en capture manuelle (autorisation puis capture
@@ -65,6 +68,7 @@ async function createOneShotCheckoutSession({
   };
   return getStripe().checkout.sessions.create({
     mode: 'payment',
+    locale: resolveStripeLocale(locale),
     ...(customerId ? { customer: customerId } : {}),
     ...invoiceCreation,
     payment_method_types: ['card'],
@@ -544,7 +548,7 @@ export const stripeService = {
   cancelCheckoutAuthorization,
   getCheckoutPaymentState,
   refundCheckoutSession,
-  createCheckoutSession: async (userId, priceId, successUrl, cancelUrl, metadata = {}, promotionCodeId = null, currency = null) => {
+  createCheckoutSession: async (userId, priceId, successUrl, cancelUrl, metadata = {}, promotionCodeId = null, currency = null, { locale = null } = {}) => {
     try {
       const session = await getStripe().checkout.sessions.create(withPromotion({
         payment_method_types: ['card'],
@@ -557,8 +561,10 @@ export const stripeService = {
         mode: 'subscription',
         // Prix multi-devises : la devise choisie (mêmes montants en EUR, USD, GBP).
         ...(currency ? { currency: String(currency).toLowerCase() } : {}),
-        // Plus d'essai sans carte : la carte est demandée dès la souscription.
-        payment_method_collection: 'always',
+        locale: resolveStripeLocale(locale),
+        // Pas d'essai : la carte est demandée dès qu'il y a un montant à payer. Code promo à 100 % (total du jour à 0) :
+        // aucune carte demandée ; Stripe la réclamera à la première facture payante (fin du code).
+        payment_method_collection: 'if_required',
         success_url: successUrl,
         cancel_url: cancelUrl,
         redirect_on_completion: 'always',
@@ -585,15 +591,16 @@ export const stripeService = {
    * Create an EMBEDDED Stripe Checkout Session (UI rendered inside HARX as a modal).
    * No redirect: the front uses onComplete + confirm endpoint.
    */
-  createEmbeddedSubscriptionSession: async (userId, priceId, metadata = {}, promotionCodeId = null, currency = null) => {
+  createEmbeddedSubscriptionSession: async (userId, priceId, metadata = {}, promotionCodeId = null, currency = null, { locale = null } = {}) => {
     return getStripe().checkout.sessions.create(withPromotion({
       ui_mode: 'embedded_page',
       mode: 'subscription',
       payment_method_types: ['card'],
       line_items: [{ price: priceId, quantity: 1 }],
       ...(currency ? { currency: String(currency).toLowerCase() } : {}),
-      // Plus d'essai sans carte : la carte est demandée dès la souscription.
-      payment_method_collection: 'always',
+      locale: resolveStripeLocale(locale),
+      // Pas d'essai : carte demandée dès qu'il y a un montant à payer ; code promo à 100 % -> pas de carte (voir createCheckoutSession).
+      payment_method_collection: 'if_required',
       redirect_on_completion: 'never',
       client_reference_id: userId.toString(),
       metadata: { userId: userId.toString(), ...metadata },

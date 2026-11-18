@@ -15,6 +15,11 @@ export const DEFAULTS = Object.freeze({
   /** Message d'accueil dit à l'appelant avant la sonnerie ; désactivé : l'appel entre directement. */
   greetingEnabled: true,
   secretaryOutbound: true,
+  /**
+   * Enregistrement des conversations, par sens (valeur sans politique d'offre connue). Full Scope / Multi-clients / TaaS : toujours `true`
+   * (non réglable) ; Accueil (option) : `false` par défaut ; Nomad Solo / offre inconnue : toujours `false` (voir toPublicSettings).
+   */
+  recording: Object.freeze({ inbound: true, outbound: true }),
 });
 export const KINDS = ['greeting', 'voicemail'];
 export const MIN_AUDIO_BYTES = 1024;
@@ -57,6 +62,15 @@ export function validateSettingsInput(body = {}) {
     if (typeof body.secretaryOutbound !== 'boolean') bad("L'autorisation d'appeler des secrétaires doit être vrai ou faux.", 'INVALID_BOOLEAN', 'secretaryOutbound');
     else value.secretaryOutbound = body.secretaryOutbound;
   }
+  if (body.recording !== undefined) {
+    const r = body.recording;
+    const keys = r && typeof r === 'object' && !Array.isArray(r) ? Object.keys(r) : null;
+    if (!keys || !keys.length || keys.some((k) => k !== 'inbound' && k !== 'outbound')) {
+      bad("Le réglage d'enregistrement doit être un objet { inbound, outbound } (vrai ou faux).", 'INVALID_RECORDING', 'recording');
+    } else if (keys.some((k) => typeof r[k] !== 'boolean')) {
+      bad("L'activation de l'enregistrement doit être vrai ou faux.", 'INVALID_BOOLEAN', 'recording');
+    } else value.recording = Object.fromEntries(keys.map((k) => [k, r[k]]));
+  }
   return { ok: errors.length === 0, errors, issues, value };
 }
 
@@ -65,8 +79,23 @@ export function isAudioValidated(audio, text, voice) {
   return Boolean(audio && audio.version && text && audio.text === text && audio.voice === voice);
 }
 
-/** Réglages publics (sans octets) avec valeurs par défaut ; `doc` peut être null. */
-export function toPublicSettings(doc) {
+/**
+ * Valeur publique du réglage d'enregistrement d'un sens selon la politique de l'offre (callRecording.recordingPolicy) :
+ * 'default_on' : toujours activé (non réglable, la valeur stockée est ignorée) ; politique non fournie : absent = activé ;
+ * 'opt_in' (Accueil) : activé seulement si `true` ; 'never' : toujours désactivé ; toute autre valeur (offre illisible) : activé seulement si `true`.
+ */
+function publicRecording(value, policy) {
+  if (policy === 'default_on') return true;
+  if (policy === undefined) return value ?? true;
+  if (policy === 'never') return false;
+  return value === true;
+}
+
+/**
+ * Réglages publics (sans octets) avec valeurs par défaut ; `doc` peut être null.
+ * `recordingPolicy` : politique d'enregistrement de l'offre de la société, pour la valeur par défaut de `recording` (voir publicRecording).
+ */
+export function toPublicSettings(doc, { recordingPolicy } = {}) {
   const d = doc || {};
   const s = {
     greetingText: d.greetingText ?? DEFAULTS.greetingText,
@@ -76,6 +105,7 @@ export function toPublicSettings(doc) {
     voicemailEnabled: d.voicemailEnabled ?? DEFAULTS.voicemailEnabled,
     greetingEnabled: d.greetingEnabled ?? DEFAULTS.greetingEnabled,
     secretaryOutbound: d.secretaryOutbound ?? DEFAULTS.secretaryOutbound,
+    recording: { inbound: publicRecording(d.recording?.inbound, recordingPolicy), outbound: publicRecording(d.recording?.outbound, recordingPolicy) },
   };
   return {
     ...s,
@@ -84,6 +114,7 @@ export function toPublicSettings(doc) {
     greetingAudioVersion: d.greetingAudio?.version || null,
     voicemailAudioVersion: d.voicemailAudio?.version || null,
     validatedAt: d.validatedAt || null,
+    ...(recordingPolicy !== undefined ? { recordingPolicy } : {}),
   };
 }
 

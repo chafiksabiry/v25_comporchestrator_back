@@ -39,6 +39,7 @@ function delegatedFail(res, error) {
 const extView = (item) => ({
   ...toItem(item), companyId: String(item.companyId), calendarProvider: item.calendarProvider || null, calendarExternalId: item.calendarExternalId || null,
   videoProvider: item.videoProvider || '', videoExternalId: item.videoExternalId || '', calendarAccountId: item.calendarAccountId || null,
+  calendarOwnerId: item.calendarOwnerId || '', videoOwnerId: item.videoOwnerId || '', // propriétaires des boîtes qui portent l'événement / le lien
 });
 
 /** Reporte la synchronisation avec l'agenda DÉLÉGUÉ du rendez-vous. Un échec est conservé avec son message (jamais masqué, jamais de repli). */
@@ -54,19 +55,21 @@ function applyDelegated(item, sync) {
 
 /** Reporte le résultat d'une synchronisation d'agenda sur le rendez-vous. Un échec est CONSERVÉ (`failed`) et ne casse jamais le rendez-vous. */
 function applySync(item, sync, op) {
+  if (sync.unavailable) { item.calendarStatus = 'not_connected'; item.calendarMessage = null; return; } // propriétaire du calendrier parti / connexion inutilisable : rien n'est écrit, aucune erreur, identifiants conservés
   const had = Boolean(item.calendarExternalId);
   if (op === 'remove') {
     if (sync.status === 'synced') { item.calendarExternalId = null; item.calendarStatus = 'synced'; } else item.calendarStatus = 'failed';
   } else if (sync.status === 'synced') {
     item.calendarProvider = sync.provider; item.calendarExternalId = sync.externalId; item.calendarStatus = 'synced';
+    if (sync.ownerId) item.calendarOwnerId = sync.ownerId; // calendrier de la personne assignée ou créatrice : les mises à jour y retournent
   } else if (sync.status === 'failed') {
     item.calendarProvider = sync.provider || item.calendarProvider; item.calendarStatus = 'failed';
   } else if (had) item.calendarStatus = 'failed'; // un événement existe mais l'agenda n'est plus joignable : on ne le cache pas
-  else { item.calendarStatus = 'not_connected'; item.calendarProvider = null; item.calendarExternalId = null; }
+  else { item.calendarStatus = 'not_connected'; item.calendarProvider = null; item.calendarExternalId = null; item.calendarOwnerId = ''; }
 }
 
 /** Répercute une modification d'un rendez-vous sur l'agenda / la visio connectés. Ne lève jamais. */
-async function syncExternal(item, { wasStatus, keys, videoChanged, access }) {
+async function syncExternal(item, { wasStatus, keys, videoChanged, access, token }) {
   if (item.model !== 'appointment') return;
   const canceled = item.status === 'canceled';
   if (item.calendarAccountId) { // agenda délégué : toujours CE compte (jamais l'agenda de la société), pas de visio
@@ -83,16 +86,16 @@ async function syncExternal(item, { wasStatus, keys, videoChanged, access }) {
     const before = extView(item);
     let ok = true;
     if (item.calendarExternalId) {
-      const sync = await syncAppointment(before, { op: 'remove' });
+      const sync = await syncAppointment(before, { op: 'remove', token, actorId: access?.userId });
       applySync(item, sync, 'remove');
       ok = sync.status === 'synced';
     }
-    const removed = await removeVideoResource(before.companyId, before);
+    const removed = await removeVideoResource(before.companyId, before, { actorId: access?.userId });
     if (item.videoProvider && ok && removed) { item.videoUrl = ''; item.videoProvider = ''; item.videoExternalId = ''; } // le lien n'existe plus chez le fournisseur
   } else if (!canceled && (wasStatus === 'canceled' || videoChanged || keys.some((k) => ['dueAt', 'timeZone', 'title', 'durationMinutes', 'location'].includes(k)))) {
-    if (item.videoProvider && item.videoExternalId && item.videoExternalId !== item.calendarExternalId) await updateVideoResource(String(item.companyId), extView(item));
+    if (item.videoProvider && item.videoExternalId && item.videoExternalId !== item.calendarExternalId) await updateVideoResource(String(item.companyId), extView(item), { actorId: access?.userId });
     const op = item.calendarExternalId ? 'update' : 'push';
-    applySync(item, await syncAppointment(extView(item), { op }), op);
+    applySync(item, await syncAppointment(extView(item), { op, token, actorId: access?.userId }), op);
   } else return;
   await item.save();
 }
@@ -237,14 +240,14 @@ export const followUpController = {
       // Lien de visio, une fois les vérifications passées (rien d'orphelin chez le fournisseur). Échec du fournisseur : le rendez-vous
       // n'est pas enregistré et l'erreur est claire (jamais de faux lien).
       const video = v.videoLink
-        ? await createVideo(access.companyId, { title: v.title, contactName: v.contactName, dueAt: v.dueAt, durationMinutes: v.durationMinutes, timeZone: v.timeZone })
-        : { url: '', provider: '', externalId: '', sharesCalendar: false, eventProvider: '' };
+        ? await createVideo(access.companyId, { title: v.title, contactName: v.contactName, dueAt: v.dueAt, durationMinutes: v.durationMinutes, timeZone: v.timeZone }, { userId: access.userId }) // Meet / Teams : la boîte de celle qui crée
+        : { url: '', provider: '', externalId: '', sharesCalendar: false, eventProvider: '', ownerId: '' };
       let item;
       try {
         item = await FollowUpItem.create({
           companyId, model: v.model, originType: v.originType, originId: v.originId, title: v.title, note: v.note,
           contactName: v.contactName, contactPhone: v.contactPhone || origin?.from || '', contactEmail: v.contactEmail, location: v.location,
-          videoUrl: video.url, videoProvider: video.provider, videoExternalId: video.externalId,
+          videoUrl: video.url, videoProvider: video.provider, videoExternalId: video.externalId, videoOwnerId: video.ownerId || '',
           dueAt: v.dueAt, timeZone: v.timeZone, durationMinutes: v.durationMinutes, assigneeId: assignee.id, assigneeName: assignee.name,
           createdById: access.userId, createdByName: me?.name || '', fromAiPlan: v.fromAiPlan,
           ...(delegated ? {
@@ -255,7 +258,7 @@ export const followUpController = {
         });
       } catch (error) {
         // Enregistrement impossible : on ne laisse pas de réunion / d'événement orphelin chez le fournisseur.
-        if (video.externalId) await removeVideoResource(access.companyId, { videoProvider: video.provider, videoExternalId: video.externalId });
+        if (video.externalId) await removeVideoResource(access.companyId, { videoProvider: video.provider, videoExternalId: video.externalId, videoOwnerId: video.ownerId || '' }, { actorId: access.userId }); // lien créé par cette personne, dans SA boîte
         if (delegated) await discardDelegatedEvent(access.companyId, delegated.account, delegated.eventId);
         throw error;
       }
@@ -263,8 +266,8 @@ export const followUpController = {
         // l'événement est déjà dans l'agenda délégué (calendarStatus 'synced') : rien à synchroniser avec l'agenda de la société
       } else if (v.model === 'appointment') {
         if (video.sharesCalendar) { // l'événement qui porte le lien Meet / Teams est l'événement d'agenda du rendez-vous
-          item.calendarProvider = video.eventProvider; item.calendarExternalId = video.externalId; item.calendarStatus = 'synced';
-        } else applySync(item, await syncAppointment(extView(item)), 'push');
+          item.calendarProvider = video.eventProvider; item.calendarExternalId = video.externalId; item.calendarStatus = 'synced'; item.calendarOwnerId = video.ownerId || '';
+        } else applySync(item, await syncAppointment(extView(item), { actorId: access.userId }), 'push');
         await item.save();
       }
       if (v.model === 'voicemail_callback' && v.originType === 'voicemail') {
@@ -294,13 +297,22 @@ export const followUpController = {
       Object.assign(item, fields);
       if (videoLink === true && !item.videoUrl) {
         // Échec du fournisseur : réponse d'erreur, rien n'est enregistré (le document modifié en mémoire n'est pas sauvegardé).
-        const video = await createVideo(item.companyId, { title: item.title, contactName: item.contactName, dueAt: item.dueAt, durationMinutes: item.durationMinutes, timeZone: item.timeZone }, { calendar: { provider: item.calendarProvider, externalId: item.calendarExternalId } });
-        item.videoUrl = video.url; item.videoProvider = video.provider; item.videoExternalId = video.externalId;
-        if (video.sharesCalendar && !item.calendarExternalId) { item.calendarProvider = video.eventProvider; item.calendarExternalId = video.externalId; item.calendarStatus = 'synced'; }
+        const video = await createVideo(item.companyId, { title: item.title, contactName: item.contactName, dueAt: item.dueAt, durationMinutes: item.durationMinutes, timeZone: item.timeZone }, { calendar: item.calendarOwnerId && item.calendarOwnerId === access.userId ? { provider: item.calendarProvider, externalId: item.calendarExternalId } : null, userId: access.userId }); // l'événement d'agenda n'est réutilisé que dans le calendrier de celui qui le possède
+        item.videoUrl = video.url; item.videoProvider = video.provider; item.videoExternalId = video.externalId; item.videoOwnerId = video.ownerId || '';
+        if (video.sharesCalendar && !item.calendarExternalId) { item.calendarProvider = video.eventProvider; item.calendarExternalId = video.externalId; item.calendarStatus = 'synced'; item.calendarOwnerId = video.ownerId || ''; }
       }
+      let videoRemoval = null;
       if (videoLink === false) {
-        await removeVideoResource(String(item.companyId), extView(item)); // réunion Zoom / événement dédié ; l'événement d'agenda reste
-        item.videoUrl = ''; item.videoProvider = ''; item.videoExternalId = '';
+        const report = {};
+        // réunion Zoom / événement dédié ; l'événement d'agenda reste. Échec (délégation Google suspendue ou panne) : le lien existe encore chez le fournisseur,
+        // donc les champs visio sont CONSERVÉS et la réponse le dit (`videoRemoval`), au lieu d'afficher un rendez-vous sans visio qui en a toujours une.
+        if (await removeVideoResource(String(item.companyId), extView(item), { actorId: access.userId, report })) {
+          item.videoUrl = ''; item.videoProvider = ''; item.videoExternalId = '';
+        } else {
+          videoRemoval = report.blocked
+            ? { status: 'not_removed', code: 'google_delegation_disabled', message: 'Le lien de visio est dans le compte Google d’un collègue : il n’a pas été retiré (délégation Google suspendue). Demandez-lui de le retirer.' }
+            : { status: 'not_removed', code: 'provider_error', message: 'Le lien de visio n’a pas pu être retiré chez le fournisseur : il est conservé. Réessayez dans un instant.' };
+        }
       }
       // Chaque modification d'un rendez-vous (déplacement, annulation, visio) fait monter la révision du fichier agenda.
       if (item.model === 'appointment') item.sequence = (item.sequence || 0) + 1;
@@ -310,11 +322,11 @@ export const followUpController = {
         item.closedById = closing ? access.userId : '';
       }
       await item.save();
-      await syncExternal(item, { wasStatus, keys: Object.keys(checked.value), videoChanged: videoLink !== undefined, access });
+      await syncExternal(item, { wasStatus, keys: Object.keys(checked.value), videoChanged: videoLink !== undefined, access, token: bearer(req) });
       if (checked.value.status === 'done' && item.model === 'voicemail_callback' && item.originType === 'voicemail') {
         await Voicemail.updateOne({ _id: item.originId, companyId: item.companyId, followUpStatus: { $in: ['new', 'to_call'] } }, { $set: { followUpStatus: 'called' } }).catch(() => {});
       }
-      res.json({ success: true, data: toItem(item) });
+      res.json({ success: true, data: { ...toItem(item), ...(videoRemoval ? { videoRemoval } : {}) } });
     } catch (error) {
       if (error instanceof SecretariatError) return providerFail(res, error);
       console.error('followUps patch:', error.message);

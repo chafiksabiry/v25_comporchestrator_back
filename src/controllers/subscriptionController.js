@@ -1,5 +1,6 @@
 import { createLaunchOffersService } from '../services/launchOffers.js';
 import mongoose from 'mongoose';
+import { guardCompanyAccess } from '../middleware/companyGuard.js';
 import { SubscriptionPlan } from '../models/SubscriptionPlan.js';
 import { Subscription } from '../models/Subscription.js';
 import CompanyPayment from '../models/CompanyPayment.js';
@@ -16,6 +17,7 @@ import { fulfillStripeCheckoutSessionPayment } from '../services/paymentFulfillm
 import { config } from '../config/env.js';
 import { handlePhoneLineInvoiceEvent, handlePhoneLineSubscriptionDeleted } from '../services/phoneLineSubscription.js';
 import { currencyForCountry, normalizeCurrency, pickCurrency, priceAmounts } from '../services/currency.js';
+import { stripeLocaleFromRequest } from '../services/stripeLocale.js';
 
 function numberOrNull(value) {
   const n = Number(value);
@@ -352,6 +354,10 @@ export const subscriptionController = {
       if (!['stripe', 'paypal'].includes(provider)) {
         return res.status(400).json({ error: "provider must be 'stripe' or 'paypal'" });
       }
+      // La société payée doit être CELLE de l'appelant (propriétaire) et l'identité du souscripteur celle du jeton : on ne paie ni ne souscrit pour autrui.
+      const access = await guardCompanyAccess(req, res, companyId, { ownerOnly: true });
+      if (!access) return;
+      if (String(userId) !== String(access.userId)) return res.status(403).json({ error: 'Forbidden', code: 'forbidden' });
 
       // Code promotionnel (offre de lancement) : abonnement Stripe uniquement, résolu avant toute création de paiement.
       let promotionCodeId = null;
@@ -451,6 +457,8 @@ export const subscriptionController = {
           return res.status(503).json({ error: 'Stripe not configured', message: 'Définissez STRIPE_SECRET_KEY.' });
         }
         const metadata = { companyId: String(companyId), paymentId: String(payment._id) };
+        // Langue de l'interface (corps `locale` / `language`) ; anglais par défaut.
+        const stripeLocale = stripeLocaleFromRequest(req);
 
         if (uiMode === 'embedded') {
           const session = await stripeService.createEmbeddedSubscriptionSession(
@@ -458,7 +466,8 @@ export const subscriptionController = {
             effectivePriceId,
             metadata,
             promotionCodeId,
-            chosenCurrency
+            chosenCurrency,
+            { locale: stripeLocale }
           );
           payment.providerRef = session.id;
           payment.checkoutUrl = '';
@@ -495,7 +504,8 @@ export const subscriptionController = {
           cancelUrl,
           metadata,
           promotionCodeId,
-          chosenCurrency
+          chosenCurrency,
+          { locale: stripeLocale }
         );
         checkoutUrl = session.url;
         payment.providerRef = session.id;
@@ -615,7 +625,10 @@ export const subscriptionController = {
   },
 
   createCheckoutSession: async (req, res) => {
-    const { userId, priceId, companyId, successUrl, cancelUrl, planName } = req.body;
+    const { userId, priceId, companyId, successUrl, cancelUrl, planName } = req.body || {};
+    const access = await guardCompanyAccess(req, res, companyId, { ownerOnly: true });
+    if (!access) return;
+    if (String(userId) !== String(access.userId)) return res.status(403).json({ error: 'Forbidden', code: 'forbidden' });
     try {
       console.log(`💳 Creating checkout session for user ${userId}, plan ${planName || 'unknown'}, price ${priceId}`);
       
@@ -624,7 +637,10 @@ export const subscriptionController = {
         priceId,
         successUrl,
         cancelUrl,
-        { companyId } // Pass metadata
+        { companyId }, // Pass metadata
+        null,
+        null,
+        { locale: stripeLocaleFromRequest(req) }
       );
 
       res.json({ 

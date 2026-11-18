@@ -1,7 +1,28 @@
 import { addressService } from '../services/addressService.js';
+import { claimAsset as claim, isOwnedAsset } from '../services/regulatoryAssets.js';
+import { guardCompanyAccess } from '../middleware/companyGuard.js';
+
+/** La pièce doit appartenir à la société de l'appelant (enregistrée à sa création, ou reprise d'un groupe de la société) : sinon 404, rien n'est lu chez l'opérateur ni modifié. */
+async function ownAsset(req, res, kind, externalId) {
+  const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+  if (!access) return null;
+  if (!(await isOwnedAsset(kind, externalId, access.companyId))) {
+    res.status(404).json({ error: 'Not Found', message: 'Not found' });
+    return null;
+  }
+  return access;
+}
+
+/** Enregistre la propriété d'une pièce créée chez l'opérateur (première inscription gagnante). */
+async function claimAsset(access, kind, externalId) {
+  await claim(access, kind, externalId);
+}
+
 
 export const addressController = {
   async createAddress(req, res) {
+    const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+    if (!access) return;
     try {
       const {
         businessName,
@@ -44,6 +65,14 @@ export const addressController = {
         customerReference
       });
 
+      try {
+        await claimAsset(access, 'address', address?.id);
+      } catch (claimError) {
+        // Propriété non enregistrée : l'adresse serait inaccessible à sa propre société ; nettoyage chez l'opérateur au mieux, erreur claire.
+        console.error('Error registering address ownership:', claimError);
+        if (address?.id) await addressService.deleteAddress(address.id).catch((e) => console.error('Cleanup of address failed:', e?.message || e));
+        return res.status(500).json({ error: 'Internal Server Error', code: 'ownership_registration_failed', message: 'The address could not be registered for your company; please retry.' });
+      }
       res.status(201).json(address);
     } catch (error) {
       console.error('Error in createAddress:', error);
@@ -74,6 +103,7 @@ export const addressController = {
         });
       }
 
+      if (!(await ownAsset(req, res, 'address', addressId))) return;
       const address = await addressService.retrieveAddress(addressId);
       res.json(address);
     } catch (error) {
