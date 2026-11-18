@@ -133,3 +133,14 @@ test('priorité « après les humains », personne en ligne : l’IA prend tout 
   Object.assign(env, { AI_INBOUND_ENABLED: 'true', AI_INBOUND_COMPANY_IDS: C1 }); aiSettings.priority = 'after_humans'; clearPresence();
   assert.match(await inbound(), /<Connect /);
 });
+
+test('pilote fermé : fin de sonnerie sans aucune lecture liée à l’agent IA (ligne, files)', async () => {
+  let reads = 0;
+  PhoneNumber.findOne = () => { reads += 1; return lean(null); };
+  CallQueue.find = () => { reads += 1; return lean([]); };
+  const call = { callSid: `CA${'b'.repeat(32)}`, companyId: C1, phoneNumber: LINE, from: CALLER, startedAt: new Date(), mobileTried: false, async save() { return this; } };
+  InboundCall.findOne = async () => call;
+  let out = null; const res = { type() { return this; }, status() { return this; }, send(x) { out = x; return this; } };
+  await pc.handleTwilioInboundDialResult({ body: { CallSid: call.callSid, DialCallStatus: 'no-answer' }, query: {}, headers: {}, get: () => 'orch.test' }, res);
+  assert.equal(reads, 0); assert.match(out, /<Record /, 'répondeur classique');
+});

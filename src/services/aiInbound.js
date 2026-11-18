@@ -49,7 +49,7 @@ export const deps = {
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   env: process.env,
   /** Forfait actif de l'entreprise (formule « Secrétariat avec agent IA » : `aiAgent`, minutes incluses). */
-  planLimits: async (companyId) => (await import('./planLimits.js')).loadCompanyPlanLimits(companyId),
+  planLimits: async (companyId) => (await import('./planLimits.js')).loadAiAgentPlan(companyId),
   /** La base de connaissances (gig) appartient-elle à l'entreprise ? */
   gigBelongsTo: async (companyId, gigId) => {
     const db = mongoose.connection.db;
@@ -71,7 +71,7 @@ export const announceMode = (env = deps.env) => (String(env.AI_INBOUND_ANNOUNCE_
 /** Migration des réglages d'avant (niveau / déclencheurs) vers horaires + priorité. Idempotente, lancée au démarrage. */
 export async function migrateAiAgentSettings(Model = AiAgentSettings) {
   let n = 0;
-  const cursor = await Model.collection.find({ $or: [{ level: { $exists: true } }, { triggers: { $exists: true } }] }).toArray();
+  const cursor = await Model.collection.find({ schedule: { $exists: false }, $or: [{ level: { $exists: true } }, { triggers: { $exists: true } }] }).toArray();
   for (const doc of cursor) {
     const upd = migrateLegacySettings(doc);
     if (!upd) continue;
@@ -101,8 +101,11 @@ export async function resolveAvailability(companyId) {
   if (!quick.pilotEnabled || quick.companyAllowed) return { ...quick, plan: null };
   let plan = null;
   try { plan = await deps.planLimits(companyId); } catch (e) { console.error('[ai-inbound] forfait illisible :', e?.message || e); }
-  return { ...pilotAvailability(companyId, deps.env, { aiAgentPlan: plan?.aiAgent === true }), plan };
+  return { ...pilotAvailability(companyId, deps.env, { aiAgentPlan: plan?.aiAgent === true }), subscriptionStatus: plan?.status || null, plan };
 }
+
+/** Drapeau global du pilote : sans lui, aucune lecture ni écriture liée à l'agent IA dans le flux d'appel. */
+export const aiInboundPilotEnabled = () => pilotAvailability(null, deps.env).pilotEnabled;
 
 export async function loadSettings(companyId) {
   const [doc, dir] = await Promise.all([
@@ -273,9 +276,10 @@ export async function ingestLearning(doc, body = {}) {
     if (same) {
       if ((same.sourceCallIds || []).map(String).includes(String(doc._id))) continue;
       const count = (same.sourceCount || 1) + 1;
+      // Échéance inchangée (alignée sur la création) : un regroupement ne prolonge jamais la conservation.
       await AiLearningProposal.updateOne({ _id: same._id, companyId }, {
         $addToSet: { sourceCallIds: doc._id },
-        $set: { sourceCount: count, confidence: Math.max(same.confidence || 0, p.confidence), expiresAt, ...(count >= RECURRING_THRESHOLD ? { kind: 'recurring' } : {}), ...(!same.answer && p.answer ? { answer: p.answer } : {}) },
+        $set: { sourceCount: count, confidence: Math.max(same.confidence || 0, p.confidence), ...(count >= RECURRING_THRESHOLD ? { kind: 'recurring' } : {}), ...(!same.answer && p.answer ? { answer: p.answer } : {}) },
       });
     } else {
       await AiLearningProposal.create({ companyId, status: 'pending', key: groupKey(p.question), kind: p.kind, question: p.question, answer: p.answer, sourceCallIds: [doc._id], sourceCount: 1, confidence: p.confidence, expiresAt });

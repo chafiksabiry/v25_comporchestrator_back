@@ -100,12 +100,13 @@ assert.equal(S.decideAiRoute({ settings: d, availability: open, now: EVENING }).
 assert.equal(R({}, { lineBusy: true }).reason, 'line_busy', 'capacité de la ligne épuisée');
 assert.equal(R({}, { minutesUsed: 200 }).reason, 'cap_reached', 'plafond mensuel');
 // Migration des réglages d'avant.
-assert.deepEqual(S.migrateLegacySettings({ level: 'total' }).$set, { schedule: { always: true, timeZone: 'Europe/Paris', slots: [] }, priority: 'first' });
+assert.deepEqual(S.migrateLegacySettings({ level: 'total' }).$set, { schedule: { always: true, timeZone: 'Europe/Paris', slots: [] }, priority: 'first', legacyLevel: 'total', legacyTriggers: null }, 'anciens champs sauvegardés');
+assert.equal(S.migrateLegacySettings({ level: 'total', schedule: { always: false } }), null, 'déjà au nouveau format (schedule présent) : jamais réécrit');
 const mig = S.migrateLegacySettings({ level: 'partial', triggers: { outsideHours: true }, businessHours: { timeZone: 'Europe/Paris', slots: [{ day: 1, start: '09:00', end: '18:00' }] } });
 assert.equal(mig.$set.priority, 'first'); assert.deepEqual(mig.$unset, { level: '', triggers: '' });
 assert.deepEqual(mig.$set.schedule.slots.filter((x) => x.day === 1), [{ day: 1, start: '00:00', end: '09:00' }, { day: 1, start: '18:00', end: '24:00' }], 'hors horaires = complément');
 assert.deepEqual(mig.$set.schedule.slots.filter((x) => x.day === 7), [{ day: 7, start: '00:00', end: '24:00' }]);
-assert.deepEqual(S.migrateLegacySettings({ level: 'partial', triggers: { outsideHours: false, allBusy: true } }).$set, { schedule: { always: true, timeZone: 'Europe/Paris', slots: [] }, priority: 'after_humans' });
+assert.deepEqual(S.migrateLegacySettings({ level: 'partial', triggers: { outsideHours: false, allBusy: true } }).$set, { schedule: { always: true, timeZone: 'Europe/Paris', slots: [] }, priority: 'after_humans', legacyLevel: 'partial', legacyTriggers: { outsideHours: false, allBusy: true } });
 assert.deepEqual(S.migrateLegacySettings({ level: 'partial', triggers: { outsideHours: false } }).$set.schedule.slots, [], 'aucun déclencheur : aucun horaire');
 assert.equal(S.migrateLegacySettings({ schedule: { always: true } }), null, 'déjà migré');
 
@@ -665,3 +666,69 @@ console.log('aiAgentPilot.test.js (apprentissage) : OK');
   delete plans[B];
 }
 console.log('aiAgentPilot.test.js (formule agent IA) : OK');
+
+// ================================================================ correctifs de revue (#185)
+{
+  const Lg = await import('../services/aiLearning.js');
+  // B2 : noms accentués et composés, civilités en minuscules, particules, IBAN entier, pas de faux positif.
+  assert.equal(Lg.anonymize("C'est André, je rappelle pour Zoé et Élodie.", { names: ['André', 'Zoé', 'Élodie'] }), "C'est [nom], je rappelle pour [nom] et [nom].");
+  assert.equal(Lg.anonymize("Je m'appelle Élodie Martin-Durand"), "Je m'appelle [nom]");
+  assert.equal(Lg.anonymize('monsieur dupont a appelé'), 'monsieur [nom] a appelé');
+  assert.equal(Lg.anonymize('Mme de la Fontaine et M. Le Gall'), 'Mme [nom] et M. [nom]');
+  assert.equal(Lg.anonymize('MADAME DE LA FONTAINE et Monsieur Durand-Petit vont bien'), 'MADAME [nom] et Monsieur [nom] vont bien');
+  assert.equal(Lg.anonymize('je suis désolé, le docteur est là'), 'je suis désolé, le docteur est là', 'pas de faux positif');
+  assert.equal(Lg.anonymize('IBAN FR76 3000 6000 0112 3456 7890 189 merci'), 'IBAN [numéro] merci', 'IBAN en entier');
+  assert.equal(Lg.anonymize('Rappelez Jean-Pierre', { names: ['Jean-Pierre Dupont'] }), 'Rappelez [nom]');
+  assert.equal(Lg.anonymize('Nous ouvrons de 9 h à 18 h, le 18/11/2026.'), 'Nous ouvrons de 9 h à 18 h, le 18/11/2026.');
+
+  // B1 : ouverture par abonnement : `active` / `trialing` seulement, le plus récent.
+  const { Subscription } = await import('../models/Subscription.js');
+  const { loadAiAgentPlan } = await import('../services/planLimits.js');
+  let seenQuery = null; let seenSort = null;
+  const subs = [
+    { status: 'past_due', createdAt: new Date('2026-11-10'), planId: { metadata: { ai_agent: 'true' } } },
+    { status: 'active', createdAt: new Date('2026-10-01'), planId: { metadata: { ai_agent: 'false' } } },
+    { status: 'active', createdAt: new Date('2026-11-01'), planId: { metadata: { ai_agent: 'true', ai_agent_included_minutes: '200' } } },
+  ];
+  Subscription.findOne = (f) => {
+    seenQuery = f;
+    return { sort(s2) { seenSort = s2; return this; }, populate: async () => subs.filter((x) => f.status.$in.includes(x.status)).sort((a, b) => b.createdAt - a.createdAt)[0] || null };
+  };
+  const plan = await loadAiAgentPlan(A);
+  assert.deepEqual(seenQuery.status.$in, ['active', 'trialing'], 'past_due n’ouvre pas l’agent'); assert.deepEqual(seenSort, { createdAt: -1 }, 'le plus récent');
+  assert.deepEqual(plan, { status: 'active', aiAgent: true, aiAgentIncludedMinutes: 200, aiAgentOverageCentsTtc: null });
+  subs.splice(1, 2);
+  assert.equal(await loadAiAgentPlan(A), null, 'seul un abonnement impayé : agent fermé');
+  plans[B] = { status: 'trialing', aiAgent: true };
+  assert.equal((await AI.resolveAvailability(B)).subscriptionStatus, 'trialing', 'statut exposé');
+  delete plans[B];
+
+  // Migration : seulement les documents sans `schedule`.
+  let migQuery = null; const updates = [];
+  const FakeModel = { collection: { find: (q2) => { migQuery = q2; return { toArray: async () => [{ _id: 1, level: 'total' }, { _id: 2, level: 'partial', schedule: { always: true } }] }; }, updateOne: async (f, u) => { updates.push([f, u]); } } };
+  assert.equal(await AI.migrateAiAgentSettings(FakeModel), 1);
+  assert.deepEqual(migQuery.schedule, { $exists: false }); assert.equal(updates[0][1].$set.legacyLevel, 'total');
+
+  // Validations concurrentes : une seule réponse apprise.
+  const { aiLearningController: lc3 } = await import('../controllers/aiLearningController.js');
+  globalThis.fetch = async (url) => { const id = new URL(url).searchParams.get('userId'); return { ok: true, json: async () => ({ data: who[id] || {} }) }; };
+  store.learned = [];
+  store.proposals = [{ _id: '64b0000000000000000000e9', companyId: A, status: 'pending', question: 'Parking gratuit ?', answer: 'Oui.', sourceCallIds: [], createdAt: new Date(NOW), expiresAt: new Date(NOW + 1e9) }];
+  const v1 = res(); const v2 = res();
+  await Promise.all([
+    lc3.validate(asUser('owner1', { body: { companyId: A }, params: { id: '64b0000000000000000000e9' } }), v1),
+    lc3.validate(asUser('owner1', { body: { companyId: A }, params: { id: '64b0000000000000000000e9' } }), v2),
+  ]);
+  assert.deepEqual([v1.code, v2.code].sort(), [200, 409]); assert.equal(store.learned.length, 1, 'une seule réponse apprise');
+  globalThis.fetch = realFetch;
+
+  // Expiration d'une proposition : alignée sur la création, jamais prolongée par un regroupement.
+  reset();
+  const exp = new Date(NOW + 5 * 86400000);
+  store.proposals = [{ _id: 'px', companyId: A, status: 'pending', key: 'ouverts samedi', question: 'Ouverts le samedi ?', answer: '', sourceCallIds: [], sourceCount: 1, confidence: 0.5, createdAt: new Date(NOW), expiresAt: exp }];
+  const c9 = { _id: newId(), companyId: A, callSid: 'CAexp', from: '+33600000000', status: 'completed', startedAt: new Date(NOW), actions: [], timeline: [] };
+  store.calls.push(c9);
+  await AI.ingestLearning(c9, { proposals: [{ question: 'Êtes-vous ouverts le samedi ?' }] });
+  assert.equal(store.proposals[0].sourceCount, 2); assert.equal(store.proposals[0].expiresAt, exp, 'échéance inchangée');
+}
+console.log('aiAgentPilot.test.js (correctifs de revue) : OK');

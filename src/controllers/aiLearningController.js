@@ -57,9 +57,17 @@ export const aiLearningController = {
       if (!p) return fail(res, 404, 'AI_PROPOSAL_NOT_FOUND', 'Proposition introuvable.');
       const checked = validateLearned({ kind: 'faq', question: req.body?.question ?? p.question, answer: req.body?.answer ?? p.answer });
       if (!checked.ok) return fail(res, 400, 'AI_LEARNING_INVALID', checked.issues[0].message, { issues: checked.issues });
-      const learned = await AiLearnedAnswer.create({ companyId: oid(o.companyId), active: true, ...checked.value, source: 'proposal', proposalId: String(p._id), createdById: o.access.userId });
-      // Validée : conservée comme trace (sans appels sources, qui suivent la rétention des fiches) jusqu'à l'échéance d'une proposition refusée.
-      await AiLearningProposal.updateOne({ _id: p._id, companyId: oid(o.companyId) }, { $set: { status: 'validated', decidedAt: new Date(deps.now()), decidedById: o.access.userId, learnedAnswerId: String(learned._id), question: checked.value.question, answer: checked.value.answer, sourceCallIds: [], expiresAt: new Date(deps.now() + REJECTED_KEEP_MS) } });
+      // Prise atomique (encore « en attente ») : deux validations simultanées ne créent jamais deux réponses apprises.
+      const claim = await AiLearningProposal.updateOne({ _id: p._id, companyId: oid(o.companyId), status: 'pending' }, { $set: { status: 'validated', decidedAt: new Date(deps.now()), decidedById: o.access.userId, question: checked.value.question, answer: checked.value.answer, sourceCallIds: [], expiresAt: new Date(deps.now() + REJECTED_KEEP_MS) } });
+      if (!claim?.modifiedCount) return fail(res, 409, 'AI_PROPOSAL_ALREADY_DECIDED', 'Cette proposition a déjà été traitée.');
+      let learned;
+      try {
+        learned = await AiLearnedAnswer.create({ companyId: oid(o.companyId), active: true, ...checked.value, source: 'proposal', proposalId: String(p._id), createdById: o.access.userId });
+      } catch (err) {
+        await AiLearningProposal.updateOne({ _id: p._id, companyId: oid(o.companyId), status: 'validated' }, { $set: { status: 'pending', decidedAt: null, decidedById: '' } }).catch(() => undefined);
+        throw err;
+      }
+      await AiLearningProposal.updateOne({ _id: p._id, companyId: oid(o.companyId) }, { $set: { learnedAnswerId: String(learned._id) } });
       res.json({ success: true, data: { answer: toAnswer(learned), counts: await counts(o.companyId) } });
     } catch (e) { console.error('ai-learning validate:', e.message); fail(res, 500, 'AI_LEARNING_SAVE_FAILED', 'Validation impossible.'); }
   },

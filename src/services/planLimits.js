@@ -36,6 +36,20 @@ export function aiAgentFromMetadata(metadata) {
 }
 
 /**
+ * Formule agent IA de l'entreprise pour l'OUVERTURE de l'agent : abonnement le plus récent au statut `active` ou `trialing` seulement
+ * (un abonnement impayé `past_due` n'ouvre pas l'agent). @returns {Promise<null|{ status, aiAgent, aiAgentIncludedMinutes, aiAgentOverageCentsTtc }>}
+ */
+export async function loadAiAgentPlan(companyId) {
+  if (!companyId) return null;
+  const subscription = await Subscription.findOne({ companyId: String(companyId), status: { $in: ['active', 'trialing'] } })
+    .sort({ createdAt: -1 })
+    .populate('planId');
+  const plan = subscription?.planId;
+  if (!plan || typeof plan === 'string') return null;
+  return { status: subscription.status, ...aiAgentFromMetadata(plan.metadata) };
+}
+
+/**
  * Quotas for the company's current plan.
  * Stripe product metadata wins over the copied numeric fields.
  */

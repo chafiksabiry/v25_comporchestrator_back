@@ -35,6 +35,9 @@ const schema = new mongoose.Schema(
     learning: { enabled: { type: Boolean, default: true } },
     listeningBench: { enabled: { type: Boolean, default: false }, provider: { type: String, default: 'alternate' } },
     updatedById: { type: String, default: '' },
+    /** Sauvegarde des anciens réglages (niveau / déclencheurs) à la migration vers horaires + priorité ; jamais renvoyée. */
+    legacyLevel: { type: mongoose.Schema.Types.Mixed, default: undefined },
+    legacyTriggers: { type: mongoose.Schema.Types.Mixed, default: undefined },
   },
   { timestamps: true, collection: 'ai_agent_settings' }
 );

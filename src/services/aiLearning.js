@@ -15,23 +15,39 @@ export const MAX_INJECTED = 40;
 
 const clip = (s, n) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
 
+// Bornes de mot compatibles avec les lettres accentuées (\b ne connaît que [A-Za-z0-9_]).
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const WORD = '[\\p{L}\\p{N}_]';
+const START = `(?<!${WORD})`;
+const END = `(?!${WORD})`;
+/** Motif insensible à la casse sans le drapeau i (qui rendrait \p{Lu} insensible à la casse lui aussi). */
+const ci = (w) => w.split('').map((c) => (/\p{L}/u.test(c) && c.toLowerCase() !== c.toUpperCase() ? `[${c.toLowerCase()}${c.toUpperCase()}]` : escapeRe(c))).join('');
+const PARTICLES = `(?:(?:${["de", "du", "des", "d'", "d’", "le", "la", "les", "van", "von", "der", "den", "di", "da", "del", "della", "dos", "ben", "ibn", "mac", "mc"].map(ci).join('|')})\\s*)`;
+const CIVILITIES = ['monsieur', 'madame', 'mademoiselle', 'docteur', 'maître', 'maitre', 'mme', 'mlle', 'm.', 'mr.', 'mr', 'mrs.', 'mrs', 'ms.', 'ms', 'dr.', 'dr'].map(ci).join('|');
+const CAP_WORD = "\\p{Lu}[\\p{L}'’-]*";
+const ANY_WORD = "[\\p{L}][\\p{L}'’-]*";
+
 /**
- * Anonymise un texte destiné à une réponse apprise : e-mails, numéros (téléphone, IBAN, carte…), noms connus de l'appel, et noms
- * annoncés (« je m'appelle X », « Monsieur X », « Mme X »). Les réponses apprises ne contiennent jamais de donnée personnelle de l'appelant.
+ * Anonymise un texte destiné à une réponse apprise : e-mails, IBAN (en entier), numéros, noms connus de l'appel (prénoms et noms
+ * accentués ou composés), noms annoncés (« je m'appelle Élodie », « c'est Zoé ») et noms après une civilité, quelle que soit la casse
+ * (« monsieur dupont », « Mme de la Fontaine », « M. Le Gall »). « je suis désolé » reste intact (un nom annoncé commence par une majuscule).
  */
 export function anonymize(text, { names = [] } = {}) {
   let t = String(text ?? '');
-  t = t.replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, '[e-mail]');
-  t = t.replace(/\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){2,7}\b/g, '[numéro]');
+  t = t.replace(/[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/gu, '[e-mail]');
+  t = t.replace(new RegExp(`${START}[A-Z]{2}\\d{2}(?:[ ]?[A-Z0-9]){11,30}${END}`, 'gu'), '[numéro]');
   t = t.replace(/(?:\+|00)?\d[\d\s.\-()]{5,}\d/g, '[numéro]');
-  for (const raw of names) {
-    for (const part of String(raw || '').split(/\s+/).filter((p) => p.length >= 2)) {
-      t = t.replace(new RegExp(`\\b${part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi'), '[nom]');
-    }
+  const known = [...new Set((names || []).map((n) => String(n || '').trim()).filter((n) => n.length >= 2))];
+  const parts = known.flatMap((n) => n.split(/[\s-]+/)).filter((p) => p.length >= 2 && !new RegExp(`^${PARTICLES}$`, 'u').test(`${p} `));
+  for (const n of [...known, ...parts].sort((a, b) => b.length - a.length)) {
+    t = t.replace(new RegExp(`${START}${escapeRe(n)}${END}`, 'giu'), '[nom]');
   }
-  t = t.replace(/\b(je m'appelle|je suis|mon nom est|my name is|this is)\s+([A-ZÀ-Ý][\p{L}'-]+(?:\s+[A-ZÀ-Ý][\p{L}'-]+)?)/giu, (m, a) => `${a} [nom]`);
-  t = t.replace(/\b(Monsieur|Madame|Mademoiselle|M\.|Mme|Mlle|Mr\.?|Mrs\.?|Ms\.?|Dr\.?)\s+[A-ZÀ-Ý][\p{L}'-]+/gu, (m, a) => `${a} [nom]`);
-  return t.replace(/\s+/g, ' ').trim();
+  const NAME_SEQ = `${PARTICLES}*${CAP_WORD}(?:[\\s-]+${PARTICLES}*${CAP_WORD})?`;
+  t = t.replace(new RegExp(`${START}([Jj]e m'appelle|[Jj]e m’appelle|[Mm]on nom est|[Jj]e suis|[Cc]'est|[Cc]’est|[Mm]y name is|[Tt]his is|[Ii]t's|I am|I'm)\\s+(?:${NAME_SEQ})`, 'gu'), (m, intro) => `${intro} [nom]`);
+  // Après une civilité, un mot courant (« le docteur est là ») n'est pas un nom.
+  const NOT_NAME = `(?!(?:est|sont|a|ont|va|vont|vous|nous|sera|peut|doit|qui|que|et|ou|au|aux|en|y|ne|se|is|was|will|can|and|or)${END})`;
+  t = t.replace(new RegExp(`${START}(${CIVILITIES})\\s+${NOT_NAME}${PARTICLES}*${ANY_WORD}(?:-${ANY_WORD}|\\s+${PARTICLES}*${CAP_WORD})?${END}`, 'gu'), (m, civ) => `${civ} [nom]`);
+  return t.replace(/\[nom\](?:[\s-]*\[nom\])+/g, '[nom]').replace(/\s+/g, ' ').trim();
 }
 
 const STOP = new Set('etes avez faites fait suis le la les un une des de du d l et ou a à au aux en est sont pour par sur dans avec que qui quoi quel quelle quels quelles est-ce ce cet cette ces vous nous je tu il elle on ils elles mon ma mes votre vos notre nos the a an of to is are do does what how when where can i you your my for in on at it'.split(' '));

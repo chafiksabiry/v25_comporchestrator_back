@@ -297,7 +297,7 @@ export function decideAiRoute({ settings, availability, lineBusy = false, stage 
  * @returns {{ $set: object, $unset: object }|null} null si le document est déjà au nouveau format.
  */
 export function migrateLegacySettings(doc) {
-  if (!doc || (doc.level === undefined && doc.triggers === undefined)) return null;
+  if (!doc || doc.schedule !== undefined || (doc.level === undefined && doc.triggers === undefined)) return null;
   const tz = normalizeTimeZone(doc.businessHours?.timeZone) || DEFAULT_TIME_ZONE;
   let schedule = { always: false, timeZone: tz, slots: [] };
   let priority = 'after_humans';
@@ -312,7 +312,8 @@ export function migrateLegacySettings(doc) {
   } else if (doc.triggers?.allBusy === true) {
     schedule = { always: true, timeZone: tz, slots: [] };
   }
-  return { $set: { schedule, priority }, $unset: { level: '', triggers: '' } };
+  // Anciens champs sauvegardés (retour arrière possible), puis retirés.
+  return { $set: { schedule, priority, legacyLevel: doc.level ?? null, legacyTriggers: doc.triggers ?? null }, $unset: { level: '', triggers: '' } };
 }
 
 /** Complément d'une semaine de plages (« hors horaires d'ouverture ») : mêmes jours 1..7, fin de journée notée 24:00. */
