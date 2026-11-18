@@ -265,6 +265,7 @@ test('repli réglable par PHONE_LINE_FALLBACK_PRICE_CENTS (PHONE_LINE_MONTHLY_PR
   assert.equal(config.phoneLineMonthlyPriceCents, undefined, 'ancienne clé retirée de la configuration');
   assert.deepEqual(sub.cloudPhoneLinePrice({ phoneLinePriceCents: 1999 }, {}), { cents: 1999, source: 'stripe_metadata' });
   const warned = []; const origWarn = console.warn; console.warn = (m) => warned.push(String(m));
+  sub.resetPhoneLineFallbackWarnings();
   try {
     assert.deepEqual(sub.cloudPhoneLinePrice({ phoneLinePriceCents: 1999, planId: 'p1' }, {}), { cents: 1999, source: 'stripe_metadata' });
     assert.equal(warned.length, 0, 'prix Stripe présent : aucun avertissement');
@@ -272,6 +273,13 @@ test('repli réglable par PHONE_LINE_FALLBACK_PRICE_CENTS (PHONE_LINE_MONTHLY_PR
   } finally { console.warn = origWarn; }
   assert.equal(warned.length, 1);
   assert.match(warned[0], /phone_line_price_cents.*plan_accueil.*price_acc/);
+  console.warn = (m) => warned.push(String(m));
+  try {
+    for (let i = 0; i < 3; i++) sub.cloudPhoneLinePrice({ phoneLinePriceCents: null, planId: 'plan_accueil', stripePriceId: 'price_acc' }, {});
+    assert.equal(warned.length, 1, 'même forfait : un seul avertissement par processus');
+    sub.cloudPhoneLinePrice({ phoneLinePriceCents: null, planId: 'plan_full', stripePriceId: 'price_full' }, {});
+    assert.equal(warned.length, 2, 'autre forfait : signalé une fois');
+  } finally { console.warn = origWarn; }
 });
 
 test('TaaS (pas de harx_product callcenter), même avec la clé : prix 999 inchangé', async () => {

@@ -76,12 +76,15 @@ function oid(value) {
 }
 
 /**
- * Sièges occupés par le centre : titulaire + membres (rattachements et invitations en attente) + agents (comptes du centre
- * et invitations en attente ou acceptées). Une même personne ne compte qu'une fois. Mêmes règles que les listes
+ * Sièges occupés par le centre. Une même personne ne compte qu'une fois. Mêmes règles que les listes
  * `GET /api/company-members` et `GET /api/call-center/agents` du service d'inscription.
+ * - `secretariesOnly` (Accueil / Secrétariat) : les secrétaires seules (agents : comptes du centre et invitations en attente ou acceptées) ;
+ * - `membersOnly` (Full Scope, Multi-clients) : titulaire + membres (rattachements et invitations en attente) ; les agents sont
+ *   facturés par leur ligne, ils n'occupent jamais un siège ;
+ * - sinon : tout le monde (titulaire, membres et agents).
  * @param {{ collection: (name: string) => any }} db
  */
-export async function countSeatsUsed(db, companyId, { secretariesOnly = false } = {}) {
+export async function countSeatsUsed(db, companyId, { secretariesOnly = false, membersOnly = false } = {}) {
   const company = oid(companyId);
   const companyDoc = await db.collection('companies').findOne({ _id: company });
   const ownerId = companyDoc?.userId ? String(companyDoc.userId) : null;
@@ -101,13 +104,16 @@ export async function countSeatsUsed(db, companyId, { secretariesOnly = false } 
     for (const m of memberships) if (!isOwner(m.userId)) add(m.userId, m.email);
   }
 
-  const agentUsers = await db.collection('users').find({ employerCompanyId: company, typeUser: 'rep' }).toArray();
-  for (const u of agentUsers) if (!isOwner(u._id)) add(u._id, u.email);
+  if (!membersOnly) {
+    const agentUsers = await db.collection('users').find({ employerCompanyId: company, typeUser: 'rep' }).toArray();
+    for (const u of agentUsers) if (!isOwner(u._id)) add(u._id, u.email);
+  }
 
   const invitations = await db.collection('agentinvitations').find({ companyId: company }).toArray();
   for (const i of invitations) {
     const status = String(i.status || '');
     if (secretariesOnly && i.kind === 'member') continue;
+    if (membersOnly && i.kind !== 'member') continue;
     const open = i.kind === 'member' ? status === 'pending' : status === 'pending' || status === 'accepted';
     if (open && !isOwner(i.userId)) add(i.userId, i.email);
   }
@@ -221,7 +227,9 @@ export async function getSeatsState({ db, stripe, companyId, forSale = EXTRA_SEA
 
 async function readSeatsState({ db, stripe, companyId }) {
   const { subscription, tier } = await loadSeatContext(db, companyId);
-  const used = await countSeatsUsed(db, companyId, { secretariesOnly: SECRETARIES_ONLY_TIERS.includes(tier) });
+  // Accueil : les secrétaires ; autres offres : titulaire et membres (les agents de Full Scope / Multi-clients sont facturés par ligne).
+  const secretariesOnly = SECRETARIES_ONLY_TIERS.includes(tier);
+  const used = await countSeatsUsed(db, companyId, { secretariesOnly, membersOnly: !secretariesOnly });
   if (!subscription || !tier) {
     return notApplicable('no_subscription', used, tier, "Aucun abonnement Call Centre actif ou en essai : pas de siège à facturer.");
   }

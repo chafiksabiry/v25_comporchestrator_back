@@ -63,12 +63,20 @@ export function cloudPhoneLineFallbackCents(cfg = config) {
  * (déjà lue dans `limits.phoneLinePriceCents`), sinon le repli. `source` dit d'où vient le prix.
  * @returns {{ cents: number, source: 'stripe_metadata' | 'default' }}
  */
+/** Forfaits déjà signalés sans `phone_line_price_cents` (un seul avertissement par forfait et par processus). */
+const fallbackWarned = new Set();
+/** Pour les tests : oublie les forfaits déjà signalés. */
+export function resetPhoneLineFallbackWarnings() { fallbackWarned.clear(); }
+
 export function cloudPhoneLinePrice(limits, cfg = config) {
   const fromStripe = limits?.phoneLinePriceCents;
   if (Number.isInteger(fromStripe) && fromStripe > 0) return { cents: fromStripe, source: 'stripe_metadata' };
   const cents = cloudPhoneLineFallbackCents(cfg);
   // Produit d'offre sans métadonnée : à corriger dans Stripe. Aucune donnée client, seulement le forfait (le produit Stripe
-  // n'est pas recopié sur le forfait local : son prix Stripe et l'identifiant du forfait le désignent).
+  // n'est pas recopié sur le forfait local : son prix Stripe et l'identifiant du forfait le désignent). Une fois par forfait et par processus.
+  const key = String(limits?.planId ?? limits?.stripePriceId ?? limits?.callcenterTier ?? '?');
+  if (fallbackWarned.has(key)) return { cents, source: 'default' };
+  fallbackWarned.add(key);
   console.warn(`[phoneLine] produit d'offre sans ${PHONE_LINE_PRICE_METADATA_KEY} : repli ${cents} centimes (forfait ${limits?.planId ?? '?'}, prix Stripe ${limits?.stripePriceId ?? '?'}, palier ${limits?.callcenterTier ?? '?'})`);
   return { cents, source: 'default' };
 }
