@@ -88,7 +88,7 @@ beforeEach(() => {
   stripeService.priceAllowsPromotionCodes = async (id) => promotionCodesAllowed(products[id]);
   stripeService.createEmbeddedSubscriptionSession = async (...args) => { calls.sessions.push(['embedded', ...args]); return { id: 'cs', client_secret: 'sec' }; };
   stripeService.createCheckoutSession = async (...args) => { calls.sessions.push(['hosted', ...args]); return { id: 'cs', url: 'https://checkout' }; };
-  stripeService.sharedClient = () => ({ coupons: { list: async () => { calls.couponReads += 1; return { data: [] }; } } });
+  stripeService.getSharedClient = () => ({ coupons: { list: async () => { calls.couponReads += 1; return { data: [] }; } } });
   SubscriptionPlan.findOne = async ({ stripePriceId }) => ({ _id: `plan_${stripePriceId}`, name: 'Plan', price: 29.99, currency: 'eur', stripePriceId, metadata: products[stripePriceId] });
   CompanyPayment.create = async (doc) => { calls.payments += 1; return { _id: 'pay_1', ...doc, save: async () => {} }; };
   global.fetch = async () => ({ ok: true, json: async () => ({ success: true, data: { companyId: C1, isOwner: true } }) });
