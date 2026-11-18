@@ -44,6 +44,31 @@ export const ACTIVE_OFFER_STATUSES = ['active', 'trialing'];
 /** Une ligne mensuelle « pending » depuis plus longtemps que cela est reprise ou libérée par la réconciliation. */
 export const PENDING_LINE_MAX_AGE_MS = 15 * 60 * 1000;
 
+/**
+ * Valeur de repli du prix mensuel d'une ligne supplémentaire (offres CLOUD), en centimes : décision du fondateur du 18/11/2026,
+ * 14,99 € TTC sur toutes les offres CLOUD, Accueil / Secrétariat compris. Ne sert que si le produit Stripe de l'offre ne porte pas
+ * `phone_line_price_cents` valable ; réglable par PHONE_LINE_MONTHLY_PRICE_CENTS.
+ */
+export const DEFAULT_CLOUD_PHONE_LINE_PRICE_CENTS = 1499;
+
+/** Repli effectif : PHONE_LINE_MONTHLY_PRICE_CENTS s'il est un entier > 0, sinon DEFAULT_CLOUD_PHONE_LINE_PRICE_CENTS. */
+export function cloudPhoneLineFallbackCents(cfg = config) {
+  const raw = String(cfg?.phoneLineMonthlyPriceCents ?? '').trim();
+  const n = /^\d+$/.test(raw) ? Number(raw) : NaN;
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_CLOUD_PHONE_LINE_PRICE_CENTS;
+}
+
+/**
+ * Prix mensuel d'une ligne supplémentaire d'une offre CLOUD : la métadonnée Stripe `phone_line_price_cents` du produit de l'offre
+ * (déjà lue dans `limits.phoneLinePriceCents`), sinon le repli. `source` dit d'où vient le prix.
+ * @returns {{ cents: number, source: 'stripe_metadata' | 'default' }}
+ */
+export function cloudPhoneLinePrice(limits, cfg = config) {
+  const fromStripe = limits?.phoneLinePriceCents;
+  if (Number.isInteger(fromStripe) && fromStripe > 0) return { cents: fromStripe, source: 'stripe_metadata' };
+  return { cents: cloudPhoneLineFallbackCents(cfg), source: 'default' };
+}
+
 /** Prix mensuel d'une ligne (centimes entiers > 0) lu dans des métadonnées de produit ; null si absent ou invalide. */
 export function phoneLinePriceCentsFromMetadata(metadata) {
   if (!metadata || typeof metadata !== 'object') return null;

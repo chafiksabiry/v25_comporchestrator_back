@@ -534,6 +534,8 @@ console.log('aiAgentPilot.test.js : OK');
   PhoneNumber.find = (f) => q(phones.filter((p) => S2(p.companyId) === S2(f.companyId)));
   PhoneNumber.updateOne = async (f, u) => { const p = phones.find((x) => S2(x._id) === S2(f._id) && S2(x.companyId) === S2(f.companyId)); if (!p) return { matchedCount: 0 }; Object.assign(p, u.$set); return { matchedCount: 1 }; };
   lineCapacityDeps.enforced = async () => true;
+  lineCapacityDeps.unitPriceTtcCents = async () => 1499; // prix de l'offre (Stripe `phone_line_price_cents`, sinon repli 14,99 €)
+  assert.equal(capacityView([{ _id: 'l1', maxConcurrentCalls: 2 }], { env: {}, unitPriceTtcCents: 1799 }).monthlyCostTtcCents, 1799, 'prix de l\'offre suivi tel quel');
   globalThis.fetch = async (url) => { const id = new URL(url).searchParams.get('userId'); return { ok: true, json: async () => ({ data: who[id] || {} }) }; };
   r = res(); await lc.put(asUser('member1', { body: { companyId: A, lineId: L1, maxConcurrentCalls: 2 } }), r); assert.equal(r.code, 403, 'membre : refus');
   r = res(); await lc.put(asUser('owner1', { body: { companyId: A, lineId: L1, maxConcurrentCalls: 0 } }), r); assert.equal(r.body.code, 'LINE_CAPACITY_INVALID');

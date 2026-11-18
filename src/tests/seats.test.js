@@ -111,7 +111,7 @@ assert.equal(prices.full_scope.priceId, 'price_f');
 // création, mise à jour, idempotence, suppression
 clearSeatPriceCache();
 const s1 = fakeStripe({ items: [planItem] });
-let r = await syncSeats({ db: fakeDb(baseData()), stripe: s1, companyId: C });
+let r = await syncSeats({ db: fakeDb(baseData()), stripe: s1, companyId: C, forSale: true });
 assert.equal(r.action, 'created');
 assert.equal(r.extra, 4);
 assert.equal(r.unitPrice, 59);
@@ -119,48 +119,48 @@ assert.equal(r.monthlyTotal, 236);
 assert.equal(s1.calls[0][1].quantity, 4);
 assert.equal(s1.calls[0][1].proration_behavior, 'create_prorations');
 assert.equal(s1.calls[0][1].price, 'price_f');
-r = await syncSeats({ db: fakeDb(baseData()), stripe: s1, companyId: C });
+r = await syncSeats({ db: fakeDb(baseData()), stripe: s1, companyId: C, forSale: true });
 assert.equal(r.action, 'unchanged');
 assert.equal(s1.calls.length, 1, 'deuxième appel identique : aucune écriture Stripe');
 
 // un siège de moins
 const fewer = baseData({ agentinvitations: [] });
-r = await syncSeats({ db: fakeDb(fewer), stripe: s1, companyId: C }); // titulaire + m1 + a1 = 3 -> 2 en plus
+r = await syncSeats({ db: fakeDb(fewer), stripe: s1, companyId: C, forSale: true }); // titulaire + m1 + a1 = 3 -> 2 en plus
 assert.equal(r.action, 'updated');
 assert.equal(s1.calls[1][2].quantity, 2);
 
 // retour à 1 siège : la ligne disparaît
 const alone = baseData({ companymemberships: [], users: [], agentinvitations: [] });
-r = await syncSeats({ db: fakeDb(alone), stripe: s1, companyId: C });
+r = await syncSeats({ db: fakeDb(alone), stripe: s1, companyId: C, forSale: true });
 assert.equal(r.action, 'removed');
 assert.equal(s1.calls[2][0], 'del');
-r = await syncSeats({ db: fakeDb(alone), stripe: s1, companyId: C });
+r = await syncSeats({ db: fakeDb(alone), stripe: s1, companyId: C, forSale: true });
 assert.equal(r.action, 'unchanged');
 assert.equal(s1.calls.length, 3, 'rien à créer pour 0 siège en plus');
 
 // appels concurrents : une seule création
 clearSeatPriceCache();
 const s2 = fakeStripe({ items: [planItem] });
-await Promise.all([1, 2, 3].map(() => syncSeats({ db: fakeDb(baseData()), stripe: s2, companyId: C })));
+await Promise.all([1, 2, 3].map(() => syncSeats({ db: fakeDb(baseData()), stripe: s2, companyId: C, forSale: true })));
 assert.equal(s2.calls.filter((c) => c[0] === 'create').length, 1);
 
 // repli sans configuration (aucun produit siège) : pas d'écriture, message clair, pas d'erreur
 clearSeatPriceCache();
 const none = fakeStripe({ items: [planItem], products: [] });
-r = await syncSeats({ db: fakeDb(baseData()), stripe: none, companyId: C });
+r = await syncSeats({ db: fakeDb(baseData()), stripe: none, companyId: C, forSale: true });
 assert.equal(r.action, 'skipped');
 assert.equal(r.configured, false);
 assert.match(r.message, /non configurée/);
 assert.equal(none.calls.length, 0);
 // Stripe absent
-r = await syncSeats({ db: fakeDb(baseData()), stripe: null, companyId: C });
+r = await syncSeats({ db: fakeDb(baseData()), stripe: null, companyId: C, forSale: true });
 assert.equal(r.action, 'skipped');
 assert.equal(r.configured, false);
 // Stripe en panne : l'état ne lève pas
 clearSeatPriceCache();
 const broken = { products: { list: async () => { throw new Error('boom'); } } };
 const origWarn = console.warn; console.warn = () => {};
-r = await getSeatsState({ db: fakeDb(baseData()), stripe: broken, companyId: C });
+r = await getSeatsState({ db: fakeDb(baseData()), stripe: broken, companyId: C, forSale: true });
 console.warn = origWarn;
 assert.equal(r.configured, false);
 assert.equal(r.used, 5);
@@ -169,17 +169,17 @@ assert.equal(r.used, 5);
 clearSeatPriceCache();
 const nomad = baseData({ subscriptionplans: [{ _id: PLAN, metadata: { harx_product: 'callcenter', callcenter_tier: 'nomad_solo' } }] });
 const s3 = fakeStripe({ items: [planItem] });
-r = await syncSeats({ db: fakeDb(nomad), stripe: s3, companyId: C });
+r = await syncSeats({ db: fakeDb(nomad), stripe: s3, companyId: C, forSale: true });
 assert.equal(r.action, 'skipped');
 assert.equal(r.applicable, false);
 assert.equal(r.reason, 'nomad_solo');
-r = await syncSeats({ db: fakeDb(baseData({ subscriptions: [] })), stripe: s3, companyId: C });
+r = await syncSeats({ db: fakeDb(baseData({ subscriptions: [] })), stripe: s3, companyId: C, forSale: true });
 assert.equal(r.applicable, false);
-r = await syncSeats({ db: fakeDb(baseData({ subscriptions: [{ companyId: C, status: 'canceled', planId: PLAN }] })), stripe: s3, companyId: C });
+r = await syncSeats({ db: fakeDb(baseData({ subscriptions: [{ companyId: C, status: 'canceled', planId: PLAN }] })), stripe: s3, companyId: C, forSale: true });
 assert.equal(r.applicable, false);
 assert.equal(s3.calls.length, 0);
 // en essai : accepté
-r = await syncSeats({ db: fakeDb(baseData({ subscriptions: [{ companyId: C, status: 'trialing', stripeSubscriptionId: 'sub_1', planId: PLAN }] })), stripe: s3, companyId: C });
+r = await syncSeats({ db: fakeDb(baseData({ subscriptions: [{ companyId: C, status: 'trialing', stripeSubscriptionId: 'sub_1', planId: PLAN }] })), stripe: s3, companyId: C, forSale: true });
 assert.equal(r.action, 'created');
 
 // la ligne du forfait n'est jamais confondue avec un siège
@@ -188,7 +188,7 @@ assert.equal(pickPlanItem([{ id: 's', metadata: { harx_product: 'callcenter_seat
 // remise : signalée mais jamais appliquée par nous
 clearSeatPriceCache();
 const withDiscount = fakeStripe({ items: [planItem], discount: { coupon: { id: 'LANCEMENT' } } });
-r = await getSeatsState({ db: fakeDb(baseData()), stripe: withDiscount, companyId: C });
+r = await getSeatsState({ db: fakeDb(baseData()), stripe: withDiscount, companyId: C, forSale: true });
 assert.equal(r.discountMayApplyToSeats, true);
 
 // --- routes : titulaire seulement ---------------------------------------------------------------------------------------
@@ -201,7 +201,14 @@ function call(handler, req) {
 clearSeatPriceCache();
 const sx = fakeStripe({ items: [planItem] });
 const mk = (role, companyId = C) => createSeatsHandlers({ getAccess: async () => ({ role, companyId }), getDb: () => fakeDb(baseData()), getStripe: () => sx });
-assert.equal((await call(mk('owner').syncSeats, {})).code, 200);
+// Sièges supplémentaires hors vente (décision du 18/11/2026) : 4 sièges en plus non facturés -> 409 SEATS_NOT_AVAILABLE, aucune écriture Stripe
+const refusedRoute = await call(mk('owner').syncSeats, {});
+assert.equal(refusedRoute.code, 409);
+assert.equal(refusedRoute.body.code, 'SEATS_NOT_AVAILABLE');
+assert.match(refusedRoute.body.message, /pas disponibles pour le moment/);
+assert.equal(sx.calls.length, 0);
+const okRoute = createSeatsHandlers({ getAccess: async () => ({ role: 'owner', companyId: C }), getDb: () => fakeDb(baseData({ companymemberships: [], users: [], agentinvitations: [] })), getStripe: () => sx });
+assert.equal((await call(okRoute.syncSeats, {})).code, 200, 'titulaire seul : rien à refuser');
 assert.equal((await call(mk('member').syncSeats, {})).code, 403);
 assert.equal((await call(mk('agent').syncSeats, {})).code, 403);
 assert.equal((await call(mk('agent').getSeats, {})).code, 403);
@@ -212,7 +219,7 @@ assert.equal((await call(mk('owner', null).getSeats, {})).code, 404);
 const denied = createSeatsHandlers({ getAccess: async () => { const e = new Error('Authentication required'); e.status = 401; Object.setPrototypeOf(e, (await import('../middleware/companyScope.js')).ScopeError.prototype); throw e; } });
 assert.equal((await call(denied.getSeats, {})).code, 401);
 // panne Stripe pendant la synchro : 200 non bloquant
-const boomHandlers = createSeatsHandlers({ getAccess: async () => ({ role: 'owner', companyId: C }), getDb: () => { throw new Error('db'); }, getStripe: () => sx });
+const boomHandlers = createSeatsHandlers({ getAccess: async () => ({ role: 'owner', companyId: C, forSale: true }), getDb: () => { throw new Error('db'); }, getStripe: () => sx });
 const origErr = console.error; console.error = () => {};
 const failed = await call(boomHandlers.syncSeats, {});
 console.error = origErr;
@@ -232,7 +239,7 @@ assert.equal(await countSeatsUsed(fakeDb(baseData({ users: [], agentinvitations:
 clearSeatPriceCache();
 const sa = fakeStripe({ items: [planItem] });
 const twoSecretaries = accueilData({ companymemberships: [], users: [{ _id: 'a1', email: 'a1@x.fr', employerCompanyId: C, typeUser: 'rep' }], agentinvitations: [{ companyId: C, userId: 'a2', email: 'a2@x.fr', kind: 'agent', status: 'pending' }] });
-r = await syncSeats({ db: fakeDb(twoSecretaries), stripe: sa, companyId: C });
+r = await syncSeats({ db: fakeDb(twoSecretaries), stripe: sa, companyId: C, forSale: true });
 assert.equal(r.used, 2);
 assert.equal(r.included, 2);
 assert.equal(r.extra, 0);
@@ -240,19 +247,56 @@ assert.equal(r.action, 'unchanged');
 assert.equal(sa.calls.length, 0, 'deux secrétaires : rien n’est facturé');
 // un responsable invité en plus n'est jamais un siège
 const withManager = accueilData({ ...twoSecretaries, agentinvitations: [...twoSecretaries.agentinvitations, { companyId: C, email: 'resp@x.fr', kind: 'member', status: 'pending' }] });
-r = await getSeatsState({ db: fakeDb(withManager), stripe: sa, companyId: C });
+r = await getSeatsState({ db: fakeDb(withManager), stripe: sa, companyId: C, forSale: true });
 assert.equal(r.used, 2);
 assert.equal(r.extra, 0);
 // la troisième secrétaire est facturée 39 €
 const threeSecretaries = accueilData({ companymemberships: [], users: [{ _id: 'a1', email: 'a1@x.fr', employerCompanyId: C, typeUser: 'rep' }], agentinvitations: [
   { companyId: C, userId: 'a2', email: 'a2@x.fr', kind: 'agent', status: 'pending' }, { companyId: C, userId: 'a4', email: 'a4@x.fr', kind: 'agent', status: 'accepted' }] });
-r = await syncSeats({ db: fakeDb(threeSecretaries), stripe: sa, companyId: C });
+r = await syncSeats({ db: fakeDb(threeSecretaries), stripe: sa, companyId: C, forSale: true });
 assert.equal(r.extra, 1);
 assert.equal(r.unitPrice, 39);
 assert.equal(r.action, 'created');
 assert.equal(sa.calls[0][1].quantity, 1);
 assert.equal(sa.calls[0][1].price, 'price_a');
 // l'offre Full Scope garde sa règle : titulaire compris, 1 inclus
-assert.equal((await getSeatsState({ db: fakeDb(baseData()), stripe: fakeStripe({ items: [planItem] }), companyId: C })).included, 1);
+assert.equal((await getSeatsState({ db: fakeDb(baseData()), stripe: fakeStripe({ items: [planItem] }), companyId: C, forSale: true })).included, 1);
+
+
+// --- Sièges supplémentaires hors vente (EXTRA_SEATS_FOR_SALE = false, décision du 18/11/2026) ----------------------------------
+{
+  const { EXTRA_SEATS_FOR_SALE, SEATS_NOT_AVAILABLE_MESSAGE } = await import('../services/seats.js');
+  assert.equal(EXTRA_SEATS_FOR_SALE, false);
+  assert.equal(SEATS_NOT_AVAILABLE_MESSAGE, 'Les sièges supplémentaires ne sont pas disponibles pour le moment.');
+  clearSeatPriceCache();
+  // état : prix jamais renvoyé, ajout possible seulement dans les sièges inclus
+  let st = await getSeatsState({ db: fakeDb(baseData()), stripe: fakeStripe({ items: [planItem] }), companyId: C });
+  assert.deepEqual([st.forSale, st.canAddSeat, st.unitPrice, st.unitAmount, st.monthlyTotal], [false, false, null, null, null]);
+  assert.equal(st.message, SEATS_NOT_AVAILABLE_MESSAGE);
+  st = await getSeatsState({ db: fakeDb(twoSecretaries), stripe: fakeStripe({ items: [planItem] }), companyId: C });
+  assert.deepEqual([st.used, st.included, st.canAddSeat], [2, 2, false], 'Accueil : deux secrétaires incluses, pas de troisième');
+  const oneSecretary = accueilData({ companymemberships: [], users: [{ _id: 'a1', email: 'a1@x.fr', employerCompanyId: C, typeUser: 'rep' }], agentinvitations: [] });
+  st = await getSeatsState({ db: fakeDb(oneSecretary), stripe: fakeStripe({ items: [planItem] }), companyId: C });
+  assert.equal(st.canAddSeat, true, 'Accueil : la deuxième secrétaire reste incluse');
+  // synchronisation : aucune création au-delà des sièges inclus
+  const n1 = fakeStripe({ items: [planItem] });
+  let rr = await syncSeats({ db: fakeDb(threeSecretaries), stripe: n1, companyId: C });
+  assert.deepEqual([rr.action, rr.code, n1.calls.length], ['refused', 'SEATS_NOT_AVAILABLE', 0]);
+  // aucune facturation configurée non plus : refus, pas un simple « skipped »
+  rr = await syncSeats({ db: fakeDb(threeSecretaries), stripe: null, companyId: C });
+  assert.equal(rr.action, 'refused');
+  // sièges déjà facturés (2 en plus) : conservés tels quels, jamais augmentés...
+  const billedItem = { id: 'si_seat', quantity: 2, price: { id: 'price_f', product: 'prod_f' }, metadata: { harx_product: 'callcenter_seat' } };
+  const n2 = fakeStripe({ items: [planItem, billedItem] });
+  const threeSeats = baseData({ agentinvitations: [] }); // titulaire + m1 + a1 = 3 -> 2 en plus, déjà facturés
+  rr = await syncSeats({ db: fakeDb(threeSeats), stripe: n2, companyId: C });
+  assert.deepEqual([rr.action, rr.billedQuantity, n2.calls.length], ['unchanged', 2, 0], 'sièges déjà attribués : rien ne casse');
+  rr = await syncSeats({ db: fakeDb(baseData()), stripe: n2, companyId: C }); // 5 sièges -> 4 en plus demandés
+  assert.deepEqual([rr.action, n2.calls.length], ['refused', 0], 'pas de hausse');
+  // ... mais une baisse s'applique (une personne retirée n'est plus facturée)
+  // titulaire + a1 = 2 sièges -> 1 en plus
+  rr = await syncSeats({ db: fakeDb(baseData({ companymemberships: [], users: [{ _id: 'a1', email: 'a1@x.fr', employerCompanyId: C, typeUser: 'rep' }], agentinvitations: [] })), stripe: n2, companyId: C });
+  assert.deepEqual([rr.action, n2.calls[0][0], n2.calls[0][2].quantity], ['updated', 'update', 1]);
+}
 
 console.log('seats OK');

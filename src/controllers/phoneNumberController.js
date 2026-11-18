@@ -1302,11 +1302,11 @@ class PhoneNumberController {
         }
       }
 
-      // Prix de la ligne de l'offre (premier mois payé ici, puis abonnement mensuel du même montant pour les offres Call Centre
-      // qui portent `phone_line_price_cents`) ; prix par défaut sinon.
+      // Prix de la ligne de l'offre (premier mois payé ici, puis abonnement mensuel du même montant pour toutes les offres CLOUD,
+      // Accueil compris : `phone_line_price_cents` du produit Stripe, sinon repli 14,99 €) ; prix par défaut hors CLOUD.
       const linePricing = await getPhoneLinePricing(companyId, { limits: planLimits });
       if (linePricing.unavailable) {
-        // Offre Call Centre sans prix de ligne valable : refus clair, jamais de repli silencieux sur 9,99 sans abonnement.
+        // Garde-fou conservé : getPhoneLinePricing ne renvoie plus `unavailable` (une offre CLOUD a toujours un prix de ligne).
         return res.status(409).json(PHONE_LINE_PRICE_NOT_CONFIGURED_BODY);
       }
       if (linePricing.monthly) {

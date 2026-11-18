@@ -43,7 +43,9 @@ export const config = {
   // Abonnement mensuel par ligne (offres Call Centre) : produit « Ligne téléphonique — Abonnement mensuel » ; à défaut,
   // déduit du prix STRIPE_PRICE_PHONE_LINE ci-dessus.
   stripeProductPhoneLine: process.env.STRIPE_PRODUCT_PHONE_LINE || '',
-  phoneLineMonthlyPriceCents: parseInt(process.env.PHONE_LINE_MONTHLY_PRICE_CENTS || '999', 10),
+  // Repli du prix mensuel d'une ligne supplémentaire des offres CLOUD quand le produit Stripe de l'offre ne porte pas
+  // `phone_line_price_cents` (décision du 18/11/2026 : 14,99 € TTC). La source normale reste la métadonnée Stripe.
+  phoneLineMonthlyPriceCents: process.env.PHONE_LINE_MONTHLY_PRICE_CENTS,
   // Royaume-Uni : dossier réglementaire Twilio « United Kingdom: Local - Business » (approuvé) et son adresse. Tant que ces deux
   // variables sont vides, la recherche de numéros +44 répond « dossier requis » (rien n'est vendu sans dossier approuvé).
   // Numéros de l'inventaire Twilio à ne JAMAIS proposer à la vente (numéros propres de HARX, séparés par des virgules, format E.164).

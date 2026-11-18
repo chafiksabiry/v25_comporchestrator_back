@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { loadCompanyPlanLimits } from './planLimits.js';
+import { cloudPhoneLinePrice } from './phoneLineSubscription.js';
 
 const DEFAULT_MINUTE_PACKS = [
   { minutes: 150, priceCents: 1000, label: 'Standard' },
@@ -128,10 +129,11 @@ export async function computeTokensPurchaseCents(tokens) {
 }
 
 /**
- * Prix d'une ligne. Sans `companyId`, pour Nomad, TaaS et autres : prix par défaut
- * (PHONE_LINE_SETUP_FEE_CENTS, 999), inchangé. Offre Call Centre autre que Nomad sans `phone_line_price_cents` valable :
- * `unavailable: true`. Offre Call Centre dont le produit Stripe porte `phone_line_price_cents` :
- * ce prix (premier mois payé à l'achat), puis abonnement mensuel du même montant (`monthly: true`).
+ * Prix d'une ligne. Sans `companyId`, pour TaaS et autres : prix par défaut (PHONE_LINE_SETUP_FEE_CENTS, 999), inchangé.
+ * Offre CLOUD (Call Centre, toutes les offres, Accueil / Secrétariat compris : décision du 18/11/2026) : prix `phone_line_price_cents`
+ * du produit Stripe de l'offre, sinon repli 14,99 € (`cloudPhoneLinePrice`) ; premier mois payé à l'achat, puis abonnement mensuel
+ * du même montant (`monthly: true`). `unavailable` reste dans la réponse pour les appelants existants : il vaut toujours false,
+ * une offre CLOUD a toujours un prix de ligne. `priceSource` : 'stripe_metadata', 'default' (repli CLOUD) ou 'platform' (hors CLOUD).
  * `opts.limits` : forfait déjà chargé par l'appelant (évite une seconde lecture). Ne lève jamais à cause du forfait.
  */
 export async function getPhoneLinePricing(companyId, { limits } = {}) {
@@ -145,15 +147,12 @@ export async function getPhoneLinePricing(companyId, { limits } = {}) {
       planLimits = null;
     }
   }
-  const monthlyCents = planLimits?.product === 'callcenter' ? planLimits.phoneLinePriceCents : null;
-  const monthly = Number.isInteger(monthlyCents) && monthlyCents > 0;
-  // Offre Call Centre (hors Nomad, limité à une ligne incluse) sans prix de ligne valable : pas de repli silencieux à 999 sans
-  // abonnement, l'achat est refusé (initLineCheckout, code PHONE_LINE_PRICE_NOT_CONFIGURED).
-  const unavailable = planLimits?.product === 'callcenter' && planLimits.callcenterTier !== 'nomad_solo' && !monthly;
+  const cloud = planLimits?.product === 'callcenter' ? cloudPhoneLinePrice(planLimits) : null;
   return {
-    setupFeeCents: monthly ? monthlyCents : pricing.phoneLineSetupFeeCents,
-    monthly,
-    unavailable,
+    setupFeeCents: cloud ? cloud.cents : pricing.phoneLineSetupFeeCents,
+    monthly: Boolean(cloud),
+    unavailable: false,
+    priceSource: cloud ? cloud.source : 'platform',
     currency: pricing.phoneLineCurrency,
     trialDays: pricing.phoneLineTrialDays,
     trialDurationMs: pricing.phoneLineTrialDays * 24 * 60 * 60 * 1000,

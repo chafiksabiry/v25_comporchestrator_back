@@ -239,12 +239,30 @@ for (const [key, { cents }] of Object.entries(TIERS)) {
   });
 }
 
-test('clé absente sur Nomad -> repli 999, pas d\'abonnement, achat non bloqué', async () => {
-  planMetadata = { harx_product: 'callcenter', callcenter_tier: 'nomad_solo' };
-  const p = await getPhoneLinePricing(COMPANY);
-  assert.equal(p.setupFeeCents, 999);
-  assert.equal(p.monthly, false);
-  assert.equal(p.unavailable, false);
+test('offre CLOUD sans clé (Nomad, Accueil, Full Scope, Multi-clients) -> repli 1499 mensuel, achat non bloqué (décision du 18/11/2026)', async () => {
+  for (const tier of ['nomad_solo', 'accueil', 'full_scope', 'multi_clients']) {
+    planMetadata = { harx_product: 'callcenter', callcenter_tier: tier };
+    const p = await getPhoneLinePricing(COMPANY);
+    assert.deepEqual([p.setupFeeCents, p.monthly, p.unavailable, p.priceSource], [1499, true, false, 'default'], tier);
+  }
+});
+
+test('le prix vient de la métadonnée Stripe quand elle existe (priceSource stripe_metadata), jamais du repli', async () => {
+  planMetadata = offerMeta('accueil', { phone_line_price_cents: '1499' });
+  let p = await getPhoneLinePricing(COMPANY);
+  assert.deepEqual([p.setupFeeCents, p.priceSource], [1499, 'stripe_metadata']);
+  planMetadata = offerMeta('accueil', { phone_line_price_cents: '1799' });
+  p = await getPhoneLinePricing(COMPANY);
+  assert.deepEqual([p.setupFeeCents, p.priceSource], [1799, 'stripe_metadata'], 'un autre prix Stripe est suivi tel quel');
+});
+
+test('repli réglable par PHONE_LINE_MONTHLY_PRICE_CENTS ; valeur absente ou invalide -> 1499', () => {
+  assert.equal(sub.DEFAULT_CLOUD_PHONE_LINE_PRICE_CENTS, 1499);
+  assert.equal(sub.cloudPhoneLineFallbackCents({}), 1499);
+  for (const bad of ['', '0', '-5', '14.99', 'abc', undefined, null]) assert.equal(sub.cloudPhoneLineFallbackCents({ phoneLineMonthlyPriceCents: bad }), 1499, String(bad));
+  assert.equal(sub.cloudPhoneLineFallbackCents({ phoneLineMonthlyPriceCents: '1599' }), 1599);
+  assert.deepEqual(sub.cloudPhoneLinePrice({ phoneLinePriceCents: 1999 }, {}), { cents: 1999, source: 'stripe_metadata' });
+  assert.deepEqual(sub.cloudPhoneLinePrice({ phoneLinePriceCents: null }, {}), { cents: 1499, source: 'default' });
 });
 
 test('TaaS (pas de harx_product callcenter), même avec la clé : prix 999 inchangé', async () => {
@@ -261,12 +279,11 @@ test('aucun forfait, ou companyId absent / invalide -> 999', async () => {
   assert.equal((await getPhoneLinePricing('pas-un-id')).setupFeeCents, 999);
 });
 
-test('clé invalide (24.99, 0, négatif, texte) -> repli 999', async () => {
+test('clé invalide (24.99, 0, négatif, texte) sur une offre CLOUD -> repli 1499 mensuel, achat possible', async () => {
   for (const bad of ['24.99', '0', '-5', 'abc', '']) {
     planMetadata = offerMeta('multi_clients', { phone_line_price_cents: bad });
     const p = await getPhoneLinePricing(COMPANY);
-    assert.equal(p.monthly, false, bad);
-    assert.equal(p.unavailable, true, `${bad} : offre Call Centre sans prix valable -> achat refusé, pas de repli silencieux`);
+    assert.deepEqual([p.setupFeeCents, p.monthly, p.unavailable, p.priceSource], [1499, true, false, 'default'], bad);
   }
 });
 
@@ -932,27 +949,26 @@ test('[config] la route GET /checkout/config est gardée par le contrôle d\'ent
 });
 
 // ── B5 : prix absent sur une offre Call Centre ──
-test('[B5] offre Call Centre non-Nomad sans phone_line_price_cents : achat REFUSÉ avec message explicite, rien de payé', async () => {
-  for (const meta of [{ harx_product: 'callcenter', callcenter_tier: 'multi_clients' }, { harx_product: 'callcenter', callcenter_tier: 'accueil', phone_line_price_cents: 'abc' }]) {
+test('[arbitrage 9] Accueil : le 2e numéro n\'est plus refusé faute de prix ; checkout/init au prix Stripe ou au repli 1499', async () => {
+  for (const meta of [offerMeta('accueil'), { harx_product: 'callcenter', callcenter_tier: 'accueil' }, { harx_product: 'callcenter', callcenter_tier: 'accueil', phone_line_price_cents: 'abc' }, { harx_product: 'callcenter', callcenter_tier: 'multi_clients' }]) {
     calls = [];
     planMetadata = meta;
+    existingLines = 1;
     const res = mockRes();
     await phoneNumberController.initLineCheckout(lineReq({ phoneNumber: '+33612345678', companyId: COMPANY, provider: 'stripe' }), res);
-    assert.equal(res.statusCode, 409, JSON.stringify(res.body));
-    assert.equal(res.body.code, 'PHONE_LINE_PRICE_NOT_CONFIGURED');
-    assert.match(res.body.message, /prix|tarif/i);
-    assert.ok(!names().includes('payment.create') && !names().includes('stripe.checkout'));
+    assert.notEqual(res.body?.code, 'PHONE_LINE_PRICE_NOT_CONFIGURED', JSON.stringify(meta));
+    assert.equal(res.statusCode, 201, JSON.stringify(res.body));
+    const created = calls.find((c) => c[0] === 'payment.create');
+    assert.ok(created, 'paiement préparé');
+    assert.equal(created[1].amount, 1499, JSON.stringify(meta));
   }
 });
 
-test('[B5] Nomad (sans clé) et TaaS ne sont pas concernés par le refus', async () => {
-  for (const meta of [{ harx_product: 'callcenter', callcenter_tier: 'nomad_solo' }, { stripe_plan: 'taas' }]) {
-    planMetadata = meta;
-    existingLines = 0;
-    const p = await getPhoneLinePricing(COMPANY);
-    assert.equal(p.unavailable, false);
-    assert.equal(p.setupFeeCents, 999);
-  }
+test('[B5] TaaS n\'est pas concerné : prix par défaut 999 sans abonnement', async () => {
+  planMetadata = { stripe_plan: 'taas' };
+  existingLines = 0;
+  const p = await getPhoneLinePricing(COMPANY);
+  assert.deepEqual([p.unavailable, p.setupFeeCents, p.monthly, p.priceSource], [false, 999, false, 'platform']);
 });
 
 // ── B6 : resync des métadonnées du forfait ──
@@ -1004,18 +1020,14 @@ test('[B8] résiliation par le portail client (abonnement supprimé sans notre d
   assert.ok(Math.abs(line.terminatesAt.getTime() - (before + 30 * DAY)) < 5000);
 });
 
-test('[B5] checkout/config : même refus 409 PHONE_LINE_PRICE_NOT_CONFIGURED que checkout/init (pas de prix trompeur), sans champ de succès ajouté', async () => {
+test('[B5] checkout/config : une offre CLOUD sans phone_line_price_cents affiche le repli 1499 (plus de refus 409), sans champ de succès ajouté', async () => {
   planMetadata = { harx_product: 'callcenter', callcenter_tier: 'multi_clients' }; // pas de phone_line_price_cents
   const cfg = mockRes();
   await phoneNumberController.getCheckoutConfig(lineReq({}, { companyId: COMPANY }), cfg);
-  const init = mockRes();
-  await phoneNumberController.initLineCheckout(lineReq({ phoneNumber: '+33612345678', companyId: COMPANY, provider: 'stripe' }), init);
-  assert.equal(cfg.statusCode, 409);
-  assert.deepEqual(cfg.body, init.body, 'strictement le même refus');
-  assert.equal(cfg.body.code, 'PHONE_LINE_PRICE_NOT_CONFIGURED');
-  assert.equal(cfg.body.pricing, undefined);
+  assert.equal(cfg.statusCode, 200);
+  assert.notEqual(cfg.body.code, 'PHONE_LINE_PRICE_NOT_CONFIGURED');
   // offre valable, Nomad, TaaS, sans entreprise : réponse de succès inchangée
-  for (const [meta, query, cents] of [[offerMeta('accueil'), { companyId: COMPANY }, 1499], [{ harx_product: 'callcenter', callcenter_tier: 'nomad_solo' }, { companyId: COMPANY }, 999], [{ stripe_plan: 'taas' }, { companyId: COMPANY }, 999], [{ harx_product: 'callcenter', callcenter_tier: 'multi_clients' }, {}, 999]]) {
+  for (const [meta, query, cents] of [[offerMeta('accueil'), { companyId: COMPANY }, 1499], [{ harx_product: 'callcenter', callcenter_tier: 'nomad_solo' }, { companyId: COMPANY }, 1499], [{ stripe_plan: 'taas' }, { companyId: COMPANY }, 999], [{ harx_product: 'callcenter', callcenter_tier: 'multi_clients' }, {}, 999]]) {
     planMetadata = meta;
     const ok = mockRes();
     await phoneNumberController.getCheckoutConfig(lineReq({}, query), ok);
