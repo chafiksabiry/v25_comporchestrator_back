@@ -4,7 +4,7 @@ import InboundSettings from '../models/InboundSettings.js';
 import ReceptionDirectory from '../models/ReceptionDirectory.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import OutboundTransfer from '../models/OutboundTransfer.js';
-import { LINE_CALL_END_PATH, signLineCallEnd, transferLease } from '../services/lineCalls.js';
+import { LINE_CALL_END_PATH, releaseCall, signLineCallEnd, transferLease } from '../services/lineCalls.js';
 import { config } from '../config/env.js';
 import { callerAccess, scopeToCompany, ScopeError } from '../middleware/companyScope.js';
 import { canUse } from '../services/followUps.js';
@@ -59,6 +59,7 @@ const deps = {
   unlockOutbound: async (callSid) => { await OutboundTransfer.deleteOne({ callSid }); },
   /** Bail de ligne (« une ligne = un appel ») : passe de la jambe navigateur à celle du correspondant. */
   moveLease: (fromSid, toSid) => transferLease(fromSid, toSid),
+  releaseLine: (callSid) => releaseCall(callSid),
 };
 export const setTransferDeps = (over) => Object.assign(deps, over);
 /** Solde de minutes et coefficient de la destination : réutilisés par le transfert de l'agent IA (services/aiInbound.js). */
@@ -183,7 +184,9 @@ export const callTransferController = {
         console.error('reception transfer (Twilio):', e?.message);
         if (outbound) {
           await deps.unlockOutbound(parentSid).catch(() => undefined);
-          if (leaseMoved) await deps.moveLease(parentSid, callSid).catch(() => undefined);
+          // Bail déjà passé à la jambe du correspondant, que Twilio n'a pas redirigée : la ligne est libérée directement (jamais rendue
+          // à une jambe navigateur qu'on ne suit plus).
+          if (leaseMoved) await deps.releaseLine(parentSid).catch(() => undefined);
         }
         if (call) await InboundCall.updateOne({ _id: call._id, companyId }, { $set: { transfer: { startedAt: null, byUserId: '', byName: '', entryId: '', entryName: '', mode: 'dial', result: 'ringing', endedAt: null } } }).catch(() => undefined);
         return fail(res, 502, 'Le transfert a échoué : l’appel est resté avec vous. Réessayez ou prenez un message.', { code: 'provider_failed' });

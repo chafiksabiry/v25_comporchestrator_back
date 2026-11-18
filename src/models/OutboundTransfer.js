@@ -18,7 +18,8 @@ const schema = new mongoose.Schema(
     entryName: { type: String, default: '' },
     mode: { type: String, enum: ['dial', 'message'], default: 'dial' },
     result: { type: String, default: 'ringing' },
-    startedAt: { type: Date, default: Date.now },
+    /** Index TTL : le verrou et son résultat sont effacés 24 h après le transfert (aucun journal durable ici). */
+    startedAt: { type: Date, default: Date.now, expires: 24 * 60 * 60 },
     endedAt: { type: Date, default: null },
   },
   { timestamps: true }

@@ -235,7 +235,8 @@ OutboundTransfer.deleteOne = async (f) => { locks.delete(f.callSid); return {}; 
 OutboundTransfer.findOneAndUpdate = (f, upd) => { const row = locks.get(f.callSid); if (row && row.entryId === f.entryId) Object.assign(row, upd.$set); return lean(row ? { ...row } : null); };
 const { transferDeps } = await import('../controllers/callTransferController.js');
 const realMoveLease = transferDeps.moveLease;
-setTransferDeps({ moveLease: async (a, b) => { leaseMoves.push([a, b]); return { moved: 1 }; } });
+const released = [];
+setTransferDeps({ moveLease: async (a, b) => { leaseMoves.push([a, b]); return { moved: 1 }; }, releaseLine: async (sid) => { released.push(sid); return { released: 1 }; } });
 resetCalls(); updates.length = 0;
 
 r = await call(ctl.transfer, { user: 'sec2', body: { callSid: SID_OUT, entryId: E_ONE } });
@@ -268,7 +269,9 @@ assert.equal(locks.get(SID_OUT_CHILD).result, 'no_answer', 'résultat consigné 
 // échec du fournisseur : verrou levé et bail rendu à la jambe navigateur
 locks.clear(); updates.length = 0; leaseMoves.length = 0; failUpdate = true;
 r = await call(ctl.transfer, { body: { callSid: SID_OUT, entryId: E_ONE } });
-assert.equal(r.code, 502); assert.equal(locks.size, 0); assert.deepEqual(leaseMoves, [[SID_OUT, SID_OUT_CHILD], [SID_OUT_CHILD, SID_OUT]]);
+assert.equal(r.code, 502); assert.equal(locks.size, 0); assert.deepEqual(leaseMoves, [[SID_OUT, SID_OUT_CHILD]]); assert.deepEqual(released, [SID_OUT_CHILD], 'ligne libérée directement');
+const ttl = OutboundTransfer.schema.path('startedAt').options.expires; assert.equal(ttl, 24 * 60 * 60, 'index TTL de 24 h');
+assert.ok(OutboundTransfer.schema.indexes().some(([f, o]) => f.startedAt === 1 && o.expireAfterSeconds === 86400), 'index TTL déclaré');
 failUpdate = false;
 // le déplacement réel du bail : emplacement par emplacement, idempotent
 const moves = [];
