@@ -93,7 +93,8 @@ async function legState(client, sid) {
  * Redirection refusée par Twilio alors que le bail de ligne était déjà passé à la jambe du correspondant. Logique prudente :
  *  - navigateur en cours ou état inconnu : bail rendu au navigateur (son action de <Dial> le libérera), puis revérification : s'il s'est
  *    terminé entre-temps, la ligne est libérée ;
- *  - navigateur terminé et correspondant en cours : le bail reste au correspondant (son statusCallback signé le libérera) ;
+ *  - navigateur terminé et correspondant en cours : le bail reste au correspondant. Son statusCallback n'a PAS été installé (la mise à
+ *    jour a échoué) : la ligne se libère par le constat de bail périmé (staleCheckFor, à la prochaine prise) ou par l'expiration (TTL) ;
  *  - les deux terminés : ligne libérée.
  */
 async function restoreLeaseAfterFailure(client, { browserSid, childSid }) {
