@@ -4,6 +4,7 @@ import { guardCompanyAccess } from '../middleware/companyGuard.js';
 import { capacityView, validateMaxConcurrentCalls } from '../services/lineCapacity.js';
 import { lineCallsEnforced } from '../services/lineCalls.js';
 import { loadCompanyPlanLimits } from '../services/planLimits.js';
+import { cloudPhoneLinePrice } from '../services/phoneLineSubscription.js';
 
 /**
  * Appels simultanés par ligne (`maxConcurrentCalls`) : lecture pour l'entreprise (titulaire ou membre), modification par le TITULAIRE seulement.
@@ -16,11 +17,19 @@ export const lineCapacityDeps = {
   enforced: async (companyId) => {
     try { return await lineCallsEnforced({ companyId, limits: await loadCompanyPlanLimits(companyId), db: mongoose.connection.db }); } catch { return false; }
   },
+  /** Prix d'une ligne supplémentaire : celui de l'offre (Stripe `phone_line_price_cents`, sinon repli 14,99 €), le même qu'à l'achat d'un numéro. */
+  unitPriceTtcCents: async (companyId) => {
+    try {
+      const limits = await loadCompanyPlanLimits(companyId);
+      return limits?.product === 'callcenter' ? cloudPhoneLinePrice(limits).cents : undefined;
+    } catch { return undefined; }
+  },
 };
 
 async function view(companyId) {
   const lines = await PhoneNumber.find({ companyId, status: 'active' }).sort({ createdAt: 1 }).lean();
-  return capacityView(lines, { enforced: await lineCapacityDeps.enforced(companyId) });
+  const [enforced, unitPriceTtcCents] = await Promise.all([lineCapacityDeps.enforced(companyId), lineCapacityDeps.unitPriceTtcCents(companyId)]);
+  return capacityView(lines, { enforced, unitPriceTtcCents });
 }
 
 export const lineCapacityController = {

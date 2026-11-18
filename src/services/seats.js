@@ -24,6 +24,15 @@ export const ENTITLED_STATUSES = ['active', 'trialing'];
 export const NOT_CONFIGURED_MESSAGE =
   "Facturation des sièges non configurée : aucun siège en plus n'est facturé pour le moment.";
 
+/**
+ * Décision du fondateur du 18/11/2026 (arbitrage 9) : les sièges supplémentaires n'ont pas de prix décidé, ils ne sont donc plus vendus.
+ * Tant que ce drapeau vaut false : aucun siège en plus n'est créé ni augmenté dans Stripe, leur prix n'est jamais renvoyé, et la
+ * synchronisation répond SEATS_NOT_AVAILABLE. Les sièges déjà facturés restent tels quels (seule une baisse est appliquée).
+ */
+export const EXTRA_SEATS_FOR_SALE = false;
+export const SEATS_NOT_AVAILABLE_CODE = 'SEATS_NOT_AVAILABLE';
+export const SEATS_NOT_AVAILABLE_MESSAGE = "Les sièges supplémentaires ne sont pas disponibles pour le moment.";
+
 const PRICE_CACHE_MS = 5 * 60 * 1000;
 let priceCache = null;
 
@@ -67,12 +76,15 @@ function oid(value) {
 }
 
 /**
- * Sièges occupés par le centre : titulaire + membres (rattachements et invitations en attente) + agents (comptes du centre
- * et invitations en attente ou acceptées). Une même personne ne compte qu'une fois. Mêmes règles que les listes
+ * Sièges occupés par le centre. Une même personne ne compte qu'une fois. Mêmes règles que les listes
  * `GET /api/company-members` et `GET /api/call-center/agents` du service d'inscription.
+ * - `secretariesOnly` (Accueil / Secrétariat) : les secrétaires seules (agents : comptes du centre et invitations en attente ou acceptées) ;
+ * - `membersOnly` (Full Scope, Multi-clients) : titulaire + membres (rattachements et invitations en attente) ; les agents sont
+ *   facturés par leur ligne, ils n'occupent jamais un siège ;
+ * - sinon : tout le monde (titulaire, membres et agents).
  * @param {{ collection: (name: string) => any }} db
  */
-export async function countSeatsUsed(db, companyId, { secretariesOnly = false } = {}) {
+export async function countSeatsUsed(db, companyId, { secretariesOnly = false, membersOnly = false } = {}) {
   const company = oid(companyId);
   const companyDoc = await db.collection('companies').findOne({ _id: company });
   const ownerId = companyDoc?.userId ? String(companyDoc.userId) : null;
@@ -92,13 +104,16 @@ export async function countSeatsUsed(db, companyId, { secretariesOnly = false } 
     for (const m of memberships) if (!isOwner(m.userId)) add(m.userId, m.email);
   }
 
-  const agentUsers = await db.collection('users').find({ employerCompanyId: company, typeUser: 'rep' }).toArray();
-  for (const u of agentUsers) if (!isOwner(u._id)) add(u._id, u.email);
+  if (!membersOnly) {
+    const agentUsers = await db.collection('users').find({ employerCompanyId: company, typeUser: 'rep' }).toArray();
+    for (const u of agentUsers) if (!isOwner(u._id)) add(u._id, u.email);
+  }
 
   const invitations = await db.collection('agentinvitations').find({ companyId: company }).toArray();
   for (const i of invitations) {
     const status = String(i.status || '');
     if (secretariesOnly && i.kind === 'member') continue;
+    if (membersOnly && i.kind !== 'member') continue;
     const open = i.kind === 'member' ? status === 'pending' : status === 'pending' || status === 'accepted';
     if (open && !isOwner(i.userId)) add(i.userId, i.email);
   }
@@ -195,9 +210,26 @@ function notApplicable(reason, used, tier, message) {
 /**
  * État des sièges d'un centre. Ne lève jamais d'erreur Stripe : sans configuration, `configured` vaut false.
  */
-export async function getSeatsState({ db, stripe, companyId }) {
+export async function getSeatsState({ db, stripe, companyId, forSale = EXTRA_SEATS_FOR_SALE }) {
+  const state = await readSeatsState({ db, stripe, companyId });
+  if (forSale) return { ...state, forSale: true, canAddSeat: state.applicable && state.tier !== 'nomad_solo' };
+  // Sièges en plus hors vente : prix masqué, une personne de plus seulement dans les sièges inclus.
+  return {
+    ...state,
+    forSale: false,
+    canAddSeat: state.used < state.included,
+    unitPrice: null,
+    unitAmount: null,
+    monthlyTotal: null,
+    ...(state.applicable ? { message: SEATS_NOT_AVAILABLE_MESSAGE } : {}),
+  };
+}
+
+async function readSeatsState({ db, stripe, companyId }) {
   const { subscription, tier } = await loadSeatContext(db, companyId);
-  const used = await countSeatsUsed(db, companyId, { secretariesOnly: SECRETARIES_ONLY_TIERS.includes(tier) });
+  // Accueil : les secrétaires ; autres offres : titulaire et membres (les agents de Full Scope / Multi-clients sont facturés par ligne).
+  const secretariesOnly = SECRETARIES_ONLY_TIERS.includes(tier);
+  const used = await countSeatsUsed(db, companyId, { secretariesOnly, membersOnly: !secretariesOnly });
   if (!subscription || !tier) {
     return notApplicable('no_subscription', used, tier, "Aucun abonnement Call Centre actif ou en essai : pas de siège à facturer.");
   }
@@ -243,9 +275,13 @@ function withLock(key, fn) {
  * Idempotent : la quantité cible est comparée à celle de Stripe, sans écriture si elle est déjà bonne.
  * @returns {Promise<object>} état des sièges + `action` : 'created' | 'updated' | 'removed' | 'unchanged' | 'skipped'
  */
-export function syncSeats({ db, stripe, companyId }) {
+export function syncSeats({ db, stripe, companyId, forSale = EXTRA_SEATS_FOR_SALE }) {
   return withLock(String(companyId), async () => {
-    const state = await getSeatsState({ db, stripe, companyId });
+    const state = await getSeatsState({ db, stripe, companyId, forSale });
+    // Sièges en plus hors vente : une personne au-delà des sièges inclus et des sièges déjà facturés n'est jamais facturée, la demande est refusée.
+    if (!forSale && state.applicable && state.extra > (state.billedQuantity || 0)) {
+      return { ...state, action: 'refused', code: SEATS_NOT_AVAILABLE_CODE, message: SEATS_NOT_AVAILABLE_MESSAGE };
+    }
     if (!state.applicable || !state.configured) return { ...state, action: 'skipped' };
 
     const { subscription } = await loadSeatContext(db, companyId);
@@ -257,6 +293,11 @@ export function syncSeats({ db, stripe, companyId }) {
     const item = seatItemOf(stripeSub, price);
     const target = state.extra;
     const current = item ? item.quantity || 0 : 0;
+
+    // Filet de sécurité (lecture Stripe entre-temps) : hors vente, jamais de création ni de hausse ; une baisse s'applique.
+    if (!forSale && target > current) {
+      return { ...state, billedQuantity: current, action: 'refused', code: SEATS_NOT_AVAILABLE_CODE, message: SEATS_NOT_AVAILABLE_MESSAGE };
+    }
 
     let action = 'unchanged';
     if (item && target === 0) {

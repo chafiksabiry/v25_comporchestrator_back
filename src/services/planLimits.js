@@ -71,6 +71,9 @@ export async function loadCompanyPlanLimits(companyId) {
   const coefficient = resolveInternationalCoefficient({ metadata });
   return {
     planName: plan.name ? String(plan.name) : null,
+    /** Forfait local et prix Stripe du forfait : désignent le produit d'offre dans les journaux (aucune donnée client). */
+    planId: plan._id ? String(plan._id) : null,
+    stripePriceId: plan.stripePriceId ? String(plan.stripePriceId) : null,
     /** Produit du forfait (metadata `harx_product`), ex. `callcenter` ; null pour les forfaits TaaS. */
     product: productEntry ? String(productEntry[1] ?? '').trim().toLowerCase() || null : null,
     /** Palier Call Centre canonique (metadata `callcenter_tier`), null sinon. */
