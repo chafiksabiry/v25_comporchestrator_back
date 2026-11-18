@@ -40,7 +40,7 @@ import { syncMinutesFromCalls } from './escrowController.js';
 import { insufficientInternationalMessages, outboundCreditFactor, outboundCreditDecision, recordCallDecision } from '../services/creditCoefficient.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket, MINUTES_INSUFFICIENT_CODE, MINUTES_INSUFFICIENT_MESSAGE, spokenLanguage, spokenRefusal, SPOKEN_REFUSALS } from '../services/browserOutbound.js';
-import { transferResult } from './callTransferController.js';
+import { billOutboundTransferRemainder, transferResult } from './callTransferController.js';
 import { buildRecordingPlan, consentLanguageFor, consentTwiml, mapCallRecordingCallback, normalizeConsentLanguage, planForCall, verifyRecordingToken } from '../services/callRecording.js';
 import { attachRecordingTracked, firstRecordingDecision, recordDecision } from '../services/recordingStatus.js';
 import { journalForwardedCall, journalUnansweredCall } from '../services/journalCall.js';
@@ -2532,13 +2532,18 @@ class PhoneNumberController {
     return PhoneNumber.find({ companyId, provider: 'twilio', twilioId: { $exists: true, $ne: null }, status: 'active', billingStatus: { $ne: 'suspended' } }).sort({ createdAt: 1 }).lean();
   }
 
-  /** Fin d'un appel sur une ligne (action du <Dial> sortant) : libère la ligne tenue par cet appel (idempotent) ; la réponse ne change rien à l'appel. */
+  /**
+   * Fin d'un appel sur une ligne (action du <Dial> sortant, ou statusCallback de la jambe du correspondant après un transfert) : libère la
+   * ligne tenue par cet appel (idempotent) ; la réponse ne change rien à l'appel.
+   */
   async handleLineCallEnd(req, res) {
     // Jeton signé de l'URL d'action (lié au CallSid) : sans lui, rien n'est libéré (403).
     if (!verifyLineCallEnd({ secret: config.twilioAuthToken, callSid: String(req.body?.CallSid || ''), token: req.query?.t })) {
       return res.type('text/xml').status(403).send('<?xml version="1.0" encoding="UTF-8"?><Response/>');
     }
     try { await releaseCall(req.body?.CallSid); } catch (error) { console.error('line-call-end:', error?.message || error); }
+    // Jambe du correspondant d'un appel sortant transféré : le reste de l'appel après la redirection est débité (sans effet sinon).
+    await billOutboundTransferRemainder(req.body || {});
     res.type('text/xml').status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response/>');
   }
 

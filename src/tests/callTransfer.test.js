@@ -175,6 +175,7 @@ assert.equal(updates.length, 1); assert.equal(updates[0].sid, SID_PARENT, 'la ja
 assert.match(updates[0].twiml, /Je vous passe Mme Martin/); assert.match(updates[0].twiml, /\+33612345678/); assert.ok(!updates[0].twiml.includes('+33100000000'), 'jamais un numéro envoyé par le navigateur');
 assert.match(updates[0].twiml, /timeLimit="1800"/); assert.match(updates[0].twiml, /callerId="\+33140000000"/);
 assert.match(updates[0].twiml, /transfer-result\?s=/);
+{ const s0 = new URL(updates[0].twiml.match(/action="([^"]+)"/)[1].replace(/&amp;/g, '&')).searchParams.get('s'); const v = T.verifyTransferState({ secret: 'tok', token: s0, now: NOW }); assert.equal(v.to, '+33612345678', 'numéro composé signé pour le débit'); assert.equal(v.factor, 1); }
 const t0 = calls[0].transfer;
 assert.equal(t0.byUserId, 'sec1'); assert.equal(t0.byName, 'Léa'); assert.equal(t0.entryName, 'Mme Martin'); assert.equal(t0.result, 'ringing');
 assert.equal(calls[0].status, 'answered'); assert.equal(calls[0].answeredBy, 'cc-sec1'); assert.equal(calls[0].waitSeconds, 8);
@@ -252,6 +253,8 @@ assert.equal(r.code, 200, JSON.stringify(r.body)); assert.equal(r.body.data.name
 assert.deepEqual(listCalls.at(-1), { parentCallSid: SID_OUT, status: 'in-progress', limit: 1 });
 assert.equal(updates.length, 1); assert.equal(updates[0].sid, SID_OUT_CHILD, 'la jambe du prospect est redirigée, pas celle du navigateur');
 assert.match(updates[0].twiml, /\+33612345678/); assert.match(updates[0].twiml, /callerId="\+33140000000"/); assert.ok(!updates[0].twiml.includes('+33100000000'));
+// les deux jambes (correspondant + fiche) sont débitées : le plafond partage le solde (30 min / 2 crédits par minute = 15 min)
+assert.match(updates[0].twiml, /timeLimit="900"/);
 assert.ok(calls.every((c) => !c.transfer?.startedAt), 'aucun appel entrant consigné pour un appel sortant');
 assert.deepEqual(existsFilters.at(-1), { companyId: existsFilters.at(-1).companyId, phoneNumber: '+33140000000', status: 'active' }, 'ligne active exigée');
 // une ligne = un appel : le bail passe à la jambe du prospect, libérée par son statusCallback signé (pas par l'action du <Dial> du navigateur)

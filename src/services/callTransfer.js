@@ -9,7 +9,11 @@ import { phrasesFor } from './companyLanguage.js';
  * Le navigateur n'envoie jamais de numéro : seulement l'identifiant d'une fiche de l'annuaire de la société ; le numéro
  * composé est celui de la fiche, relu côté serveur.
  */
-export const TRANSFER_STATE_TTL_MS = 60 * 60 * 1000;
+/**
+ * Validité du jeton de l'action du <Dial> : elle est appelée à la FIN de la jambe transférée, qui peut durer jusqu'au plafond d'un appel
+ * (MAX_CALL_SECONDS = 4 h). 5 h couvre sonnerie + plafond : au-delà d'1 h, l'ancien délai faisait rejeter le résultat (et donc le débit).
+ */
+export const TRANSFER_STATE_TTL_MS = 5 * 60 * 60 * 1000;
 export const TRANSFER_RING_SECONDS = 25;
 export const TRANSFER_WEBHOOK_PATH = '/api/phone-numbers/webhooks/twilio/transfer-result';
 export const CALL_SID = /^CA[0-9a-fA-F]{32}$/;
@@ -54,12 +58,17 @@ export const isReachableNow = (availability) => availability.state === 'availabl
 const b64 = (s) => Buffer.from(s, 'utf8').toString('base64url');
 const sign = (secret, body) => crypto.createHmac('sha256', String(secret)).update(`transfer.${body}`).digest('hex');
 
-export function signTransferState({ secret, companyId, callSid, entryId, userId, now = Date.now() }) {
-  const body = b64(JSON.stringify({ c: String(companyId), s: String(callSid), e: String(entryId), u: String(userId), x: now + TRANSFER_STATE_TTL_MS }));
+/**
+ * `to` (numéro composé, relu dans l'annuaire) et `factor` (crédits par minute retenus pour le plafond) sont facultatifs : ils servent au
+ * débit de la jambe transférée (même destination et même coefficient que le plafond). Un jeton sans eux reste valide.
+ */
+export function signTransferState({ secret, companyId, callSid, entryId, userId, to = '', factor = 0, now = Date.now() }) {
+  const extra = { ...(to ? { n: String(to) } : {}), ...(Number(factor) >= 1 ? { f: Number(factor) } : {}) };
+  const body = b64(JSON.stringify({ c: String(companyId), s: String(callSid), e: String(entryId), u: String(userId), ...extra, x: now + TRANSFER_STATE_TTL_MS }));
   return `${body}.${sign(secret, body)}`;
 }
 
-/** @returns {{companyId: string, callSid: string, entryId: string, userId: string}|null} null si le jeton est altéré ou périmé */
+/** @returns {{companyId: string, callSid: string, entryId: string, userId: string, to?: string, factor?: number}|null} null si le jeton est altéré ou périmé */
 export function verifyTransferState({ secret, token, now = Date.now() }) {
   const [body, sig] = String(token ?? '').split('.');
   if (!secret || !body || !sig) return null;
@@ -69,7 +78,7 @@ export function verifyTransferState({ secret, token, now = Date.now() }) {
   try {
     const p = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
     if (!Number.isFinite(p.x) || p.x < now) return null;
-    return { companyId: p.c, callSid: p.s, entryId: p.e, userId: p.u };
+    return { companyId: p.c, callSid: p.s, entryId: p.e, userId: p.u, ...(p.n ? { to: String(p.n) } : {}), ...(Number(p.f) >= 1 ? { factor: Number(p.f) } : {}) };
   } catch {
     return null;
   }

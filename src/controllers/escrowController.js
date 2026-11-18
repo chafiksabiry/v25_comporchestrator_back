@@ -972,9 +972,12 @@ export async function syncMinutesFromCalls(companyId) {
     let addedSeconds = 0;
     let addedMinutes = 0;
     const newKeys = [];
+    const seen = new Set();
     for (const c of calls) {
       const key = String(c.sid || c._id || '');
-      if (!key || alreadyCharged.has(key)) continue;
+      // Un même sid inscrit deux fois (écritures concurrentes sans index unique) n'est débité qu'une fois.
+      if (!key || alreadyCharged.has(key) || seen.has(key)) continue;
+      seen.add(key);
       const secs = Number(c.duration || 0);
       if (secs <= 0) continue;
       addedSeconds += secs;
