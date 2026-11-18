@@ -10,9 +10,13 @@ const schema = new mongoose.Schema(
   {
     companyId: { type: mongoose.Schema.Types.ObjectId, required: true, unique: true },
     enabled: { type: Boolean, default: false },
-    level: { type: String, enum: ['partial', 'total'], default: 'partial' },
-    triggers: { outsideHours: { type: Boolean, default: true }, allBusy: { type: Boolean, default: false } },
-    /** Horaires d'ouverture de l'entreprise (nouveau réglage au niveau de la société) : déclencheur « hors horaires » et créneaux de RDV. */
+    /** Horaires de travail de l'agent IA (plages jour / heure, format du planning de l'annuaire) ; `always` = 24 h/24, 7 j/7. */
+    schedule: { always: { type: Boolean, default: false }, timeZone: { type: String, default: 'Europe/Paris' }, slots: { type: [slotSchema], default: [] } },
+    /** Compétences de l'IA (étiquettes du routage des files, comme StaffRouting) ; ses langues de routage viennent de `languages`. */
+    skills: { type: [String], default: [] },
+    /** Priorité face aux humains : après les humains (défaut) ou en premier. */
+    priority: { type: String, enum: ['after_humans', 'first'], default: 'after_humans' },
+    /** Horaires d'ouverture de l'entreprise : servent seulement à proposer des créneaux de rendez-vous. */
     businessHours: { timeZone: { type: String, default: 'Europe/Paris' }, slots: { type: [slotSchema], default: undefined } },
     languages: { type: [String], default: undefined },
     voice: { type: String, enum: ['female', 'male'], default: 'female' },
@@ -27,8 +31,13 @@ const schema = new mongoose.Schema(
     maxCallMinutes: { type: Number, default: 8, min: 3, max: 15 },
     monthlyMinutesCap: { type: Number, default: 200 },
     retentionDays: { type: Number, default: 365, min: 30, max: 365 },
+    /** Apprentissage validé par le titulaire (analyse après appel) : désactivable. Les réponses déjà validées restent utilisées. */
+    learning: { enabled: { type: Boolean, default: true } },
     listeningBench: { enabled: { type: Boolean, default: false }, provider: { type: String, default: 'alternate' } },
     updatedById: { type: String, default: '' },
+    /** Sauvegarde des anciens réglages (niveau / déclencheurs) à la migration vers horaires + priorité ; jamais renvoyée. */
+    legacyLevel: { type: mongoose.Schema.Types.Mixed, default: undefined },
+    legacyTriggers: { type: mongoose.Schema.Types.Mixed, default: undefined },
   },
   { timestamps: true, collection: 'ai_agent_settings' }
 );

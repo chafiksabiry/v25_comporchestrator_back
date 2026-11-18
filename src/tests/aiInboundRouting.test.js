@@ -24,6 +24,7 @@ const { default: AiAgentSettings } = await import('../models/AiAgentSettings.js'
 const { default: AiInboundCall } = await import('../models/AiInboundCall.js');
 const { default: AiMinutesUsage } = await import('../models/AiMinutesUsage.js');
 const { default: ReceptionDirectory } = await import('../models/ReceptionDirectory.js');
+const { default: AiLearnedAnswer } = await import('../models/AiLearnedAnswer.js');
 const { PhoneNumber } = await import('../models/PhoneNumber.js');
 const { default: CallRecordingStatus } = await import('../models/CallRecordingStatus.js');
 const { Subscription } = await import('../models/Subscription.js');
@@ -36,7 +37,7 @@ const C1 = '64b0000000000000000000c1';
 const LINE = '+33900000001'; const CALLER = '+33612345678';
 const lean = (v) => ({ lean: async () => v, select() { return this; }, sort() { return this; }, limit() { return this; }, then(r, j) { return Promise.resolve(v).then(r, j); } });
 const EVENING = Date.parse('2026-11-03T19:00:00Z'); const MORNING = Date.parse('2026-11-03T09:00:00Z');
-let env; let dashOk; let dashHits; let aiCalls; let now;
+let env; let dashOk; let dashHits; let aiCalls; let now; let aiSettings;
 const savedLog = { log: console.log, warn: console.warn, error: console.error };
 beforeEach(() => {
   console.log = () => {}; console.warn = () => {}; console.error = () => {};
@@ -51,16 +52,18 @@ beforeEach(() => {
   CallRecordingStatus.updateOne = async () => ({}); CallRecordingStatus.findOne = () => lean(null);
   const db = { collection: () => ({ find: () => { const c = { sort: () => c, limit: () => c, toArray: async () => [], next: async () => null }; return c; }, findOne: async () => null }) };
   Object.defineProperty(mongoose.connection, 'db', { get: () => db, configurable: true });
-  AiAgentSettings.findOne = () => lean({ companyId: C1, enabled: true, level: 'partial' });
+  aiSettings = { companyId: C1, enabled: true, priority: 'first', schedule: { always: false, timeZone: 'Europe/Paris', slots: [1, 2, 3, 4, 5].map((day) => ({ day, start: '18:00', end: '24:00' })) } };
+  AiAgentSettings.findOne = () => lean(aiSettings);
   ReceptionDirectory.findOne = () => lean({ general: { companyName: 'Cabinet Test' }, entries: [] });
   AiMinutesUsage.findOne = () => lean(null);
+  AiLearnedAnswer.find = () => lean([]);
   aiCalls = [];
   AiInboundCall.create = async (doc) => { const r = { _id: '64b0000000000000000000f1', ...doc }; aiCalls.push(r); return r; };
   AiInboundCall.updateOne = async (f, u) => { Object.assign(aiCalls[0] || {}, u.$set || {}); return { modifiedCount: 1 }; };
   AiInboundCall.countDocuments = async () => 0;
   env = { DASH_CALLS_API_URL: 'https://dash.test', PUBLIC_API_BASE_URL: 'https://orch.test/api' }; dashOk = true; dashHits = 0; now = EVENING;
   AI.setAiInboundDeps({
-    env, now: () => now, sleep: async () => {},
+    env, now: () => now, sleep: async () => {}, planLimits: async () => null,
     fetch: async () => { dashHits += 1; if (!dashOk) return { ok: false, status: 503, json: async () => ({}) }; return { ok: true, status: 201, json: async () => ({ sessionId: 's', streamUrl: 'wss://dash.test/ai-voice-stream/t0k', provider: 'gemini', model: 'm' }) }; },
   });
 });
@@ -82,14 +85,14 @@ test('pilote fermé (défaut) : TwiML classique inchangé, dash jamais appelé',
   assert.ok(!(await inbound()).includes('<Connect'), 'drapeau seul, entreprise hors liste blanche'); assert.equal(dashHits, 0);
 });
 
-test('pilote ouvert, hors horaires : <Connect><Stream> vers dash, action de fin signée', async () => {
+test('pilote ouvert, dans les horaires de l’IA, priorité « en premier » : <Connect><Stream> vers dash, action de fin signée', async () => {
   Object.assign(env, { AI_INBOUND_ENABLED: 'true', AI_INBOUND_COMPANY_IDS: C1 });
   const x = await inbound();
   assert.match(x, /<Response><Connect action="https:\/\/orch\.test\/api\/phone-numbers\/webhooks\/twilio\/ai-inbound\/after-stream\?s=[^"]+" method="POST"><Stream url="wss:\/\/dash\.test\/ai-voice-stream\/t0k"\/><\/Connect><\/Response>/);
   assert.ok(!x.includes('<Client>'), 'aucun humain ne sonne'); assert.equal(dashHits, 1);
 });
 
-test('pilote ouvert, heures ouvrées (niveau partiel) : les humains sonnent', async () => {
+test('hors des horaires de l’IA : les humains sonnent', async () => {
   Object.assign(env, { AI_INBOUND_ENABLED: 'true', AI_INBOUND_COMPANY_IDS: C1 }); now = MORNING;
   assert.match(await inbound(), /<Client>cc-owner1<\/Client>/); assert.equal(dashHits, 0);
 });
@@ -111,4 +114,33 @@ test('B1 : requête forgée (sans signature Twilio valide) : jamais de session I
 test('PUBLIC_API_BASE_URL absente : IA désactivée (jamais l’en-tête Host), flux classique', async () => {
   Object.assign(env, { AI_INBOUND_ENABLED: 'true', AI_INBOUND_COMPANY_IDS: C1 }); delete env.PUBLIC_API_BASE_URL;
   assert.ok(!(await inbound()).includes('<Connect')); assert.equal(dashHits, 0);
+});
+
+test('priorité « après les humains » : les humains sonnent d’abord ; sans réponse, l’IA prend avant le répondeur', async () => {
+  Object.assign(env, { AI_INBOUND_ENABLED: 'true', AI_INBOUND_COMPANY_IDS: C1 }); aiSettings.priority = 'after_humans';
+  const first = await inbound();
+  assert.match(first, /<Client>cc-owner1<\/Client>/); assert.equal(dashHits, 0, 'humains d’abord');
+  const call = { callSid: `CA${'a'.repeat(32)}`, companyId: C1, phoneNumber: LINE, from: CALLER, startedAt: new Date(), mobileTried: false, async save() { return this; } };
+  InboundCall.findOne = async () => call;
+  const body = { CallSid: call.callSid, DialCallStatus: 'no-answer' };
+  const p = '/api/phone-numbers/webhooks/twilio/inbound-dial-result';
+  let out = null; const res = { type() { return this; }, status() { return this; }, send(x) { out = x; return this; } };
+  await pc.handleTwilioInboundDialResult({ body, query: {}, originalUrl: p, headers: { 'x-twilio-signature': twilio.getExpectedTwilioSignature(process.env.TWILIO_AUTH_TOKEN, `https://orch.test${p}`, body) }, get: () => 'orch.test' }, res);
+  assert.match(out, /<Connect action=/); assert.equal(dashHits, 1);
+});
+
+test('priorité « après les humains », personne en ligne : l’IA prend tout de suite (avant le répondeur)', async () => {
+  Object.assign(env, { AI_INBOUND_ENABLED: 'true', AI_INBOUND_COMPANY_IDS: C1 }); aiSettings.priority = 'after_humans'; clearPresence();
+  assert.match(await inbound(), /<Connect /);
+});
+
+test('pilote fermé : fin de sonnerie sans aucune lecture liée à l’agent IA (ligne, files)', async () => {
+  let reads = 0;
+  PhoneNumber.findOne = () => { reads += 1; return lean(null); };
+  CallQueue.find = () => { reads += 1; return lean([]); };
+  const call = { callSid: `CA${'b'.repeat(32)}`, companyId: C1, phoneNumber: LINE, from: CALLER, startedAt: new Date(), mobileTried: false, async save() { return this; } };
+  InboundCall.findOne = async () => call;
+  let out = null; const res = { type() { return this; }, status() { return this; }, send(x) { out = x; return this; } };
+  await pc.handleTwilioInboundDialResult({ body: { CallSid: call.callSid, DialCallStatus: 'no-answer' }, query: {}, headers: {}, get: () => 'orch.test' }, res);
+  assert.equal(reads, 0); assert.match(out, /<Record /, 'répondeur classique');
 });

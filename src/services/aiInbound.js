@@ -9,8 +9,13 @@ import FollowUpItem from '../models/FollowUpItem.js';
 import Contact from '../models/Contact.js';
 import { config } from '../config/env.js';
 import {
-  toPublicSettings, pilotAvailability, decideAiRoute, announcementText, greetingLanguage,
+  toPublicSettings, pilotAvailability, decideAiRoute, announcementText, greetingLanguage, migrateLegacySettings,
 } from './aiAgentSettings.js';
+import CallQueue from '../models/CallQueue.js';
+import AiLearningProposal from '../models/AiLearningProposal.js';
+import AiLearnedAnswer from '../models/AiLearnedAnswer.js';
+import { cleanProposals, findSimilar, groupKey, toInjected, RECURRING_THRESHOLD } from './aiLearning.js';
+import { inboundQueues, needsMenu, defaultQueueOf } from './callQueues.js';
 import {
   signAiInboundServiceToken, signAfterStreamState, verifyAfterStreamState, periodOf, billedMinutes,
   computeFreeSlots, isBookableSlot, slotLabel, latencyStats,
@@ -43,6 +48,8 @@ export const deps = {
   now: () => Date.now(),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   env: process.env,
+  /** Forfait actif de l'entreprise (formule « Secrétariat avec agent IA » : `aiAgent`, minutes incluses). */
+  planLimits: async (companyId) => (await import('./planLimits.js')).loadAiAgentPlan(companyId),
   /** La base de connaissances (gig) appartient-elle à l'entreprise ? */
   gigBelongsTo: async (companyId, gigId) => {
     const db = mongoose.connection.db;
@@ -60,6 +67,45 @@ const enginesFromEnv = (env = deps.env) => ({
 });
 export const engines = () => enginesFromEnv();
 export const announceMode = (env = deps.env) => (String(env.AI_INBOUND_ANNOUNCE_MODE || 'engine').toLowerCase() === 'twiml' ? 'twiml' : 'engine');
+
+/** Migration des réglages d'avant (niveau / déclencheurs) vers horaires + priorité. Idempotente, lancée au démarrage. */
+export async function migrateAiAgentSettings(Model = AiAgentSettings) {
+  let n = 0;
+  const cursor = await Model.collection.find({ schedule: { $exists: false }, $or: [{ level: { $exists: true } }, { triggers: { $exists: true } }] }).toArray();
+  for (const doc of cursor) {
+    const upd = migrateLegacySettings(doc);
+    if (!upd) continue;
+    await Model.collection.updateOne({ _id: doc._id }, upd);
+    n += 1;
+  }
+  if (n) console.log(`[ai-inbound] réglages migrés vers horaires + priorité : ${n}`);
+  return n;
+}
+
+/**
+ * File visée par l'appel, pour la compétence de l'IA : `null` = aucune file (aucune exigence), `{ deferred: true }` = menu vocal à jouer
+ * (la file sera connue au retour du menu), sinon la file (par id mémorisé, ou file par défaut).
+ */
+export async function aiQueueFor(companyId, queueId = null) {
+  const rows = await CallQueue.find({ companyId: oid(companyId) }).lean();
+  const inbound = inboundQueues(rows || []);
+  if (!inbound.length) return null;
+  if (queueId) return inbound.find((q) => String(q._id) === String(queueId)) || defaultQueueOf(inbound);
+  if (needsMenu(inbound)) return { deferred: true };
+  return defaultQueueOf(inbound);
+}
+
+/** Disponibilité de l'agent IA pour l'entreprise : drapeau global, puis liste blanche OU abonnement `ai_agent=true`. */
+export async function resolveAvailability(companyId) {
+  const quick = pilotAvailability(companyId, deps.env);
+  if (!quick.pilotEnabled || quick.companyAllowed) return { ...quick, plan: null };
+  let plan = null;
+  try { plan = await deps.planLimits(companyId); } catch (e) { console.error('[ai-inbound] forfait illisible :', e?.message || e); }
+  return { ...pilotAvailability(companyId, deps.env, { aiAgentPlan: plan?.aiAgent === true }), subscriptionStatus: plan?.status || null, plan };
+}
+
+/** Drapeau global du pilote : sans lui, aucune lecture ni écriture liée à l'agent IA dans le flux d'appel. */
+export const aiInboundPilotEnabled = () => pilotAvailability(null, deps.env).pilotEnabled;
 
 export async function loadSettings(companyId) {
   const [doc, dir] = await Promise.all([
@@ -91,11 +137,18 @@ async function benchProvider(companyId, settings) {
  * Branche agent IA de handleTwilioInboundCall. Renvoie le corps TwiML (<Connect><Stream>) si l'IA décroche, sinon null :
  * l'appelant suit alors le flux classique INCHANGÉ (sonnerie, puis répondeur). Ne lève jamais.
  */
-export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, concurrent = false, signatureValid = () => false }) {
+/**
+ * @param {'call'|'menu'|'after_humans'} stage  arrivée de l'appel, retour du menu vocal, ou sonnerie des humains sans réponse
+ * @param {boolean} humansAvailable  un humain (navigateur ou mobile) va sonner
+ * @param {object|null|undefined} queue  file de l'appel (undefined : la déterminer)
+ */
+export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, stage = 'call', humansAvailable = false, queue, signatureValid = () => false }) {
   const companyId = line?.companyId ? String(line.companyId) : '';
   if (!companyId || !callSid) return null;
-  const availability = pilotAvailability(companyId, deps.env);
-  if (!availability.available) return null; // pilote fermé : aucun accès base, flux classique strictement inchangé
+  // Drapeau global coupé : aucun accès base, flux classique strictement inchangé. Sinon liste blanche, ou abonnement ai_agent=true.
+  if (!pilotAvailability(companyId, deps.env).pilotEnabled) return null;
+  const availability = await resolveAvailability(companyId);
+  if (!availability.available) return null;
   // URL publique obligatoire (jamais l'en-tête Host) et requête signée par Twilio : sinon, pas d'IA (flux classique).
   const apiBase = publicApiBase(deps.env);
   if (!apiBase) { console.error(`[ai-inbound] ${callSid} : PUBLIC_API_BASE_URL absente, agent IA désactivé`); return null; }
@@ -105,7 +158,9 @@ export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, 
   try {
     const { settings, directory } = await loadSettings(companyId);
     const usage = await monthUsage(companyId, settings.businessHours.timeZone);
-    const decision = decideAiRoute({ settings, availability, lineBusy, concurrent, minutesUsed: usage.minutesUsed, now: deps.now() });
+    const q = queue === undefined ? await aiQueueFor(companyId) : queue;
+    if (q && q.deferred) { console.log(`[ai-inbound] ${callSid} : menu vocal d'abord (compétence connue au retour du menu)`); return null; }
+    const decision = decideAiRoute({ settings, availability, lineBusy, stage, humansAvailable, queue: q, minutesUsed: usage.minutesUsed, now: deps.now() });
     if (!decision.route) { console.log(`[ai-inbound] ${callSid} : flux classique (${decision.reason})`); return null; }
 
     const language = greetingLanguage(settings);
@@ -113,25 +168,31 @@ export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, 
     const recorded = Boolean(provider);
     const short = language.startsWith('en') ? 'en' : 'fr';
     const mode = announceMode();
-    const text = announcementText({ language, companyName: settings.companyName, level: settings.level, voice: settings.voice, recorded, consentText: CONSENT_TEXTS[short] });
+    const canTransfer = settings.actions.transfer && settings.transferTargets.length > 0;
+    const text = announcementText({ language, companyName: settings.companyName, canTransfer, voice: settings.voice, recorded, consentText: CONSENT_TEXTS[short] });
+    // Pour les consignes de dash : « total » = aucun humain disponible (l'IA propose rappel / message), « partial » = humains présents.
+    const level = decision.trigger === 'first' && humansAvailable ? 'partial' : 'total';
     const maxCallSeconds = settings.maxCallMinutes * 60;
     aiCall = await AiInboundCall.create({
-      companyId: oid(companyId), callSid, from, to, startedAt: new Date(deps.now()), status: 'starting', level: settings.level, trigger: decision.trigger,
+      companyId: oid(companyId), callSid, from, to, startedAt: new Date(deps.now()), status: 'starting', level, trigger: decision.trigger,
       language, announcement: { mode, language, text, verified: mode === 'twiml' ? true : null }, expiresAt: retentionDate(settings.retentionDays),
-      timeline: [{ at: new Date(deps.now()), type: 'session_started', label: `Agent IA (${{ total: 'niveau total', outside_hours: 'hors horaires', all_busy: 'tous occupés' }[decision.trigger]})` }],
+      timeline: [{ at: new Date(deps.now()), type: 'session_started', label: `Agent IA (${{ first: 'en premier', no_human: 'aucun humain disponible', after_humans: 'après les humains, sans réponse' }[decision.trigger]})` }],
     });
     const entries = directory?.entries || [];
     const transferTargets = settings.actions.transfer
       ? settings.transferTargets.map((id) => entries.find((e) => String(e._id) === id)).filter(Boolean).map((e) => ({ id: String(e._id), name: e.name }))
       : [];
+    // Apprentissage : seules les réponses VALIDÉES par le titulaire sont envoyées à l'agent (jamais les propositions).
+    const learned = await AiLearnedAnswer.find({ companyId: oid(companyId), active: true }).sort({ updatedAt: -1 }).limit(40).lean().catch(() => []);
     const dashApi = resolveDashCallsApi(deps.env);
     if (!dashApi) throw new Error('dash_calls URL not configured');
     const body = {
-      callSid, companyId, from, to, level: settings.level, trigger: decision.trigger, language, languages: settings.languages,
+      callSid, companyId, from, to, level, trigger: decision.trigger, language, languages: settings.languages,
       voice: settings.voice, addressForm: settings.addressForm, tone: settings.tone, companyName: settings.companyName,
       instructions: settings.instructions, knowledgeBase: settings.knowledgeBase, actions: settings.actions, transferTargets,
       maxCallSeconds, announcement: { mode, text }, provider, record: recorded, timeZone: settings.businessHours.timeZone,
       orchestratorUrl: apiBase,
+      learnedAnswers: toInjected(learned), learning: settings.learning.enabled,
     };
     const timeoutMs = Math.min(10000, Math.max(1000, int(deps.env.AI_INBOUND_SESSION_TIMEOUT_MS, 5000)));
     const controller = new AbortController();
@@ -191,6 +252,41 @@ export async function applyRetention(companyId, days) {
   const ms = Math.min(365, Math.max(30, Number(days) || 365)) * 86400000;
   await AiInboundCall.updateMany({ companyId: oid(companyId) }, [{ $set: { expiresAt: { $add: ['$startedAt', ms] } } }]);
   await FollowUpItem.updateMany({ companyId: oid(companyId), fromAiAgent: true }, [{ $set: { aiExpiresAt: { $add: ['$createdAt', ms] } } }]);
+  await AiLearningProposal.updateMany({ companyId: oid(companyId), status: 'pending' }, [{ $set: { expiresAt: { $add: ['$createdAt', ms] } } }]);
+}
+
+/**
+ * Propositions d'apprentissage d'UN appel (envoyées par dash après l'analyse) : anonymisées (nom et numéro de l'appelant compris),
+ * regroupées avec les propositions en attente similaires de la MÊME entreprise (« appris de N appels »). Une seule analyse par appel.
+ * Rien n'est utilisé par l'agent avant validation.
+ */
+export async function ingestLearning(doc, body = {}) {
+  const companyId = oid(doc.companyId);
+  const claim = await AiInboundCall.updateOne({ _id: doc._id, 'learning.analyzed': { $ne: true } }, { $set: { 'learning.analyzed': true, 'learning.unanswered': Number.isFinite(Number(body.unanswered)) ? Math.max(0, Math.min(50, Math.floor(Number(body.unanswered)))) : null } });
+  if (!claim?.modifiedCount) return { ingested: 0, alreadyAnalyzed: true };
+  const { settings } = await loadSettings(doc.companyId);
+  if (!settings.learning.enabled) return { ingested: 0, disabled: true };
+  const names = [doc.caller?.name, ...(Array.isArray(body.callerNames) ? body.callerNames.slice(0, 5) : [])].filter(Boolean);
+  const proposals = cleanProposals(body.proposals, { names: [...names, doc.from] });
+  const expiresAt = retentionDate(settings.retentionDays);
+  let n = 0;
+  for (const p of proposals) {
+    const pending = await AiLearningProposal.find({ companyId, status: 'pending' }).select('question key sourceCallIds sourceCount confidence answer kind').limit(200).lean();
+    const same = findSimilar(pending, p.question);
+    if (same) {
+      if ((same.sourceCallIds || []).map(String).includes(String(doc._id))) continue;
+      const count = (same.sourceCount || 1) + 1;
+      // Échéance inchangée (alignée sur la création) : un regroupement ne prolonge jamais la conservation.
+      await AiLearningProposal.updateOne({ _id: same._id, companyId }, {
+        $addToSet: { sourceCallIds: doc._id },
+        $set: { sourceCount: count, confidence: Math.max(same.confidence || 0, p.confidence), ...(count >= RECURRING_THRESHOLD ? { kind: 'recurring' } : {}), ...(!same.answer && p.answer ? { answer: p.answer } : {}) },
+      });
+    } else {
+      await AiLearningProposal.create({ companyId, status: 'pending', key: groupKey(p.question), kind: p.kind, question: p.question, answer: p.answer, sourceCallIds: [doc._id], sourceCount: 1, confidence: p.confidence, expiresAt });
+    }
+    n += 1;
+  }
+  return { ingested: n };
 }
 
 /** Compte les minutes d'un appel une seule fois (idempotent) dans le compteur mensuel. */

@@ -34,7 +34,7 @@ import { startIntegrationsWorker } from './src/integrations/runtime.js';
 import { internalRoutes } from './src/routes/internal.js';
 import { aiAgentRoutes } from './src/routes/aiAgent.js';
 import { lineCapacityRoutes } from './src/routes/lineCapacity.js';
-import { purgeExpiredBenchRecordings } from './src/services/aiInbound.js';
+import { purgeExpiredBenchRecordings, migrateAiAgentSettings } from './src/services/aiInbound.js';
 import { companyNotificationRoutes } from './src/routes/companyNotifications.js';
 import { startMessageReminders } from './src/services/messageReminders.js';
 import { scanLowResources } from './src/services/companyNotificationService.js';
@@ -57,6 +57,8 @@ mongoose.connect(config.mongodbUri, {
   console.log('✅ Connected to MongoDB');
   // Une boîte mail connectée n'est utilisable que par la personne qui l'a connectée : anciennes connexions sans propriétaire marquées (inutilisables jusqu'à reconnexion), e-mails stockés partagés purgés (idempotent, journalisé sans donnée personnelle).
   applyMailOwnership();
+  // Pilote agent IA : réglages d'avant (niveau / déclencheurs) → horaires + priorité (idempotent).
+  migrateAiAgentSettings().catch((e) => console.error('[ai-inbound] migration des réglages :', e?.message || e));
 }).catch((error) => {
   console.error('❌ MongoDB connection error:', error);
   process.exit(1); // Exit if we can't connect to database

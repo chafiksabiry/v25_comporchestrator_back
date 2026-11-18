@@ -6,6 +6,7 @@ import TokensCompany from '../models/TokensCompany.js';
 import { createCallEndedHandler } from '../controllers/callEndedController.js';
 import { notifyCompany, verifyIngestToken } from '../services/companyNotificationService.js';
 import { aiInboundTool, aiInboundReport } from '../controllers/aiAgentController.js';
+import { aiInboundLearning } from '../controllers/aiLearningController.js';
 
 const router = express.Router();
 
@@ -51,5 +52,6 @@ router.post('/call-ended', createCallEndedHandler());
 // L'entreprise et l'appel viennent uniquement du jeton signé : jamais de données croisées entre entreprises.
 router.post('/ai-inbound/tools/:tool', aiInboundTool);
 router.post('/ai-inbound/calls/:callSid/report', aiInboundReport);
+router.post('/ai-inbound/calls/:callSid/learning', aiInboundLearning);
 
 export const internalRoutes = router;

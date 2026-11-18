@@ -17,6 +17,41 @@ function metadataObject(metadata) {
   return {};
 }
 
+const metaValue = (metadata, key) => {
+  const entry = Object.entries(metadata).find(([k]) => k.trim().toLowerCase() === key);
+  return entry ? String(entry[1] ?? '').trim() : '';
+};
+
+/**
+ * Formule « Secrétariat avec agent IA » : métadonnées du produit Stripe (copiées sur le forfait à son inscription) `ai_agent=true`,
+ * `ai_agent_included_minutes`, `ai_agent_overage_cents_ttc`. Absentes : pas d'agent IA par l'abonnement, valeurs par défaut du compteur.
+ */
+export function aiAgentFromMetadata(metadata) {
+  const m = metadataObject(metadata);
+  return {
+    aiAgent: ['true', '1', 'yes'].includes(metaValue(m, 'ai_agent').toLowerCase()),
+    aiAgentIncludedMinutes: metaValue(m, 'ai_agent_included_minutes') === '' ? null : numberOrNull(metaValue(m, 'ai_agent_included_minutes')),
+    aiAgentOverageCentsTtc: metaValue(m, 'ai_agent_overage_cents_ttc') === '' ? null : numberOrNull(metaValue(m, 'ai_agent_overage_cents_ttc')),
+  };
+}
+
+/**
+ * Formule agent IA de l'entreprise pour l'OUVERTURE de l'agent : abonnements au statut `active` ou `trialing` seulement (un `past_due`
+ * impayé n'ouvre pas l'agent), du plus récemment mis à jour au plus ancien ; avec plusieurs abonnements actifs, celui dont le forfait porte
+ * `ai_agent=true` l'emporte. @returns {Promise<null|{ status, aiAgent, aiAgentIncludedMinutes, aiAgentOverageCentsTtc }>}
+ */
+export async function loadAiAgentPlan(companyId) {
+  if (!companyId) return null;
+  const subscriptions = await Subscription.find({ companyId: String(companyId), status: { $in: ['active', 'trialing'] } })
+    .sort({ updatedAt: -1 })
+    .limit(10)
+    .populate('planId');
+  const rows = (subscriptions || [])
+    .filter((s) => s?.planId && typeof s.planId !== 'string')
+    .map((s) => ({ status: s.status, ...aiAgentFromMetadata(s.planId.metadata) }));
+  return rows.find((r) => r.aiAgent) || rows[0] || null;
+}
+
 /**
  * Quotas for the company's current plan.
  * Stripe product metadata wins over the copied numeric fields.
@@ -56,6 +91,7 @@ export async function loadCompanyPlanLimits(companyId) {
         : null),
     aiToken: fromMeta.aiToken || (plan.aiToken ? String(plan.aiToken) : null),
     aiTokensIncluded: numberOrNull(fromMeta.aiTokensIncluded) ?? numberOrNull(plan.aiTokensIncluded),
+    ...aiAgentFromMetadata(metadata),
   };
 }
 

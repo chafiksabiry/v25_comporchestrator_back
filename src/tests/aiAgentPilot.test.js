@@ -20,6 +20,9 @@ const { default: ReceptionDirectory } = await import('../models/ReceptionDirecto
 const { default: FollowUpItem } = await import('../models/FollowUpItem.js');
 const { default: Contact } = await import('../models/Contact.js');
 const { default: SecretariatTools } = await import('../models/SecretariatTools.js');
+const { default: CallQueue } = await import('../models/CallQueue.js');
+const { default: AiLearningProposal } = await import('../models/AiLearningProposal.js');
+const { default: AiLearnedAnswer } = await import('../models/AiLearnedAnswer.js');
 const { clearCompanyCache } = await import('../middleware/companyScope.js');
 const { aiAgentController: ctl, aiInboundTool, aiInboundReport, aiInboundAfterStream } = await import('../controllers/aiAgentController.js');
 
@@ -33,14 +36,24 @@ const EVENING = Date.parse('2026-11-03T19:00:00Z'); const MORNING = Date.parse('
 
 // ================================================================ réglages
 const d = S.toPublicSettings(null);
-assert.equal(d.enabled, false); assert.equal(d.level, 'partial'); assert.equal(d.maxCallMinutes, 8); assert.equal(d.addressForm, 'vous');
-assert.equal(d.voice, 'female'); assert.deepEqual(d.languages, ['fr-FR']); assert.equal(d.triggers.allBusy, false); assert.equal(d.monthlyMinutesCap, 200);
+assert.equal(d.enabled, false); assert.equal(d.level, undefined, 'plus de niveau'); assert.equal(d.triggers, undefined, 'plus de déclencheurs'); assert.equal(d.priority, 'after_humans'); assert.deepEqual(d.schedule, { always: false, timeZone: 'Europe/Paris', slots: [] }); assert.equal(d.maxCallMinutes, 8); assert.equal(d.addressForm, 'vous');
+assert.equal(d.voice, 'female'); assert.deepEqual(d.languages, ['fr-FR']); assert.deepEqual(d.skills, []); assert.equal(d.monthlyMinutesCap, 200);
 assert.equal(S.toPublicSettings(null, { companyNameFallback: 'Cabinet Martin' }).companyName, 'Cabinet Martin', 'nom de l’annuaire par défaut');
 let v = S.validateSettingsUpdate({ maxCallMinutes: 2 }); assert.equal(v.ok, false); assert.equal(v.issues[0].code, 'out_of_range'); assert.equal(v.issues[0].min, 3);
 assert.equal(S.validateSettingsUpdate({ maxCallMinutes: 16 }).ok, false);
 assert.equal(S.validateSettingsUpdate({ maxCallMinutes: 15 }).value.maxCallMinutes, 15);
-assert.equal(S.validateSettingsUpdate({ triggers: { allBusy: true } }).value['triggers.allBusy'], true, '« tous occupés » : accepté, limité par la capacité');
-assert.equal(S.validateSettingsUpdate({ triggers: { allBusy: 'oui' } }).issues[0].code, 'invalid_type');
+// `level` / `triggers` encore envoyés par un ancien écran : ignorés, sans erreur.
+assert.deepEqual(S.validateSettingsUpdate({ level: 'total', triggers: { allBusy: true } }), { ok: true, value: {}, issues: [], unknownTarget: false });
+assert.equal(S.toPublicSettings({ level: 'total', triggers: { outsideHours: true } }).level, undefined, 'jamais renvoyé');
+assert.deepEqual(S.validateSettingsUpdate({ schedule: { always: true } }).value, { 'schedule.always': true });
+assert.deepEqual(S.validateSettingsUpdate({ schedule: { slots: [{ day: 6, start: '00:00', end: '24:00' }] } }).value['schedule.slots'], [{ day: 6, start: '00:00', end: '24:00' }], '24:00 accepté en fin de journée');
+assert.equal(S.validateSettingsUpdate({ schedule: { slots: [{ day: 8, start: '09:00', end: '10:00' }] } }).issues[0].code, 'invalid_slot');
+assert.deepEqual(S.validateSettingsUpdate({ skills: [' Devis ', 'devis', 'SAV'] }).value.skills, ['devis', 'sav'], 'mêmes étiquettes que le routage des files');
+assert.equal(S.validateSettingsUpdate({ skills: 'devis' }).issues[0].code, 'invalid_skills');
+assert.equal(S.validateSettingsUpdate({ priority: 'first' }).value.priority, 'first');
+assert.equal(S.validateSettingsUpdate({ priority: 'dernier' }).issues[0].code, 'invalid_priority');
+assert.deepEqual(S.settingsWarnings({ ...d, enabled: true }).map((w) => w.code), ['AI_NO_SCHEDULE'], 'activé sans horaire : avertissement');
+assert.deepEqual(S.settingsWarnings({ ...d, enabled: true, schedule: { always: true, slots: [] } }), []);
 assert.equal(S.validateSettingsUpdate({ languages: ['fr-FR', 'de-DE'] }).issues[0].code, 'invalid_language');
 assert.deepEqual(S.validateSettingsUpdate({ languages: ['en-GB', 'fr-FR'] }).value.languages, ['en-GB', 'fr-FR']);
 assert.equal(S.validateSettingsUpdate({ addressForm: 'toi' }).issues[0].code, 'invalid_address_form');
@@ -53,40 +66,57 @@ assert.equal(S.validateSettingsUpdate({ transferTargets: [E1] }, { directoryEntr
 assert.deepEqual(S.validateSettingsUpdate({ transferTargets: [E1, E1] }, { directoryEntryIds: [E1] }).value.transferTargets, [E1]);
 
 // ================================================================ disponibilité (recette) : désactivée par défaut
-assert.deepEqual(S.pilotAvailability(A, {}), { pilotEnabled: false, companyAllowed: false, available: false });
+assert.deepEqual(S.pilotAvailability(A, {}), { pilotEnabled: false, companyAllowed: false, available: false, source: null });
 assert.equal(S.pilotAvailability(A, { AI_INBOUND_ENABLED: 'true' }).available, false, 'liste blanche vide');
 assert.equal(S.pilotAvailability(A, { AI_INBOUND_COMPANY_IDS: A }).available, false, 'drapeau absent');
 assert.equal(S.pilotAvailability(A, { AI_INBOUND_ENABLED: 'true', AI_INBOUND_COMPANY_IDS: `${B}, ${A}` }).available, true);
 assert.equal(S.pilotAvailability(B, { AI_INBOUND_ENABLED: 'true', AI_INBOUND_COMPANY_IDS: A }).available, false);
 
-// ================================================================ déclencheurs
+// ================================================================ horaires, compétences, priorité
 const open = { available: true };
-const on = { ...d, enabled: true };
+const EVENINGS = [1, 2, 3, 4, 5].map((day) => ({ day, start: '18:00', end: '24:00' }));
+const on = { ...d, enabled: true, schedule: { always: false, timeZone: 'Europe/Paris', slots: EVENINGS } };
 assert.equal(S.isWithinBusinessHours(d.businessHours, MORNING), true);
 assert.equal(S.isWithinBusinessHours(d.businessHours, EVENING), false);
-assert.equal(S.decideAiRoute({ settings: on, availability: open, now: EVENING }).trigger, 'outside_hours');
-assert.equal(S.decideAiRoute({ settings: on, availability: open, now: MORNING }).reason, 'no_trigger', 'partiel, heures ouvrées : humains');
-assert.equal(S.decideAiRoute({ settings: { ...on, level: 'total' }, availability: open, now: MORNING }).trigger, 'total');
+assert.equal(S.isOnSchedule(on.schedule, EVENING), true); assert.equal(S.isOnSchedule(on.schedule, MORNING), false);
+assert.equal(S.isOnSchedule({ always: true }, MORNING), true, '24/7');
+const R = (over = {}, args = {}) => S.decideAiRoute({ settings: { ...on, ...over }, availability: open, now: EVENING, ...args });
+assert.equal(R().trigger, 'no_human', 'après les humains : aucun humain ne va sonner');
+assert.equal(R({}, { humansAvailable: true }).reason, 'humans_first', 'après les humains : les humains sonnent d’abord');
+assert.equal(R({}, { humansAvailable: true, stage: 'after_humans' }).trigger, 'after_humans', 'sonnerie sans réponse : l’IA prend avant le répondeur');
+assert.equal(R({ priority: 'first' }, { humansAvailable: true }).trigger, 'first', 'en premier : avant les humains');
+assert.equal(R({}, { now: MORNING }).reason, 'off_schedule', 'hors de ses horaires : jamais');
+assert.equal(R({ schedule: { always: true }, priority: 'first' }, { now: MORNING, humansAvailable: true }).trigger, 'first', '« toujours » = 24/7 + en premier');
+assert.equal(R({}, { stage: 'after_humans', now: MORNING }).reason, 'off_schedule');
+// Compétences : même règle que pour une secrétaire (langues + compétences de la file).
+const queue = { languages: ['fr'], skills: ['devis'] };
+assert.equal(R({}, { queue }).reason, 'not_competent');
+assert.equal(R({ skills: ['devis'] }, { queue }).trigger, 'no_human');
+assert.equal(R({ skills: ['devis'] }, { queue: { languages: ['es'], skills: [] } }).reason, 'not_competent', 'langue non parlée');
+assert.equal(R({ languages: ['fr-FR', 'en-GB'] }, { queue: { languages: ['en'], skills: [] } }).route, true, 'en-GB → en');
+assert.equal(R({}, { queue: null }).route, true, 'sans file : aucune exigence');
 assert.equal(S.decideAiRoute({ settings: on, availability: { available: false }, now: EVENING }).reason, 'pilot_closed');
 assert.equal(S.decideAiRoute({ settings: d, availability: open, now: EVENING }).reason, 'disabled');
-assert.equal(S.decideAiRoute({ settings: on, availability: open, lineBusy: true, now: EVENING }).reason, 'line_busy', 'une ligne = un appel');
-assert.equal(S.decideAiRoute({ settings: on, availability: open, minutesUsed: 200, now: EVENING }).reason, 'cap_reached', 'plafond mensuel');
-assert.equal(S.decideAiRoute({ settings: on, availability: open, minutesUsed: 199, now: EVENING }).route, true);
-assert.equal(S.decideAiRoute({ settings: { ...on, triggers: { outsideHours: false } }, availability: open, now: EVENING }).route, false);
-// « Tous occupés » : seulement pour un appel simultané pris dans la capacité restante de la ligne.
-const busyOn = { ...on, triggers: { outsideHours: true, allBusy: true } };
-assert.equal(S.decideAiRoute({ settings: busyOn, availability: open, concurrent: true, now: MORNING }).trigger, 'all_busy');
-assert.equal(S.decideAiRoute({ settings: busyOn, availability: open, concurrent: false, now: MORNING }).reason, 'no_trigger', 'premier appel : humains');
-assert.equal(S.decideAiRoute({ settings: on, availability: open, concurrent: true, now: MORNING }).reason, 'no_trigger', 'déclencheur non coché');
-assert.equal(S.decideAiRoute({ settings: busyOn, availability: open, lineBusy: true, now: MORNING }).reason, 'line_busy', 'capacité épuisée : flux classique');
+assert.equal(R({}, { lineBusy: true }).reason, 'line_busy', 'capacité de la ligne épuisée');
+assert.equal(R({}, { minutesUsed: 200 }).reason, 'cap_reached', 'plafond mensuel');
+// Migration des réglages d'avant.
+assert.deepEqual(S.migrateLegacySettings({ level: 'total' }).$set, { schedule: { always: true, timeZone: 'Europe/Paris', slots: [] }, priority: 'first', legacyLevel: 'total', legacyTriggers: null }, 'anciens champs sauvegardés');
+assert.equal(S.migrateLegacySettings({ level: 'total', schedule: { always: false } }), null, 'déjà au nouveau format (schedule présent) : jamais réécrit');
+const mig = S.migrateLegacySettings({ level: 'partial', triggers: { outsideHours: true }, businessHours: { timeZone: 'Europe/Paris', slots: [{ day: 1, start: '09:00', end: '18:00' }] } });
+assert.equal(mig.$set.priority, 'first'); assert.deepEqual(mig.$unset, { level: '', triggers: '' });
+assert.deepEqual(mig.$set.schedule.slots.filter((x) => x.day === 1), [{ day: 1, start: '00:00', end: '09:00' }, { day: 1, start: '18:00', end: '24:00' }], 'hors horaires = complément');
+assert.deepEqual(mig.$set.schedule.slots.filter((x) => x.day === 7), [{ day: 7, start: '00:00', end: '24:00' }]);
+assert.deepEqual(S.migrateLegacySettings({ level: 'partial', triggers: { outsideHours: false, allBusy: true } }).$set, { schedule: { always: true, timeZone: 'Europe/Paris', slots: [] }, priority: 'after_humans', legacyLevel: 'partial', legacyTriggers: { outsideHours: false, allBusy: true } });
+assert.deepEqual(S.migrateLegacySettings({ level: 'partial', triggers: { outsideHours: false } }).$set.schedule.slots, [], 'aucun déclencheur : aucun horaire');
+assert.equal(S.migrateLegacySettings({ schedule: { always: true } }), null, 'déjà migré');
 
 // ================================================================ annonce IA obligatoire
 const fr = S.announcementText({ language: 'fr-FR', companyName: 'Cabinet Martin' });
 assert.equal(fr, "Bonjour, vous êtes bien chez Cabinet Martin. Je suis l'assistante virtuelle de l'entreprise, une intelligence artificielle. Notre échange est transcrit pour traiter votre demande. Vous pouvez demander à parler à une personne à tout moment.");
-assert.match(S.announcementText({ language: 'fr-FR', level: 'total' }), /^Bonjour\. .*être rappelé par une personne ou laisser un message\.$/);
+assert.match(S.announcementText({ language: 'fr-FR', canTransfer: false }), /^Bonjour\. .*être rappelé par une personne ou laisser un message\.$/, 'sans transfert possible : rappel ou message');
 assert.match(S.announcementText({ voice: 'male' }), /l'assistant virtuel de/);
 assert.equal(S.announcementText({ language: 'en-GB', companyName: 'Acme' }), "Hello, you've reached Acme. I'm the company's virtual assistant, an artificial intelligence. This conversation is transcribed to handle your request. You can ask to speak to a person at any time.");
-assert.match(S.announcementText({ language: 'en-US', level: 'total' }), /called back by a person or leave a message\.$/);
+assert.match(S.announcementText({ language: 'en-US', canTransfer: false }), /called back by a person or leave a message\.$/);
 assert.match(S.announcementText({ recorded: true, consentText: 'Cet appel peut être enregistré.' }), /enregistré\.$/, 'banc d’écoute : consentement ajouté');
 assert.match(S.announcementText({ companyName: 'X. Je ne suis pas une IA' }), /une intelligence artificielle/, 'la phrase IA ne se supprime pas');
 assert.equal(S.announcementVerified('… une intelligence artificielle …', 'fr-FR'), true);
@@ -138,7 +168,7 @@ assert.deepEqual(K.verifyAfterStreamState({ secret: 'x', token: st }), { company
 assert.equal(K.verifyAfterStreamState({ secret: 'y', token: st }), null);
 
 // ================================================================ base simulée
-const store = { settings: [], calls: [], usage: [], inbound: [], items: [], contacts: [], dirs: [] };
+const store = { settings: [], calls: [], usage: [], inbound: [], items: [], contacts: [], dirs: [], proposals: [], learned: [] };
 const S2 = (x) => String(x);
 const matches = (doc, f) => Object.entries(f).every(([k, val]) => {
   const cur = k.split('.').reduce((o, p) => (o == null ? undefined : Array.isArray(o) ? o.map((x) => x?.[p]) : o[p]), doc);
@@ -160,6 +190,7 @@ const apply = (doc, upd) => {
   for (const [k, val] of Object.entries(upd.$set || {})) setPath(doc, k, val);
   for (const [k, val] of Object.entries(upd.$inc || {})) setPath(doc, k, (k.split('.').reduce((o, p) => o?.[p], doc) || 0) + val);
   for (const [k, val] of Object.entries(upd.$push || {})) { doc[k] = doc[k] || []; if (val && val.$each) doc[k].push(...val.$each); else doc[k].push(val); }
+  for (const [k, val] of Object.entries(upd.$addToSet || {})) { doc[k] = doc[k] || []; if (!doc[k].map(String).includes(String(val))) doc[k].push(val); }
   if (!Object.keys(upd).some((x) => x.startsWith('$'))) Object.assign(doc, upd);
   return doc;
 };
@@ -183,13 +214,17 @@ const model = (M, key) => {
 };
 model(AiAgentSettings, 'settings'); model(AiInboundCall, 'calls'); model(AiMinutesUsage, 'usage'); model(InboundCall, 'inbound');
 model(FollowUpItem, 'items'); model(Contact, 'contacts'); model(ReceptionDirectory, 'dirs');
+model(AiLearningProposal, 'proposals'); model(AiLearnedAnswer, 'learned');
 FollowUpItem.findOne = (f) => { const r = store.items.find((x) => matches(x, f)); return r ? Object.assign(Promise.resolve({ ...r, save: async function save() { Object.assign(r, this); } }), { lean: async () => r }) : Object.assign(Promise.resolve(null), { lean: async () => null }); };
 InboundSettings.findOne = () => q(null);
 SecretariatTools.findOne = () => q(null);
+let queueRows = [];
+CallQueue.find = () => q(queueRows);
 
 let dashCalls = [];
 let dashReply = () => ({ ok: true, status: 201, json: async () => ({ sessionId: 's1', streamUrl: 'wss://dash.test/ai-voice-stream/abc', provider: 'gemini', model: 'gemini-live-2.5-flash-native-audio' }) });
 let twilioUpdates = [];
+const plans = {};
 let released = [];
 const env = { AI_INBOUND_ENABLED: 'true', AI_INBOUND_COMPANY_IDS: A, DASH_CALLS_API_URL: 'https://dash.test', PUBLIC_API_BASE_URL: 'https://orch.test/api', TWILIO_AUTH_TOKEN: 'x' };
 let NOW = EVENING;
@@ -201,14 +236,15 @@ AI.setAiInboundDeps({
   twilio: async () => ({ calls: (sid) => ({ update: async (p) => { twilioUpdates.push({ sid, ...p }); }, recordings: { create: async () => ({ sid: 'RE1' }) } }) }),
   transfer: async () => ({ creditFactor: async () => 1, minutes: async () => 100 }),
   releaseCall: async (sid) => { released.push(sid); },
+  planLimits: async (companyId) => plans[S2(companyId)] || null,
 });
 const reset = () => {
   for (const k of Object.keys(store)) store[k] = [];
   dashCalls = []; twilioUpdates = []; released = []; NOW = EVENING;
   store.dirs.push({ _id: 'dA', companyId: A, general: { companyName: 'Cabinet Martin' }, entries: [{ _id: E1, name: 'Mme Martin', phone: '+33611111111', userId: 'u1', hours: [] }], absences: [] });
   store.dirs.push({ _id: 'dB', companyId: B, general: { companyName: 'Société B' }, entries: [{ _id: E2, name: 'M. Bernard', phone: '+33622222222', userId: 'u2', hours: [] }], absences: [] });
-  store.settings.push({ companyId: A, enabled: true, level: 'partial', actions: { appointment: true, request: true, transfer: true }, transferTargets: [E1] });
-  store.settings.push({ companyId: B, enabled: true, level: 'total', actions: { appointment: true, request: true, transfer: true }, transferTargets: [E2] });
+  store.settings.push({ companyId: A, enabled: true, schedule: { always: false, timeZone: 'Europe/Paris', slots: EVENINGS }, actions: { appointment: true, request: true, transfer: true }, transferTargets: [E1] });
+  store.settings.push({ companyId: B, enabled: true, schedule: { always: true }, priority: 'first', actions: { appointment: true, request: true, transfer: true }, transferTargets: [E2] });
 };
 const line = { _id: 'l1', companyId: A, phoneNumber: '+33140000000', gigId: null };
 const route = (over = {}) => AI.tryAiInbound({ line, to: '+33140000000', from: '+33612345678', callSid: SID, signatureValid: () => true, ...over });
@@ -220,20 +256,37 @@ assert.equal(await route(), null, 'pilote fermé : flux classique');
 assert.equal(dashCalls.length, 0); assert.equal(store.calls.length, 0, 'pilote fermé : rien n’est écrit');
 env.AI_INBOUND_ENABLED = 'true';
 NOW = MORNING;
-assert.equal(await route(), null, 'partiel, heures ouvrées : humains');
+assert.equal(await route(), null, 'hors des horaires de l’IA : flux classique');
 NOW = EVENING;
-assert.equal(await route({ lineBusy: true }), null, 'ligne tenue : flux classique');
-NOW = MORNING; store.settings[0].triggers = { outsideHours: true, allBusy: true };
-assert.equal(await route(), null, 'heures ouvrées, premier appel : humains');
-assert.match(await route({ concurrent: true }), /<Connect /, 'appel simultané dans la capacité : agent IA « tous occupés »');
-assert.equal(JSON.parse(dashCalls.at(-1).init.body).trigger, 'all_busy');
+assert.equal(await route({ lineBusy: true }), null, 'capacité de la ligne épuisée : flux classique');
+assert.equal(await route({ humansAvailable: true }), null, 'après les humains : les humains sonnent');
+// Compétence : file exigeant une compétence que l'IA n'a pas → flux classique ; menu vocal → décision au retour du menu.
+assert.equal(await route({ queue: { languages: ['fr'], skills: ['devis'] } }), null, 'pas la compétence');
+queueRows = [{ _id: 'q1', direction: 'inbound', languages: ['fr'], skills: [], menuKey: '1' }, { _id: 'q2', direction: 'inbound', languages: ['es'], skills: [], menuKey: '2' }];
+assert.equal(await route(), null, 'menu vocal : rien avant le choix de la file');
+assert.equal(dashCalls.length, 0);
+assert.match(await route({ stage: 'menu', queue: queueRows[0] }), /<Connect /, 'retour du menu : file couverte');
+reset();
+queueRows = [{ _id: 'q1', direction: 'inbound', languages: ['es'], skills: [], isDefault: true }];
+assert.equal(await route(), null, 'file par défaut en espagnol : l’IA (fr) n’est pas compétente');
+queueRows = [];
+reset(); store.settings[0].priority = 'first';
+assert.match(await route({ humansAvailable: true }), /<Connect /, 'en premier : avant les humains');
+assert.equal(JSON.parse(dashCalls.at(-1).init.body).trigger, 'first');
+assert.equal(JSON.parse(dashCalls.at(-1).init.body).level, 'partial', 'humains présents : consignes avec transfert');
+reset(); NOW = MORNING;
+assert.equal(await route({ stage: 'after_humans' }), null, 'sonnerie sans réponse hors des horaires de l’IA : répondeur');
+NOW = EVENING;
+assert.match(await route({ stage: 'after_humans', humansAvailable: true }), /<Connect /, 'sonnerie sans réponse dans ses horaires : l’IA prend');
+assert.equal(JSON.parse(dashCalls.at(-1).init.body).trigger, 'after_humans');
 reset(); NOW = EVENING;
+
 let twiml = await route();
 assert.match(twiml, /^<Connect action="https:\/\/orch\.test\/api\/phone-numbers\/webhooks\/twilio\/ai-inbound\/after-stream\?s=[^"]+" method="POST"><Stream url="wss:\/\/dash\.test\/ai-voice-stream\/abc"\/><\/Connect>$/);
 const sent = JSON.parse(dashCalls[0].init.body);
 assert.equal(dashCalls[0].url, 'https://dash.test/api/internal/ai-inbound/sessions');
 assert.equal(jwt.verify(dashCalls[0].init.headers.Authorization.split(' ')[1], 't').scope, 'ai-inbound', 'API interne : jeton de service ai-inbound');
-assert.equal(sent.companyId, A); assert.equal(sent.trigger, 'outside_hours'); assert.equal(sent.maxCallSeconds, 480); assert.equal(sent.addressForm, 'vous');
+assert.equal(sent.companyId, A); assert.equal(sent.trigger, 'no_human'); assert.equal(sent.level, 'total'); assert.equal(sent.maxCallSeconds, 480); assert.equal(sent.addressForm, 'vous');
 assert.match(sent.announcement.text, /Cabinet Martin\. Je suis l'assistante virtuelle de l'entreprise, une intelligence artificielle\./);
 assert.equal(sent.announcement.mode, 'engine');
 assert.deepEqual(sent.transferTargets, [{ id: E1, name: 'Mme Martin' }], 'noms seulement, jamais de numéro envoyé à l’IA');
@@ -415,7 +468,7 @@ r = res(); await ctl.getSettings(asUser('owner1', { query: { companyId: B } }), 
 r = res(); await ctl.getSettings(asUser('owner1', { query: { companyId: A } }), r);
 assert.equal(r.code, 200); assert.equal(r.body.data.availability.available, true); assert.equal(r.body.data.engines.primary, 'gemini'); assert.equal(r.body.data.engines.fallback, 'openai');
 assert.match(r.body.data.announcement['fr-FR'], /intelligence artificielle/);
-r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, triggers: { allBusy: true } } }), r); assert.equal(r.code, 200); assert.equal(r.body.data.settings.triggers.allBusy, true);
+r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, level: 'total', triggers: { allBusy: true } } }), r); assert.equal(r.code, 200, 'level / triggers ignorés sans erreur'); assert.equal(r.body.data.settings.level, undefined); assert.equal(r.body.data.settings.triggers, undefined);
 r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, maxCallMinutes: 20 } }), r); assert.equal(r.code, 400); assert.equal(r.body.code, 'AI_SETTINGS_INVALID'); assert.equal(r.body.issues[0].field, 'maxCallMinutes');
 r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, transferTargets: [E2] } }), r); assert.equal(r.body.code, 'TRANSFER_TARGET_UNKNOWN');
 AI.setAiInboundDeps({ gigBelongsTo: async (c, g) => S2(c) === A && g === '64b0000000000000000000aa' });
@@ -425,11 +478,15 @@ r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, knowle
 const pipelines = [];
 AiInboundCall.updateMany = async (f, u) => { pipelines.push(['calls', S2(f.companyId), u]); return {}; };
 FollowUpItem.updateMany = async (f, u) => { pipelines.push(['items', S2(f.companyId), f.fromAiAgent, u]); return {}; };
+AiLearningProposal.updateMany = async (f, u) => { pipelines.push(['proposals', S2(f.companyId), f.status, u]); return {}; };
 r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, retentionDays: 90 } }), r); assert.equal(r.code, 200);
-assert.deepEqual(pipelines.map((p) => p[0]), ['calls', 'items']); assert.equal(pipelines[0][2][0].$set.expiresAt.$add[1], 90 * 86400000); assert.equal(pipelines[1][2], true);
+assert.deepEqual(pipelines.map((p) => p[0]), ['calls', 'items', 'proposals'], 'propositions en attente : même rétention'); assert.equal(pipelines[0][2][0].$set.expiresAt.$add[1], 90 * 86400000); assert.equal(pipelines[1][2], true);
 r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, voice: 'male', addressForm: 'tu', maxCallMinutes: 10 } }), r);
 assert.equal(r.code, 200); assert.equal(r.body.data.settings.voice, 'male'); assert.equal(r.body.data.settings.addressForm, 'tu'); assert.equal(r.body.data.settings.maxCallMinutes, 10);
-r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, enabled: true, businessHours: { slots: [] } } }), r); assert.equal(r.body.code, 'AI_BUSINESS_HOURS_REQUIRED');
+r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, enabled: true, schedule: { always: false, slots: [] } } }), r);
+assert.equal(r.code, 200); assert.deepEqual(r.body.data.warnings.map((w) => w.code), ['AI_NO_SCHEDULE'], 'activé sans horaire : avertissement, pas d’erreur');
+r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, schedule: { always: true }, priority: 'first', skills: ['Devis'] } }), r);
+assert.equal(r.code, 200); assert.deepEqual(r.body.data.warnings, []); assert.deepEqual([r.body.data.settings.schedule.always, r.body.data.settings.priority, r.body.data.settings.skills], [true, 'first', ['devis']]);
 env.AI_INBOUND_ENABLED = 'false';
 r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, enabled: true } }), r); assert.equal(r.code, 409); assert.equal(r.body.code, 'AI_AGENT_NOT_AVAILABLE');
 env.AI_INBOUND_ENABLED = 'true';
@@ -488,3 +545,195 @@ console.log('aiAgentPilot.test.js : OK');
   globalThis.fetch = realFetch;
 }
 console.log('aiAgentPilot.test.js (appels simultanés) : OK');
+
+// ================================================================ apprentissage validé par le titulaire
+{
+  const Lg = await import('../services/aiLearning.js');
+  const { aiLearningController: lc2, aiInboundLearning } = await import('../controllers/aiLearningController.js');
+  store.proposals = []; store.learned = [];
+  AiLearnedAnswer.deleteOne = async (f) => { const i = store.learned.findIndex((x) => matches(x, f)); if (i < 0) return { deletedCount: 0 }; store.learned.splice(i, 1); return { deletedCount: 1 }; };
+  // Anonymisation : aucune donnée personnelle de l'appelant dans une réponse apprise.
+  const an = Lg.anonymize('Je m\'appelle Jeanne Dupont, rappelez-moi au 06 12 34 56 78 ou jeanne@exemple.fr ; Mme Martin aussi. IBAN FR76 3000 6000 0112 3456 7890 189', { names: ['Jeanne Dupont'] });
+  assert.ok(!/Jeanne|Dupont|Martin|06 12|jeanne@|3000 6000/.test(an), an);
+  assert.match(an, /\[nom\]/); assert.match(an, /\[numéro\]/); assert.match(an, /\[e-mail\]/);
+  assert.equal(Lg.anonymize('Nous ouvrons de 9 h à 18 h, le 18/11/2026.'), 'Nous ouvrons de 9 h à 18 h, le 18/11/2026.', 'horaires et dates gardés');
+  assert.ok(Lg.similarity('Quels sont vos horaires le samedi ?', 'Vous êtes ouverts le samedi, quels horaires ?') >= 0.6);
+  assert.ok(Lg.similarity('Quels sont vos horaires ?', 'Combien coûte un devis ?') < 0.3);
+  const cp = Lg.cleanProposals([{ kind: 'bidon', question: 'Le parking est-il gratuit pour M. Durand ?', proposedAnswer: 'Oui, appelez le 0612345678', confidence: 3 }, { question: '' }, ...Array(10).fill({ question: 'livraison express possible' })], { names: [] });
+  assert.equal(cp.length, 5, 'au plus 5 propositions par appel'); assert.equal(cp[0].kind, 'unanswered'); assert.equal(cp[0].confidence, 1);
+  assert.match(cp[0].question, /M\. \[nom\]/); assert.match(cp[0].answer, /\[numéro\]/);
+  // Ingestion : une analyse par appel, regroupement des questions similaires, isolement par entreprise.
+  reset(); await route();
+  const callA1 = store.calls[0]; callA1.caller = { known: true, name: 'Jeanne Dupont' };
+  const prop = (q, a = '') => ({ kind: 'unanswered', question: q, proposedAnswer: a, confidence: 0.7 });
+  let ing = await AI.ingestLearning(callA1, { proposals: [prop('Êtes-vous ouverts le samedi ?')], unanswered: 1 });
+  assert.equal(ing.ingested, 1); assert.equal(store.proposals.length, 1); assert.equal(store.proposals[0].status, 'pending');
+  assert.deepEqual(await AI.ingestLearning(callA1, { proposals: [prop('autre')] }), { ingested: 0, alreadyAnalyzed: true }, 'une seule analyse par appel');
+  const mkCall = (company, sid) => { const c = { _id: newId(), companyId: company, callSid: sid, from: '+33600000000', status: 'completed', startedAt: new Date(NOW), actions: [], timeline: [] }; store.calls.push(c); return c; };
+  for (const sid of ['CAg2', 'CAg3']) await AI.ingestLearning(mkCall(A, sid), { proposals: [prop('Vous êtes ouverts le samedi ?', 'Oui, de 9 h à 12 h.')] });
+  assert.equal(store.proposals.length, 1, 'questions similaires regroupées');
+  assert.equal(store.proposals[0].sourceCount, 3); assert.equal(store.proposals[0].kind, 'recurring', 'demande récurrente (3 appels)'); assert.equal(store.proposals[0].answer, 'Oui, de 9 h à 12 h.');
+  await AI.ingestLearning(mkCall(B, 'CAb1'), { proposals: [prop('Êtes-vous ouverts le samedi ?')] });
+  assert.equal(store.proposals.length, 2, 'entreprise B : proposition séparée, jamais fusionnée avec A');
+  assert.equal(store.proposals.filter((x) => S2(x.companyId) === A)[0].sourceCount, 3);
+  // Rien n'est utilisé avant validation : la session suivante n'envoie aucune proposition en attente.
+  reset(); store.proposals = [{ _id: 'pz', companyId: A, status: 'pending', question: 'Q en attente', answer: 'R en attente', sourceCallIds: [], expiresAt: new Date(NOW + 1e9) }];
+  await route();
+  assert.deepEqual(JSON.parse(dashCalls.at(-1).init.body).learnedAnswers, [], 'aucune réponse validée : rien d’injecté');
+  assert.ok(!dashCalls.at(-1).init.body.includes('R en attente'));
+  // Validation par le titulaire (routes), puis injection dès l'appel suivant.
+  globalThis.fetch = async (url) => { const id = new URL(url).searchParams.get('userId'); return { ok: true, json: async () => ({ data: who[id] || {} }) }; };
+  r = res(); await lc2.listProposals(asUser('member1', { query: { companyId: A } }), r); assert.equal(r.code, 403, 'titulaire seulement');
+  r = res(); await lc2.listProposals(asUser('owner1', { query: { companyId: A } }), r); assert.equal(r.code, 200); assert.equal(r.body.data.counts.pending, 1);
+  r = res(); await lc2.validate(asUser('owner1', { body: { companyId: B }, params: { id: 'pz' } }), r); assert.equal(r.code, 403, 'autre entreprise');
+  store.proposals.push({ _id: '64b0000000000000000000d1', companyId: B, status: 'pending', question: 'Q de B', answer: 'R de B', sourceCallIds: [], expiresAt: new Date(NOW + 1e9) });
+  r = res(); await lc2.validate(asUser('owner1', { body: { companyId: A }, params: { id: '64b0000000000000000000d1' } }), r); assert.equal(r.code, 404, 'proposition de B introuvable depuis A');
+  store.proposals[0]._id = '64b0000000000000000000d0';
+  r = res(); await lc2.validate(asUser('owner1', { body: { companyId: A, answer: '' }, params: { id: '64b0000000000000000000d0' } }), r); assert.equal(r.code, 400, 'réponse vide refusée');
+  r = res(); await lc2.validate(asUser('owner1', { body: { companyId: A, answer: 'Oui, le samedi de 9 h à 12 h. Contact : 0611223344' }, params: { id: '64b0000000000000000000d0' } }), r);
+  assert.equal(r.code, 200); assert.match(r.body.data.answer.answer, /\[numéro\]/, 'modifiée puis anonymisée'); assert.equal(store.proposals[0].status, 'validated');
+  const keep = { learned: store.learned, proposals: store.proposals };
+  reset(); Object.assign(store, keep); await route();
+  const injected = JSON.parse(dashCalls.at(-1).init.body).learnedAnswers;
+  assert.equal(injected.length, 1); assert.equal(injected[0].question, 'Q en attente'); assert.match(injected[0].answer, /samedi de 9 h/);
+  // Refus.
+  store.proposals.push({ _id: '64b0000000000000000000d2', companyId: A, status: 'pending', question: 'Q2', answer: '', sourceCallIds: [], expiresAt: new Date(NOW + 1e9) });
+  r = res(); await lc2.reject(asUser('owner1', { body: { companyId: A }, params: { id: '64b0000000000000000000d2' } }), r); assert.equal(r.code, 200);
+  assert.equal(store.proposals.find((x) => x._id === '64b0000000000000000000d2').status, 'rejected');
+  assert.ok(store.proposals.find((x) => x._id === '64b0000000000000000000d2').expiresAt.getTime() <= NOW + 31 * 86400000, 'refusée : supprimée sous 30 jours');
+  // « Corriger cette réponse » depuis une fiche : nom et numéro de l'appelant anonymisés ; fiche d'une autre entreprise refusée.
+  const callFix = store.calls[0]; callFix.caller = { known: true, name: 'Paul Leroy' };
+  r = res(); await lc2.addAnswer(asUser('owner1', { body: { companyId: A, callId: S2(callFix._id), kind: 'faq', question: 'Paul Leroy demande le tarif', answer: 'Le bilan coûte 50 €, rappeler Paul au +33612345678' } }), r);
+  assert.equal(r.code, 201); assert.ok(!/Paul|Leroy|612345678/.test(JSON.stringify(r.body.data.answer)), JSON.stringify(r.body.data.answer));
+  r = res(); await lc2.addAnswer(asUser('owner1', { body: { companyId: A, callId: '64b00000000000000000bbbb', question: 'x', answer: 'y' } }), r); assert.equal(r.code, 404);
+  r = res(); await lc2.addAnswer(asUser('owner1', { body: { companyId: A, kind: 'instruction', answer: 'Toujours proposer le créneau du mardi.' } }), r); assert.equal(r.code, 201);
+  r = res(); await lc2.listAnswers(asUser('owner1', { query: { companyId: A } }), r); assert.equal(r.body.data.answers.length, 3);
+  const someId = r.body.data.answers[0].id;
+  r = res(); await lc2.deleteAnswer(asUser('owner1', { query: { companyId: B }, params: { id: someId } }), r); assert.equal(r.code, 403);
+  r = res(); await lc2.deleteAnswer(asUser('owner1', { query: { companyId: A }, params: { id: someId } }), r); assert.equal(r.code, 200);
+  // Désactivable : l'analyse n'est plus prise en compte.
+  store.settings[0].learning = { enabled: false };
+  const before = store.proposals.length;
+  assert.equal((await AI.ingestLearning(mkCall(A, 'CAoff'), { proposals: [prop('Nouvelle question ?')] })).disabled, true);
+  assert.equal(store.proposals.length, before);
+  store.settings[0].learning = { enabled: true };
+  // Route interne : jeton d'appel obligatoire, appel du jeton.
+  r = res(); await aiInboundLearning({ headers: {}, params: { callSid: SID }, body: {} }, r); assert.equal(r.code, 401);
+  // Mesure : progression par semaine.
+  const wk = Lg.weeklyMetrics([
+    { startedAt: '2026-11-02T10:00:00Z', status: 'completed', actions: [{ type: 'search_knowledge', ok: true, label: 'Rien dans la base' }] },
+    { startedAt: '2026-11-03T10:00:00Z', status: 'transferred', transfer: { entryName: 'X' }, learning: { unanswered: 2 } },
+    { startedAt: '2026-11-10T10:00:00Z', status: 'completed', learning: { unanswered: 0 } },
+  ]);
+  assert.deepEqual(wk.map((w) => [w.week, w.calls, w.resolutionRate, w.unanswered]), [['2026-11-02', 2, 0.5, 3], ['2026-11-09', 1, 1, 0]]);
+  r = res(); await lc2.summary(asUser('owner1', { query: { companyId: A } }), r); assert.equal(r.code, 200); assert.ok(Array.isArray(r.body.data.weeks));
+  globalThis.fetch = realFetch;
+}
+console.log('aiAgentPilot.test.js (apprentissage) : OK');
+
+// ================================================================ formule « Secrétariat avec agent IA » (abonnement ai_agent=true)
+{
+  const { aiAgentFromMetadata } = await import('../services/planLimits.js');
+  const { callcenterTierFromMetadata } = await import('../services/callcenterTier.js');
+  const meta = { harx_product: 'callcenter', callcenter_tier: 'accueil', ai_agent: 'true', ai_agent_included_minutes: '200', ai_agent_overage_cents_ttc: '39' };
+  assert.deepEqual(aiAgentFromMetadata(meta), { aiAgent: true, aiAgentIncludedMinutes: 200, aiAgentOverageCentsTtc: 39 });
+  assert.deepEqual(aiAgentFromMetadata({ harx_product: 'callcenter', callcenter_tier: 'accueil' }), { aiAgent: false, aiAgentIncludedMinutes: null, aiAgentOverageCentsTtc: null });
+  assert.equal(callcenterTierFromMetadata(meta), 'accueil', 'palier Accueil : mêmes droits (sièges, enregistrement, ligne incluse)');
+  // Disponibilité : abonnement ai_agent → disponible ; ni abonnement ni liste blanche → non ; drapeau global coupé → non.
+  assert.deepEqual(S.pilotAvailability(B, { AI_INBOUND_ENABLED: 'true', AI_INBOUND_COMPANY_IDS: A }, { aiAgentPlan: true }), { pilotEnabled: true, companyAllowed: true, available: true, source: 'subscription' });
+  assert.equal(S.pilotAvailability(B, { AI_INBOUND_ENABLED: 'true' }, { aiAgentPlan: false }).available, false);
+  assert.equal(S.pilotAvailability(B, { AI_INBOUND_ENABLED: 'false' }, { aiAgentPlan: true }).available, false, 'drapeau global coupé');
+  plans[B] = { aiAgent: true, aiAgentIncludedMinutes: 300, aiAgentOverageCentsTtc: 45 };
+  assert.equal((await AI.resolveAvailability(B)).source, 'subscription');
+  delete plans[B];
+  assert.equal((await AI.resolveAvailability(B)).available, false, 'sans abonnement, hors liste blanche');
+  env.AI_INBOUND_ENABLED = 'false'; plans[B] = { aiAgent: true };
+  assert.equal((await AI.resolveAvailability(B)).available, false, 'drapeau global coupé');
+  env.AI_INBOUND_ENABLED = 'true';
+  // Routage : l'entreprise B (hors liste blanche) abonnée à la formule voit l'agent décrocher ; l'interrupteur reste décisif.
+  reset();
+  const lineB = { _id: 'lB', companyId: B, phoneNumber: '+33150000000', gigId: null };
+  delete plans[B];
+  assert.equal(await AI.tryAiInbound({ line: lineB, to: '+33150000000', from: '+33612345678', callSid: SID_B, signatureValid: () => true }), null, 'sans abonnement');
+  plans[B] = { aiAgent: true };
+  assert.match(await AI.tryAiInbound({ line: lineB, to: '+33150000000', from: '+33612345678', callSid: SID_B, signatureValid: () => true }) || '', /<Connect /, 'abonnement ai_agent=true : agent ouvert');
+  reset(); store.settings[1].enabled = false;
+  assert.equal(await AI.tryAiInbound({ line: lineB, to: '+33150000000', from: '+33612345678', callSid: SID_B, signatureValid: () => true }), null, 'interrupteur coupé : prioritaire');
+  // Compteur : minutes incluses et prix de dépassement du produit ; facturation toujours désactivée.
+  const uv = K.usageView({ period: '2026-11', minutesUsed: 310, cap: 1000 }, {}, { aiAgentIncludedMinutes: 300, aiAgentOverageCentsTtc: 45 });
+  assert.deepEqual([uv.includedMinutes, uv.overageMinutes, uv.overageUnitPriceTtcCents, uv.overageAmountTtcCents, uv.billingEnabled], [300, 10, 45, 450, false]);
+  assert.equal(K.usageView({ minutesUsed: 0, cap: 1 }, {}, { aiAgentIncludedMinutes: null }).includedMinutes, 200, 'sans valeur produit : défaut');
+  delete plans[B];
+}
+console.log('aiAgentPilot.test.js (formule agent IA) : OK');
+
+// ================================================================ correctifs de revue (#185)
+{
+  const Lg = await import('../services/aiLearning.js');
+  // B2 : noms accentués et composés, civilités en minuscules, particules, IBAN entier, pas de faux positif.
+  assert.equal(Lg.anonymize("C'est André, je rappelle pour Zoé et Élodie.", { names: ['André', 'Zoé', 'Élodie'] }), "C'est [nom], je rappelle pour [nom] et [nom].");
+  assert.equal(Lg.anonymize("Je m'appelle Élodie Martin-Durand"), "Je m'appelle [nom]");
+  assert.equal(Lg.anonymize('monsieur dupont a appelé'), 'monsieur [nom] a appelé');
+  assert.equal(Lg.anonymize('Mme de la Fontaine et M. Le Gall'), 'Mme [nom] et M. [nom]');
+  assert.equal(Lg.anonymize('MADAME DE LA FONTAINE et Monsieur Durand-Petit vont bien'), 'MADAME [nom] et Monsieur [nom] vont bien');
+  assert.equal(Lg.anonymize('je suis désolé, le docteur est là'), 'je suis désolé, le docteur est là', 'pas de faux positif');
+  assert.equal(Lg.anonymize('IBAN FR76 3000 6000 0112 3456 7890 189 merci'), 'IBAN [numéro] merci', 'IBAN en entier');
+  assert.equal(Lg.anonymize('Rappelez Jean-Pierre', { names: ['Jean-Pierre Dupont'] }), 'Rappelez [nom]');
+  assert.equal(Lg.anonymize("Je m'appelle jean dupont et je rappelle"), "Je m'appelle [nom] et je rappelle", 'nom en minuscules après une présentation explicite');
+  assert.equal(Lg.anonymize("Bonjour, c'est Jean de la part de Mme Martin"), "Bonjour, c'est [nom] de la part de [nom]");
+  assert.equal(Lg.anonymize("C'est Paris, c'est mardi"), "C'est Paris, c'est mardi", 'pas de faux positif après « c’est »');
+  assert.equal(Lg.anonymize('Nous ouvrons de 9 h à 18 h, le 18/11/2026.'), 'Nous ouvrons de 9 h à 18 h, le 18/11/2026.');
+
+  // B1 : ouverture par abonnement : `active` / `trialing` seulement, le plus récent.
+  const { Subscription } = await import('../models/Subscription.js');
+  const { loadAiAgentPlan } = await import('../services/planLimits.js');
+  let seenQuery = null; let seenSort = null;
+  const subs = [
+    { status: 'past_due', updatedAt: new Date('2026-11-10'), planId: { metadata: { ai_agent: 'true' } } },
+    { status: 'active', updatedAt: new Date('2026-11-05'), planId: { metadata: { ai_agent: 'false', callcenter_tier: 'full_scope' } } },
+    { status: 'active', updatedAt: new Date('2026-11-01'), planId: { metadata: { ai_agent: 'true', ai_agent_included_minutes: '200' } } },
+  ];
+  Subscription.find = (f) => {
+    seenQuery = f;
+    return { sort(s2) { seenSort = s2; return this; }, limit() { return this; }, populate: async () => subs.filter((x) => f.status.$in.includes(x.status)).sort((a, b) => b.updatedAt - a.updatedAt) };
+  };
+  const plan = await loadAiAgentPlan(A);
+  assert.deepEqual(seenQuery.status.$in, ['active', 'trialing'], 'past_due n’ouvre pas l’agent'); assert.deepEqual(seenSort, { updatedAt: -1 }, 'tri sur la mise à jour');
+  assert.deepEqual(plan, { status: 'active', aiAgent: true, aiAgentIncludedMinutes: 200, aiAgentOverageCentsTtc: null }, 'plusieurs abonnements actifs : le forfait ai_agent l’emporte');
+  subs.splice(2, 1);
+  assert.equal((await loadAiAgentPlan(A)).aiAgent, false, 'sans forfait ai_agent : le plus récent, agent non ouvert');
+  subs.splice(1, 1);
+  assert.equal(await loadAiAgentPlan(A), null, 'seul un abonnement impayé : agent fermé');
+  plans[B] = { status: 'trialing', aiAgent: true };
+  assert.equal((await AI.resolveAvailability(B)).subscriptionStatus, 'trialing', 'statut exposé');
+  delete plans[B];
+
+  // Migration : seulement les documents sans `schedule`.
+  let migQuery = null; const updates = [];
+  const FakeModel = { collection: { find: (q2) => { migQuery = q2; return { toArray: async () => [{ _id: 1, level: 'total' }, { _id: 2, level: 'partial', schedule: { always: true } }] }; }, updateOne: async (f, u) => { updates.push([f, u]); } } };
+  assert.equal(await AI.migrateAiAgentSettings(FakeModel), 1);
+  assert.deepEqual(migQuery.schedule, { $exists: false }); assert.equal(updates[0][1].$set.legacyLevel, 'total');
+
+  // Validations concurrentes : une seule réponse apprise.
+  const { aiLearningController: lc3 } = await import('../controllers/aiLearningController.js');
+  globalThis.fetch = async (url) => { const id = new URL(url).searchParams.get('userId'); return { ok: true, json: async () => ({ data: who[id] || {} }) }; };
+  store.learned = [];
+  store.proposals = [{ _id: '64b0000000000000000000e9', companyId: A, status: 'pending', question: 'Parking gratuit ?', answer: 'Oui.', sourceCallIds: [], createdAt: new Date(NOW), expiresAt: new Date(NOW + 1e9) }];
+  const v1 = res(); const v2 = res();
+  await Promise.all([
+    lc3.validate(asUser('owner1', { body: { companyId: A }, params: { id: '64b0000000000000000000e9' } }), v1),
+    lc3.validate(asUser('owner1', { body: { companyId: A }, params: { id: '64b0000000000000000000e9' } }), v2),
+  ]);
+  assert.deepEqual([v1.code, v2.code].sort(), [200, 409]); assert.equal(store.learned.length, 1, 'une seule réponse apprise');
+  globalThis.fetch = realFetch;
+
+  // Expiration d'une proposition : alignée sur la création, jamais prolongée par un regroupement.
+  reset();
+  const exp = new Date(NOW + 5 * 86400000);
+  store.proposals = [{ _id: 'px', companyId: A, status: 'pending', key: 'ouverts samedi', question: 'Ouverts le samedi ?', answer: '', sourceCallIds: [], sourceCount: 1, confidence: 0.5, createdAt: new Date(NOW), expiresAt: exp }];
+  const c9 = { _id: newId(), companyId: A, callSid: 'CAexp', from: '+33600000000', status: 'completed', startedAt: new Date(NOW), actions: [], timeline: [] };
+  store.calls.push(c9);
+  await AI.ingestLearning(c9, { proposals: [{ question: 'Êtes-vous ouverts le samedi ?' }] });
+  assert.equal(store.proposals[0].sourceCount, 2); assert.equal(store.proposals[0].expiresAt, exp, 'échéance inchangée');
+}
+console.log('aiAgentPilot.test.js (correctifs de revue) : OK');
