@@ -175,7 +175,12 @@ export function createAgent({ cfg, claude, zoho, tools, knowledge, kb = null, lo
     if (cfg.logPayloadShape) logger.info?.('[salesiq] payload shape', JSON.stringify(payloadShape(body)));
     if (cfg.logPayloadShape) logger.info?.('[salesiq] payload received', JSON.stringify({ handler: evt.handler, operation: evt.operation, hasRequestId: Boolean(evt.requestId), hasConversationId: Boolean(evt.conversationId), hasEmail: Boolean(evt.visitorEmail) }));
     if (evt.handler === 'failure') {
-      logger.error?.(`[salesiq] SalesIQ rejected our response: code=${evt.failure?.code} desc="${evt.failure?.desc}" action=${evt.failure?.action} replies=${evt.failure?.replies}`);
+      // 1001 offline_hours / 1002 operators_not_available are normal business
+      // outcomes (nobody to hand the chat to), not errors: keep them out of the
+      // error stream so real failures stay visible.
+      const expected = ['offline_hours', 'operators_not_available'].includes(String(evt.failure?.desc));
+      const logFailure = expected ? (logger.info || logger.warn) : (logger.error || logger.warn);
+      logFailure?.call(logger, `[salesiq] SalesIQ rejected our response: code=${evt.failure?.code} desc="${evt.failure?.desc}" action=${evt.failure?.action} replies=${evt.failure?.replies}`);
     } else if (cfg.logPayloadShape && evt.activeConversationIdShape) {
       logger.info?.(`[salesiq] active_conversation_id shape: ${evt.activeConversationIdShape}`);
     }
