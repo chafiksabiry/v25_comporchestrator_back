@@ -45,6 +45,8 @@ const deps = {
   now: () => Date.now(),
 };
 export const setTransferDeps = (over) => Object.assign(deps, over);
+/** Solde de minutes et coefficient de la destination : réutilisés par le transfert de l'agent IA (services/aiInbound.js). */
+export const transferDeps = deps;
 
 async function context(req, res) {
   let access;

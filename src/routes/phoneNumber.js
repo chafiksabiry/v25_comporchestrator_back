@@ -4,6 +4,7 @@ import { voicemailController } from '../controllers/voicemailController.js';
 import { authenticate } from '../middleware/auth.js';
 import { guard, companyFrom, companyFromIfPresent, ofNumber, ofPayment, ofCaller } from '../middleware/phoneScope.js';
 import { copilotGuard } from '../middleware/copilotScope.js';
+import { aiInboundAfterStream } from '../controllers/aiAgentController.js';
 
 // Access control: `authenticate` = valid login; `guard(...)` = login + the caller belongs to the targeted company.
 // Left open on purpose: provider webhooks only. The two REP copilot routes (gig check, configure-voice) use `copilotGuard`:
@@ -122,6 +123,12 @@ router.post(
   '/webhooks/twilio/inbound-call',
   express.urlencoded({ extended: false }),
   phoneNumberController.handleTwilioInboundCall.bind(phoneNumberController)
+);
+// Pilote agent IA : fin du flux IA (<Connect action>) — au revoir, ou repli excuse puis répondeur classique (état signé dans l'URL).
+router.post(
+  '/webhooks/twilio/ai-inbound/after-stream',
+  express.urlencoded({ extended: false }),
+  aiInboundAfterStream
 );
 router.post(
   '/webhooks/twilio/inbound-menu',

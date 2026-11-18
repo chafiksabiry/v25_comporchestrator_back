@@ -88,6 +88,10 @@ const schema = new mongoose.Schema(
     sequence: { type: Number, default: 0, min: 0 },
     /** Proposé par l'IA puis validé par une personne (information seulement). */
     fromAiPlan: { type: Boolean, default: false },
+    /** Créé par l'agent IA qui a décroché un appel entrant (pilote) : l'appel est consultable sur sa fiche IA (`originType: 'call'`, `originId`). */
+    fromAiAgent: { type: Boolean, default: false },
+    /** Élément créé par l'agent IA : supprimé avec la fiche d'appel IA (même rétention, 12 mois au plus ; index TTL). Absent pour les autres. */
+    aiExpiresAt: { type: Date, default: undefined },
     /**
      * Synchronisation avec l'agenda externe du centre (Google, Microsoft 365) : fournisseur, identifiant de l'événement et statut.
      * Sans agenda connecté, `calendarStatus` reste `not_connected` et rien n'est envoyé à l'extérieur (services/calendarSync.js).
@@ -119,5 +123,6 @@ schema.index({ companyId: 1, status: 1, createdAt: -1 });
 schema.index({ companyId: 1, assigneeId: 1, status: 1 });
 schema.index({ companyId: 1, model: 1, originType: 1, originId: 1 });
 schema.index({ model: 1, status: 1, escalatedAt: 1, remindedAt: 1 });
+schema.index({ aiExpiresAt: 1 }, { expireAfterSeconds: 0, partialFilterExpression: { fromAiAgent: true } });
 
 export default mongoose.models.FollowUpItem || mongoose.model('FollowUpItem', schema);
