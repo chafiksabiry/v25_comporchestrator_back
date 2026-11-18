@@ -51,6 +51,7 @@ import { blockedCallBody } from '../services/blockedCallers.js';
 import { languageForPhone } from '../services/companyLanguage.js';
 import { getInboundTest, needsInboundTestProof, realCallProof, receiveInboundCall, startInboundTest as startInboundTestSession } from '../services/inboundTestService.js';
 import { stripeLocaleFromRequest } from '../services/stripeLocale.js';
+import { tryAiInbound } from '../services/aiInbound.js';
 
 /** Titulaire Nomad Solo (une seule personne) : l'appelant entend des messages à la première personne. Toute erreur = texte entreprise. */
 const isSoloCompany = async (companyId) => {
@@ -2613,6 +2614,13 @@ class PhoneNumberController {
             leaseTaken = taken.ok; lineBusy = !taken.ok && taken.reason === 'busy';
           }
         } catch (error) { console.error('[inbound] contrôle de ligne ignoré :', error?.message || error); }
+      }
+      // Pilote « Téléphonie + agent IA » (recette) : l'agent IA décroche seulement si le pilote est ouvert pour l'entreprise
+      // (AI_INBOUND_ENABLED + AI_INBOUND_COMPANY_IDS), le réglage activé et le déclencheur rempli. null (tous les autres cas, ou
+      // échec du moteur / de la session) : flux classique ci-dessous, inchangé. Ligne déjà tenue : jamais l'IA (« une ligne = un appel »).
+      if (line?.companyId && callSid) {
+        const aiBody = await tryAiInbound({ line, to, from, callSid, lineBusy, baseUrl: `https://${req.get('host')}` });
+        if (aiBody) return reply(aiBody);
       }
       const ringAllow = await this.inboundRingFilterFor(line);
       const online = line?.companyId && !lineBusy ? (ringAllow ? availableIdentities(line.companyId).filter(ringAllow) : availableIdentities(line.companyId)) : [];

@@ -88,6 +88,8 @@ const schema = new mongoose.Schema(
     sequence: { type: Number, default: 0, min: 0 },
     /** Proposé par l'IA puis validé par une personne (information seulement). */
     fromAiPlan: { type: Boolean, default: false },
+    /** Créé par l'agent IA qui a décroché un appel entrant (pilote) : l'appel est consultable sur sa fiche IA (`originType: 'call'`, `originId`). */
+    fromAiAgent: { type: Boolean, default: false },
     /**
      * Synchronisation avec l'agenda externe du centre (Google, Microsoft 365) : fournisseur, identifiant de l'événement et statut.
      * Sans agenda connecté, `calendarStatus` reste `not_connected` et rien n'est envoyé à l'extérieur (services/calendarSync.js).

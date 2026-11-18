@@ -11,12 +11,12 @@ const schema = new mongoose.Schema(
     startedAt: { type: Date, required: true, default: Date.now },
     /** ringing : en cours de sonnerie ; answered : un conseiller a décroché ; abandoned : l'appelant a raccroché avant ; missed : personne n'a décroché ; no_agent : aucun conseiller disponible ; voicemail : l'appelant a laissé un message (compté comme non décroché par les statistiques). */
     status: { type: String, enum: ['ringing', 'answered', 'abandoned', 'missed', 'no_agent', 'voicemail'], default: 'ringing' },
-    /** Où l'appel a d'abord sonné : browser (navigateur présent), mobile (renvoi vers le mobile du titulaire), voicemail (personne). */
-    route: { type: String, enum: ['browser', 'mobile', 'voicemail'], default: 'browser' },
+    /** Où l'appel a d'abord sonné : browser (navigateur présent), mobile (renvoi vers le mobile du titulaire), voicemail (personne), ai_agent (agent IA, pilote). */
+    route: { type: String, enum: ['browser', 'mobile', 'voicemail', 'ai_agent'], default: 'browser' },
     /** Le mobile du titulaire a été composé pour cet appel (une seule fois). */
     mobileTried: { type: Boolean, default: false },
     /** Où l'appel a été décroché (le statut reste « answered »). */
-    answeredOn: { type: String, enum: ['browser', 'mobile'], default: undefined },
+    answeredOn: { type: String, enum: ['browser', 'mobile', 'ai_agent'], default: undefined },
     /** Identité navigateur (`cc-…`) de la secrétaire qui a décroché, connue seulement pour une sonnerie à tour de rôle (files) ; sert à la stratégie « libre depuis le plus longtemps ». */
     answeredBy: { type: String, default: '' },
     waitSeconds: { type: Number, default: null },
