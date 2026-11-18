@@ -224,7 +224,18 @@ const children = { [SID_OUT]: [{ sid: SID_OUT_CHILD, from: '+33140000000', to: '
 const listCalls = [];
 client.calls.list = async (q) => { listCalls.push(q); return children[q.parentCallSid] || []; };
 const lines = { [C1]: ['+33140000000'], [C2]: ['+33150000000'] };
-setTransferDeps({ lineOfCompany: async (cid, n) => (lines[String(cid)] || []).includes(n) });
+// Ligne de la société : seules les lignes ACTIVES comptent (filtre lu sur la requête réelle).
+const { PhoneNumber } = await import('../models/PhoneNumber.js');
+const { default: OutboundTransfer } = await import('../models/OutboundTransfer.js');
+const existsFilters = [];
+PhoneNumber.exists = async (f) => { existsFilters.push(f); return f.status === 'active' && (lines[String(f.companyId)] || []).includes(f.phoneNumber) ? { _id: 'p' } : null; };
+const locks = new Map(); const leaseMoves = [];
+OutboundTransfer.create = async (doc) => { if (locks.has(doc.callSid)) { const e = new Error('dup'); e.code = 11000; throw e; } locks.set(doc.callSid, { ...doc }); return doc; };
+OutboundTransfer.deleteOne = async (f) => { locks.delete(f.callSid); return {}; };
+OutboundTransfer.findOneAndUpdate = (f, upd) => { const row = locks.get(f.callSid); if (row && row.entryId === f.entryId) Object.assign(row, upd.$set); return lean(row ? { ...row } : null); };
+const { transferDeps } = await import('../controllers/callTransferController.js');
+const realMoveLease = transferDeps.moveLease;
+setTransferDeps({ moveLease: async (a, b) => { leaseMoves.push([a, b]); return { moved: 1 }; } });
 resetCalls(); updates.length = 0;
 
 r = await call(ctl.transfer, { user: 'sec2', body: { callSid: SID_OUT, entryId: E_ONE } });
@@ -241,10 +252,32 @@ assert.deepEqual(listCalls.at(-1), { parentCallSid: SID_OUT, status: 'in-progres
 assert.equal(updates.length, 1); assert.equal(updates[0].sid, SID_OUT_CHILD, 'la jambe du prospect est redirigée, pas celle du navigateur');
 assert.match(updates[0].twiml, /\+33612345678/); assert.match(updates[0].twiml, /callerId="\+33140000000"/); assert.ok(!updates[0].twiml.includes('+33100000000'));
 assert.ok(calls.every((c) => !c.transfer?.startedAt), 'aucun appel entrant consigné pour un appel sortant');
+assert.deepEqual(existsFilters.at(-1), { companyId: existsFilters.at(-1).companyId, phoneNumber: '+33140000000', status: 'active' }, 'ligne active exigée');
+// une ligne = un appel : le bail passe à la jambe du prospect, libérée par son statusCallback signé (pas par l'action du <Dial> du navigateur)
+assert.deepEqual(leaseMoves.at(-1), [SID_OUT, SID_OUT_CHILD]);
+assert.match(updates[0].statusCallback, /\/api\/phone-numbers\/webhooks\/twilio\/line-call-end\?t=[a-f0-9]{64}$/);
+const { verifyLineCallEnd } = await import('../services/lineCalls.js');
+assert.ok(verifyLineCallEnd({ secret: 'tok', callSid: SID_OUT_CHILD, token: new URL(updates[0].statusCallback).searchParams.get('t') }), 'jeton lié à la jambe du prospect');
+// verrou : une seule redirection de la jambe du prospect
+assert.equal(locks.get(SID_OUT_CHILD).byUserId, 'sec1');
+r = await call(ctl.transfer, { body: { callSid: SID_OUT, entryId: E_ONE } });
+assert.equal(r.code, 409, 'deuxième redirection de la même jambe'); assert.equal(updates.length, 1);
 const outState = new URL(updates[0].twiml.match(/action="([^"]+)"/)[1].replace(/&amp;/g, '&')).searchParams.get('s');
 assert.match(await hook({ s: outState }, { CallSid: SID_OUT_CHILD, DialCallStatus: 'no-answer' }), /<Record /, 'sans réponse : message proposé au correspondant');
+assert.equal(locks.get(SID_OUT_CHILD).result, 'no_answer', 'résultat consigné sur le verrou sortant');
+// échec du fournisseur : verrou levé et bail rendu à la jambe navigateur
+locks.clear(); updates.length = 0; leaseMoves.length = 0; failUpdate = true;
+r = await call(ctl.transfer, { body: { callSid: SID_OUT, entryId: E_ONE } });
+assert.equal(r.code, 502); assert.equal(locks.size, 0); assert.deepEqual(leaseMoves, [[SID_OUT, SID_OUT_CHILD], [SID_OUT_CHILD, SID_OUT]]);
+failUpdate = false;
+// le déplacement réel du bail : emplacement par emplacement, idempotent
+const moves = [];
+const { transferLease } = await import('../services/lineCalls.js');
+const out = await transferLease(SID_OUT, SID_OUT_CHILD, { Model: { updateMany: async (f, u) => { moves.push([f, u]); return { modifiedCount: Object.keys(f)[0].startsWith('activeCall.') ? 1 : 0 }; } } });
+assert.equal(out.moved, 1); assert.equal(moves.length, 10); assert.deepEqual(moves[0], [{ 'activeCall.callSid': SID_OUT }, { $set: { 'activeCall.callSid': SID_OUT_CHILD } }]);
+assert.equal(typeof realMoveLease, 'function');
 // solde épuisé : refus, rien n'est redirigé
-updates.length = 0; setTransferDeps({ minutes: async () => 0 });
+updates.length = 0; locks.clear(); setTransferDeps({ minutes: async () => 0 });
 assert.equal((await call(ctl.transfer, { body: { callSid: SID_OUT, entryId: E_ONE } })).code, 402); assert.equal(updates.length, 0);
 setTransferDeps({ minutes: async () => 30 });
 

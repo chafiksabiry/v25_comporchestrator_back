@@ -3,6 +3,8 @@ import InboundCall from '../models/InboundCall.js';
 import InboundSettings from '../models/InboundSettings.js';
 import ReceptionDirectory from '../models/ReceptionDirectory.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
+import OutboundTransfer from '../models/OutboundTransfer.js';
+import { LINE_CALL_END_PATH, signLineCallEnd, transferLease } from '../services/lineCalls.js';
 import { config } from '../config/env.js';
 import { callerAccess, scopeToCompany, ScopeError } from '../middleware/companyScope.js';
 import { canUse } from '../services/followUps.js';
@@ -49,7 +51,14 @@ const deps = {
   },
   now: () => Date.now(),
   /** La ligne appelante d'un appel sortant appartient-elle à la société ? */
-  lineOfCompany: async (companyId, phoneNumber) => Boolean(phoneNumber && await PhoneNumber.exists({ companyId, phoneNumber })),
+  lineOfCompany: async (companyId, phoneNumber) => Boolean(phoneNumber && await PhoneNumber.exists({ companyId, phoneNumber, status: 'active' })),
+  /** Verrou d'une jambe sortante (index unique) : false si elle est déjà transférée. */
+  lockOutbound: async (doc) => {
+    try { await OutboundTransfer.create(doc); return true; } catch (e) { if (e?.code === 11000) return false; throw e; }
+  },
+  unlockOutbound: async (callSid) => { await OutboundTransfer.deleteOne({ callSid }); },
+  /** Bail de ligne (« une ligne = un appel ») : passe de la jambe navigateur à celle du correspondant. */
+  moveLease: (fromSid, toSid) => transferLease(fromSid, toSid),
 };
 export const setTransferDeps = (over) => Object.assign(deps, over);
 /** Solde de minutes et coefficient de la destination : réutilisés par le transfert de l'agent IA (services/aiInbound.js). */
@@ -136,8 +145,10 @@ export const callTransferController = {
       }
 
       const byName = (await loadUserName(access.userId)) || 'Accueil';
-      // Un seul transfert par appel entrant : la prise est atomique. (Sortant : la jambe navigateur se termine à la redirection.)
-      const claim = outbound ? { modifiedCount: 1 } : await InboundCall.updateOne(
+      // Un seul transfert par appel : prise atomique (entrant : sur l'appel ; sortant : verrou unique sur la jambe du correspondant).
+      const claim = outbound
+        ? { modifiedCount: (await deps.lockOutbound({ companyId, callSid: parentSid, browserCallSid: callSid, lineNumber, byUserId: access.userId, byName, entryId, entryName: entry.name, mode, result: mode === 'dial' ? 'ringing' : 'message_offered', startedAt: new Date(now) })) ? 1 : 0 }
+        : await InboundCall.updateOne(
         { _id: call._id, companyId, 'transfer.startedAt': null },
         { $set: {
           status: 'answered', answeredOn: 'browser', answeredBy: voiceIdentity(access.userId),
@@ -157,10 +168,23 @@ export const callTransferController = {
           name: entry.name, number, extension: entry.extension, callerId: lineNumber, voice: settings?.voice, maxSeconds, language,
           resultUrl: `${baseUrl}${TRANSFER_WEBHOOK_PATH}?s=${encodeURIComponent(signTransferState({ secret: config.twilioAuthToken, companyId: access.companyId, callSid: parentSid, entryId, userId: access.userId, now }))}`,
         });
+      // Sortant : la ligne reste tenue par la jambe du correspondant jusqu'à sa fin réelle (bail déplacé, puis libéré par son
+      // statusCallback signé), et non libérée par l'action du <Dial> du navigateur qui se termine à la redirection.
+      let leaseMoved = false;
+      if (outbound) {
+        try { leaseMoved = (await deps.moveLease(callSid, parentSid)).moved > 0; } catch (e) { console.warn('reception transfer (ligne) :', e?.message); }
+      }
+      const update = outbound
+        ? { twiml, statusCallback: `${baseUrl}${LINE_CALL_END_PATH}?t=${signLineCallEnd({ secret: config.twilioAuthToken, callSid: parentSid })}`, statusCallbackMethod: 'POST' }
+        : { twiml };
       try {
-        await client.calls(parentSid).update({ twiml });
+        await client.calls(parentSid).update(update);
       } catch (e) {
         console.error('reception transfer (Twilio):', e?.message);
+        if (outbound) {
+          await deps.unlockOutbound(parentSid).catch(() => undefined);
+          if (leaseMoved) await deps.moveLease(parentSid, callSid).catch(() => undefined);
+        }
         if (call) await InboundCall.updateOne({ _id: call._id, companyId }, { $set: { transfer: { startedAt: null, byUserId: '', byName: '', entryId: '', entryName: '', mode: 'dial', result: 'ringing', endedAt: null } } }).catch(() => undefined);
         return fail(res, 502, 'Le transfert a échoué : l’appel est resté avec vous. Réessayez ou prenez un message.', { code: 'provider_failed' });
       }
@@ -204,9 +228,12 @@ export async function transferResult(req, res) {
       { $set: { 'transfer.result': result, 'transfer.endedAt': new Date(deps.now())} },
       { new: true }
     ).lean();
+    // Transfert d'un appel sortant (poste de l'agent) : résultat consigné sur son verrou.
+    let outboundRow = null;
+    if (!updated) outboundRow = await OutboundTransfer.findOneAndUpdate({ callSid, companyId, entryId: state.entryId }, { $set: { result, endedAt: new Date(deps.now()) } }, { new: true }).lean().catch(() => null);
     const settings = await InboundSettings.findOne({ companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch(() => null);
-    const language = languageForPhone(updated?.phoneNumber);
-    return xml(buildTransferResultTwiml({ dialStatus, name: updated?.transfer?.entryName || phrasesFor(language).transferFallbackName, settings, baseUrl: baseUrlOf(req), companyId: state.companyId, language }));
+    const language = languageForPhone(updated?.phoneNumber || outboundRow?.lineNumber);
+    return xml(buildTransferResultTwiml({ dialStatus, name: updated?.transfer?.entryName || outboundRow?.entryName || phrasesFor(language).transferFallbackName, settings, baseUrl: baseUrlOf(req), companyId: state.companyId, language }));
   } catch (error) {
     console.error('reception transferResult:', error.message);
     return xml('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>');

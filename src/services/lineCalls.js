@@ -104,6 +104,22 @@ export async function releaseCall(callSid, { Model = PhoneNumber } = {}) {
   return { released };
 }
 
+/**
+ * Transfert d'un appel sortant : le bail passe de la jambe navigateur (`fromSid`) à la jambe du correspondant (`toSid`), qui continue
+ * après la redirection. La ligne reste donc occupée jusqu'à la fin réelle de cette jambe (et non à la fin du <Dial> du navigateur).
+ * Atomique par emplacement ; sans bail à `fromSid` (règle inactive), ne fait rien.
+ */
+export async function transferLease(fromSid, toSid, { Model = PhoneNumber } = {}) {
+  const from = String(fromSid || '').trim(); const to = String(toSid || '').trim();
+  if (!from || !to) return { moved: 0 };
+  let moved = 0;
+  for (const k of LEASE_SLOTS) {
+    const r = await Model.updateMany({ [`${k}.callSid`]: from }, { $set: { [`${k}.callSid`]: to } });
+    moved += r?.modifiedCount ?? r?.nModified ?? 0;
+  }
+  return { moved };
+}
+
 /** Prend la première ligne libre de la liste (ordre donné). @returns {Promise<{ok: boolean, lineId?: any}>} */
 export async function takeFirstFreeLine({ lineIds, capacityFor = null, ...rest }) {
   // 1er passage : une ligne libre (emplacement 1) ; 2e passage seulement si l'entreprise a choisi des appels simultanés : un emplacement libre.
