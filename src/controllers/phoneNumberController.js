@@ -51,7 +51,7 @@ import { blockedCallBody } from '../services/blockedCallers.js';
 import { languageForPhone } from '../services/companyLanguage.js';
 import { getInboundTest, needsInboundTestProof, realCallProof, receiveInboundCall, startInboundTest as startInboundTestSession } from '../services/inboundTestService.js';
 import { stripeLocaleFromRequest } from '../services/stripeLocale.js';
-import { tryAiInbound } from '../services/aiInbound.js';
+import { tryAiInbound, aiQueueFor } from '../services/aiInbound.js';
 import { twilioRequestValid } from '../services/twilioSignature.js';
 
 /** Titulaire Nomad Solo (une seule personne) : l'appelant entend des messages à la première personne. Toute erreur = texte entreprise. */
@@ -2607,22 +2607,15 @@ class PhoneNumberController {
       }
       // Offre Accueil, règle datée active : une ligne = un appel actif. Ligne déjà tenue par un autre appel : traité comme « aucun conseiller disponible »
       // (même branche : mobile du titulaire s'il est configuré, sinon répondeur / flux « no_agent » existant, sans file ni sonnerie). Règle inactive : rien de tout cela.
-      let lineBusy = false; let leaseTaken = false; let concurrent = false;
+      let lineBusy = false; let leaseTaken = false;
       if (line?.companyId && callSid && this.lineRuleConfigured()) {
         try {
           if (await lineCallsEnforced({ companyId: line.companyId, limits: await loadCompanyPlanLimits(line.companyId), db: mongoose.connection.db })) {
             // Capacité choisie par l'entreprise (appels simultanés, 1 par défaut) : au-delà, flux classique de la règle comme avant.
             const taken = await takeLine({ lineId: line._id, callSid, direction: 'inbound', isStale: staleCheckFor(phoneNumberService.twilioClient), capacity: capacityOf(line) });
-            leaseTaken = taken.ok; lineBusy = !taken.ok && taken.reason === 'busy'; concurrent = taken.ok && (taken.slot || 1) > 1;
+            leaseTaken = taken.ok; lineBusy = !taken.ok && taken.reason === 'busy';
           }
         } catch (error) { console.error('[inbound] contrôle de ligne ignoré :', error?.message || error); }
-      }
-      // Pilote « Téléphonie + agent IA » (recette) : l'agent IA décroche seulement si le pilote est ouvert pour l'entreprise
-      // (AI_INBOUND_ENABLED + AI_INBOUND_COMPANY_IDS), le réglage activé et le déclencheur rempli. null (tous les autres cas, ou
-      // échec du moteur / de la session) : flux classique ci-dessous, inchangé. Ligne déjà tenue : jamais l'IA (« une ligne = un appel »).
-      if (line?.companyId && callSid) {
-        const aiBody = await tryAiInbound({ line, to, from, callSid, lineBusy, concurrent, signatureValid: () => twilioRequestValid(req) });
-        if (aiBody) return reply(aiBody);
       }
       const ringAllow = await this.inboundRingFilterFor(line);
       const online = line?.companyId && !lineBusy ? (ringAllow ? availableIdentities(line.companyId).filter(ringAllow) : availableIdentities(line.companyId)) : [];
@@ -2637,12 +2630,20 @@ class PhoneNumberController {
       const reach = line?.companyId ? await ReachSettings.findOne({ companyId: line.companyId }).lean().catch((e) => { console.error('ReachSettings read:', e.message); return null; }) : null;
       const route = queueRoute?.kind === 'menu' ? { first: 'browser', mobileNext: false, mobile: null } : decideInboundRoute({ identities, reach, linePhone: to });
       // Aucun conseiller à faire sonner : l'appel va au répondeur, il ne tient pas la ligne (un message laissé n'est pas un appel actif).
+      // Pilote « Téléphonie + agent IA » (recette) : l'IA se règle comme un agent (interrupteur, horaires, compétences, priorité).
+      // Elle décroche ici si elle est « en premier », ou « après les humains » quand aucun humain ne va sonner. Menu vocal : décision au
+      // retour du menu (file connue). null (tous les autres cas, ou échec du moteur / de la session) : flux classique inchangé.
+      // Capacité de la ligne épuisée : jamais l'IA.
+      if (line?.companyId && callSid && queueRoute?.kind !== 'menu') {
+        const aiBody = await tryAiInbound({ line, to, from, callSid, lineBusy, stage: 'call', humansAvailable: route.first !== 'voicemail', queue: queueRoute ? queueRoute.queue || null : undefined, signatureValid: () => twilioRequestValid(req) });
+        if (aiBody) return reply(aiBody);
+      }
       if (leaseTaken && route.first === 'voicemail') await releaseCall(callSid).catch((e) => console.error('[inbound] libération :', e?.message || e));
       // Chaque appel est consigné : niveau de service, abandon et attente en sont calculés (inbound-stats).
       if (line?.companyId && callSid) {
         await InboundCall.updateOne(
           { callSid },
-          { $setOnInsert: { companyId: line.companyId, gigId: line.gigId || null, phoneNumber: to, from, callSid, startedAt: new Date(), status: route.first === 'voicemail' ? 'no_agent' : 'ringing', waitSeconds: route.first === 'voicemail' ? 0 : null, route: route.first, mobileTried: route.first === 'mobile' } },
+          { $setOnInsert: { companyId: line.companyId, gigId: line.gigId || null, phoneNumber: to, from, callSid, startedAt: new Date(), ...(queueRoute?.queue?._id ? { queueId: String(queueRoute.queue._id) } : {}), status: route.first === 'voicemail' ? 'no_agent' : 'ringing', waitSeconds: route.first === 'voicemail' ? 0 : null, route: route.first, mobileTried: route.first === 'mobile' } },
           { upsert: true }
         ).catch((e) => console.error('InboundCall log:', e.message));
         // Aucun conseiller à faire sonner : l'appel va au répondeur et doit être au journal même sans message laissé.
@@ -2711,6 +2712,12 @@ class PhoneNumberController {
       const queueRoute = !solo && line?.companyId
         ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'menu', digits: String(req.body?.Digits || '').trim(), attempt, recording, language, allow: ringAllow })
         : null;
+      // File choisie au menu : mémorisée (compétence de l'agent IA en fin de sonnerie). Agent IA « en premier » : il décroche maintenant.
+      if (line?.companyId && callSid && queueRoute?.queue?._id) await InboundCall.updateOne({ callSid }, { $set: { queueId: String(queueRoute.queue._id) } }).catch(() => undefined);
+      if (line?.companyId && callSid && queueRoute && queueRoute.kind !== 'menu') {
+        const aiFirst = await tryAiInbound({ line, to, from, callSid, stage: 'menu', humansAvailable: queueRoute.kind === 'ring', queue: queueRoute.queue || null, signatureValid: () => twilioRequestValid(req) });
+        if (aiFirst) return reply(aiFirst);
+      }
       if (queueRoute && (queueRoute.kind === 'menu' || queueRoute.kind === 'ring')) return reply(queueRoute.body);
       // Aucune file ne couvre ce cas (ou personne d'éligible) : repli existant, sans rejouer l'accueil.
       // Personne d'éligible dans la file : les conseillers présents sonnent quand même (sinon l'appel tombait au répondeur alors qu'ils étaient en ligne).
@@ -2782,6 +2789,17 @@ class PhoneNumberController {
       const mobile = leg === 'browser' && call && !call.mobileTried ? mobileTarget(reach, call.phoneNumber) : null;
       const ringMobile = shouldRingMobileAfter({ leg, dialStatus, mobile });
       const baseUrl = `https://${req.get('host')}`;
+      // Agent IA « après les humains » : personne n'a décroché (navigateur, puis mobile) : l'IA prend l'appel avant le répondeur.
+      // La ligne reste tenue par l'appel (libérée à la fin de l'appel IA). Toute anomalie : flux classique ci-dessous.
+      if (call?.companyId && callSid && !answered && dialStatus !== 'canceled' && !ringMobile) {
+        const aiLine = (await PhoneNumber.findOne({ phoneNumber: call.phoneNumber }).lean().catch(() => null)) || { companyId: call.companyId, gigId: call.gigId || null };
+        const aiQueue = await aiQueueFor(call.companyId, call.queueId || null).catch(() => null);
+        const aiBody = await tryAiInbound({ line: aiLine, to: call.phoneNumber, from: call.from, callSid, stage: 'after_humans', queue: aiQueue && aiQueue.deferred ? null : aiQueue, signatureValid: () => twilioRequestValid(req) });
+        if (aiBody) {
+          await InboundCall.updateOne({ callSid }, { $set: { status: 'answered', answeredOn: 'ai_agent', answeredBy: 'ai-agent', route: 'ai_agent' } }).catch(() => undefined);
+          return reply(aiBody);
+        }
+      }
       // Fin de la sonnerie (décroché puis raccroché, non décroché, abandonné) : la ligne est libérée, sauf si le mobile du titulaire va encore sonner. Idempotent.
       if (!ringMobile && callSid && this.lineRuleConfigured()) await releaseCall(callSid).catch((e) => console.error('[inbound] libération :', e?.message || e));
       if (call) {

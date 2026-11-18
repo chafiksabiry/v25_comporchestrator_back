@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import AiAgentSettings from '../models/AiAgentSettings.js';
 import AiInboundCall from '../models/AiInboundCall.js';
 import { guardCompanyAccess } from '../middleware/companyGuard.js';
-import { validateSettingsUpdate, toPublicSettings, pilotAvailability, announcementText, LANGUAGES } from '../services/aiAgentSettings.js';
+import { validateSettingsUpdate, toPublicSettings, pilotAvailability, announcementText, settingsWarnings, LANGUAGES } from '../services/aiAgentSettings.js';
 import { usageView, verifyCallToken, latencyStats } from '../services/aiInboundCore.js';
 import { loadSettings, monthUsage, engines, runTool, finalizeCall, callOf, ToolError, afterStreamTwiml, deps, applyRetention } from '../services/aiInbound.js';
 import { publicOrigin, twilioRequestValid } from '../services/twilioSignature.js';
@@ -20,9 +20,10 @@ const companyOf = (req) => req.query?.companyId ?? req.body?.companyId;
 async function settingsView(companyId) {
   const { settings } = await loadSettings(companyId);
   const usage = await monthUsage(companyId, settings.businessHours.timeZone);
-  const announcement = Object.fromEntries(settings.languages.map((l) => [l, announcementText({ language: l, companyName: settings.companyName, level: settings.level, voice: settings.voice, recorded: settings.listeningBench.enabled, consentText: CONSENT_TEXTS[l.startsWith('en') ? 'en' : 'fr'] })]));
+  const announcement = Object.fromEntries(settings.languages.map((l) => [l, announcementText({ language: l, companyName: settings.companyName, canTransfer: settings.actions.transfer && settings.transferTargets.length > 0, voice: settings.voice, recorded: settings.listeningBench.enabled, consentText: CONSENT_TEXTS[l.startsWith('en') ? 'en' : 'fr'] })]));
   return {
     settings,
+    warnings: settingsWarnings(settings),
     availability: pilotAvailability(companyId, deps.env),
     announcement,
     engines: engines(),
@@ -42,7 +43,7 @@ function toCallSummary(c) {
 /** Fiche complète (contrat 4.2). Les identifiants internes (enregistrement Twilio, session) ne sont jamais exposés. */
 export function toCallView(c) {
   return {
-    ...toCallSummary(c), to: c.to || '', endedAt: c.endedAt || null, billedMinutes: c.billedMinutes || 0, level: c.level, trigger: c.trigger || '',
+    ...toCallSummary(c), to: c.to || '', endedAt: c.endedAt || null, billedMinutes: c.billedMinutes || 0, trigger: c.trigger || '',
     language: c.language, engine: { provider: c.engine?.provider || '', model: c.engine?.model || '', fallbackUsed: c.engine?.fallbackUsed === true },
     announcement: { mode: c.announcement?.mode || '', language: c.announcement?.language || '', text: c.announcement?.text || '', verified: c.announcement?.verified ?? null },
     actions: (c.actions || []).map((a) => ({ at: a.at, type: a.type, ok: a.ok === true, label: a.label || '', refId: a.refId || '', latencyMs: a.latencyMs ?? null })),
@@ -79,9 +80,7 @@ export const aiAgentController = {
         const issue = { field: 'knowledgeBase.gigId', code: 'invalid_gig', message: 'Base de connaissances inconnue pour cette entreprise.' };
         return fail(res, 400, 'AI_SETTINGS_INVALID', issue.message, { issues: [issue] });
       }
-      const next = { enabled: v.enabled ?? current.enabled, level: v.level ?? current.level, outside: v['triggers.outsideHours'] ?? current.triggers.outsideHours, slots: v['businessHours.slots'] ?? current.businessHours.slots };
       if (v.enabled === true && !pilotAvailability(companyId, deps.env).available) return fail(res, 409, 'AI_AGENT_NOT_AVAILABLE', "L'agent IA n'est pas encore ouvert pour votre entreprise.");
-      if (next.enabled && next.level === 'partial' && next.outside && !next.slots.length) return fail(res, 409, 'AI_BUSINESS_HOURS_REQUIRED', "Indiquez vos horaires d'ouverture pour le déclencheur « hors horaires ».");
       await AiAgentSettings.findOneAndUpdate({ companyId: oid(companyId) }, { $set: { ...v, updatedById: access.userId }, $setOnInsert: { companyId: oid(companyId) } }, { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true });
       // Nouvelle durée de conservation : appliquée aussi aux fiches existantes et aux éléments « À faire » créés par l'IA.
       if (v.retentionDays !== undefined && v.retentionDays !== current.retentionDays) await applyRetention(companyId, v.retentionDays);
@@ -99,7 +98,7 @@ export const aiAgentController = {
     try {
       const { settings } = await loadSettings(companyId);
       const language = LANGUAGES.includes(req.query?.language) ? req.query.language : settings.languages[0];
-      res.json({ success: true, data: { language, text: announcementText({ language, companyName: settings.companyName, level: settings.level, voice: settings.voice, recorded: settings.listeningBench.enabled, consentText: CONSENT_TEXTS[language.startsWith('en') ? 'en' : 'fr'] }) } });
+      res.json({ success: true, data: { language, text: announcementText({ language, companyName: settings.companyName, canTransfer: settings.actions.transfer && settings.transferTargets.length > 0, voice: settings.voice, recorded: settings.listeningBench.enabled, consentText: CONSENT_TEXTS[language.startsWith('en') ? 'en' : 'fr'] }) } });
     } catch (e) { console.error('ai-agent announcement:', e.message); fail(res, 500, 'AI_SETTINGS_READ_FAILED', 'Lecture impossible.'); }
   },
 

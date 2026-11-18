@@ -9,8 +9,10 @@ import FollowUpItem from '../models/FollowUpItem.js';
 import Contact from '../models/Contact.js';
 import { config } from '../config/env.js';
 import {
-  toPublicSettings, pilotAvailability, decideAiRoute, announcementText, greetingLanguage,
+  toPublicSettings, pilotAvailability, decideAiRoute, announcementText, greetingLanguage, migrateLegacySettings,
 } from './aiAgentSettings.js';
+import CallQueue from '../models/CallQueue.js';
+import { inboundQueues, needsMenu, defaultQueueOf } from './callQueues.js';
 import {
   signAiInboundServiceToken, signAfterStreamState, verifyAfterStreamState, periodOf, billedMinutes,
   computeFreeSlots, isBookableSlot, slotLabel, latencyStats,
@@ -61,6 +63,33 @@ const enginesFromEnv = (env = deps.env) => ({
 export const engines = () => enginesFromEnv();
 export const announceMode = (env = deps.env) => (String(env.AI_INBOUND_ANNOUNCE_MODE || 'engine').toLowerCase() === 'twiml' ? 'twiml' : 'engine');
 
+/** Migration des réglages d'avant (niveau / déclencheurs) vers horaires + priorité. Idempotente, lancée au démarrage. */
+export async function migrateAiAgentSettings(Model = AiAgentSettings) {
+  let n = 0;
+  const cursor = await Model.collection.find({ $or: [{ level: { $exists: true } }, { triggers: { $exists: true } }] }).toArray();
+  for (const doc of cursor) {
+    const upd = migrateLegacySettings(doc);
+    if (!upd) continue;
+    await Model.collection.updateOne({ _id: doc._id }, upd);
+    n += 1;
+  }
+  if (n) console.log(`[ai-inbound] réglages migrés vers horaires + priorité : ${n}`);
+  return n;
+}
+
+/**
+ * File visée par l'appel, pour la compétence de l'IA : `null` = aucune file (aucune exigence), `{ deferred: true }` = menu vocal à jouer
+ * (la file sera connue au retour du menu), sinon la file (par id mémorisé, ou file par défaut).
+ */
+export async function aiQueueFor(companyId, queueId = null) {
+  const rows = await CallQueue.find({ companyId: oid(companyId) }).lean();
+  const inbound = inboundQueues(rows || []);
+  if (!inbound.length) return null;
+  if (queueId) return inbound.find((q) => String(q._id) === String(queueId)) || defaultQueueOf(inbound);
+  if (needsMenu(inbound)) return { deferred: true };
+  return defaultQueueOf(inbound);
+}
+
 export async function loadSettings(companyId) {
   const [doc, dir] = await Promise.all([
     AiAgentSettings.findOne({ companyId: oid(companyId) }).lean(),
@@ -91,7 +120,12 @@ async function benchProvider(companyId, settings) {
  * Branche agent IA de handleTwilioInboundCall. Renvoie le corps TwiML (<Connect><Stream>) si l'IA décroche, sinon null :
  * l'appelant suit alors le flux classique INCHANGÉ (sonnerie, puis répondeur). Ne lève jamais.
  */
-export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, concurrent = false, signatureValid = () => false }) {
+/**
+ * @param {'call'|'menu'|'after_humans'} stage  arrivée de l'appel, retour du menu vocal, ou sonnerie des humains sans réponse
+ * @param {boolean} humansAvailable  un humain (navigateur ou mobile) va sonner
+ * @param {object|null|undefined} queue  file de l'appel (undefined : la déterminer)
+ */
+export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, stage = 'call', humansAvailable = false, queue, signatureValid = () => false }) {
   const companyId = line?.companyId ? String(line.companyId) : '';
   if (!companyId || !callSid) return null;
   const availability = pilotAvailability(companyId, deps.env);
@@ -105,7 +139,9 @@ export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, 
   try {
     const { settings, directory } = await loadSettings(companyId);
     const usage = await monthUsage(companyId, settings.businessHours.timeZone);
-    const decision = decideAiRoute({ settings, availability, lineBusy, concurrent, minutesUsed: usage.minutesUsed, now: deps.now() });
+    const q = queue === undefined ? await aiQueueFor(companyId) : queue;
+    if (q && q.deferred) { console.log(`[ai-inbound] ${callSid} : menu vocal d'abord (compétence connue au retour du menu)`); return null; }
+    const decision = decideAiRoute({ settings, availability, lineBusy, stage, humansAvailable, queue: q, minutesUsed: usage.minutesUsed, now: deps.now() });
     if (!decision.route) { console.log(`[ai-inbound] ${callSid} : flux classique (${decision.reason})`); return null; }
 
     const language = greetingLanguage(settings);
@@ -113,12 +149,15 @@ export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, 
     const recorded = Boolean(provider);
     const short = language.startsWith('en') ? 'en' : 'fr';
     const mode = announceMode();
-    const text = announcementText({ language, companyName: settings.companyName, level: settings.level, voice: settings.voice, recorded, consentText: CONSENT_TEXTS[short] });
+    const canTransfer = settings.actions.transfer && settings.transferTargets.length > 0;
+    const text = announcementText({ language, companyName: settings.companyName, canTransfer, voice: settings.voice, recorded, consentText: CONSENT_TEXTS[short] });
+    // Pour les consignes de dash : « total » = aucun humain disponible (l'IA propose rappel / message), « partial » = humains présents.
+    const level = decision.trigger === 'first' && humansAvailable ? 'partial' : 'total';
     const maxCallSeconds = settings.maxCallMinutes * 60;
     aiCall = await AiInboundCall.create({
-      companyId: oid(companyId), callSid, from, to, startedAt: new Date(deps.now()), status: 'starting', level: settings.level, trigger: decision.trigger,
+      companyId: oid(companyId), callSid, from, to, startedAt: new Date(deps.now()), status: 'starting', level, trigger: decision.trigger,
       language, announcement: { mode, language, text, verified: mode === 'twiml' ? true : null }, expiresAt: retentionDate(settings.retentionDays),
-      timeline: [{ at: new Date(deps.now()), type: 'session_started', label: `Agent IA (${{ total: 'niveau total', outside_hours: 'hors horaires', all_busy: 'tous occupés' }[decision.trigger]})` }],
+      timeline: [{ at: new Date(deps.now()), type: 'session_started', label: `Agent IA (${{ first: 'en premier', no_human: 'aucun humain disponible', after_humans: 'après les humains, sans réponse' }[decision.trigger]})` }],
     });
     const entries = directory?.entries || [];
     const transferTargets = settings.actions.transfer
@@ -127,7 +166,7 @@ export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, 
     const dashApi = resolveDashCallsApi(deps.env);
     if (!dashApi) throw new Error('dash_calls URL not configured');
     const body = {
-      callSid, companyId, from, to, level: settings.level, trigger: decision.trigger, language, languages: settings.languages,
+      callSid, companyId, from, to, level, trigger: decision.trigger, language, languages: settings.languages,
       voice: settings.voice, addressForm: settings.addressForm, tone: settings.tone, companyName: settings.companyName,
       instructions: settings.instructions, knowledgeBase: settings.knowledgeBase, actions: settings.actions, transferTargets,
       maxCallSeconds, announcement: { mode, text }, provider, record: recorded, timeZone: settings.businessHours.timeZone,

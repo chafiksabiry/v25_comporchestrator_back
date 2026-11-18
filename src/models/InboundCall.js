@@ -19,6 +19,8 @@ const schema = new mongoose.Schema(
     answeredOn: { type: String, enum: ['browser', 'mobile', 'ai_agent'], default: undefined },
     /** Identité navigateur (`cc-…`) de la secrétaire qui a décroché, connue seulement pour une sonnerie à tour de rôle (files) ; sert à la stratégie « libre depuis le plus longtemps ». */
     answeredBy: { type: String, default: '' },
+    /** File de l'appel (choisie au menu ou par défaut) : sert à la compétence de l'agent IA en fin de sonnerie. */
+    queueId: { type: String, default: '' },
     waitSeconds: { type: Number, default: null },
     talkSeconds: { type: Number, default: null },
     /** Transfert de l'appel en cours par la secrétaire vers une fiche de l'annuaire (un seul par appel). */

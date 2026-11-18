@@ -1,12 +1,14 @@
 import mongoose from 'mongoose';
 import { normalizeTimeZone, DEFAULT_TIME_ZONE } from './timeZone.js';
 import { clockIn } from './callTransfer.js';
+import { covers, normalizeSkills } from './callQueues.js';
 
 /**
  * Pilote « Téléphonie + agent IA » (appels ENTRANTS) : réglages de l'entreprise, disponibilité du pilote, annonce IA obligatoire et
  * décision de routage. Logique pure : aucun accès base ni réseau. Contrat : etude-secretaire-ia/contrat-pilote.md, section 2.
  */
-export const LEVELS = ['partial', 'total'];
+/** Priorité de l'agent IA face aux humains : « après les humains » (défaut) ou « en premier ». */
+export const PRIORITIES = ['after_humans', 'first'];
 export const LANGUAGES = ['fr-FR', 'en-GB', 'en-US'];
 export const VOICES = ['female', 'male'];
 export const ADDRESS_FORMS = ['vous', 'tu'];
@@ -29,8 +31,12 @@ const WEEKDAY_SLOTS = [1, 2, 3, 4, 5].flatMap((day) => [{ day, start: '09:00', e
 export function defaultSettings() {
   return {
     enabled: false,
-    level: 'partial',
-    triggers: { outsideHours: true, allBusy: false },
+    // L'agent IA se règle comme un agent humain : ses horaires (plages jour / heure, même format que le planning de l'annuaire),
+    // ses compétences (mêmes étiquettes que le routage des files), et une priorité. Plus de « niveau » ni de déclencheurs.
+    schedule: { always: false, timeZone: DEFAULT_TIME_ZONE, slots: [] },
+    skills: [],
+    priority: 'after_humans',
+    // Horaires d'ouverture : servent seulement à proposer des créneaux de rendez-vous.
     businessHours: { timeZone: DEFAULT_TIME_ZONE, slots: WEEKDAY_SLOTS.map((s) => ({ ...s })) },
     languages: ['fr-FR'],
     voice: 'female',
@@ -60,8 +66,13 @@ export function toPublicSettings(doc, { companyNameFallback = '' } = {}) {
   const pick = (v, def) => (v === undefined || v === null ? def : v);
   return {
     enabled: s.enabled === true,
-    level: LEVELS.includes(s.level) ? s.level : d.level,
-    triggers: { outsideHours: pick(s.triggers?.outsideHours, d.triggers.outsideHours) === true, allBusy: s.triggers?.allBusy === true },
+    schedule: {
+      always: s.schedule?.always === true,
+      timeZone: normalizeTimeZone(s.schedule?.timeZone) || d.schedule.timeZone,
+      slots: Array.isArray(s.schedule?.slots) ? s.schedule.slots.map(({ day, start, end }) => ({ day, start, end })) : [],
+    },
+    skills: Array.isArray(s.skills) ? [...s.skills] : [],
+    priority: PRIORITIES.includes(s.priority) ? s.priority : d.priority,
     businessHours: {
       timeZone: normalizeTimeZone(s.businessHours?.timeZone) || d.businessHours.timeZone,
       slots: Array.isArray(s.businessHours?.slots) ? s.businessHours.slots.map(({ day, start, end }) => ({ day, start, end })) : d.businessHours.slots,
@@ -94,6 +105,24 @@ export function toPublicSettings(doc, { companyNameFallback = '' } = {}) {
   };
 }
 
+/** Plages { day 1..7, start, end } (format du planning de l'annuaire). @returns {object[]|null} */
+function checkSlots(field, slots, issues) {
+  if (!Array.isArray(slots)) { issues.push(issue(field, 'invalid_type', 'Plages : liste attendue.')); return null; }
+  if (slots.length > MAX_SLOTS) { issues.push(issue(field, 'too_many_slots', `${MAX_SLOTS} plages au maximum.`)); return null; }
+  const bad = slots.findIndex((x) => !x || !Number.isInteger(x.day) || x.day < 1 || x.day > 7 || !HHMM.test(x.start) || !(HHMM.test(x.end) || x.end === '24:00') || x.start >= x.end);
+  if (bad >= 0) { issues.push(issue(`${field}.${bad}`, 'invalid_slot', 'Plage invalide (jour 1 à 7, HH:MM, début avant fin).')); return null; }
+  return slots.map(({ day, start, end }) => ({ day, start, end })).sort((a, c) => a.day - c.day || a.start.localeCompare(c.start));
+}
+
+/** Avertissements (sans erreur) : agent activé qui ne décrochera jamais. */
+export function settingsWarnings(settings) {
+  const w = [];
+  if (settings.enabled && !settings.schedule.always && !settings.schedule.slots.length) {
+    w.push({ code: 'AI_NO_SCHEDULE', message: "L'agent IA est activé mais n'a aucun horaire : il ne décrochera aucun appel." });
+  }
+  return w;
+}
+
 function intIn(field, value, issues) {
   const r = RANGES[field];
   const n = Number(value);
@@ -114,13 +143,25 @@ export function validateSettingsUpdate(body, { directoryEntryIds = [] } = {}) {
   const bool = (field, value) => { if (typeof value !== 'boolean') { issues.push(issue(field, 'invalid_type', `${field} : vrai ou faux.`)); return; } v[field] = value; };
 
   if (has('enabled')) bool('enabled', b.enabled);
-  if (has('level')) { if (LEVELS.includes(b.level)) v.level = b.level; else issues.push(issue('level', 'invalid_level', 'Niveau inconnu.')); }
-  if (has('triggers')) {
-    const t = b.triggers || {};
-    // « Tous occupés » : limité par la capacité d'appels simultanés de la ligne (une ligne = un appel à la fois au-delà).
-    if (t.allBusy !== undefined) bool('triggers.allBusy', t.allBusy);
-    if (t.outsideHours !== undefined) bool('triggers.outsideHours', t.outsideHours);
+  // `level` (ancien « partiel / total ») et `triggers` : ignorés sans erreur (remplacés par horaires + priorité).
+  if (has('schedule')) {
+    const sc = b.schedule || {};
+    if (sc.always !== undefined) bool('schedule.always', sc.always);
+    if (sc.timeZone !== undefined) {
+      const tz = normalizeTimeZone(sc.timeZone);
+      if (tz) v['schedule.timeZone'] = tz; else issues.push(issue('schedule.timeZone', 'invalid_time_zone', 'Fuseau horaire inconnu.'));
+    }
+    if (sc.slots !== undefined) {
+      const slots = checkSlots('schedule.slots', sc.slots, issues);
+      if (slots) v['schedule.slots'] = slots;
+    }
   }
+  if (has('skills')) {
+    const r = normalizeSkills(b.skills);
+    if (r && r.error) issues.push(issue('skills', 'invalid_skills', r.error));
+    else v.skills = Array.isArray(r) ? r : (r?.value || []);
+  }
+  if (has('priority')) { if (PRIORITIES.includes(b.priority)) v.priority = b.priority; else issues.push(issue('priority', 'invalid_priority', 'Priorité : after_humans ou first.')); }
   if (has('businessHours')) {
     const h = b.businessHours || {};
     if (h.timeZone !== undefined) {
@@ -128,13 +169,8 @@ export function validateSettingsUpdate(body, { directoryEntryIds = [] } = {}) {
       if (tz) v['businessHours.timeZone'] = tz; else issues.push(issue('businessHours.timeZone', 'invalid_time_zone', 'Fuseau horaire inconnu.'));
     }
     if (h.slots !== undefined) {
-      if (!Array.isArray(h.slots)) issues.push(issue('businessHours.slots', 'invalid_type', 'Plages : liste attendue.'));
-      else if (h.slots.length > MAX_SLOTS) issues.push(issue('businessHours.slots', 'too_many_slots', `${MAX_SLOTS} plages au maximum.`));
-      else {
-        const bad = h.slots.findIndex((s) => !s || !Number.isInteger(s.day) || s.day < 1 || s.day > 7 || !HHMM.test(s.start) || !HHMM.test(s.end) || s.start >= s.end);
-        if (bad >= 0) issues.push(issue(`businessHours.slots.${bad}`, 'invalid_slot', 'Plage invalide (jour 1 à 7, HH:MM, début avant fin).'));
-        else v['businessHours.slots'] = h.slots.map(({ day, start, end }) => ({ day, start, end })).sort((a, c) => a.day - c.day || a.start.localeCompare(c.start));
-      }
+      const slots = checkSlots('businessHours.slots', h.slots, issues);
+      if (slots) v['businessHours.slots'] = slots;
     }
   }
   if (has('languages')) {
@@ -207,23 +243,79 @@ export function isWithinBusinessHours(businessHours, now = Date.now()) {
   return (businessHours?.slots || []).some((s) => s.day === clock.weekday && s.start <= clock.time && clock.time < s.end);
 }
 
+/** L'agent IA est-il « disponible » maintenant (ses horaires, comme un agent) ? `always` = 24 h/24, 7 j/7. */
+export function isOnSchedule(schedule, now = Date.now()) {
+  if (schedule?.always) return true;
+  return isWithinBusinessHours({ timeZone: schedule?.timeZone, slots: (schedule?.slots || []).map((x) => ({ ...x, end: x.end === '24:00' ? '24:00' : x.end })) }, now);
+}
+
+/** Langues de routage de l'IA (codes ISO 639-1, comme StaffRouting) : déduites des langues parlées (fr-FR → fr). */
+export const routingLanguagesOf = (settings) => [...new Set((settings.languages || []).map((l) => String(l).slice(0, 2).toLowerCase()))];
+
+/** L'IA a-t-elle la compétence demandée ? Même règle que pour une secrétaire (callQueues.covers). Sans file : aucune exigence. */
+export const isCompetent = (settings, queue) => !queue || covers({ languages: routingLanguagesOf(settings), skills: settings.skills || [] }, queue);
+
 /**
- * L'agent IA décroche-t-il cet appel ? Ordre des contrôles : pilote ouvert, réglage activé, capacité de la ligne (appels simultanés choisis
- * par l'entreprise ; capacité épuisée = flux classique), déclencheur (total ; partiel : hors horaires, ou « tous occupés » = appel simultané
- * pris dans la capacité restante alors qu'un autre appel tient déjà la ligne), plafond mensuel.
- * @returns {{ route: boolean, reason: string, trigger?: string }}
+ * L'agent IA prend-il cet appel ? Pilote ouvert, interrupteur, capacité de la ligne (épuisée = flux classique), horaires de l'IA,
+ * compétence pour la file, priorité, plafond mensuel.
+ *  - `first` : l'IA décroche dès l'arrivée de l'appel (ou au retour du menu vocal), avant les humains ;
+ *  - `after_humans` (défaut) : l'IA décroche seulement quand aucun humain ne peut prendre l'appel (`humansAvailable` faux à l'arrivée),
+ *    ou en dernier recours après la sonnerie sans réponse des humains (étape `after_humans`), avant le répondeur.
+ * @param {'call'|'menu'|'after_humans'} stage
+ * @returns {{ route: boolean, reason: string, trigger?: 'first'|'no_human'|'after_humans' }}
  */
-export function decideAiRoute({ settings, availability, lineBusy = false, concurrent = false, minutesUsed = 0, now = Date.now() }) {
+export function decideAiRoute({ settings, availability, lineBusy = false, stage = 'call', humansAvailable = false, queue = null, minutesUsed = 0, now = Date.now() }) {
   if (!availability?.available) return { route: false, reason: 'pilot_closed' };
   if (!settings?.enabled) return { route: false, reason: 'disabled' };
   if (lineBusy) return { route: false, reason: 'line_busy' };
+  if (!isOnSchedule(settings.schedule, now)) return { route: false, reason: 'off_schedule' };
+  if (!isCompetent(settings, queue)) return { route: false, reason: 'not_competent' };
   let trigger = null;
-  if (settings.level === 'total') trigger = 'total';
-  else if (settings.triggers?.outsideHours && !isWithinBusinessHours(settings.businessHours, now)) trigger = 'outside_hours';
-  else if (settings.triggers?.allBusy && concurrent) trigger = 'all_busy';
-  if (!trigger) return { route: false, reason: 'no_trigger' };
+  if (stage === 'after_humans') trigger = 'after_humans';
+  else if (settings.priority === 'first') trigger = 'first';
+  else if (!humansAvailable) trigger = 'no_human';
+  if (!trigger) return { route: false, reason: 'humans_first' };
   if (Number(minutesUsed) >= Number(settings.monthlyMinutesCap)) return { route: false, reason: 'cap_reached' };
   return { route: true, reason: 'ok', trigger };
+}
+
+/**
+ * Migration des réglages du pilote d'avant (niveau / déclencheurs) vers horaires + priorité :
+ *  - `level: total` → horaires 24/7 et priorité « en premier » ;
+ *  - `level: partial` + « hors horaires » → horaires de l'IA = complément des horaires d'ouverture, priorité « en premier » ;
+ *  - `level: partial` + « toutes les lignes occupées » seul → 24/7 et priorité « après les humains » (l'IA prend quand personne ne peut) ;
+ *  - aucun déclencheur → aucun horaire (l'agent ne décroche rien, avertissement).
+ * @returns {{ $set: object, $unset: object }|null} null si le document est déjà au nouveau format.
+ */
+export function migrateLegacySettings(doc) {
+  if (!doc || (doc.level === undefined && doc.triggers === undefined)) return null;
+  const tz = normalizeTimeZone(doc.businessHours?.timeZone) || DEFAULT_TIME_ZONE;
+  let schedule = { always: false, timeZone: tz, slots: [] };
+  let priority = 'after_humans';
+  const outsideHours = doc.triggers?.outsideHours === undefined ? true : doc.triggers.outsideHours === true;
+  if (doc.level === 'total') {
+    schedule = { always: true, timeZone: tz, slots: [] };
+    priority = 'first';
+  } else if (outsideHours) {
+    const open = Array.isArray(doc.businessHours?.slots) ? doc.businessHours.slots : defaultSettings().businessHours.slots;
+    schedule = { always: false, timeZone: tz, slots: complementSlots(open) };
+    priority = 'first';
+  } else if (doc.triggers?.allBusy === true) {
+    schedule = { always: true, timeZone: tz, slots: [] };
+  }
+  return { $set: { schedule, priority }, $unset: { level: '', triggers: '' } };
+}
+
+/** Complément d'une semaine de plages (« hors horaires d'ouverture ») : mêmes jours 1..7, fin de journée notée 24:00. */
+export function complementSlots(open) {
+  const out = [];
+  for (let day = 1; day <= 7; day += 1) {
+    const ranges = (open || []).filter((x) => x.day === day).sort((a, b) => a.start.localeCompare(b.start));
+    let cursor = '00:00';
+    for (const r of ranges) { if (r.start > cursor) out.push({ day, start: cursor, end: r.start }); if (r.end > cursor) cursor = r.end; }
+    if (cursor < '24:00') out.push({ day, start: cursor, end: '24:00' });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- annonce IA obligatoire (AI Act art. 50)
@@ -234,16 +326,16 @@ const shortLang = (language) => (String(language || '').toLowerCase().startsWith
  * Texte exact de l'annonce (contrat, section 3). Seul `companyName` est personnalisable ; la phrase IA ne l'est jamais.
  * `recorded` : banc d'écoute (appel enregistré) → phrase de consentement existante ajoutée.
  */
-export function announcementText({ language = 'fr-FR', companyName = '', level = 'partial', voice = 'female', recorded = false, consentText = '' } = {}) {
+export function announcementText({ language = 'fr-FR', companyName = '', canTransfer = true, voice = 'female', recorded = false, consentText = '' } = {}) {
   const name = String(companyName || '').replace(/\s+/g, ' ').trim().slice(0, MAX_COMPANY_NAME);
   if (shortLang(language) === 'en') {
     const hello = name ? `Hello, you've reached ${name}.` : 'Hello.';
-    const last = level === 'total' ? 'You can ask to be called back by a person or leave a message.' : 'You can ask to speak to a person at any time.';
+    const last = !canTransfer ? 'You can ask to be called back by a person or leave a message.' : 'You can ask to speak to a person at any time.';
     return [hello, "I'm the company's virtual assistant, an artificial intelligence.", 'This conversation is transcribed to handle your request.', last, recorded ? consentText : ''].filter(Boolean).join(' ');
   }
   const hello = name ? `Bonjour, vous êtes bien chez ${name}.` : 'Bonjour.';
   const who = voice === 'male' ? "Je suis l'assistant virtuel de l'entreprise, une intelligence artificielle." : "Je suis l'assistante virtuelle de l'entreprise, une intelligence artificielle.";
-  const last = level === 'total' ? 'Vous pouvez demander à être rappelé par une personne ou laisser un message.' : 'Vous pouvez demander à parler à une personne à tout moment.';
+  const last = !canTransfer ? 'Vous pouvez demander à être rappelé par une personne ou laisser un message.' : 'Vous pouvez demander à parler à une personne à tout moment.';
   return [hello, who, 'Notre échange est transcrit pour traiter votre demande.', last, recorded ? consentText : ''].filter(Boolean).join(' ');
 }
 
