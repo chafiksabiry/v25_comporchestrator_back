@@ -213,4 +213,39 @@ assert.equal(r.body.data.transfers[0].byName, 'Léa');
 assert.equal((await call(ctl.list, { user: 'other' })).body.data.transfers.length, 0);
 assert.equal((await call(ctl.list, { user: 'mgrNo' })).code, 403);
 
+// ---------------------------------------------------------------- appel SORTANT du navigateur (poste de l'agent de centre d'appels)
+// La jambe navigateur est le parent (from = identité de l'agent) ; la jambe du prospect (enfant) est redirigée vers la fiche.
+const SID_OUT = `CA${'a'.repeat(32)}`; const SID_OUT_CHILD = `CA${'b'.repeat(32)}`; const SID_OUT_FOREIGN = `CA${'c'.repeat(32)}`; const SID_OUT_FOREIGN_CHILD = `CA${'d'.repeat(32)}`;
+const SID_OUT_ALONE = `CA${'e'.repeat(32)}`;
+legs[SID_OUT] = { from: 'client:cc-sec1', to: null, status: 'in-progress', parentCallSid: null };
+legs[SID_OUT_FOREIGN] = { from: 'client:cc-sec1', to: null, status: 'in-progress', parentCallSid: null };
+legs[SID_OUT_ALONE] = { from: 'client:cc-sec1', to: null, status: 'in-progress', parentCallSid: null };
+const children = { [SID_OUT]: [{ sid: SID_OUT_CHILD, from: '+33140000000', to: '+33677777777', status: 'in-progress' }], [SID_OUT_FOREIGN]: [{ sid: SID_OUT_FOREIGN_CHILD, from: '+33150000000', to: '+33677777777', status: 'in-progress' }], [SID_OUT_ALONE]: [] };
+const listCalls = [];
+client.calls.list = async (q) => { listCalls.push(q); return children[q.parentCallSid] || []; };
+const lines = { [C1]: ['+33140000000'], [C2]: ['+33150000000'] };
+setTransferDeps({ lineOfCompany: async (cid, n) => (lines[String(cid)] || []).includes(n) });
+resetCalls(); updates.length = 0;
+
+r = await call(ctl.transfer, { user: 'sec2', body: { callSid: SID_OUT, entryId: E_ONE } });
+assert.equal(r.code, 403, 'jambe sortante d’une autre personne'); assert.equal(updates.length, 0);
+r = await call(ctl.transfer, { body: { callSid: SID_OUT_FOREIGN, entryId: E_ONE } });
+assert.equal(r.code, 403, 'appel sortant depuis une ligne d’une autre société'); assert.equal(updates.length, 0);
+r = await call(ctl.transfer, { body: { callSid: SID_OUT_ALONE, entryId: E_ONE } });
+assert.equal(r.code, 409, 'correspondant pas encore en ligne'); assert.equal(updates.length, 0);
+r = await call(ctl.transfer, { body: { callSid: SID_OUT, entryId: E_ABS } });
+assert.equal(r.code, 409); assert.equal(r.body.error, 'unavailable'); assert.equal(updates.length, 0);
+r = await call(ctl.transfer, { body: { callSid: SID_OUT, entryId: E_ONE, to: '+33100000000' } });
+assert.equal(r.code, 200, JSON.stringify(r.body)); assert.equal(r.body.data.name, 'Mme Martin');
+assert.deepEqual(listCalls.at(-1), { parentCallSid: SID_OUT, status: 'in-progress', limit: 1 });
+assert.equal(updates.length, 1); assert.equal(updates[0].sid, SID_OUT_CHILD, 'la jambe du prospect est redirigée, pas celle du navigateur');
+assert.match(updates[0].twiml, /\+33612345678/); assert.match(updates[0].twiml, /callerId="\+33140000000"/); assert.ok(!updates[0].twiml.includes('+33100000000'));
+assert.ok(calls.every((c) => !c.transfer?.startedAt), 'aucun appel entrant consigné pour un appel sortant');
+const outState = new URL(updates[0].twiml.match(/action="([^"]+)"/)[1].replace(/&amp;/g, '&')).searchParams.get('s');
+assert.match(await hook({ s: outState }, { CallSid: SID_OUT_CHILD, DialCallStatus: 'no-answer' }), /<Record /, 'sans réponse : message proposé au correspondant');
+// solde épuisé : refus, rien n'est redirigé
+updates.length = 0; setTransferDeps({ minutes: async () => 0 });
+assert.equal((await call(ctl.transfer, { body: { callSid: SID_OUT, entryId: E_ONE } })).code, 402); assert.equal(updates.length, 0);
+setTransferDeps({ minutes: async () => 30 });
+
 console.log('callTransfer.test.js : OK');
