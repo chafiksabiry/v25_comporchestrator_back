@@ -502,6 +502,40 @@ try {
     assert.ok(partsOf(m2).slice(1)[0].data.equals(PDF));
   }
 
+  // ============================================ 8. REVUE : connexion coupée en plein envoi — le processus survit, la requête suivante répond
+  {
+    const net = await import('node:net');
+    const wait = (ms) => new Promise((ok) => setTimeout(ok, ms));
+    const boundary = 'yBOUNDARYy';
+    const port = server.address().port;
+    for (const [user, sentBytes, chunked] of [['owner1', MiB, false], ['mgrA', 512 * 1024, false], ['owner1', 3 * MiB, true], ['owner1', 10, false]]) {
+      await new Promise((resolve) => {
+        const sock = net.connect(port, '127.0.0.1', () => {
+          const partHead = `--${boundary}\r\nContent-Disposition: form-data; name="to"\r\n\r\nclient@exemple.fr\r\n--${boundary}\r\nContent-Disposition: form-data; name="attachments"; filename="gros.pdf"\r\nContent-Type: application/pdf\r\n\r\n`;
+          const total = Buffer.byteLength(partHead) + 2 * MiB + `\r\n--${boundary}--\r\n`.length;
+          sock.write(`POST /api/emails HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer ${sign(user)}\r\nContent-Type: multipart/form-data; boundary=${boundary}\r\n${chunked ? 'Transfer-Encoding: chunked' : `Content-Length: ${total}`}\r\n\r\n`);
+          const body = Buffer.concat([Buffer.from(partHead), Buffer.alloc(sentBytes, 0x41)]);
+          sock.write(chunked ? Buffer.concat([Buffer.from(`${body.length.toString(16)}\r\n`), body, Buffer.from('\r\n')]) : body, () => setTimeout(() => { sock.destroy(); resolve(); }, 50));
+        });
+        sock.on('error', () => resolve());
+      });
+      await wait(300); // laisse multer / busboy traiter la coupure (c'est là que l'ancien code plantait)
+    }
+    // le serveur est toujours là : un envoi normal avec pièce jointe aboutit
+    resetDb(); std(); putConn('google', { connectedBy: 'owner1', scopes: G_SCOPES }); toolsDocs.push({ companyId: C1, email: { provider: 'google' } });
+    const r2 = await multipart('', { user: 'owner1', fields: FIELDS, files: [{ name: 'a.pdf', data: PDF, type: 'application/pdf' }] });
+    assert.equal(r2.status, 201, r2.text); assert.equal(gmailSends().length, 1);
+    // erreur tardive d'un flux après la fin de multer : ignorée, aucune exception
+    const { PassThrough } = await import('node:stream');
+    const storage = AT.countingMemoryStorage(100); const rqx = { attachmentsAborted: true }; let calls = 0;
+    const stream = new PassThrough(); storage._handleFile(rqx, { stream }, () => { calls += 1; });
+    stream.destroy(new Error('Unexpected end of form')); await wait(20);
+    assert.equal(calls, 0, 'aucun rappel de multer après sa fin');
+    const s2 = new PassThrough(); let n2 = 0; storage._handleFile({}, { stream: s2 }, () => { n2 += 1; }); s2.destroy(new Error('x')); s2.destroy(new Error('y')); await wait(20);
+    assert.equal(n2, 1, 'un seul rappel, même avec plusieurs erreurs');
+    storage._removeFile({}, undefined, () => {}); // fichier absent : sans exception
+  }
+
   // ============================================ jamais de jeton, d'adresse de boîte, de nom ou de contenu de pièce jointe dans les journaux
   const forbidden = ['REFRESH_', 'ACCESS_', 'Bilan-confidentiel', PDF.toString('base64').slice(0, 40)];
   for (const { text } of responses) for (const x of ['REFRESH_', 'ACCESS_']) assert.ok(!text.includes(x), `jeton (${x}) dans une réponse`);

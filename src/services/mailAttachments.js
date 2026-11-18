@@ -154,26 +154,37 @@ const TOTAL_EXCEEDED = 'ATTACHMENTS_TOTAL_EXCEEDED';
  */
 export const countingMemoryStorage = (maxTotalBytes = ATTACHMENT_LIMITS.maxTotalBytes) => ({
   _handleFile(req, file, cb) {
-    const chunks = [];
+    let chunks = [];
     let finished = false;
-    const finish = (err, info) => { if (finished) return; finished = true; cb(err, info); };
-    const onData = (chunk) => {
+    // Une seule réponse à multer, quoi qu'il arrive. Une erreur tardive du flux arrivée APRÈS la fin de multer (client parti, busboy détruit) n'est
+    // pas relayée. Avant cette fin, elle l'est, même si la requête est détruite, pour que multer termine toujours.
+    const finish = (err, info) => {
+      if (finished) return;
+      finished = true;
+      chunks = [];
+      file.stream.removeListener('data', onData);
+      if (err) file.stream.resume(); // le reste éventuel est lu et jeté, jamais gardé
+      if (err && req.attachmentsAborted) return;
+      try { cb(err, info); } catch { /* jamais d'exception non rattrapée depuis un flux */ }
+    };
+    function onData(chunk) {
+      if (finished) return;
       req.attachmentBytes = (req.attachmentBytes || 0) + chunk.length;
       if (req.attachmentBytes > maxTotalBytes) {
-        chunks.length = 0; // tampons libérés tout de suite
-        file.stream.removeListener('data', onData);
-        file.stream.resume(); // le reste du fichier est lu et jeté, jamais gardé
         const e = new Error('Pièces jointes trop volumineuses.'); e.code = TOTAL_EXCEEDED;
         finish(e);
         return;
       }
       chunks.push(chunk);
-    };
+    }
     file.stream.on('data', onData);
     file.stream.on('error', (e) => finish(e));
-    file.stream.on('end', () => { if (finished) return; const buffer = Buffer.concat(chunks); chunks.length = 0; finish(null, { buffer, size: buffer.length }); });
+    file.stream.on('end', () => { if (finished) return; const buffer = Buffer.concat(chunks); finish(null, { buffer, size: buffer.length }); });
   },
-  _removeFile(req, file, cb) { delete file.buffer; cb(null); },
+  _removeFile(req, file, cb) {
+    if (file) delete file.buffer;
+    try { cb(null); } catch { /* idem */ }
+  },
 });
 
 const upload = multer({
@@ -209,7 +220,8 @@ export function receiveAttachments(req, res, next) {
   }
   return parse(req, res, (err) => {
     if (err) {
-      req.files = undefined; // rien n'est gardé
+      req.attachmentsAborted = true; // toute erreur tardive d'un flux de fichier est ignorée (voir countingMemoryStorage)
+      req.files = []; // rien n'est gardé (tableau vide et non undefined : multer peut encore y retirer un emplacement)
       if (err.code === TOTAL_EXCEEDED) return sendAttachmentError(res, ERR.total(ATTACHMENT_LIMITS));
       if (err.code === 'LIMIT_FILE_SIZE') return sendAttachmentError(res, ERR.too_large(ATTACHMENT_LIMITS));
       if (err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE') return sendAttachmentError(res, err.field && err.field !== 'attachments' ? ERR.invalid() : ERR.too_many(ATTACHMENT_LIMITS));
@@ -217,7 +229,7 @@ export function receiveAttachments(req, res, next) {
     }
     req.body = normalizeFields(req.body || {});
     req.attachmentFiles = Array.isArray(req.files) ? req.files : [];
-    req.files = undefined;
+    req.files = [];
     if (req.attachmentFiles.length > ATTACHMENT_LIMITS.maxFiles) { req.attachmentFiles = []; return sendAttachmentError(res, ERR.too_many(ATTACHMENT_LIMITS)); }
     // Libère les tampons à la fin de la requête, quoi qu'il arrive.
     res.on('finish', () => { req.attachmentFiles = []; });
