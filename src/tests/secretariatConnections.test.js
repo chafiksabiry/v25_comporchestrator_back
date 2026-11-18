@@ -603,7 +603,7 @@ try {
   putConnection(C1, 'microsoft'); on('POST', /me\/sendMail/, () => ({ status: 202, json: null }));
   e = await call(mail.send, msg); assert.equal(e.code, 201, JSON.stringify(e.body)); assert.equal(callsTo(/me\/sendMail/).length, 1); assert.equal(brevo.length, 0);
   r = await call(mail.config); assert.deepEqual([r.body.data.configured, r.body.data.provider, r.body.data.account], [true, 'microsoft', 'centre@contoso.test']);
-  assert.equal(r.body.data.remainingThisHour, 30, 'les autres champs de /emails/config sont conservés'); assert.deepEqual(Object.keys(r.body.data).sort(), ['account', 'configured', 'limits', 'provider', 'remainingThisHour', 'remainingToday']);
+  assert.equal(r.body.data.remainingThisHour, 30, 'les autres champs de /emails/config sont conservés'); assert.deepEqual(Object.keys(r.body.data).sort(), ['account', 'attachments', 'configured', 'limits', 'provider', 'remainingThisHour', 'remainingToday']);
   // deux connectées : le choix des réglages ; sans choix, refus
   putConnection(C1, 'google'); reset(); std();
   on('POST', /me\/sendMail/, () => ({ status: 202, json: null })); on('POST', /messages\/send/, () => ({ status: 200, json: { id: 'x' } }));

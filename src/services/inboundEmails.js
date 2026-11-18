@@ -251,6 +251,49 @@ export async function readInboundBody(scope, id, { purpose } = {}) {
   return { text, aiAllowed: aiAllowedFor(doc.provider) };
 }
 
+/** Limites de « Répondre à tous » : celles de l'envoi (POST /api/emails : `to` 5 adresses, `cc` 10 adresses). */
+export const REPLY_ALL_MAX = { to: 5, cc: 10 };
+const MSG_ID = /<[^<>\s@]{1,250}@[^<>\s@]{1,250}>/g;
+
+/**
+ * Destinataires de « Répondre à tous » (pur, testable). Destinataire principal = Reply-To, sinon From ; copie = To + Cc d'origine ; l'adresse de la
+ * boîte elle-même est retirée partout ; dédoublonné ; un message que la boîte s'est envoyé à elle-même répond à ses destinataires d'origine.
+ * Coupé aux limites d'envoi (`truncated: true` si des adresses ont été laissées de côté).
+ */
+export function replyAllRecipients({ from = [], replyTo = [], to = [], cc = [] } = {}, mailbox = '') {
+  const self = String(mailbox || '').trim().toLowerCase();
+  const norm = (list) => (Array.isArray(list) ? list : []).map((a) => String(a || '').trim().toLowerCase()).filter((a) => a && a !== self);
+  let primary = [...new Set(norm(replyTo.length ? replyTo : from))];
+  if (!primary.length) primary = [...new Set(norm(to))];
+  const copy = [...new Set([...norm(to), ...norm(cc)])].filter((a) => !primary.includes(a));
+  return {
+    to: primary.slice(0, REPLY_ALL_MAX.to), cc: copy.slice(0, REPLY_ALL_MAX.cc),
+    truncated: primary.length > REPLY_ALL_MAX.to || copy.length > REPLY_ALL_MAX.cc,
+  };
+}
+
+/**
+ * « Répondre » / « Répondre à tous » d'un e-mail reçu : destinataires et en-têtes de fil lus EN DIRECT chez le fournisseur (aucune adresse To / Cc n'est
+ * stockée : seuls l'expéditeur, l'objet, l'extrait et la date le sont déjà). Mêmes contrôles que la lecture du corps (seul le propriétaire de la boîte).
+ * @returns {Promise<{to: string[], cc: string[], truncated: boolean, subject: string, inReplyTo: string, references: string[], threading: boolean}>}
+ */
+export async function readReplyAll(scope, id) {
+  const s = asScope(scope);
+  if (!isId(id)) throw new SecretariatError('invalid_request', 'Identifiant d’e-mail invalide.');
+  const access = await requireReadAccess(s);
+  const doc = await InboundEmail.findOne({ _id: oid(id), ...scopeFilter(s), deletedAt: null }).select('provider providerMessageId subject').lean();
+  if (!doc) throw new SecretariatError('not_found', 'E-mail introuvable.');
+  if (doc.provider !== access.provider) throw new SecretariatError('no_mailbox', ERRORS.no_mailbox);
+  const meta = await connect(s, access.provider, (accessToken, http) => PROVIDERS[access.provider].readRecipients({ http, accessToken, id: doc.providerMessageId }));
+  const r = replyAllRecipients(meta, access.account);
+  const messageId = (String(meta.messageId || '').match(MSG_ID) || [])[0] || '';
+  const references = [...new Set([...(String(meta.references || '').match(MSG_ID) || []), ...(messageId ? [messageId] : [])])].slice(-20);
+  const base = String(meta.subject || doc.subject || '').trim();
+  const subject = (/^(re|r[ée]p|aw|sv)\s*:/i.test(base) ? base : `Re: ${base}`).slice(0, 150);
+  // Outlook (Graph sendMail) ne transmet pas In-Reply-To / References : `threading: false` (le front peut les envoyer quand même, ils sont ignorés).
+  return { ...r, subject, inReplyTo: messageId, references, threading: access.provider === 'google' };
+}
+
 const plainBody = (body) => (body && typeof body === 'object' && !Array.isArray(body) ? body : {});
 
 /**

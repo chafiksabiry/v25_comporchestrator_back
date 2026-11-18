@@ -4,6 +4,10 @@ import { dialIn, plainDescription, safeVideoUrl, videoUrlIn } from './eventConne
 import { cleanSnippet, cleanSubject, htmlToText, limitBody, parseAddress, stripQuoted } from './mailText.js';
 import { DEFAULT_TIME_ZONE } from '../timeZone.js';
 import { buildMime, toBase64Url } from './mime.js';
+import { parseAddressList } from './addressList.js';
+
+/** Au-delà (octets du message MIME), envoi par le point d'upload plutôt que par le champ JSON `raw`. */
+const RAW_JSON_MAX = 900_000;
 
 /**
  * Google : Gmail (envoi + LECTURE de la boîte de réception), Agenda (événements), Meet (via un événement). Tous les points d'accès ci-dessous sont les points
@@ -43,14 +47,37 @@ export const google = {
     await call(http, { method: 'POST', url: 'https://oauth2.googleapis.com/revoke', form: { token } });
   },
 
-  /** Gmail users.messages.send : RFC 822 en base64url ; From = compte connecté. */
+  /**
+   * Gmail users.messages.send : RFC 822 ; From = compte connecté. Message court : champ JSON `raw` (base64url, comme avant). Message volumineux (pièces
+   * jointes) : point d'upload `uploadType=media` (message/rfc822, jusqu'à 35 Mo côté API ; le champ JSON `raw` est limité à quelques Mo).
+   * Réponse : en-têtes In-Reply-To / References transmis (fil conservé chez le destinataire).
+   */
   async sendMail({ http, accessToken, account, message }) {
-    const raw = toBase64Url(buildMime({
-      from: { email: account, name: message.fromName }, to: message.to, replyTo: message.replyTo, subject: message.subject,
-      text: message.text, html: message.html, attachments: message.attachments,
-    }));
-    const res = ensure(await call(http, { method: 'POST', url: 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send', headers: { Authorization: `Bearer ${accessToken}` }, body: { raw } }), 'Envoi Gmail', [200]);
+    const mime = buildMime({
+      from: { email: account, name: message.fromName }, to: message.to, cc: message.cc, replyTo: message.replyTo, subject: message.subject,
+      text: message.text, html: message.html, attachments: message.attachments, inReplyTo: message.inReplyTo, references: message.references,
+    });
+    const headers = { Authorization: `Bearer ${accessToken}` };
+    const req = Buffer.byteLength(mime, 'utf8') > RAW_JSON_MAX
+      ? { method: 'POST', url: 'https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media', headers: { ...headers, 'Content-Type': 'message/rfc822' }, body: mime, timeoutMs: 120000 }
+      : { method: 'POST', url: 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send', headers, body: { raw: toBase64Url(mime) } };
+    const res = ensure(await call(http, req), 'Envoi Gmail', [200]);
     return { id: res.json?.id || '' };
+  },
+
+  /**
+   * Destinataires d'un message reçu, lus EN DIRECT (format=metadata, en-têtes seulement ; rien n'est stocké) pour « Répondre à tous » :
+   * From, Reply-To, To, Cc, Message-ID, References, Subject.
+   */
+  async readRecipients({ http, accessToken, id }) {
+    const q = ['From', 'Reply-To', 'To', 'Cc', 'Message-ID', 'References', 'Subject'].map((h) => `metadataHeaders=${encodeURIComponent(h)}`).join('&');
+    const res = ensure(await call(http, { method: 'GET', url: `${GMAIL}/messages/${encodeURIComponent(id)}?format=metadata&${q}`, headers: { Authorization: `Bearer ${accessToken}` } }), 'Lecture d’un message Gmail', [200]);
+    const all = (name) => (res.json?.payload?.headers || []).filter((x) => String(x?.name).toLowerCase() === name).map((x) => String(x?.value || ''));
+    return {
+      from: parseAddressList(all('from').join(', ')).slice(0, 1), replyTo: parseAddressList(all('reply-to').join(', ')),
+      to: parseAddressList(all('to').join(', ')), cc: parseAddressList(all('cc').join(', ')),
+      messageId: all('message-id')[0] || '', references: all('references').join(' '), subject: cleanSubject(all('subject')[0] || ''),
+    };
   },
 
   /**

@@ -11,6 +11,9 @@ import axios from 'axios';
  */
 export const TEMPLATES = ['callback_confirmation', 'appointment_confirmation', 'free'];
 export const MAX_RECIPIENTS = 5;
+/** Copie (Cc) : utile surtout pour « Répondre à tous ». */
+export const MAX_CC = 10;
+const MSG_ID_RE = /^<[^<>\s@]{1,250}@[^<>\s@]{1,250}>$/;
 export const MAX_SUBJECT = 150;
 export const MAX_BODY = 5000;
 export const ICS_ATTACHMENT_NAME = 'rendez-vous.ics';
@@ -38,6 +41,28 @@ export function parseRecipients(input) {
   return { value: list };
 }
 
+/** Copie facultative : même format que `to`, 10 adresses au plus, sans les adresses déjà en `to`. */
+export function parseCc(input, to = []) {
+  if (input === undefined || input === null || input === '' || (Array.isArray(input) && input.length === 0)) return { value: [] };
+  const raw = Array.isArray(input) ? input : typeof input === 'string' ? input.split(/[;,]/) : null;
+  if (!raw) return bad('Copie (Cc) invalide.');
+  const list = [...new Set(raw.map((x) => (typeof x === 'string' ? x.trim().toLowerCase() : '')).filter(Boolean))].filter((a) => !to.includes(a));
+  if (list.length > MAX_CC) return bad(`${MAX_CC} adresses au maximum en copie.`);
+  const wrong = list.find((a) => !isValidEmail(a));
+  if (wrong) return bad(`Adresse e-mail invalide : ${wrong.slice(0, 80)}.`);
+  return { value: list };
+}
+
+/** En-têtes de fil facultatifs (réponse) : identifiants de message « <…@…> » seulement. */
+function parseThreading(b) {
+  const inReplyTo = b.inReplyTo === undefined || b.inReplyTo === null || b.inReplyTo === '' ? '' : b.inReplyTo;
+  if (inReplyTo && !(typeof inReplyTo === 'string' && MSG_ID_RE.test(inReplyTo.trim()))) return bad('Identifiant du message d’origine invalide.');
+  let refs = b.references === undefined || b.references === null || b.references === '' ? [] : b.references;
+  if (typeof refs === 'string') refs = refs.trim().split(/\s+/);
+  if (!Array.isArray(refs) || refs.length > 20 || refs.some((r) => typeof r !== 'string' || !MSG_ID_RE.test(r.trim()))) return bad('Références du fil invalides.');
+  return { value: { inReplyTo: inReplyTo ? inReplyTo.trim() : '', references: refs.map((r) => r.trim()) } };
+}
+
 /** Nom affiché de l'expéditeur : texte simple, sans caractère pouvant casser un en-tête. */
 export function cleanDisplayName(v, fallback = 'HARX') {
   const s = typeof v === 'string' ? v.replace(/[\r\n\t"<>@\\]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) : '';
@@ -60,9 +85,13 @@ export function validateSend(body) {
   if (followUpId !== null && !(typeof followUpId === 'string' && /^[0-9a-fA-F]{24}$/.test(followUpId))) return bad('Élément « À traiter » invalide.');
   if (b.attachIcs !== undefined && typeof b.attachIcs !== 'boolean') return bad('Pièce jointe invalide.');
   if (b.attachIcs === true && !followUpId) return bad('Le fichier agenda se joint à partir d’un rendez-vous.');
+  const cc = parseCc(b.cc, to.value);
+  if (cc.error) return cc;
+  const thread = parseThreading(b);
+  if (thread.error) return thread;
   return {
     value: {
-      to: to.value, subject: b.subject.trim(), body: b.body.replace(/\r\n?/g, '\n').trim(), template, followUpId,
+      to: to.value, cc: cc.value, inReplyTo: thread.value.inReplyTo, references: thread.value.references, subject: b.subject.trim(), body: b.body.replace(/\r\n?/g, '\n').trim(), template, followUpId,
       attachIcs: b.attachIcs === true, centerName: cleanDisplayName(b.centerName, ''),
     },
   };

@@ -11,12 +11,31 @@ import { SecretariatError } from '../services/secretariatProviders/common.js';
 import { loadEmailIdentity } from '../services/secretariatTools.js';
 import { composeSignature, listAccounts, requireAccount, sendFromAccount } from '../services/secretariatSharedAccounts.js';
 import { buildPayload, checkRate, limits, validateSend } from '../services/emailService.js';
+import { AttachmentError, limitsFor, prepareAttachments } from '../services/mailAttachments.js';
 
 const fail = (res, status, message, code) => res.status(status).json({ success: false, error: code || message, message, ...(code ? { code } : {}) });
 /** 409 : aucune messagerie utilisable. `code` pour le portail, `error` identique (comme les autres refus de ce contrôleur). */
 const refuse = (res, code, message) => res.status(409).json({ success: false, code, error: code, message });
 const NOT_ALLOWED = 'Seuls le titulaire et les membres autorisés à gérer les appels peuvent envoyer des e-mails.';
 const HOUR = 3600_000;
+/**
+ * Pièces jointes de l'auteur, vérifiées APRÈS le contrôle du propriétaire de la boîte et selon les limites du fournisseur. Jamais stockées ni journalisées.
+ * Répond lui-même (400 / 413 / 415) et renvoie null en cas de refus.
+ */
+function attachmentsFor(req, res, provider) {
+  try {
+    return prepareAttachments(req.attachmentFiles, provider);
+  } catch (e) {
+    if (!(e instanceof AttachmentError)) throw e;
+    res.status(e.status).json({ success: false, code: e.code, error: e.code, message: e.message, limits: limitsFor(provider) });
+    return null;
+  } finally {
+    req.attachmentFiles = []; // tampons libérés dès qu'ils sont encodés (ou refusés)
+  }
+}
+const icsParts = (payload) => (payload.attachment || []).map((a) => ({ name: a.name, contentType: 'text/calendar; charset=UTF-8; method=PUBLISH', contentBase64: a.content }));
+/** Champs d'envoi communs (copie, fil de discussion, pièces). */
+const extras = (v, files, payload) => ({ cc: v.cc, inReplyTo: v.inReplyTo, references: v.references, attachments: [...icsParts(payload), ...files.map(({ name, contentType, contentBase64 }) => ({ name, contentType, contentBase64 }))] });
 const REFUSED = 'Votre messagerie connectée a refusé l\'envoi. Reconnectez-la dans Paramétrage > Outils.';
 const NOT_CONNECTED = 'Connectez votre messagerie (Gmail ou Outlook) dans Paramétrage > Outils pour envoyer des e-mails.';
 const UNAVAILABLE = 'Votre messagerie connectée est momentanément indisponible. Aucun e-mail n’a été envoyé : réessayez dans un instant.';
@@ -85,6 +104,8 @@ async function sendFromShared(req, res, access, accountId) {
   const checked = validateSend(req.body);
   if (checked.error) return fail(res, 400, checked.error);
   const v = checked.value;
+  const files = attachmentsFor(req, res, account.provider);
+  if (!files) return;
   const companyId = new mongoose.Types.ObjectId(access.companyId);
   const rate = checkRate(await usage(companyId), limits());
   if (!rate.ok) return fail(res, 429, rate.message, 'email_rate_limited');
@@ -112,8 +133,7 @@ async function sendFromShared(req, res, access, accountId) {
   };
   try {
     await sendFromAccount(access.companyId, account, {
-      fromName, to: v.to, subject: v.subject, text: payload.textContent, html: payload.htmlContent, replyTo: payload.replyTo,
-      attachments: (payload.attachment || []).map((a) => ({ name: a.name, contentType: 'text/calendar; charset=UTF-8; method=PUBLISH', contentBase64: a.content })),
+      fromName, to: v.to, subject: v.subject, text: payload.textContent, html: payload.htmlContent, replyTo: payload.replyTo, ...extras(v, files, payload),
     });
   } catch (error) {
     const e = error instanceof SecretariatError ? error : new SecretariatError('provider_error', '');
@@ -139,13 +159,13 @@ export const emailController = {
       if (access.role === 'agent') {
         // Une secrétaire n'a pas la messagerie de la société : « configuré » = au moins un compte utilisable pour écrire (délégué autorisé OU sa messagerie personnelle).
         const usable = (await listAccounts(access.companyId, access)).filter((a) => (a.can ? a.can.send : true) && !a.needsReauth);
-        return res.json({ success: true, data: { configured: usable.length > 0, provider: null, account: null, limits: max, remainingThisHour: Math.max(0, max.perHour - used.hour), remainingToday: Math.max(0, max.perDay - used.day) } });
+        return res.json({ success: true, data: { configured: usable.length > 0, provider: null, account: null, limits: max, attachments: { google: limitsFor('google'), microsoft: limitsFor('microsoft') }, remainingThisHour: Math.max(0, max.perHour - used.hour), remainingToday: Math.max(0, max.perDay - used.day) } });
       }
       // Les e-mails ne partent que de la messagerie connectée du centre : `configured` = une messagerie active (aucune dépendance au service HARX).
       const identity = await loadEmailIdentity(access.companyId);
       const mailbox = await resolveMailbox(access.companyId, identity.provider, access.userId); // SA boîte seulement : celle d'un autre n'existe pas pour lui
       const ok = !mailbox.error;
-      res.json({ success: true, data: { configured: ok, provider: ok ? mailbox.provider : null, account: ok ? mailbox.account : null, limits: max, remainingThisHour: Math.max(0, max.perHour - used.hour), remainingToday: Math.max(0, max.perDay - used.day) } });
+      res.json({ success: true, data: { configured: ok, provider: ok ? mailbox.provider : null, account: ok ? mailbox.account : null, limits: max, attachments: limitsFor(ok ? mailbox.provider : ''), remainingThisHour: Math.max(0, max.perHour - used.hour), remainingToday: Math.max(0, max.perDay - used.day) } });
     } catch (error) {
       console.error('emails config:', error.message);
       fail(res, 500, 'Lecture de la configuration des e-mails impossible.');
@@ -187,6 +207,8 @@ export const emailController = {
       const checked = validateSend(req.body);
       if (checked.error) return fail(res, 400, checked.error);
       const v = checked.value;
+      const files = attachmentsFor(req, res, mailbox.provider);
+      if (!files) return;
       const companyId = new mongoose.Types.ObjectId(access.companyId);
 
       const rate = checkRate(await usage(companyId), limits());
@@ -214,8 +236,7 @@ export const emailController = {
       try {
         // From = compte connecté. Un refus du fournisseur n'est JAMAIS rattrapé par un autre canal d'envoi.
         await sendViaConnection(access.companyId, mailbox.provider, {
-          fromName: v.centerName, to: v.to, subject: v.subject, text: payload.textContent, html: payload.htmlContent, replyTo: payload.replyTo,
-          attachments: (payload.attachment || []).map((a) => ({ name: a.name, contentType: 'text/calendar; charset=UTF-8; method=PUBLISH', contentBase64: a.content })),
+          fromName: v.centerName, to: v.to, subject: v.subject, text: payload.textContent, html: payload.htmlContent, replyTo: payload.replyTo, ...extras(v, files, payload),
         }, { userId: access.userId });
       } catch (error) {
         const e = error instanceof SecretariatError ? error : new SecretariatError('provider_error', '');
