@@ -435,6 +435,73 @@ try {
   assert.equal(r.status, 200, r.text);
   assert.deepEqual(r.body.data, { to: ['devis@client.fr'], cc: ['jean@client.fr'], truncated: false, subject: 'RE: Devis', inReplyTo: '<AM1@outlook.test>', references: ['<AM1@outlook.test>'], threading: false });
 
+  // ============================================ 7. REVUE : flux sans Content-Length, types supplémentaires, caractères invisibles, noms longs
+  // Requête « chunked » (aucun Content-Length) : le total est compté dans le flux et la requête coupée à 20 Mio, AVANT le contrôle du propriétaire
+  // (mgrA n'a pas de boîte : sans cette coupure, la réponse serait 409 mailbox_not_connected).
+  {
+    const http = await import('node:http');
+    const boundary = 'xBOUNDARYx';
+    const head = (field, name) => Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${field}"${name ? `; filename="${name}"` : ''}\r\n${name ? 'Content-Type: application/pdf\r\n' : ''}\r\n`);
+    const sendsBefore = gmailSends().length + httpCalls.filter((c) => /sendMail/.test(c.url)).length;
+    const result = await new Promise((resolve, reject) => {
+      const rq = http.request(`${origin}/api/emails`, { method: 'POST', headers: { Authorization: `Bearer ${sign('mgrA')}`, 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Transfer-Encoding': 'chunked' } }, (res) => {
+        let text = ''; res.on('data', (c) => { text += c; }); res.on('end', () => resolve({ status: res.statusCode, text, headers: res.headers }));
+      });
+      rq.on('error', reject);
+      assert.equal(rq.getHeader('content-length'), undefined, 'aucun Content-Length annoncé');
+      rq.write(head('to')); rq.write('client@exemple.fr\r\n');
+      const chunk = Buffer.alloc(MiB, 0x41);
+      // 3 fichiers de 9 Mio (chacun sous la limite par fichier) = 27 Mio > 20 Mio
+      (async () => {
+        for (let k = 0; k < 3; k += 1) {
+          rq.write(head('attachments', `f${k}.pdf`));
+          for (let m = 0; m < 9; m += 1) { if (!rq.write(chunk)) await new Promise((ok) => rq.once('drain', ok)); }
+          rq.write('\r\n');
+        }
+        rq.end(`--${boundary}--\r\n`);
+      })().catch(reject);
+    });
+    assert.equal(result.status, 413, result.text); assert.equal(JSON.parse(result.text).code, 'attachments_total_too_large');
+    assert.equal(gmailSends().length + httpCalls.filter((c) => /sendMail/.test(c.url)).length, sendsBefore, 'rien envoyé');
+  }
+  // compteur du stockage : coupe au premier octet au-delà de la limite, sans garder les tampons
+  {
+    const { PassThrough } = await import('node:stream');
+    const storage = AT.countingMemoryStorage(10);
+    const rq = {}; const results = [];
+    const feed = (bytes) => new Promise((resolve) => { const stream = new PassThrough(); storage._handleFile(rq, { stream }, (err, info) => { results.push(err ? err.code : info.size); resolve(); }); stream.end(Buffer.alloc(bytes)); });
+    await feed(6); await feed(5);
+    assert.deepEqual(results, [6, 'ATTACHMENTS_TOTAL_EXCEEDED'], 'total compté sur tous les fichiers de la requête');
+  }
+  for (const n of ['macro.docm', 'calc.XLSM', 'p.pptm', 'a.xlam', 'm.dotm', 'm.potm', 'a.ppam', 'page.html', 'page.htm', 'logo.svg', 'x.xhtml', 'notes.one', 'setup.cab', 'disk.iso', 'disk.img', 'disk.vhd']) {
+    assert.equal(code(() => AT.prepareAttachments([f(n, Buffer.from('contenu'), 'application/octet-stream')], 'google')), 'attachment_type_blocked', n);
+  }
+  assert.equal(code(() => AT.prepareAttachments([f('page.txt', Buffer.from('x'), 'text/html')], 'google')), 'attachment_type_blocked', 'HTML déclaré');
+  assert.equal(code(() => AT.prepareAttachments([f('img.png', Buffer.from('x'), 'image/svg+xml')], 'google')), 'attachment_type_blocked', 'SVG déclaré');
+  // caractères invisibles retirés AVANT de lire l'extension
+  for (const [raw, clean] of [['virus.e\u200Bxe', 'virus.exe'], ['virus.ex\u200De', 'virus.exe'], ['facture\u202Efdp.exe', 'facturefdp.exe'], ['a.e\u2060x\u2064e', 'a.exe'], ['\uFEFFrun.bat\u200F', 'run.bat'], ['doc.p\u200Cdf', 'doc.pdf']]) {
+    assert.equal(AT.sanitizeFilename(raw), clean, JSON.stringify(raw));
+  }
+  for (const raw of ['virus.e\u200Bxe', 'facture\u202Efdp.exe', 'script.j\u2061s', 'x.h\uFEFFta']) assert.equal(code(() => AT.prepareAttachments([f(raw, Buffer.from('x'), 'application/pdf')], 'google')), 'attachment_type_blocked', JSON.stringify(raw));
+  // nom CJK de 150 caractères : continuation RFC 2231, chaque ligne ≤ 998 caractères, nom restitué à l'identique
+  {
+    const cjk = `${'報告書資料'.repeat(29)}文.pdf`; // 145 + 1 + 4 = 150 caractères
+    assert.equal(cjk.length, 150);
+    const name = AT.sanitizeFilename(cjk); assert.equal(name, cjk);
+    const m2 = buildMime({ from: { email: 'a@b.fr' }, to: ['c@d.fr'], subject: 's', text: 't', attachments: [{ name, contentType: 'application/pdf', contentBase64: PDF.toString('base64') }] });
+    for (const line of m2.split('\r\n')) assert.ok(line.length <= 998, `ligne de ${line.length} caractères`);
+    assert.ok(m2.split('\r\n').every((l) => l.length <= 120 || /^[A-Za-z0-9+/=]+$/.test(l)), 'en-têtes pliés en lignes courtes');
+    const part = partsOf(m2).slice(1)[0];
+    assert.match(part.head, /^Content-Type: application\/pdf; name="_\.pdf";\r\n name\*0\*=UTF-8''%E5/);
+    assert.match(part.head, /\r\nContent-Disposition: attachment; filename="_\.pdf";\r\n filename\*0\*=UTF-8''/);
+    // réassemblage RFC 2231 : les morceaux filename*N* concaténés redonnent le nom exact
+    const segs = [...part.head.matchAll(/filename\*(\d+)\*=(?:UTF-8'')?([^;\r\n]+)/g)].sort((a, b) => Number(a[1]) - Number(b[1]));
+    assert.ok(segs.length > 1); assert.deepEqual(segs.map((x) => Number(x[1])), segs.map((_, i) => i));
+    assert.equal(decodeURIComponent(segs.map((x) => x[2]).join('')), cjk);
+    assert.ok(segs.every((x) => !/%.?$/.test(x[2])), 'aucune séquence %XX coupée');
+    assert.ok(partsOf(m2).slice(1)[0].data.equals(PDF));
+  }
+
   // ============================================ jamais de jeton, d'adresse de boîte, de nom ou de contenu de pièce jointe dans les journaux
   const forbidden = ['REFRESH_', 'ACCESS_', 'Bilan-confidentiel', PDF.toString('base64').slice(0, 40)];
   for (const { text } of responses) for (const x of ['REFRESH_', 'ACCESS_']) assert.ok(!text.includes(x), `jeton (${x}) dans une réponse`);

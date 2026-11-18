@@ -16,15 +16,31 @@ const mailbox = (email, name) => (name ? `${quoted(cleanHeader(name))} <${cleanH
 export const msgId = (v) => { const s = cleanHeader(v); return /^<[^<>\s@]{1,250}@[^<>\s@]{1,250}>$/.test(s) ? s : ''; };
 /** Caractères autorisés tels quels dans un paramètre RFC 2231 (attr-char). */
 const pct = (s) => Array.from(Buffer.from(s, 'utf8')).map((c) => (/[A-Za-z0-9!#$&+.^_`|~-]/.test(String.fromCharCode(c)) ? String.fromCharCode(c) : `%${c.toString(16).toUpperCase().padStart(2, '0')}`)).join('');
-/** Repli ASCII d'un nom de fichier (pour les lecteurs qui ignorent RFC 2231) : accents retirés, autres caractères remplacés par « _ ». */
-const asciiName = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '');
+/** Repli ASCII d'un nom de fichier (pour les lecteurs qui ignorent RFC 2231) : accents retirés, autres caractères remplacés par « _ » (suites fusionnées). */
+const asciiName = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\x20-\x7E]+/g, '_').replace(/["\\]/g, '');
+/** Longueur maximale d'un morceau encodé RFC 2231 (les lignes pliées restent courtes, bien sous la limite de 998 caractères). */
+const SEGMENT = 60;
+/** Découpe un nom encodé en morceaux de SEGMENT caractères au plus, sans couper une séquence « %XX ». */
+const segments = (enc) => {
+  const out = []; let i = 0;
+  while (i < enc.length) {
+    let j = Math.min(enc.length, i + SEGMENT);
+    if (j < enc.length) { const pc = enc.lastIndexOf('%', j - 1); if (pc > j - 3 && pc >= i) j = pc; }
+    out.push(enc.slice(i, j)); i = j;
+  }
+  return out;
+};
 /**
  * Paramètre de nom de fichier : ASCII → `name="…"` ; sinon repli ASCII + forme RFC 2231 `name*=UTF-8''%C3%A9…` (le lecteur qui comprend `name*` la préfère).
+ * Nom encodé long (CJK…) : continuation RFC 2231 `name*0*=UTF-8''…; name*1*=…`, un morceau par ligne pliée (CRLF + espace).
  */
 export function fileParam(param, name) {
   const clean = cleanHeader(name).replace(/["\\]/g, '');
   if (ascii(clean)) return `${param}="${clean}"`;
-  return `${param}="${asciiName(clean)}"; ${param}*=UTF-8''${pct(clean)}`;
+  const enc = pct(clean);
+  const fallback = `${param}="${asciiName(clean)}"`;
+  if (enc.length <= SEGMENT) return `${fallback}; ${param}*=UTF-8''${enc}`;
+  return [fallback, ...segments(enc).map((seg, n) => `${param}*${n}*=${n === 0 ? "UTF-8''" : ''}${seg}`)].join(';\r\n ');
 }
 
 /**

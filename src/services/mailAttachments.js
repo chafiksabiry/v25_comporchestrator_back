@@ -38,6 +38,8 @@ export const BLOCKED_EXTENSIONS = Object.freeze([
   'psc1', 'psm1', 'psd1', 'pif', 'cpl', 'hta', 'reg', 'lnk', 'inf', 'scf', 'gadget', 'application', 'msc', 'dll', 'sys', 'drv', 'ocx', 'sh', 'bash',
   'csh', 'ksh', 'command', 'app', 'apk', 'appx', 'msix', 'appxbundle', 'dmg', 'pkg', 'deb', 'rpm', 'iso', 'img', 'vhd', 'vhdx', 'xll', 'chm', 'url',
   'library-ms', 'settingcontent-ms', 'mjs', 'cjs', 'py', 'pyc', 'pyw', 'pl', 'rb', 'php', 'elf', 'bin', 'run', 'class', 'xbap', 'appref-ms', 'ade', 'adp',
+  // documents Office à macros, pages web et images vectorielles (scripts intégrés), OneNote, archives d'installation
+  'docm', 'xlsm', 'pptm', 'xlam', 'dotm', 'potm', 'ppam', 'xltm', 'sldm', 'html', 'htm', 'xhtml', 'shtml', 'mht', 'mhtml', 'svg', 'svgz', 'one', 'onepkg', 'cab',
 ]);
 const BLOCKED_SET = new Set(BLOCKED_EXTENSIONS);
 /** Types MIME déclarés refusés. */
@@ -47,6 +49,10 @@ const BLOCKED_TYPES = new Set([
   'application/x-csh', 'application/x-shellscript', 'application/javascript', 'application/x-javascript', 'text/javascript', 'application/ecmascript',
   'text/vbscript', 'application/x-vbscript', 'application/hta', 'application/java-archive', 'application/x-java-archive', 'application/java-vm',
   'application/x-elf', 'application/x-mach-binary', 'application/x-apple-diskimage', 'application/vnd.android.package-archive', 'application/x-powershell',
+  'text/html', 'application/xhtml+xml', 'image/svg+xml', 'application/vnd.ms-cab-compressed', 'application/onenote', 'application/x-iso9660-image',
+  'application/vnd.ms-word.document.macroenabled.12', 'application/vnd.ms-excel.sheet.macroenabled.12', 'application/vnd.ms-powerpoint.presentation.macroenabled.12',
+  'application/vnd.ms-excel.addin.macroenabled.12', 'application/vnd.ms-word.template.macroenabled.12', 'application/vnd.ms-powerpoint.template.macroenabled.12',
+  'application/vnd.ms-powerpoint.addin.macroenabled.12',
 ]);
 
 export class AttachmentError extends Error {
@@ -58,7 +64,7 @@ const ERR = {
   too_many: (l) => new AttachmentError('too_many_attachments', `${l.maxFiles} pièces jointes au maximum par e-mail.`, 400),
   too_large: (l) => new AttachmentError('attachment_too_large', `Une pièce jointe dépasse la taille maximale (${fmt(l.maxFileBytes)} par fichier pour cette messagerie).`, 413),
   total: (l) => new AttachmentError('attachments_total_too_large', `Les pièces jointes dépassent la taille totale autorisée (${fmt(l.maxTotalBytes)} pour cette messagerie).`, 413),
-  blocked: () => new AttachmentError('attachment_type_blocked', 'Ce type de fichier ne peut pas être envoyé (programme, script ou installeur).', 415),
+  blocked: () => new AttachmentError('attachment_type_blocked', 'Ce type de fichier ne peut pas être envoyé (programme, script, installeur, document à macros ou page web).', 415),
   invalid: () => new AttachmentError('invalid_attachment', 'Pièce jointe invalide.', 400),
 };
 
@@ -66,10 +72,12 @@ const ERR = {
  * Nom de fichier sûr pour un en-tête MIME : sans chemin, sans caractère de contrôle (CR/LF), sans guillemet ni caractère interdit par Windows,
  * sans point ou espace final (« facture.exe. » → « facture.exe »), 150 caractères au plus (extension conservée).
  */
+/** Caractères invisibles (largeur nulle, contrôle bidi) retirés AVANT de lire l'extension : « facture\u202Efdp.exe », « virus.e\u200Bxe ». */
+const INVISIBLE = /[\u200B-\u200F\u2028-\u202E\u2060-\u2064\u2066-\u2069\uFEFF\u00AD\u180E]/g;
 export function sanitizeFilename(input) {
   let s = String(input ?? '').normalize('NFC');
   s = s.split(/[\\/]/).pop();
-  s = s.replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029\u202A-\u202E\u2066-\u2069"'`<>:*?|;]+/g, '').replace(/\s+/g, ' ').trim();
+  s = s.replace(INVISIBLE, '').replace(/[\u0000-\u001F\u007F-\u009F"'`<>:*?|;]+/g, '').replace(/\s+/g, ' ').trim();
   s = s.replace(/[. ]+$/g, '').replace(/^[. ]+/g, '');
   if (s.length > 150) {
     const dot = s.lastIndexOf('.');
@@ -136,10 +144,42 @@ export function prepareAttachments(files, provider) {
 
 /** Corps multipart d'une requête : taille annoncée au-delà de laquelle on refuse sans rien lire (limite totale + marge pour les champs texte). */
 const MAX_REQUEST_BYTES = ATTACHMENT_LIMITS.maxTotalBytes + MiB;
+const TOTAL_EXCEEDED = 'ATTACHMENTS_TOTAL_EXCEEDED';
+
+/**
+ * Stockage multer EN MÉMOIRE qui compte les octets de TOUS les fichiers de la requête au fil du flux : dès que le total dépasse la limite (20 Mio),
+ * le fichier en cours est abandonné et la requête refusée (413 attachments_total_too_large). Vaut aussi pour une requête sans Content-Length
+ * (transfert « chunked ») : la mémoire occupée ne dépasse jamais la limite totale (+ un morceau du flux), et cela AVANT tout autre traitement.
+ * Rien n'est écrit sur disque.
+ */
+export const countingMemoryStorage = (maxTotalBytes = ATTACHMENT_LIMITS.maxTotalBytes) => ({
+  _handleFile(req, file, cb) {
+    const chunks = [];
+    let finished = false;
+    const finish = (err, info) => { if (finished) return; finished = true; cb(err, info); };
+    const onData = (chunk) => {
+      req.attachmentBytes = (req.attachmentBytes || 0) + chunk.length;
+      if (req.attachmentBytes > maxTotalBytes) {
+        chunks.length = 0; // tampons libérés tout de suite
+        file.stream.removeListener('data', onData);
+        file.stream.resume(); // le reste du fichier est lu et jeté, jamais gardé
+        const e = new Error('Pièces jointes trop volumineuses.'); e.code = TOTAL_EXCEEDED;
+        finish(e);
+        return;
+      }
+      chunks.push(chunk);
+    };
+    file.stream.on('data', onData);
+    file.stream.on('error', (e) => finish(e));
+    file.stream.on('end', () => { if (finished) return; const buffer = Buffer.concat(chunks); chunks.length = 0; finish(null, { buffer, size: buffer.length }); });
+  },
+  _removeFile(req, file, cb) { delete file.buffer; cb(null); },
+});
+
 const upload = multer({
-  storage: multer.memoryStorage(), // mémoire uniquement : aucun fichier temporaire
+  storage: countingMemoryStorage(), // mémoire uniquement, total compté au fil du flux : aucun fichier temporaire
   defParamCharset: 'utf8', // noms de fichiers accentués
-  // +1 fichier : au-delà de 10 on renvoie too_many_attachments (pas une erreur multer générique).
+  // +1 fichier : au-delà de 10 on renvoie too_many_attachments (pas une erreur multer générique). Champs texte bornés (30 × 64 Kio).
   limits: { files: ATTACHMENT_LIMITS.maxFiles + 1, fileSize: ATTACHMENT_LIMITS.maxFileBytes + 1, fields: 30, fieldSize: 64 * 1024, parts: 50 },
 });
 const parse = upload.array('attachments', ATTACHMENT_LIMITS.maxFiles + 1);
@@ -170,6 +210,7 @@ export function receiveAttachments(req, res, next) {
   return parse(req, res, (err) => {
     if (err) {
       req.files = undefined; // rien n'est gardé
+      if (err.code === TOTAL_EXCEEDED) return sendAttachmentError(res, ERR.total(ATTACHMENT_LIMITS));
       if (err.code === 'LIMIT_FILE_SIZE') return sendAttachmentError(res, ERR.too_large(ATTACHMENT_LIMITS));
       if (err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE') return sendAttachmentError(res, err.field && err.field !== 'attachments' ? ERR.invalid() : ERR.too_many(ATTACHMENT_LIMITS));
       return sendAttachmentError(res, ERR.invalid());
