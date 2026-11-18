@@ -4,7 +4,7 @@ import AiInboundCall from '../models/AiInboundCall.js';
 import { guardCompanyAccess } from '../middleware/companyGuard.js';
 import { validateSettingsUpdate, toPublicSettings, pilotAvailability, announcementText, settingsWarnings, LANGUAGES } from '../services/aiAgentSettings.js';
 import { usageView, verifyCallToken, latencyStats } from '../services/aiInboundCore.js';
-import { loadSettings, monthUsage, engines, runTool, finalizeCall, callOf, ToolError, afterStreamTwiml, deps, applyRetention } from '../services/aiInbound.js';
+import { loadSettings, monthUsage, engines, runTool, finalizeCall, callOf, ToolError, afterStreamTwiml, deps, applyRetention, resolveAvailability } from '../services/aiInbound.js';
 import { publicOrigin, twilioRequestValid } from '../services/twilioSignature.js';
 import { CONSENT_TEXTS } from '../services/callRecording.js';
 
@@ -24,7 +24,7 @@ async function settingsView(companyId) {
   return {
     settings,
     warnings: settingsWarnings(settings),
-    availability: pilotAvailability(companyId, deps.env),
+    availability: (({ plan, ...a }) => a)(await resolveAvailability(companyId)),
     announcement,
     engines: engines(),
     usage: { period: usage.period, minutesUsed: usage.minutesUsed, cap: settings.monthlyMinutesCap, remaining: Math.max(0, settings.monthlyMinutesCap - usage.minutesUsed) },
@@ -80,7 +80,7 @@ export const aiAgentController = {
         const issue = { field: 'knowledgeBase.gigId', code: 'invalid_gig', message: 'Base de connaissances inconnue pour cette entreprise.' };
         return fail(res, 400, 'AI_SETTINGS_INVALID', issue.message, { issues: [issue] });
       }
-      if (v.enabled === true && !pilotAvailability(companyId, deps.env).available) return fail(res, 409, 'AI_AGENT_NOT_AVAILABLE', "L'agent IA n'est pas encore ouvert pour votre entreprise.");
+      if (v.enabled === true && !(await resolveAvailability(companyId)).available) return fail(res, 409, 'AI_AGENT_NOT_AVAILABLE', "L'agent IA n'est pas encore ouvert pour votre entreprise.");
       await AiAgentSettings.findOneAndUpdate({ companyId: oid(companyId) }, { $set: { ...v, updatedById: access.userId }, $setOnInsert: { companyId: oid(companyId) } }, { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true });
       // Nouvelle durée de conservation : appliquée aussi aux fiches existantes et aux éléments « À faire » créés par l'IA.
       if (v.retentionDays !== undefined && v.retentionDays !== current.retentionDays) await applyRetention(companyId, v.retentionDays);
@@ -114,7 +114,8 @@ export const aiAgentController = {
         const row = await AiMinutesUsage.findOne({ companyId: oid(companyId), period: req.query.period }).lean();
         u = { period: req.query.period, minutesUsed: row?.minutesUsed || 0, calls: row?.calls || 0 };
       }
-      res.json({ success: true, data: usageView({ ...u, cap: settings.monthlyMinutesCap }, deps.env) });
+      const plan = (await resolveAvailability(companyId)).plan || (await deps.planLimits(companyId).catch(() => null));
+      res.json({ success: true, data: usageView({ ...u, cap: settings.monthlyMinutesCap }, deps.env, plan) });
     } catch (e) { console.error('ai-agent usage:', e.message); fail(res, 500, 'AI_USAGE_READ_FAILED', 'Lecture du compteur impossible.'); }
   },
 

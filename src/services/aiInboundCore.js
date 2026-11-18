@@ -77,8 +77,14 @@ export function billingConfig(env = process.env) {
   };
 }
 
-export function usageView({ period, minutesUsed = 0, calls = 0, cap }, env = process.env) {
-  const cfg = billingConfig(env);
+/** `plan` : valeurs de la formule souscrite (`aiAgentIncludedMinutes`, `aiAgentOverageCentsTtc`), prioritaires sur la configuration. */
+export function usageView({ period, minutesUsed = 0, calls = 0, cap }, env = process.env, plan = null) {
+  const base = billingConfig(env);
+  const cfg = {
+    ...base,
+    includedMinutes: Number.isFinite(plan?.aiAgentIncludedMinutes) ? plan.aiAgentIncludedMinutes : base.includedMinutes,
+    overageUnitPriceTtcCents: Number.isFinite(plan?.aiAgentOverageCentsTtc) ? plan.aiAgentOverageCentsTtc : base.overageUnitPriceTtcCents,
+  };
   const used = Math.max(0, Number(minutesUsed) || 0);
   const overageMinutes = Math.max(0, used - cfg.includedMinutes);
   return {

@@ -35,6 +35,8 @@ const schema = new mongoose.Schema(
     usage: { type: mongoose.Schema.Types.Mixed, default: null },
     cost: { type: mongoose.Schema.Types.Mixed, default: null },
     followUpId: { type: String, default: '' },
+    /** Apprentissage : analyse faite (une fois par appel), nombre de questions restées sans réponse. */
+    learning: { analyzed: { type: Boolean, default: false }, unanswered: { type: Number, default: null } },
     transfer: { entryId: String, entryName: String, result: String },
     bench: {
       recorded: { type: Boolean, default: false },

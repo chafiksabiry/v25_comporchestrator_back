@@ -12,6 +12,9 @@ import {
   toPublicSettings, pilotAvailability, decideAiRoute, announcementText, greetingLanguage, migrateLegacySettings,
 } from './aiAgentSettings.js';
 import CallQueue from '../models/CallQueue.js';
+import AiLearningProposal from '../models/AiLearningProposal.js';
+import AiLearnedAnswer from '../models/AiLearnedAnswer.js';
+import { cleanProposals, findSimilar, groupKey, toInjected, RECURRING_THRESHOLD } from './aiLearning.js';
 import { inboundQueues, needsMenu, defaultQueueOf } from './callQueues.js';
 import {
   signAiInboundServiceToken, signAfterStreamState, verifyAfterStreamState, periodOf, billedMinutes,
@@ -45,6 +48,8 @@ export const deps = {
   now: () => Date.now(),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   env: process.env,
+  /** Forfait actif de l'entreprise (formule « Secrétariat avec agent IA » : `aiAgent`, minutes incluses). */
+  planLimits: async (companyId) => (await import('./planLimits.js')).loadCompanyPlanLimits(companyId),
   /** La base de connaissances (gig) appartient-elle à l'entreprise ? */
   gigBelongsTo: async (companyId, gigId) => {
     const db = mongoose.connection.db;
@@ -90,6 +95,15 @@ export async function aiQueueFor(companyId, queueId = null) {
   return defaultQueueOf(inbound);
 }
 
+/** Disponibilité de l'agent IA pour l'entreprise : drapeau global, puis liste blanche OU abonnement `ai_agent=true`. */
+export async function resolveAvailability(companyId) {
+  const quick = pilotAvailability(companyId, deps.env);
+  if (!quick.pilotEnabled || quick.companyAllowed) return { ...quick, plan: null };
+  let plan = null;
+  try { plan = await deps.planLimits(companyId); } catch (e) { console.error('[ai-inbound] forfait illisible :', e?.message || e); }
+  return { ...pilotAvailability(companyId, deps.env, { aiAgentPlan: plan?.aiAgent === true }), plan };
+}
+
 export async function loadSettings(companyId) {
   const [doc, dir] = await Promise.all([
     AiAgentSettings.findOne({ companyId: oid(companyId) }).lean(),
@@ -128,8 +142,10 @@ async function benchProvider(companyId, settings) {
 export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, stage = 'call', humansAvailable = false, queue, signatureValid = () => false }) {
   const companyId = line?.companyId ? String(line.companyId) : '';
   if (!companyId || !callSid) return null;
-  const availability = pilotAvailability(companyId, deps.env);
-  if (!availability.available) return null; // pilote fermé : aucun accès base, flux classique strictement inchangé
+  // Drapeau global coupé : aucun accès base, flux classique strictement inchangé. Sinon liste blanche, ou abonnement ai_agent=true.
+  if (!pilotAvailability(companyId, deps.env).pilotEnabled) return null;
+  const availability = await resolveAvailability(companyId);
+  if (!availability.available) return null;
   // URL publique obligatoire (jamais l'en-tête Host) et requête signée par Twilio : sinon, pas d'IA (flux classique).
   const apiBase = publicApiBase(deps.env);
   if (!apiBase) { console.error(`[ai-inbound] ${callSid} : PUBLIC_API_BASE_URL absente, agent IA désactivé`); return null; }
@@ -163,6 +179,8 @@ export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, 
     const transferTargets = settings.actions.transfer
       ? settings.transferTargets.map((id) => entries.find((e) => String(e._id) === id)).filter(Boolean).map((e) => ({ id: String(e._id), name: e.name }))
       : [];
+    // Apprentissage : seules les réponses VALIDÉES par le titulaire sont envoyées à l'agent (jamais les propositions).
+    const learned = await AiLearnedAnswer.find({ companyId: oid(companyId), active: true }).sort({ updatedAt: -1 }).limit(40).lean().catch(() => []);
     const dashApi = resolveDashCallsApi(deps.env);
     if (!dashApi) throw new Error('dash_calls URL not configured');
     const body = {
@@ -171,6 +189,7 @@ export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, 
       instructions: settings.instructions, knowledgeBase: settings.knowledgeBase, actions: settings.actions, transferTargets,
       maxCallSeconds, announcement: { mode, text }, provider, record: recorded, timeZone: settings.businessHours.timeZone,
       orchestratorUrl: apiBase,
+      learnedAnswers: toInjected(learned), learning: settings.learning.enabled,
     };
     const timeoutMs = Math.min(10000, Math.max(1000, int(deps.env.AI_INBOUND_SESSION_TIMEOUT_MS, 5000)));
     const controller = new AbortController();
@@ -230,6 +249,40 @@ export async function applyRetention(companyId, days) {
   const ms = Math.min(365, Math.max(30, Number(days) || 365)) * 86400000;
   await AiInboundCall.updateMany({ companyId: oid(companyId) }, [{ $set: { expiresAt: { $add: ['$startedAt', ms] } } }]);
   await FollowUpItem.updateMany({ companyId: oid(companyId), fromAiAgent: true }, [{ $set: { aiExpiresAt: { $add: ['$createdAt', ms] } } }]);
+  await AiLearningProposal.updateMany({ companyId: oid(companyId), status: 'pending' }, [{ $set: { expiresAt: { $add: ['$createdAt', ms] } } }]);
+}
+
+/**
+ * Propositions d'apprentissage d'UN appel (envoyées par dash après l'analyse) : anonymisées (nom et numéro de l'appelant compris),
+ * regroupées avec les propositions en attente similaires de la MÊME entreprise (« appris de N appels »). Une seule analyse par appel.
+ * Rien n'est utilisé par l'agent avant validation.
+ */
+export async function ingestLearning(doc, body = {}) {
+  const companyId = oid(doc.companyId);
+  const claim = await AiInboundCall.updateOne({ _id: doc._id, 'learning.analyzed': { $ne: true } }, { $set: { 'learning.analyzed': true, 'learning.unanswered': Number.isFinite(Number(body.unanswered)) ? Math.max(0, Math.min(50, Math.floor(Number(body.unanswered)))) : null } });
+  if (!claim?.modifiedCount) return { ingested: 0, alreadyAnalyzed: true };
+  const { settings } = await loadSettings(doc.companyId);
+  if (!settings.learning.enabled) return { ingested: 0, disabled: true };
+  const names = [doc.caller?.name, ...(Array.isArray(body.callerNames) ? body.callerNames.slice(0, 5) : [])].filter(Boolean);
+  const proposals = cleanProposals(body.proposals, { names: [...names, doc.from] });
+  const expiresAt = retentionDate(settings.retentionDays);
+  let n = 0;
+  for (const p of proposals) {
+    const pending = await AiLearningProposal.find({ companyId, status: 'pending' }).select('question key sourceCallIds sourceCount confidence answer kind').limit(200).lean();
+    const same = findSimilar(pending, p.question);
+    if (same) {
+      if ((same.sourceCallIds || []).map(String).includes(String(doc._id))) continue;
+      const count = (same.sourceCount || 1) + 1;
+      await AiLearningProposal.updateOne({ _id: same._id, companyId }, {
+        $addToSet: { sourceCallIds: doc._id },
+        $set: { sourceCount: count, confidence: Math.max(same.confidence || 0, p.confidence), expiresAt, ...(count >= RECURRING_THRESHOLD ? { kind: 'recurring' } : {}), ...(!same.answer && p.answer ? { answer: p.answer } : {}) },
+      });
+    } else {
+      await AiLearningProposal.create({ companyId, status: 'pending', key: groupKey(p.question), kind: p.kind, question: p.question, answer: p.answer, sourceCallIds: [doc._id], sourceCount: 1, confidence: p.confidence, expiresAt });
+    }
+    n += 1;
+  }
+  return { ingested: n };
 }
 
 /** Compte les minutes d'un appel une seule fois (idempotent) dans le compteur mensuel. */

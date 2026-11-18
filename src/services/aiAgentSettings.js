@@ -51,6 +51,7 @@ export function defaultSettings() {
     maxCallMinutes: 8,
     monthlyMinutesCap: 200,
     retentionDays: 365,
+    learning: { enabled: true },
     listeningBench: { enabled: false, provider: 'alternate' },
   };
 }
@@ -97,6 +98,7 @@ export function toPublicSettings(doc, { companyNameFallback = '' } = {}) {
     maxCallMinutes: pick(s.maxCallMinutes, d.maxCallMinutes),
     monthlyMinutesCap: pick(s.monthlyMinutesCap, d.monthlyMinutesCap),
     retentionDays: pick(s.retentionDays, d.retentionDays),
+    learning: { enabled: pick(s.learning?.enabled, true) === true },
     listeningBench: {
       enabled: s.listeningBench?.enabled === true,
       provider: BENCH_PROVIDERS.includes(s.listeningBench?.provider) ? s.listeningBench.provider : 'alternate',
@@ -214,6 +216,7 @@ export function validateSettingsUpdate(body, { directoryEntryIds = [] } = {}) {
     for (const k of ['durationMinutes', 'daysAhead']) if (a[k] !== undefined) { const n = intIn(`appointment.${k}`, a[k], issues); if (n !== undefined) v[`appointment.${k}`] = n; }
   }
   for (const field of ['maxCallMinutes', 'monthlyMinutesCap', 'retentionDays']) if (has(field)) { const n = intIn(field, b[field], issues); if (n !== undefined) v[field] = n; }
+  if (has('learning')) { const l = b.learning || {}; if (l.enabled !== undefined) bool('learning.enabled', l.enabled); }
   if (has('listeningBench')) {
     const lb = b.listeningBench || {};
     if (lb.enabled !== undefined) bool('listeningBench.enabled', lb.enabled);
@@ -227,11 +230,17 @@ export function validateSettingsUpdate(body, { directoryEntryIds = [] } = {}) {
 const truthy = (v) => ['1', 'true', 'yes', 'on'].includes(String(v ?? '').trim().toLowerCase());
 export const allowedCompanyIds = (env = process.env) => String(env.AI_INBOUND_COMPANY_IDS || '').split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
 
-/** Drapeau AI_INBOUND_ENABLED ET entreprise dans AI_INBOUND_COMPANY_IDS : les deux sont désactivés par défaut. */
-export function pilotAvailability(companyId, env = process.env) {
+/**
+ * Agent IA ouvert pour l'entreprise : drapeau AI_INBOUND_ENABLED (désactivé par défaut) ET (entreprise dans AI_INBOUND_COMPANY_IDS OU
+ * abonnement actif à une formule portant `ai_agent=true`). L'interrupteur `enabled` de l'entreprise reste ensuite décisif.
+ * @param {{ aiAgentPlan?: boolean }} plan  abonnement actif à la formule « Secrétariat avec agent IA »
+ */
+export function pilotAvailability(companyId, env = process.env, { aiAgentPlan = false } = {}) {
   const pilotEnabled = truthy(env.AI_INBOUND_ENABLED);
-  const companyAllowed = Boolean(companyId) && allowedCompanyIds(env).includes(String(companyId));
-  return { pilotEnabled, companyAllowed, available: pilotEnabled && companyAllowed };
+  const listed = Boolean(companyId) && allowedCompanyIds(env).includes(String(companyId));
+  const subscribed = Boolean(companyId) && aiAgentPlan === true;
+  const companyAllowed = listed || subscribed;
+  return { pilotEnabled, companyAllowed, available: pilotEnabled && companyAllowed, source: listed ? 'whitelist' : subscribed ? 'subscription' : null };
 }
 
 // ---------------------------------------------------------------- horaires et décision de routage

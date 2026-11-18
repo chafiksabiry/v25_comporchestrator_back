@@ -1,3 +1,4 @@
+import { aiAgentFromMetadata } from '../services/planLimits.js';
 import { createLaunchOffersService } from '../services/launchOffers.js';
 import mongoose from 'mongoose';
 import { guardCompanyAccess } from '../middleware/companyGuard.js';
@@ -283,6 +284,8 @@ export const subscriptionController = {
               metadata: product.metadata || {},
               /** Palier canonique (nomad_solo, accueil, full_scope, multi_clients) ; anciennes valeurs converties. */
               callcenterTier: callcenterTierFromMetadata(product.metadata),
+              /** Formule « Secrétariat avec agent IA » (palier accueil + `ai_agent=true`) : distincte de l'Accueil seul (autre prix, autre ligne). */
+              ...(() => { const ai = aiAgentFromMetadata(product.metadata); return { aiAgent: ai.aiAgent, aiAgentIncludedMinutes: ai.aiAgentIncludedMinutes, aiAgentOverageCentsTtc: ai.aiAgentOverageCentsTtc }; })(),
               isPopular: Boolean(dbPlan.isPopular),
               maxGigs: stripeLimits.maxGigs,
               maxReps: stripeLimits.maxReps,

@@ -24,6 +24,7 @@ const { default: AiAgentSettings } = await import('../models/AiAgentSettings.js'
 const { default: AiInboundCall } = await import('../models/AiInboundCall.js');
 const { default: AiMinutesUsage } = await import('../models/AiMinutesUsage.js');
 const { default: ReceptionDirectory } = await import('../models/ReceptionDirectory.js');
+const { default: AiLearnedAnswer } = await import('../models/AiLearnedAnswer.js');
 const { PhoneNumber } = await import('../models/PhoneNumber.js');
 const { default: CallRecordingStatus } = await import('../models/CallRecordingStatus.js');
 const { Subscription } = await import('../models/Subscription.js');
@@ -55,13 +56,14 @@ beforeEach(() => {
   AiAgentSettings.findOne = () => lean(aiSettings);
   ReceptionDirectory.findOne = () => lean({ general: { companyName: 'Cabinet Test' }, entries: [] });
   AiMinutesUsage.findOne = () => lean(null);
+  AiLearnedAnswer.find = () => lean([]);
   aiCalls = [];
   AiInboundCall.create = async (doc) => { const r = { _id: '64b0000000000000000000f1', ...doc }; aiCalls.push(r); return r; };
   AiInboundCall.updateOne = async (f, u) => { Object.assign(aiCalls[0] || {}, u.$set || {}); return { modifiedCount: 1 }; };
   AiInboundCall.countDocuments = async () => 0;
   env = { DASH_CALLS_API_URL: 'https://dash.test', PUBLIC_API_BASE_URL: 'https://orch.test/api' }; dashOk = true; dashHits = 0; now = EVENING;
   AI.setAiInboundDeps({
-    env, now: () => now, sleep: async () => {},
+    env, now: () => now, sleep: async () => {}, planLimits: async () => null,
     fetch: async () => { dashHits += 1; if (!dashOk) return { ok: false, status: 503, json: async () => ({}) }; return { ok: true, status: 201, json: async () => ({ sessionId: 's', streamUrl: 'wss://dash.test/ai-voice-stream/t0k', provider: 'gemini', model: 'm' }) }; },
   });
 });

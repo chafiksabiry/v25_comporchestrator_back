@@ -21,6 +21,8 @@ const { default: FollowUpItem } = await import('../models/FollowUpItem.js');
 const { default: Contact } = await import('../models/Contact.js');
 const { default: SecretariatTools } = await import('../models/SecretariatTools.js');
 const { default: CallQueue } = await import('../models/CallQueue.js');
+const { default: AiLearningProposal } = await import('../models/AiLearningProposal.js');
+const { default: AiLearnedAnswer } = await import('../models/AiLearnedAnswer.js');
 const { clearCompanyCache } = await import('../middleware/companyScope.js');
 const { aiAgentController: ctl, aiInboundTool, aiInboundReport, aiInboundAfterStream } = await import('../controllers/aiAgentController.js');
 
@@ -64,7 +66,7 @@ assert.equal(S.validateSettingsUpdate({ transferTargets: [E1] }, { directoryEntr
 assert.deepEqual(S.validateSettingsUpdate({ transferTargets: [E1, E1] }, { directoryEntryIds: [E1] }).value.transferTargets, [E1]);
 
 // ================================================================ disponibilité (recette) : désactivée par défaut
-assert.deepEqual(S.pilotAvailability(A, {}), { pilotEnabled: false, companyAllowed: false, available: false });
+assert.deepEqual(S.pilotAvailability(A, {}), { pilotEnabled: false, companyAllowed: false, available: false, source: null });
 assert.equal(S.pilotAvailability(A, { AI_INBOUND_ENABLED: 'true' }).available, false, 'liste blanche vide');
 assert.equal(S.pilotAvailability(A, { AI_INBOUND_COMPANY_IDS: A }).available, false, 'drapeau absent');
 assert.equal(S.pilotAvailability(A, { AI_INBOUND_ENABLED: 'true', AI_INBOUND_COMPANY_IDS: `${B}, ${A}` }).available, true);
@@ -165,7 +167,7 @@ assert.deepEqual(K.verifyAfterStreamState({ secret: 'x', token: st }), { company
 assert.equal(K.verifyAfterStreamState({ secret: 'y', token: st }), null);
 
 // ================================================================ base simulée
-const store = { settings: [], calls: [], usage: [], inbound: [], items: [], contacts: [], dirs: [] };
+const store = { settings: [], calls: [], usage: [], inbound: [], items: [], contacts: [], dirs: [], proposals: [], learned: [] };
 const S2 = (x) => String(x);
 const matches = (doc, f) => Object.entries(f).every(([k, val]) => {
   const cur = k.split('.').reduce((o, p) => (o == null ? undefined : Array.isArray(o) ? o.map((x) => x?.[p]) : o[p]), doc);
@@ -187,6 +189,7 @@ const apply = (doc, upd) => {
   for (const [k, val] of Object.entries(upd.$set || {})) setPath(doc, k, val);
   for (const [k, val] of Object.entries(upd.$inc || {})) setPath(doc, k, (k.split('.').reduce((o, p) => o?.[p], doc) || 0) + val);
   for (const [k, val] of Object.entries(upd.$push || {})) { doc[k] = doc[k] || []; if (val && val.$each) doc[k].push(...val.$each); else doc[k].push(val); }
+  for (const [k, val] of Object.entries(upd.$addToSet || {})) { doc[k] = doc[k] || []; if (!doc[k].map(String).includes(String(val))) doc[k].push(val); }
   if (!Object.keys(upd).some((x) => x.startsWith('$'))) Object.assign(doc, upd);
   return doc;
 };
@@ -210,6 +213,7 @@ const model = (M, key) => {
 };
 model(AiAgentSettings, 'settings'); model(AiInboundCall, 'calls'); model(AiMinutesUsage, 'usage'); model(InboundCall, 'inbound');
 model(FollowUpItem, 'items'); model(Contact, 'contacts'); model(ReceptionDirectory, 'dirs');
+model(AiLearningProposal, 'proposals'); model(AiLearnedAnswer, 'learned');
 FollowUpItem.findOne = (f) => { const r = store.items.find((x) => matches(x, f)); return r ? Object.assign(Promise.resolve({ ...r, save: async function save() { Object.assign(r, this); } }), { lean: async () => r }) : Object.assign(Promise.resolve(null), { lean: async () => null }); };
 InboundSettings.findOne = () => q(null);
 SecretariatTools.findOne = () => q(null);
@@ -219,6 +223,7 @@ CallQueue.find = () => q(queueRows);
 let dashCalls = [];
 let dashReply = () => ({ ok: true, status: 201, json: async () => ({ sessionId: 's1', streamUrl: 'wss://dash.test/ai-voice-stream/abc', provider: 'gemini', model: 'gemini-live-2.5-flash-native-audio' }) });
 let twilioUpdates = [];
+const plans = {};
 let released = [];
 const env = { AI_INBOUND_ENABLED: 'true', AI_INBOUND_COMPANY_IDS: A, DASH_CALLS_API_URL: 'https://dash.test', PUBLIC_API_BASE_URL: 'https://orch.test/api', TWILIO_AUTH_TOKEN: 'x' };
 let NOW = EVENING;
@@ -230,6 +235,7 @@ AI.setAiInboundDeps({
   twilio: async () => ({ calls: (sid) => ({ update: async (p) => { twilioUpdates.push({ sid, ...p }); }, recordings: { create: async () => ({ sid: 'RE1' }) } }) }),
   transfer: async () => ({ creditFactor: async () => 1, minutes: async () => 100 }),
   releaseCall: async (sid) => { released.push(sid); },
+  planLimits: async (companyId) => plans[S2(companyId)] || null,
 });
 const reset = () => {
   for (const k of Object.keys(store)) store[k] = [];
@@ -471,8 +477,9 @@ r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, knowle
 const pipelines = [];
 AiInboundCall.updateMany = async (f, u) => { pipelines.push(['calls', S2(f.companyId), u]); return {}; };
 FollowUpItem.updateMany = async (f, u) => { pipelines.push(['items', S2(f.companyId), f.fromAiAgent, u]); return {}; };
+AiLearningProposal.updateMany = async (f, u) => { pipelines.push(['proposals', S2(f.companyId), f.status, u]); return {}; };
 r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, retentionDays: 90 } }), r); assert.equal(r.code, 200);
-assert.deepEqual(pipelines.map((p) => p[0]), ['calls', 'items']); assert.equal(pipelines[0][2][0].$set.expiresAt.$add[1], 90 * 86400000); assert.equal(pipelines[1][2], true);
+assert.deepEqual(pipelines.map((p) => p[0]), ['calls', 'items', 'proposals'], 'propositions en attente : même rétention'); assert.equal(pipelines[0][2][0].$set.expiresAt.$add[1], 90 * 86400000); assert.equal(pipelines[1][2], true);
 r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, voice: 'male', addressForm: 'tu', maxCallMinutes: 10 } }), r);
 assert.equal(r.code, 200); assert.equal(r.body.data.settings.voice, 'male'); assert.equal(r.body.data.settings.addressForm, 'tu'); assert.equal(r.body.data.settings.maxCallMinutes, 10);
 r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, enabled: true, schedule: { always: false, slots: [] } } }), r);
@@ -537,3 +544,124 @@ console.log('aiAgentPilot.test.js : OK');
   globalThis.fetch = realFetch;
 }
 console.log('aiAgentPilot.test.js (appels simultanés) : OK');
+
+// ================================================================ apprentissage validé par le titulaire
+{
+  const Lg = await import('../services/aiLearning.js');
+  const { aiLearningController: lc2, aiInboundLearning } = await import('../controllers/aiLearningController.js');
+  store.proposals = []; store.learned = [];
+  AiLearnedAnswer.deleteOne = async (f) => { const i = store.learned.findIndex((x) => matches(x, f)); if (i < 0) return { deletedCount: 0 }; store.learned.splice(i, 1); return { deletedCount: 1 }; };
+  // Anonymisation : aucune donnée personnelle de l'appelant dans une réponse apprise.
+  const an = Lg.anonymize('Je m\'appelle Jeanne Dupont, rappelez-moi au 06 12 34 56 78 ou jeanne@exemple.fr ; Mme Martin aussi. IBAN FR76 3000 6000 0112 3456 7890 189', { names: ['Jeanne Dupont'] });
+  assert.ok(!/Jeanne|Dupont|Martin|06 12|jeanne@|3000 6000/.test(an), an);
+  assert.match(an, /\[nom\]/); assert.match(an, /\[numéro\]/); assert.match(an, /\[e-mail\]/);
+  assert.equal(Lg.anonymize('Nous ouvrons de 9 h à 18 h, le 18/11/2026.'), 'Nous ouvrons de 9 h à 18 h, le 18/11/2026.', 'horaires et dates gardés');
+  assert.ok(Lg.similarity('Quels sont vos horaires le samedi ?', 'Vous êtes ouverts le samedi, quels horaires ?') >= 0.6);
+  assert.ok(Lg.similarity('Quels sont vos horaires ?', 'Combien coûte un devis ?') < 0.3);
+  const cp = Lg.cleanProposals([{ kind: 'bidon', question: 'Le parking est-il gratuit pour M. Durand ?', proposedAnswer: 'Oui, appelez le 0612345678', confidence: 3 }, { question: '' }, ...Array(10).fill({ question: 'livraison express possible' })], { names: [] });
+  assert.equal(cp.length, 5, 'au plus 5 propositions par appel'); assert.equal(cp[0].kind, 'unanswered'); assert.equal(cp[0].confidence, 1);
+  assert.match(cp[0].question, /M\. \[nom\]/); assert.match(cp[0].answer, /\[numéro\]/);
+  // Ingestion : une analyse par appel, regroupement des questions similaires, isolement par entreprise.
+  reset(); await route();
+  const callA1 = store.calls[0]; callA1.caller = { known: true, name: 'Jeanne Dupont' };
+  const prop = (q, a = '') => ({ kind: 'unanswered', question: q, proposedAnswer: a, confidence: 0.7 });
+  let ing = await AI.ingestLearning(callA1, { proposals: [prop('Êtes-vous ouverts le samedi ?')], unanswered: 1 });
+  assert.equal(ing.ingested, 1); assert.equal(store.proposals.length, 1); assert.equal(store.proposals[0].status, 'pending');
+  assert.deepEqual(await AI.ingestLearning(callA1, { proposals: [prop('autre')] }), { ingested: 0, alreadyAnalyzed: true }, 'une seule analyse par appel');
+  const mkCall = (company, sid) => { const c = { _id: newId(), companyId: company, callSid: sid, from: '+33600000000', status: 'completed', startedAt: new Date(NOW), actions: [], timeline: [] }; store.calls.push(c); return c; };
+  for (const sid of ['CAg2', 'CAg3']) await AI.ingestLearning(mkCall(A, sid), { proposals: [prop('Vous êtes ouverts le samedi ?', 'Oui, de 9 h à 12 h.')] });
+  assert.equal(store.proposals.length, 1, 'questions similaires regroupées');
+  assert.equal(store.proposals[0].sourceCount, 3); assert.equal(store.proposals[0].kind, 'recurring', 'demande récurrente (3 appels)'); assert.equal(store.proposals[0].answer, 'Oui, de 9 h à 12 h.');
+  await AI.ingestLearning(mkCall(B, 'CAb1'), { proposals: [prop('Êtes-vous ouverts le samedi ?')] });
+  assert.equal(store.proposals.length, 2, 'entreprise B : proposition séparée, jamais fusionnée avec A');
+  assert.equal(store.proposals.filter((x) => S2(x.companyId) === A)[0].sourceCount, 3);
+  // Rien n'est utilisé avant validation : la session suivante n'envoie aucune proposition en attente.
+  reset(); store.proposals = [{ _id: 'pz', companyId: A, status: 'pending', question: 'Q en attente', answer: 'R en attente', sourceCallIds: [], expiresAt: new Date(NOW + 1e9) }];
+  await route();
+  assert.deepEqual(JSON.parse(dashCalls.at(-1).init.body).learnedAnswers, [], 'aucune réponse validée : rien d’injecté');
+  assert.ok(!dashCalls.at(-1).init.body.includes('R en attente'));
+  // Validation par le titulaire (routes), puis injection dès l'appel suivant.
+  globalThis.fetch = async (url) => { const id = new URL(url).searchParams.get('userId'); return { ok: true, json: async () => ({ data: who[id] || {} }) }; };
+  r = res(); await lc2.listProposals(asUser('member1', { query: { companyId: A } }), r); assert.equal(r.code, 403, 'titulaire seulement');
+  r = res(); await lc2.listProposals(asUser('owner1', { query: { companyId: A } }), r); assert.equal(r.code, 200); assert.equal(r.body.data.counts.pending, 1);
+  r = res(); await lc2.validate(asUser('owner1', { body: { companyId: B }, params: { id: 'pz' } }), r); assert.equal(r.code, 403, 'autre entreprise');
+  store.proposals.push({ _id: '64b0000000000000000000d1', companyId: B, status: 'pending', question: 'Q de B', answer: 'R de B', sourceCallIds: [], expiresAt: new Date(NOW + 1e9) });
+  r = res(); await lc2.validate(asUser('owner1', { body: { companyId: A }, params: { id: '64b0000000000000000000d1' } }), r); assert.equal(r.code, 404, 'proposition de B introuvable depuis A');
+  store.proposals[0]._id = '64b0000000000000000000d0';
+  r = res(); await lc2.validate(asUser('owner1', { body: { companyId: A, answer: '' }, params: { id: '64b0000000000000000000d0' } }), r); assert.equal(r.code, 400, 'réponse vide refusée');
+  r = res(); await lc2.validate(asUser('owner1', { body: { companyId: A, answer: 'Oui, le samedi de 9 h à 12 h. Contact : 0611223344' }, params: { id: '64b0000000000000000000d0' } }), r);
+  assert.equal(r.code, 200); assert.match(r.body.data.answer.answer, /\[numéro\]/, 'modifiée puis anonymisée'); assert.equal(store.proposals[0].status, 'validated');
+  const keep = { learned: store.learned, proposals: store.proposals };
+  reset(); Object.assign(store, keep); await route();
+  const injected = JSON.parse(dashCalls.at(-1).init.body).learnedAnswers;
+  assert.equal(injected.length, 1); assert.equal(injected[0].question, 'Q en attente'); assert.match(injected[0].answer, /samedi de 9 h/);
+  // Refus.
+  store.proposals.push({ _id: '64b0000000000000000000d2', companyId: A, status: 'pending', question: 'Q2', answer: '', sourceCallIds: [], expiresAt: new Date(NOW + 1e9) });
+  r = res(); await lc2.reject(asUser('owner1', { body: { companyId: A }, params: { id: '64b0000000000000000000d2' } }), r); assert.equal(r.code, 200);
+  assert.equal(store.proposals.find((x) => x._id === '64b0000000000000000000d2').status, 'rejected');
+  assert.ok(store.proposals.find((x) => x._id === '64b0000000000000000000d2').expiresAt.getTime() <= NOW + 31 * 86400000, 'refusée : supprimée sous 30 jours');
+  // « Corriger cette réponse » depuis une fiche : nom et numéro de l'appelant anonymisés ; fiche d'une autre entreprise refusée.
+  const callFix = store.calls[0]; callFix.caller = { known: true, name: 'Paul Leroy' };
+  r = res(); await lc2.addAnswer(asUser('owner1', { body: { companyId: A, callId: S2(callFix._id), kind: 'faq', question: 'Paul Leroy demande le tarif', answer: 'Le bilan coûte 50 €, rappeler Paul au +33612345678' } }), r);
+  assert.equal(r.code, 201); assert.ok(!/Paul|Leroy|612345678/.test(JSON.stringify(r.body.data.answer)), JSON.stringify(r.body.data.answer));
+  r = res(); await lc2.addAnswer(asUser('owner1', { body: { companyId: A, callId: '64b00000000000000000bbbb', question: 'x', answer: 'y' } }), r); assert.equal(r.code, 404);
+  r = res(); await lc2.addAnswer(asUser('owner1', { body: { companyId: A, kind: 'instruction', answer: 'Toujours proposer le créneau du mardi.' } }), r); assert.equal(r.code, 201);
+  r = res(); await lc2.listAnswers(asUser('owner1', { query: { companyId: A } }), r); assert.equal(r.body.data.answers.length, 3);
+  const someId = r.body.data.answers[0].id;
+  r = res(); await lc2.deleteAnswer(asUser('owner1', { query: { companyId: B }, params: { id: someId } }), r); assert.equal(r.code, 403);
+  r = res(); await lc2.deleteAnswer(asUser('owner1', { query: { companyId: A }, params: { id: someId } }), r); assert.equal(r.code, 200);
+  // Désactivable : l'analyse n'est plus prise en compte.
+  store.settings[0].learning = { enabled: false };
+  const before = store.proposals.length;
+  assert.equal((await AI.ingestLearning(mkCall(A, 'CAoff'), { proposals: [prop('Nouvelle question ?')] })).disabled, true);
+  assert.equal(store.proposals.length, before);
+  store.settings[0].learning = { enabled: true };
+  // Route interne : jeton d'appel obligatoire, appel du jeton.
+  r = res(); await aiInboundLearning({ headers: {}, params: { callSid: SID }, body: {} }, r); assert.equal(r.code, 401);
+  // Mesure : progression par semaine.
+  const wk = Lg.weeklyMetrics([
+    { startedAt: '2026-11-02T10:00:00Z', status: 'completed', actions: [{ type: 'search_knowledge', ok: true, label: 'Rien dans la base' }] },
+    { startedAt: '2026-11-03T10:00:00Z', status: 'transferred', transfer: { entryName: 'X' }, learning: { unanswered: 2 } },
+    { startedAt: '2026-11-10T10:00:00Z', status: 'completed', learning: { unanswered: 0 } },
+  ]);
+  assert.deepEqual(wk.map((w) => [w.week, w.calls, w.resolutionRate, w.unanswered]), [['2026-11-02', 2, 0.5, 3], ['2026-11-09', 1, 1, 0]]);
+  r = res(); await lc2.summary(asUser('owner1', { query: { companyId: A } }), r); assert.equal(r.code, 200); assert.ok(Array.isArray(r.body.data.weeks));
+  globalThis.fetch = realFetch;
+}
+console.log('aiAgentPilot.test.js (apprentissage) : OK');
+
+// ================================================================ formule « Secrétariat avec agent IA » (abonnement ai_agent=true)
+{
+  const { aiAgentFromMetadata } = await import('../services/planLimits.js');
+  const { callcenterTierFromMetadata } = await import('../services/callcenterTier.js');
+  const meta = { harx_product: 'callcenter', callcenter_tier: 'accueil', ai_agent: 'true', ai_agent_included_minutes: '200', ai_agent_overage_cents_ttc: '39' };
+  assert.deepEqual(aiAgentFromMetadata(meta), { aiAgent: true, aiAgentIncludedMinutes: 200, aiAgentOverageCentsTtc: 39 });
+  assert.deepEqual(aiAgentFromMetadata({ harx_product: 'callcenter', callcenter_tier: 'accueil' }), { aiAgent: false, aiAgentIncludedMinutes: null, aiAgentOverageCentsTtc: null });
+  assert.equal(callcenterTierFromMetadata(meta), 'accueil', 'palier Accueil : mêmes droits (sièges, enregistrement, ligne incluse)');
+  // Disponibilité : abonnement ai_agent → disponible ; ni abonnement ni liste blanche → non ; drapeau global coupé → non.
+  assert.deepEqual(S.pilotAvailability(B, { AI_INBOUND_ENABLED: 'true', AI_INBOUND_COMPANY_IDS: A }, { aiAgentPlan: true }), { pilotEnabled: true, companyAllowed: true, available: true, source: 'subscription' });
+  assert.equal(S.pilotAvailability(B, { AI_INBOUND_ENABLED: 'true' }, { aiAgentPlan: false }).available, false);
+  assert.equal(S.pilotAvailability(B, { AI_INBOUND_ENABLED: 'false' }, { aiAgentPlan: true }).available, false, 'drapeau global coupé');
+  plans[B] = { aiAgent: true, aiAgentIncludedMinutes: 300, aiAgentOverageCentsTtc: 45 };
+  assert.equal((await AI.resolveAvailability(B)).source, 'subscription');
+  delete plans[B];
+  assert.equal((await AI.resolveAvailability(B)).available, false, 'sans abonnement, hors liste blanche');
+  env.AI_INBOUND_ENABLED = 'false'; plans[B] = { aiAgent: true };
+  assert.equal((await AI.resolveAvailability(B)).available, false, 'drapeau global coupé');
+  env.AI_INBOUND_ENABLED = 'true';
+  // Routage : l'entreprise B (hors liste blanche) abonnée à la formule voit l'agent décrocher ; l'interrupteur reste décisif.
+  reset();
+  const lineB = { _id: 'lB', companyId: B, phoneNumber: '+33150000000', gigId: null };
+  delete plans[B];
+  assert.equal(await AI.tryAiInbound({ line: lineB, to: '+33150000000', from: '+33612345678', callSid: SID_B, signatureValid: () => true }), null, 'sans abonnement');
+  plans[B] = { aiAgent: true };
+  assert.match(await AI.tryAiInbound({ line: lineB, to: '+33150000000', from: '+33612345678', callSid: SID_B, signatureValid: () => true }) || '', /<Connect /, 'abonnement ai_agent=true : agent ouvert');
+  reset(); store.settings[1].enabled = false;
+  assert.equal(await AI.tryAiInbound({ line: lineB, to: '+33150000000', from: '+33612345678', callSid: SID_B, signatureValid: () => true }), null, 'interrupteur coupé : prioritaire');
+  // Compteur : minutes incluses et prix de dépassement du produit ; facturation toujours désactivée.
+  const uv = K.usageView({ period: '2026-11', minutesUsed: 310, cap: 1000 }, {}, { aiAgentIncludedMinutes: 300, aiAgentOverageCentsTtc: 45 });
+  assert.deepEqual([uv.includedMinutes, uv.overageMinutes, uv.overageUnitPriceTtcCents, uv.overageAmountTtcCents, uv.billingEnabled], [300, 10, 45, 450, false]);
+  assert.equal(K.usageView({ minutesUsed: 0, cap: 1 }, {}, { aiAgentIncludedMinutes: null }).includedMinutes, 200, 'sans valeur produit : défaut');
+  delete plans[B];
+}
+console.log('aiAgentPilot.test.js (formule agent IA) : OK');

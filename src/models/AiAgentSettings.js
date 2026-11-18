@@ -31,6 +31,8 @@ const schema = new mongoose.Schema(
     maxCallMinutes: { type: Number, default: 8, min: 3, max: 15 },
     monthlyMinutesCap: { type: Number, default: 200 },
     retentionDays: { type: Number, default: 365, min: 30, max: 365 },
+    /** Apprentissage validé par le titulaire (analyse après appel) : désactivable. Les réponses déjà validées restent utilisées. */
+    learning: { enabled: { type: Boolean, default: true } },
     listeningBench: { enabled: { type: Boolean, default: false }, provider: { type: String, default: 'alternate' } },
     updatedById: { type: String, default: '' },
   },
