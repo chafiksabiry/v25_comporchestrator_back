@@ -1,5 +1,5 @@
 import { aiAgentFromMetadata } from '../services/planLimits.js';
-import { createLaunchOffersService } from '../services/launchOffers.js';
+import { promotionCodesAllowed } from '../services/promotionCode.js';
 import mongoose from 'mongoose';
 import { guardCompanyAccess } from '../middleware/companyGuard.js';
 import { SubscriptionPlan } from '../models/SubscriptionPlan.js';
@@ -176,13 +176,15 @@ async function registerCallcenterPlans(stripePrices) {
   }
 }
 
-const launchOffers = createLaunchOffersService({ getClient: () => stripeService.sharedClient() });
-
 export const subscriptionController = {
-  /** GET /api/subscriptions/launch-offers (public) : remises de lancement Call Centre lues dans Stripe, mises en cache 5 min. */
+  /**
+   * GET /api/subscriptions/launch-offers (public). Grille 2026-11 : plus aucune offre de lancement sur CLOUD et NOMAD (décision du 18/11/2026,
+   * les prix sont présentés comme des « Tarifs de lancement »). La route ne publiait que des offres CLOUD et NOMAD : elle renvoie une liste vide,
+   * sans lire les coupons Stripe. Elle reste en place pour les pages déjà chargées qui l'appellent encore.
+   */
   getLaunchOffers: async (_req, res) => {
     res.set('Cache-Control', 'public, max-age=60');
-    res.json(await launchOffers.get());
+    res.json({ offers: [] });
   },
 
   getPlans: async (req, res) => {
@@ -362,10 +364,36 @@ export const subscriptionController = {
       if (!access) return;
       if (String(userId) !== String(access.userId)) return res.status(403).json({ error: 'Forbidden', code: 'forbidden' });
 
-      // Code promotionnel (offre de lancement) : abonnement Stripe uniquement, résolu avant toute création de paiement.
+      let resolved;
+      try {
+        resolved = await resolvePlanByPriceId(priceId);
+      } catch (err) {
+        if (err?.code === 'STRIPE_PRICE_MODE_MISMATCH') {
+          return res.status(400).json({
+            error: 'stripe_price_mode_mismatch',
+            message: err.message,
+          });
+        }
+        throw err;
+      }
+      if (!resolved) {
+        return res.status(404).json({ error: 'Plan not found for this priceId' });
+      }
+      const { plan, stripePriceId: effectivePriceId } = resolved;
+      // Offres CLOUD et NOMAD (grille 2026-11, « Tarifs de lancement ») : aucun code promotionnel, ni saisi par le client ni transmis par la page.
+      // Offres TAAS : inchangé (code facultatif). Vérifié avant toute création de paiement.
+      const allowPromotionCodes = promotionCodesAllowed(resolved.productMetadata ?? plan.metadata);
+      const hasPromotionCode = promotionCode != null && String(promotionCode).trim() !== '';
+      if (hasPromotionCode && !allowPromotionCodes) {
+        return res.status(400).json({
+          error: 'promotion_code_not_allowed',
+          message: 'Aucun code promotionnel ne s\u2019applique à cette offre : son prix est déjà un tarif de lancement.',
+        });
+      }
+      // Code promotionnel (offres TAAS) : abonnement Stripe uniquement, résolu avant toute création de paiement.
       let promotionCodeId = null;
       let promotionCodeText = null;
-      if (promotionCode != null && String(promotionCode).trim()) {
+      if (hasPromotionCode) {
         if (provider !== 'stripe') {
           return res.status(400).json({
             error: 'promotion_code_unsupported',
@@ -386,22 +414,6 @@ export const subscriptionController = {
         }
       }
 
-      let resolved;
-      try {
-        resolved = await resolvePlanByPriceId(priceId);
-      } catch (err) {
-        if (err?.code === 'STRIPE_PRICE_MODE_MISMATCH') {
-          return res.status(400).json({
-            error: 'stripe_price_mode_mismatch',
-            message: err.message,
-          });
-        }
-        throw err;
-      }
-      if (!resolved) {
-        return res.status(404).json({ error: 'Plan not found for this priceId' });
-      }
-      const { plan, stripePriceId: effectivePriceId } = resolved;
       // Devise choisie par le visiteur (mêmes montants en EUR, USD, GBP) si le prix Stripe la propose ; sinon celle du prix.
       const chosenCurrency = pickCurrency(requestedCurrency, resolved.amounts, resolved.currency);
       const amountCents = resolved.amounts?.[chosenCurrency] ?? resolved.amountCents;
@@ -470,7 +482,7 @@ export const subscriptionController = {
             metadata,
             promotionCodeId,
             chosenCurrency,
-            { locale: stripeLocale }
+            { locale: stripeLocale, allowPromotionCodes }
           );
           payment.providerRef = session.id;
           payment.checkoutUrl = '';
@@ -508,7 +520,7 @@ export const subscriptionController = {
           metadata,
           promotionCodeId,
           chosenCurrency,
-          { locale: stripeLocale }
+          { locale: stripeLocale, allowPromotionCodes }
         );
         checkoutUrl = session.url;
         payment.providerRef = session.id;
@@ -634,7 +646,8 @@ export const subscriptionController = {
     if (String(userId) !== String(access.userId)) return res.status(403).json({ error: 'Forbidden', code: 'forbidden' });
     try {
       console.log(`💳 Creating checkout session for user ${userId}, plan ${planName || 'unknown'}, price ${priceId}`);
-      
+      // Offres CLOUD et NOMAD : pas de champ de code promotionnel (voir initPopupCheckout) ; offres TAAS : inchangé.
+      const allowPromotionCodes = await stripeService.priceAllowsPromotionCodes(priceId);
       const session = await stripeService.createCheckoutSession(
         userId,
         priceId,
@@ -643,7 +656,7 @@ export const subscriptionController = {
         { companyId }, // Pass metadata
         null,
         null,
-        { locale: stripeLocaleFromRequest(req) }
+        { locale: stripeLocaleFromRequest(req), allowPromotionCodes }
       );
 
       res.json({ 
