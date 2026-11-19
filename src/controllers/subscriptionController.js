@@ -18,6 +18,8 @@ import { config } from '../config/env.js';
 import { handlePhoneLineInvoiceEvent, handlePhoneLineSubscriptionDeleted } from '../services/phoneLineSubscription.js';
 import { currencyForCountry, pickCurrency } from '../services/currency.js';
 import { stripeLocaleFromRequest } from '../services/stripeLocale.js';
+import { callcenterTierFromMetadata } from '../services/callcenterTier.js';
+import { soloCheckoutEligibility } from '../services/numberAvailability.js';
 
 function numberOrNull(value) {
   const n = Number(value);
@@ -259,6 +261,12 @@ export const subscriptionController = {
           error: 'promotion_code_not_allowed',
           message: 'Aucun code promotionnel ne s\u2019applique à cette offre : son prix est déjà un tarif de lancement.',
         });
+      }
+      // Nomad Solo (décision du 19/11) : souscrit seulement là où un numéro est disponible, vérifié ici AVANT toute création de
+      // paiement, à partir du profil enregistré (pays de résidence, pays de la pièce FR/GB/US) ; jamais d'après le corps de la requête.
+      if (callcenterTierFromMetadata(resolved.productMetadata ?? plan.metadata) === 'nomad_solo') {
+        const eligibility = await soloCheckoutEligibility(req, companyId);
+        if (!eligibility.ok) return res.status(eligibility.status).json(eligibility.body);
       }
       // Code promotionnel (offres TAAS) : abonnement Stripe uniquement, résolu avant toute création de paiement.
       let promotionCodeId = null;
@@ -515,6 +523,11 @@ export const subscriptionController = {
     if (!access) return;
     if (String(userId) !== String(access.userId)) return res.status(403).json({ error: 'Forbidden', code: 'forbidden' });
     try {
+      // Même garde Nomad Solo que /checkout/init (route ancienne, gardée pour ne pas contourner la vérification des numéros).
+      if (callcenterTierFromMetadata(await stripeService.priceProductMetadata(priceId)) === 'nomad_solo') {
+        const eligibility = await soloCheckoutEligibility(req, companyId);
+        if (!eligibility.ok) return res.status(eligibility.status).json(eligibility.body);
+      }
       console.log(`💳 Creating checkout session for user ${userId}, plan ${planName || 'unknown'}, price ${priceId}`);
       // Offres CLOUD et NOMAD : pas de champ de code promotionnel (voir initPopupCheckout) ; offres TAAS : inchangé.
       const allowPromotionCodes = await stripeService.priceAllowsPromotionCodes(priceId);
