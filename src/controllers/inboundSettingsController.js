@@ -3,6 +3,7 @@ import InboundSettings from '../models/InboundSettings.js';
 import { KINDS, audioVersion, isMp3, toPublicSettings, validateSettingsInput } from '../services/inboundSettings.js';
 import { callerAccess, ScopeError } from '../middleware/companyScope.js';
 import { phoneNumberController } from './phoneNumberController.js';
+import { inboundWebhookUrls } from '../services/inboundWebhook.js';
 import { COUNTRY_CATALOG, validatePrefixList } from '../services/outboundDestinations.js';
 import { resolveOutboundPolicy } from '../services/outboundPolicy.js';
 import { loadCompanyPlanLimits } from '../services/planLimits.js';
@@ -79,8 +80,7 @@ export const inboundSettingsController = {
       const data = { ...toPublicSettings(doc, { recordingPolicy: await recordingPolicyOf(companyId) }), outbound: await outboundView(companyId) };
       // Le répondeur doit fonctionner même si aucun conseiller n'est connecté : on branche les lignes tout de suite.
       if (data.voicemailEnabled) {
-        const voiceUrl = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/inbound-call`;
-        phoneNumberController.ensureInboundWebhook(companyId, voiceUrl).catch((e) => console.error('ensureInboundWebhook (inbound-settings):', e.message));
+        phoneNumberController.ensureInboundWebhook(companyId, inboundWebhookUrls({ req })).catch((e) => console.error('ensureInboundWebhook (inbound-settings):', e.message));
       }
       res.json({ success: true, data });
     } catch (error) {
