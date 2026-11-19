@@ -16,7 +16,7 @@ import { outboundCreditFactor } from '../services/creditCoefficient.js';
 import { loadCompanyPlanLimits } from '../services/planLimits.js';
 import InboundSettings from '../models/InboundSettings.js';
 import { callerAccess } from '../middleware/companyScope.js';
-import { buildCallbackTwiml, buildRefusalTwiml, CALLBACK_WEBHOOK_PATH, ensureCallbackApp, pickDestination, signTicket, verifyTicket } from '../services/voicemailCallback.js';
+import { buildCallbackTwiml, buildRefusalTwiml, ensureCallbackApp, pickDestination, signTicket, verifyTicket } from '../services/voicemailCallback.js';
 
 const FOLLOW_UPS = ['new', 'to_call', 'called', 'closed'];
 const validId = (v) => mongoose.Types.ObjectId.isValid(String(v)) && String(v).length === 24;
@@ -146,7 +146,7 @@ export const voicemailController = {
         if (!secretaryOutboundAllowed(settings)) return fail(res, 403, SECRETARY_OUTBOUND_BLOCKED, 'secretary_outbound_disabled');
       }
       const client = phoneNumberService.twilioClient;
-      const appSid = await ensureCallbackApp(client, `https://${req.get('host')}${CALLBACK_WEBHOOK_PATH}`);
+      const appSid = await ensureCallbackApp(client, { req });
       const identity = voiceIdentity(userId);
       const token = await createVoiceToken({ client, accountSid: config.twilioAccountSid, identity, outgoingApplicationSid: appSid });
       const voicemailId = String(vm._id);
