@@ -5,6 +5,7 @@ import { countryOfE164 } from '../utils/e164Country.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { cancelLineSubscription } from './phoneLineSubscription.js';
 import { config } from '../config/env.js';
+import { foreignHarxHost, inboundWebhookUrls } from './inboundWebhook.js';
 import telnyx from 'telnyx';
 import twilio from 'twilio';
 import axios from 'axios';
@@ -644,6 +645,9 @@ class PhoneNumberService {
     const e164 = String(n?.phoneNumber || '');
     if (!e164.startsWith('+')) return false;
     if (n?.capabilities && n.capabilities.voice === false) return false;
+    // Garde-fou recette / production (même compte Twilio) : un numéro dont la voice_url pointe vers l'API HARX d'un AUTRE environnement
+    // appartient à cet environnement (sa base, pas la nôtre) : il n'est jamais proposé ni pris ici.
+    if (foreignHarxHost(n?.voiceUrl)) return false;
     return !(config.twilioInventoryExclude || []).includes(e164);
   }
 
@@ -687,7 +691,7 @@ class PhoneNumberService {
     return { owned: true, claimable: free.length > 0, number: n };
   }
 
-  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId, { bundleSid, addressSid, type, price, currency, paymentRef, isTrial, trialExpiresAt, billingModel, assignedRole, assignedAgentId, assignedAt } = {}) {
+  async purchaseTwilioNumber(phoneNumber, baseUrl, gigId, companyId, { bundleSid, addressSid, type, price, currency, paymentRef, isTrial, trialExpiresAt, billingModel, assignedRole, assignedAgentId, assignedAt, webhookUrls } = {}) {
     if (!companyId) {
       throw new Error('companyId is required to purchase a phone number');
     }
@@ -696,6 +700,8 @@ class PhoneNumberService {
 
     let purchasedNumber;
     let inventorySnapshot = null; // réglages « stock » du numéro pris dans l'inventaire, pour l'y remettre si l'achat échoue
+    // Branchement des appels entrants sur l'API de CET environnement (jamais celle de l'autre : recette et production partagent le compte Twilio).
+    const inbound = webhookUrls === undefined ? inboundWebhookUrls() : webhookUrls;
     try {
       // Numéro déjà dans l'inventaire Twilio : on le prend sans le racheter ; s'il est possédé mais pas proposable (déjà détenu par une entreprise,
       // sans voix ou exclu par la configuration), on refuse plutôt que de tenter un achat qui échouerait.
@@ -709,6 +715,7 @@ class PhoneNumberService {
       const purchaseOptions = {
         phoneNumber: phoneNumber,
         friendlyName: 'Gig Number:' + phoneNumber,
+        ...(inbound || {}),
       };
 
       const currentBundleSid = bundleSid
@@ -742,6 +749,10 @@ class PhoneNumberService {
           purchasedNumber = inventory.number;
           inventorySnapshot = inventoryStockSnapshot(inventory.number);
           console.log(`📦 Numéro pris dans l'inventaire Twilio : ${phoneNumber}`);
+          // Rebranché tout de suite sur cet environnement ; les réglages d'avant sont dans inventorySnapshot (rétablis par returnToInventory).
+          if (inbound && (inventory.number.voiceUrl !== inbound.voiceUrl || String(inventory.number.voiceMethod || '').toUpperCase() !== inbound.voiceMethod)) {
+            await this.twilioClient.incomingPhoneNumbers(String(inventory.number.sid)).update(inbound);
+          }
         } else {
           purchasedNumber = await this.twilioClient.incomingPhoneNumbers.create(purchaseOptions);
         }
@@ -840,7 +851,8 @@ class PhoneNumberService {
         type: type, // Save the original type (local, national, mobile)
         ...(isTrial ? { trial: { granted: true, expiresAt: trialExpiresAt } } : {}),
         // Numéro venu de l'inventaire HARX (pas commandé neuf) : un achat qui échoue le REMET EN STOCK (returnToInventory), il n'est pas rendu à Twilio.
-        ...(inventorySnapshot ? { inventory: inventorySnapshot } : {})
+        ...(inventorySnapshot ? { inventory: inventorySnapshot } : {}),
+        ...(inbound ? { inboundWebhook: inbound.voiceUrl } : {})
       }
     };
 
