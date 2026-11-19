@@ -248,7 +248,8 @@ export async function readInboundBody(scope, id, { purpose } = {}) {
   if (doc.provider !== access.provider) throw new SecretariatError('no_mailbox', ERRORS.no_mailbox); // la messagerie a changé depuis la lecture
   if (purpose === 'ai') assertAiAllowed(doc.provider); // aucune donnée Google envoyée à une IA
   const P = PROVIDERS[access.provider];
-  const out = await connect(s, access.provider, async (accessToken, http) => (P.readBodyFull
+  // Analyse IA : texte seul (aucune image intégrée lue) ; affichage : HTML d'origine avec ses images intégrées converties en `data:`.
+  const out = await connect(s, access.provider, async (accessToken, http) => (P.readBodyFull && purpose !== 'ai'
     ? P.readBodyFull({ http, accessToken, id: doc.providerMessageId })
     : { text: await P.readBody({ http, accessToken, id: doc.providerMessageId }) }));
   return out.html ? { text: out.text, html: out.html, aiAllowed: aiAllowedFor(doc.provider) } : { text: out.text, aiAllowed: aiAllowedFor(doc.provider) };
