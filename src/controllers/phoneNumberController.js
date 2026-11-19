@@ -41,11 +41,12 @@ import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
 import { insufficientInternationalMessages, outboundCreditFactor, outboundCreditDecision, recordCallDecision } from '../services/creditCoefficient.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
-import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket, MINUTES_INSUFFICIENT_CODE, MINUTES_INSUFFICIENT_MESSAGE, spokenLanguage, spokenRefusal, SPOKEN_REFUSALS } from '../services/browserOutbound.js';
+import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, maxSecondsForBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket, MINUTES_INSUFFICIENT_CODE, MINUTES_INSUFFICIENT_MESSAGE, spokenLanguage, spokenRefusal, SPOKEN_REFUSALS } from '../services/browserOutbound.js';
 import { billLineCallEnd, transferResult } from './callTransferController.js';
 import { buildRecordingPlan, consentLanguageFor, consentTwiml, mapCallRecordingCallback, normalizeConsentLanguage, planForCall, verifyRecordingToken } from '../services/callRecording.js';
 import { attachRecordingTracked, firstRecordingDecision, recordDecision } from '../services/recordingStatus.js';
 import { journalForwardedCall, journalUnansweredCall } from '../services/journalCall.js';
+import { scheduleGraceDeadline } from '../services/minutesGrace.js';
 import ReachSettings from '../models/ReachSettings.js';
 import { decideInboundRoute, mobileTarget, shouldRingMobileAfter } from '../services/reach.js';
 import { callPayload, notifyOwners, voicemailPayload } from '../services/webPush.js';
@@ -2630,11 +2631,48 @@ class PhoneNumberController {
       }
       // Trace de la décision (ligne retenue, zone, facteur) : le débit la relit au lieu de reclasser l'appel.
       if (credit.coefficient > 1) await recordCallDecision({ sid: String(req.body?.CallSid || ''), companyId, factor: creditFactor, zone: credit.zone, line: callerLine?.phoneNumber || '' });
+      // B.1 : échéance de coupure enregistrée (solde à zéro + 5 minutes de grâce) ; le balayeur raccroche l'appel à l'échéance, même après un redémarrage.
+      await this.scheduleGrace({ callSid: req.body?.CallSid, companyId, path: 'outbound_browser', coveredSeconds: decision.maxSeconds, creditFactor });
       console.log(`📞 Appel sortant du navigateur (entreprise ${companyId}) vers ${to.slice(0, 6)}… depuis ${callerLine.phoneNumber}${recording ? ' (enregistré)' : ''}`);
       return send(decision.twiml);
     } catch (error) {
       console.error('Error in handleBrowserOutbound:', error);
       return send(spokenRefusal('error'));
+    }
+  }
+
+  /**
+   * B.1 : solde de minutes d'un appel entrant (1 crédit la minute). `exhausted` : moins d'une minute entière (même règle que les sortants).
+   * Lecture impossible : null (aucun blocage, aucune échéance).
+   */
+  async inboundMinutes(companyId) {
+    if (!this.dbReady()) return null;
+    try {
+      const minutes = await freshMinutesBalance(String(companyId), { sync: syncMinutesFromCalls, grant: ensurePlanMinutesGranted, readWallet: (id) => MinutesCompany.findOne({ companyId: id }).select('minutes').lean() });
+      const balance = Number.isFinite(Number(minutes)) ? Number(minutes) : 0;
+      // Démarrage : au moins une minute entière (maxSecondsForBalance). Échéance : minutes entières du solde, sans le plafond de 4 h d'un <Dial>.
+      const exhausted = maxSecondsForBalance(balance) === 0;
+      return { minutes, coveredSeconds: exhausted ? 0 : Math.floor(balance) * 60, exhausted };
+    } catch (error) {
+      console.warn('[minutes] solde illisible pour un appel entrant, aucun contrôle :', error?.message || error);
+      return null;
+    }
+  }
+
+  /** Base connectée ? (B.1 : sans base, ni contrôle du solde entrant ni échéance ; jamais d'attente pendant un webhook.) */
+  dbReady() {
+    return mongoose.connection.readyState === 1;
+  }
+
+  /** B.1 : enregistre l'échéance de coupure d'un appel (grâce de 5 minutes). Une panne d'écriture ne bloque jamais l'appel (le timeLimit du <Dial> reste). */
+  async scheduleGrace(args) {
+    // Base indisponible : rien à écrire (le timeLimit du <Dial> reste) ; jamais d'attente de reconnexion pendant le webhook.
+    if (!this.dbReady()) return null;
+    try {
+      return await scheduleGraceDeadline(args);
+    } catch (error) {
+      console.error('[minutes-grace] échéance non enregistrée :', error?.message || error);
+      return null;
     }
   }
 
@@ -2790,18 +2828,24 @@ class PhoneNumberController {
           }
         } catch (error) { console.error('[inbound] contrôle de ligne ignoré :', error?.message || error); }
       }
+      // B.1 : appel entrant sans minutes (solde à zéro ou moins) : personne ne sonne, l'appel va au répondeur (jamais de dépassement).
+      // Solde illisible : aucun blocage (comme les contrôles sortants). Sinon l'échéance de coupure est enregistrée plus bas.
+      const minutesState = line?.companyId && callSid ? await this.inboundMinutes(line.companyId) : null;
+      const noMinutes = minutesState?.exhausted === true;
+      if (noMinutes) console.log(`⏳ Appel entrant sur ${maskNumber(to)} : solde de minutes épuisé, répondeur`);
       const ringAllow = await this.inboundRingFilterFor(line);
-      const online = line?.companyId && !lineBusy ? (ringAllow ? availableIdentities(line.companyId).filter(ringAllow) : availableIdentities(line.companyId)) : [];
+      const online = line?.companyId && !lineBusy && !noMinutes ? (ringAllow ? availableIdentities(line.companyId).filter(ringAllow) : availableIdentities(line.companyId)) : [];
       const settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
       const baseUrl = `https://${req.get('host')}`;
       const solo = await isSoloCompany(line?.companyId);
       const recording = solo ? null : await recordingPlanFor({ companyId: line?.companyId, callSid, baseUrl, from, language });
       // Files d'attente (routage par langues / compétences, menu vocal). null = aucune file, Nomad Solo ou erreur : comportement inchangé.
-      const queueRoute = !solo && line?.companyId && !lineBusy ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'call', recording, language, allow: ringAllow }) : null;
+      const queueRoute = !solo && line?.companyId && !lineBusy && !noMinutes ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'call', recording, language, allow: ringAllow }) : null;
       // File choisie sans conseiller éligible (langues / compétences) : les conseillers présents sonnent quand même, plutôt que le répondeur.
       const identities = queueRoute ? (queueRoute.kind === 'ring' ? queueRoute.firstIds : queueRoute.kind === 'none' ? online : []) : online;
       const reach = line?.companyId ? await ReachSettings.findOne({ companyId: line.companyId }).lean().catch((e) => { console.error('ReachSettings read:', e.message); return null; }) : null;
-      const route = queueRoute?.kind === 'menu' ? { first: 'browser', mobileNext: false, mobile: null } : decideInboundRoute({ identities, reach, linePhone: to });
+      const route = noMinutes ? { first: 'voicemail', mobileNext: false, mobile: null }
+        : queueRoute?.kind === 'menu' ? { first: 'browser', mobileNext: false, mobile: null } : decideInboundRoute({ identities, reach, linePhone: to });
       // Aucun conseiller à faire sonner : l'appel va au répondeur, il ne tient pas la ligne (un message laissé n'est pas un appel actif).
       // Pilote « Téléphonie + agent IA » (recette) : l'IA se règle comme un agent (interrupteur, horaires, compétences, priorité).
       // Elle décroche ici si elle est « en premier », ou « après les humains » quand aucun humain ne va sonner. Menu vocal : décision au
@@ -2821,6 +2865,10 @@ class PhoneNumberController {
         ).catch((e) => console.error('InboundCall log:', e.message));
         // Aucun conseiller à faire sonner : l'appel va au répondeur et doit être au journal même sans message laissé.
         if (route.first === 'voicemail') void journalUnansweredCall({ callSid, companyId: line.companyId, gigId: line.gigId, from, to, startedAt: new Date(), voicemail: settings?.voicemailEnabled !== false });
+      }
+      // B.1 : l'appel peut être pris (navigateur, file, mobile) : coupure à l'échéance (solde couvert + 5 minutes de grâce).
+      if (line?.companyId && callSid && route.first !== 'voicemail' && minutesState && !noMinutes) {
+        await this.scheduleGrace({ callSid, companyId: line.companyId, path: 'inbound', coveredSeconds: minutesState.coveredSeconds, creditFactor: 1 });
       }
       const where = queueRoute?.kind === 'menu' ? "file d'attente : menu vocal" : route.first === 'browser' ? `sonnerie chez ${identities.length} conseiller(s)${route.mobileNext ? ', puis le mobile du titulaire' : ''}` : route.first === 'mobile' ? "aucun navigateur présent : sonnerie du mobile du titulaire" : `aucun conseiller disponible pour l'entreprise de la ligne ${line?.companyId ?? '(ligne inconnue)'} ; présents : ${JSON.stringify(presenceSummary())}`;
       console.log(`📞 Appel entrant sur ${to} depuis ${from} : ${where}`);

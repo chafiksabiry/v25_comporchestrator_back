@@ -4,6 +4,7 @@ import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { callerAccess, ScopeError } from '../middleware/companyScope.js';
 import mongoose from 'mongoose';
 import { creditFactorForCall } from '../services/creditCoefficient.js';
+import { debitMinutesClamped } from '../services/minutesGrace.js';
 
 async function readMinutes(companyId, res) {
   try {
@@ -144,36 +145,23 @@ export const minutesCompanyController = {
       // Same idempotency key as syncMinutesFromCalls (`sid || _id`).
       const chargeKey = String(stored.sid || stored._id || callSid);
 
-      // Ensure the wallet exists (avoids upsert collisions on unique companyId)
-      let wallet = await MinutesCompany.findOne({ companyId });
-      if (!wallet) {
-        wallet = await MinutesCompany.create({ companyId, minutes: 0 });
-      }
-
       // Crédits par minute selon la zone (1, ou N pour un appel international ; classement d'après la ligne de l'appel stocké). Forfait ou
       // lignes illisibles : 1 crédit, comme avant (le débit normal n'est jamais sauté).
       const factor = await creditFactorForCall({ companyId, call: stored });
 
       // Billing rule: any started minute is billed in full (10s → 1 min, 1m02s → 2 min), then multiplied by the credits of the zone.
+      // B.1 : débit borné par le solde (jamais sous zéro) : les minutes de grâce ne sont pas facturées.
       const durationMinutes = Math.ceil(durationSeconds / 60) * factor;
-      const updated = await MinutesCompany.findOneAndUpdate(
-        { companyId, chargedCallSids: { $ne: chargeKey } },
-        {
-          $inc: {
-            minutes: -durationMinutes,
-            consumedSeconds: durationSeconds
-          },
-          $addToSet: { chargedCallSids: chargeKey }
-        },
-        { new: true }
-      );
+      const done = await debitMinutesClamped({ companyId, keys: [chargeKey], cost: durationMinutes, seconds: durationSeconds });
+      const updated = done?.wallet;
 
       if (!updated) {
+        const wallet = await MinutesCompany.findOne({ companyId });
         return res.status(200).json({
           success: true,
           charged: false,
           reason: 'Already charged',
-          data: { minutes: wallet.minutes }
+          data: { minutes: wallet?.minutes ?? 0 }
         });
       }
 

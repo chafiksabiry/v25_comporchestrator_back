@@ -26,6 +26,7 @@ import { clearExpiredRetractions, reverseSaleCommission } from '../services/retr
 import { planCreditCharging } from '../services/creditCoefficient.js';
 import { guardCompanyAccess } from '../middleware/companyGuard.js';
 import { guardAgentSelf } from '../middleware/agentGuard.js';
+import { debitMinutesClamped } from '../services/minutesGrace.js';
 
 const OWNER_ONLY = { ownerOnly: true };
 const OWN_COMPANY_OWNER = { ownerOnly: true, ownCompany: true };
@@ -902,31 +903,11 @@ export async function chargeCallMinutes(companyId, call) {
   const callKey = String(call.sid || call._id || '');
   if (!callKey) return false;
 
-  // Ensure wallet exists first (avoids upsert collisions on unique companyId)
-  let wallet = await MinutesCompany.findOne({ companyId });
-  if (!wallet) {
-    wallet = await MinutesCompany.create({ companyId, minutes: 0 });
-  }
-
-  // Atomic conditional update: only matches when callKey is NOT already in
-  // chargedCallSids. Returns null when the call was previously charged.
   // Billing rule: any started minute is billed in full (10s → 1 min, 1m02s → 2 min).
+  // B.1 : débit atomique et idempotent (chargedCallSids), borné par le solde : jamais sous zéro, la grâce n'est pas facturée.
   const durationMinutes = Math.ceil(durationSeconds / 60);
-  const updated = await MinutesCompany.findOneAndUpdate(
-    { companyId, chargedCallSids: { $ne: callKey } },
-    {
-      $inc: {
-        minutes: -durationMinutes,
-        consumedSeconds: durationSeconds
-      },
-      $addToSet: { chargedCallSids: callKey }
-    },
-    { new: true }
-  );
-
-  if (!updated) return false;
-
-  return true;
+  const done = await debitMinutesClamped({ companyId, keys: [callKey], cost: durationMinutes, seconds: durationSeconds });
+  return Boolean(done);
 }
 
 // Replay all completed calls for a company and ensure each one was deducted
@@ -988,18 +969,8 @@ export async function syncMinutesFromCalls(companyId) {
 
     if (newKeys.length === 0) return;
     // Garde atomique : si une lecture concurrente a déjà inscrit l'un de ces appels, on ne débite pas deux fois
-    // (les appels restants seront repris à la lecture suivante).
-    await MinutesCompany.findOneAndUpdate(
-      { companyId, chargedCallSids: { $nin: newKeys } },
-      {
-        $inc: {
-          minutes: -addedMinutes,
-          consumedSeconds: addedSeconds
-        },
-        $addToSet: { chargedCallSids: { $each: newKeys } }
-      },
-      { new: true }
-    );
+    // (les appels restants seront repris à la lecture suivante). B.1 : débit borné par le solde (jamais sous zéro, grâce gratuite).
+    await debitMinutesClamped({ companyId, keys: newKeys, cost: addedMinutes, seconds: addedSeconds, batch: true });
   } catch (err) {
     console.error('[syncMinutesFromCalls] error:', err.message);
   }

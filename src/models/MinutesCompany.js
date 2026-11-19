@@ -10,7 +10,8 @@ const minutesCompanySchema = new mongoose.Schema({
   },
   // Remaining minutes balance.
   // Auto-decreases when calls are made (AI validation NOT required).
-  // Allowed to go negative to display overconsumption.
+  // B.1 : never goes below zero any more (debits are clamped, the 5-minute grace is free). A balance already negative before B.1 is
+  // left as is (never dug deeper).
   minutes: {
     type: Number,
     required: true,
@@ -35,6 +36,11 @@ const minutesCompanySchema = new mongoose.Schema({
   planGrantKeys: {
     type: [String],
     default: []
+  },
+  /** B.1 : crédits NON facturés (grâce de 5 minutes, ou appels simultanés au-delà du solde) : trace seulement, jamais débitée. */
+  graceWaivedMinutes: {
+    type: Number,
+    default: 0
   },
   consumedSeconds: {
     type: Number,

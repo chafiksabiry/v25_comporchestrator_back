@@ -9,6 +9,7 @@ import { createVoiceToken } from '../services/voiceTokenService.js';
 import { voiceIdentity } from '../services/voicePresenceService.js';
 import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
+import { graceLimitSeconds, scheduleGraceDeadline } from '../services/minutesGrace.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { isPremiumRate, MESSAGES as DESTINATION_MESSAGES } from '../services/outboundDestinations.js';
 import { freshMinutesBalance, maxSecondsForBalance, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, spokenLanguage, spokenRefusal } from '../services/browserOutbound.js';
@@ -181,7 +182,13 @@ export const voicemailController = {
       const maxSeconds = maxSecondsForBalance(minutes, { creditFactor });
       // Refus international : même texte que sur tous les canaux, dans la langue de la ligne appelante (en / fr / es).
       if (!maxSeconds) return send(creditFactor > 1 ? spokenRefusal('insufficient_minutes_international', spokenLanguage(line.phoneNumber), { credits: creditFactor }) : buildRefusalTwiml('Solde de minutes insuffisant.'));
-      return send(buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds }));
+      // B.1 : 5 minutes de grâce gratuites une fois le solde couvert écoulé, puis coupure (timeLimit + échéance enregistrée, coupée par le serveur).
+      if (mongoose.connection.readyState === 1) try {
+        await scheduleGraceDeadline({ callSid: req.body?.CallSid, companyId: String(vm.companyId), path: 'voicemail_callback', coveredSeconds: maxSeconds, creditFactor });
+      } catch (graceErr) {
+        console.error('[minutes-grace] échéance du rappel non enregistrée :', graceErr?.message || graceErr);
+      }
+      return send(buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds: graceLimitSeconds(maxSeconds) }));
     } catch (error) {
       console.error('[voicemail] callbackVoice failed:', error.message);
       return send(buildRefusalTwiml('Une erreur est survenue.'));
