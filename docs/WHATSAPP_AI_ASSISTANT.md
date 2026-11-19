@@ -53,7 +53,20 @@ Même agent que sur WhatsApp (Claude, base de connaissances, langue, escalade), 
 
 ## Boîte de réception du support (lecture des conversations)
 Page `GET /api/whatsapp/admin/inbox` (statique, sans donnée) : saisir la clé `WHATSAPP_ADMIN_API_KEY` (gardée en sessionStorage, envoyée en en-tête `x-admin-key`). Elle liste les conversations WhatsApp et du chat du site, avec leur historique. Routes JSON : `GET /admin/conversations[?channel=web|whatsapp&limit=]` et `GET /admin/conversations/:id`. Désactivée (404) sans `WHATSAPP_ADMIN_API_KEY`.
+`DELETE /admin/conversations/:id` supprime définitivement une conversation et ses tickets d'escalade (irréversible ; admin uniquement).
 Les routes `/admin/*` acceptent aussi la connexion admin du tableau de bord HARX (`Authorization: Bearer <JWT>` émis par le service d'inscription avec `typeUser: 'admin'`) : c'est ce qu'utilise la page « Inbox » de `harx.ai/admin`, sans saisie de clé.
+
+### Temps réel (WebSocket `/support-inbox`)
+L'Inbox du tableau de bord reçoit un signal dès qu'un message arrive, qu'une conversation est transmise à un humain, qu'un ticket change ou qu'une conversation est supprimée. Connexion : `new WebSocket(url, ['bearer', <jeton admin>])` (sous-protocole uniquement, jamais `?token=`) ; refus 401 sans jeton admin ; fermeture 4401 à l'expiration du jeton ; ping toutes les 30 s. Le serveur n'envoie que `{ type: 'inbox.changed', waId, reason }` (reason : `message`, `handoff`, `ticket`, `deleted`), sans contenu : le client relit les données par les routes HTTP authentifiées. Code : `src/websocket/supportInbox.js`, évènements : `src/whatsapp/events.js` (le store est enveloppé dans `createWhatsAppModule`). Les serveurs WebSocket (escrow et Inbox) sont en mode `noServer` ; `upgradeFallback.js` refuse (400) les autres chemins.
+
+### Copie du chat du site vers WhatsApp (Meta)
+Un visiteur du site n'a pas de numéro : Meta ne peut rien lui envoyer. En revanche chaque échange du chat (message du visiteur + réponse de l'assistant) peut être **copié par l'API WhatsApp Business vers un numéro de l'équipe**, pour suivre le chat du site depuis WhatsApp (`src/whatsapp/webMirror.js`).
+- `WHATSAPP_WEB_MIRROR_NUMBER` : numéro de l'équipe (E.164, « + » et espaces ignorés). Vide = désactivé (rien n'est envoyé à Meta).
+- Fenêtre de 24 h : un texte libre n'est accepté que si ce numéro a écrit au numéro HARX dans les dernières 24 h (erreur Meta 131047 sinon). Pour ne pas dépendre de cela, créez un modèle approuvé avec UN paramètre de corps `{{1}}` et indiquez-le dans `WHATSAPP_WEB_MIRROR_TEMPLATE` (langue : `WHATSAPP_WEB_MIRROR_TEMPLATE_LANG`, défaut `fr`) ; il prend le relais quand la fenêtre est fermée (messages hors fenêtre : facturés par Meta selon sa grille).
+- `WHATSAPP_WEB_MIRROR_MAX_PER_HOUR` (défaut 200) : plafond de copies par heure.
+- La copie est en arrière-plan : un échec ne retarde ni n'altère la réponse au visiteur (avertissement au plus une fois par 10 min).
+- Les messages écrits par ce numéro d'équipe ne sont pas traités par l'assistant (pas de réponse, pas de boucle) ; ils ouvrent quand même la fenêtre de 24 h.
+- Les visiteurs sont informés dans le panneau du chat que leurs messages peuvent être transmis à l'équipe via WhatsApp.
 
 ## Base de connaissances
 `npm run whatsapp:kb -- <dossier des dépôts v25_*>` régénère routes, permissions, messages d'erreur, énumérations et textes d'interface depuis le code ; `npm run whatsapp:kb:check` signale les rubriques dont les fichiers source ont disparu. Les rubriques rédigées portent `sources:` et `verified:` ; les zones non confirmées sont listées dans `kb/coverage-and-limits.md`.

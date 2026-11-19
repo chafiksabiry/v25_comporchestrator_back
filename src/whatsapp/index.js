@@ -7,6 +7,8 @@ import { createAgent } from './agent.js';
 import { createWhatsAppRouter } from './routes.js';
 import { createMongoStore } from './store/mongoStore.js';
 import { createWebChatRouter } from './webChat.js';
+import { createInboxBus, withInboxEvents } from './events.js';
+import { createWebMirror } from './webMirror.js';
 
 /**
  * Assemble le module WhatsApp AI Assistant. Toutes les dépendances sont substituables (tests) ;
@@ -17,7 +19,9 @@ import { createWebChatRouter } from './webChat.js';
 export function createWhatsAppModule(overrides = {}) {
   const cfg = overrides.cfg || getWhatsAppConfig();
   const logger = overrides.logger || console;
-  const store = overrides.store || createMongoStore();
+  // Le store est enveloppé pour signaler à l'Inbox (WebSocket /support-inbox) tout nouveau message, transfert, ticket ou suppression.
+  const events = overrides.events || createInboxBus();
+  const store = withInboxEvents(overrides.store || createMongoStore(), events);
   const kb = overrides.kb || loadKnowledgeBase();
   const whatsapp = overrides.whatsapp || createWhatsAppClient({ config: cfg, logger });
   const claude = overrides.claude || createClaudeClient({ config: cfg });
@@ -44,13 +48,14 @@ export function createWhatsAppModule(overrides = {}) {
   const agent = createAgent({ store, claude, whatsapp, kb, tools, cfg, logger });
   const router = createWhatsAppRouter({ agent, store, whatsapp, kb, cfg, logger, auth: overrides.auth });
   // Chat sur le site (sans redirection vers l'application WhatsApp) : même agent, transport sans réseau.
-  const webChat = createWebChatRouter({ store, claude, kb, tools, cfg, logger });
+  const mirror = overrides.mirror !== undefined ? overrides.mirror : createWebMirror({ whatsapp, cfg, logger });
+  const webChat = createWebChatRouter({ store, claude, kb, tools, cfg, logger, mirror });
   router.use('/web-chat', webChat.router);
 
   const missing = missingConfig(cfg);
   if (cfg.enabled && missing.length) logger.warn(`[whatsapp] module mounted but incomplete: missing ${missing.join(', ')}`);
   logger.log?.(`[whatsapp] AI assistant ready (model ${cfg.model}, ${kb.size} knowledge chunks, store ${store.kind})`);
-  return { router, agent, webAgent: webChat.agent, cfg, kb, store, tools };
+  return { router, agent, webAgent: webChat.agent, cfg, kb, store, tools, events };
 }
 
 export { getWhatsAppConfig, missingConfig };

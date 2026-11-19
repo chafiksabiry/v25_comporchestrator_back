@@ -28,7 +28,7 @@ const publicMessage = (m) => ({
   ts: m.ts instanceof Date ? m.ts.toISOString() : new Date(m.ts || Date.now()).toISOString(),
 });
 
-export function createWebChatRouter({ store, claude, kb, tools, cfg, logger = console, agent: injectedAgent = null }) {
+export function createWebChatRouter({ store, claude, kb, tools, cfg, logger = console, agent: injectedAgent = null, mirror = null }) {
   // Transport sans réseau : la réponse de l'agent est retournée par processMessage et renvoyée au navigateur.
   const transport = { sendText: async () => [`web.${crypto.randomUUID()}`], markReadAndType: async () => {} };
   const agent = injectedAgent || createAgent({ store, claude, whatsapp: transport, kb, tools, cfg, logger });
@@ -72,9 +72,12 @@ export function createWebChatRouter({ store, claude, kb, tools, cfg, logger = co
       if (cfg.humanMode) {
         await store.getOrCreateConversation(waId, {});
         await store.appendMessage(waId, { role: 'user', text: msg.text, wamid: msg.id, ts: msg.timestamp });
+        void mirror?.({ sessionId, visitorText: msg.text, reply: '' }).catch(() => {});
         return res.status(202).json({ queued: true });
       }
       const result = await agent.processMessage(msg);
+      // Copie vers le WhatsApp de l'équipe (si configurée) : en arrière-plan, sans jamais retarder ni faire échouer la réponse.
+      void mirror?.({ sessionId, visitorText: msg.text, reply: result.reply || '' }).catch(() => {});
       return res.json({ reply: result.reply || '', rateLimited: Boolean(result.rateLimited), handoff: Boolean((await store.getConversation(waId))?.handoff?.active) });
     } catch (e) {
       logger.error('[whatsapp-web] message failed:', e.message);

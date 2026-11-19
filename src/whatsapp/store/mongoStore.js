@@ -55,6 +55,12 @@ export function createMongoStore() {
       ]);
       return rows.map((r) => ({ waId: r.waId, profileName: r.profileName || '', language: r.language?.language || null, linked: Boolean(r.linkedUserId), handoff: Boolean(r.handoff?.active), updatedAt: r.updatedAt, messageCount: r.count, last: r.last ? { role: r.last.role, text: r.last.text, ts: r.last.ts } : null }));
     },
+    /** Supprime la conversation et ses tickets d'escalade (qui en contiennent une copie). @returns {Promise<boolean>} true si elle existait. */
+    async deleteConversation(waId) {
+      const res = await WhatsAppConversation.deleteOne({ waId });
+      await WhatsAppTicket.deleteMany({ waId });
+      return res.deletedCount > 0;
+    },
     async createTicket(t) { return ticketOut(await WhatsAppTicket.create(t)); },
     async listTickets({ status } = {}) { return (await WhatsAppTicket.find(status ? { status } : {}).sort({ createdAt: -1 }).limit(100).lean()).map(ticketOut); },
     async updateTicket(id, patch) { return ticketOut(await WhatsAppTicket.findByIdAndUpdate(id, { $set: patch }, { new: true }).lean()); },

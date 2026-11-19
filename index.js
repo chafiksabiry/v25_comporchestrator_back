@@ -2,7 +2,9 @@ import 'dotenv/config';
 import { config } from './src/config/env.js';
 import express from 'express';
 import http from 'http';
-import { setupEscrowWebSocket } from './src/websocket/escrowUpdates.js';
+import { setupEscrowWebSocket, ESCROW_PATH } from './src/websocket/escrowUpdates.js';
+import { setupSupportInboxWebSocket, SUPPORT_INBOX_PATH } from './src/websocket/supportInbox.js';
+import { setupUpgradeFallback } from './src/websocket/upgradeFallback.js';
 import { corsMiddleware, parseAllowedOrigins } from './src/middleware/cors.js';
 import { demoBodyQueryAlias, idParam, demoAliasEnabled } from './src/middleware/demoAlias.js';
 import mongoose from 'mongoose';
@@ -146,7 +148,8 @@ app.use('/api/device-link', deviceLinkRoutes);
 app.use('/api/company-notifications', companyNotificationRoutes);
 
 // HARX WhatsApp AI Assistant : webhook Meta + liaison de compte + administration du support (voir docs/WHATSAPP_AI_ASSISTANT.md).
-app.use('/api/whatsapp', createWhatsAppModule().router);
+const whatsappModule = createWhatsAppModule();
+app.use('/api/whatsapp', whatsappModule.router);
 
 // Health check to verify deployment
 app.get('/api/health', (req, res) => {
@@ -164,6 +167,9 @@ const server = http.createServer(app);
 
 // Set up WebSocket
 setupEscrowWebSocket(server);
+// Temps réel de l'Inbox support (admin) : signaux sans contenu, voir src/websocket/supportInbox.js.
+setupSupportInboxWebSocket(server, { bus: whatsappModule.events });
+setupUpgradeFallback(server, [ESCROW_PATH, SUPPORT_INBOX_PATH]);
 
 // Start server
 server.listen(config.port, () => {
