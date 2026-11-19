@@ -12,7 +12,7 @@ const { default: InboundCall } = await import('../models/InboundCall.js');
 const { default: InboundSettings } = await import('../models/InboundSettings.js');
 const { default: ReceptionDirectory } = await import('../models/ReceptionDirectory.js');
 const { default: SecretariatTools } = await import('../models/SecretariatTools.js');
-const { callTransferController: ctl, transferResult, setTransferDeps } = await import('../controllers/callTransferController.js');
+const { callTransferController: ctl, transferResult, setTransferDeps, elapsedCredits } = await import('../controllers/callTransferController.js');
 
 // ---------------------------------------------------------------- disponibilité
 const hours = [{ day: 1, start: '09:00', end: '12:00' }, { day: 1, start: '14:00', end: '18:00' }];
@@ -57,6 +57,12 @@ assert.ok(!/<Record/.test(T.buildTransferResultTwiml({ ...args, settings: { voic
 assert.deepEqual(['completed', 'busy', 'no-answer', 'failed', 'canceled', ''].map(T.resultOfDial), ['answered', 'busy', 'no_answer', 'failed', 'caller_hung_up', 'no_answer']);
 for (const w of ['centre d’appels', 'call centre', 'siège']) assert.ok(!(T.announceText('X') + T.unavailableText('X')).toLowerCase().includes(w), w);
 
+// ---------------------------------------------------------------- jambe navigateur en cours
+assert.equal(elapsedCredits({ startTime: new Date(1000), now: 1000 + 61000 }), 2, 'minute entamée');
+assert.equal(elapsedCredits({ startTime: new Date(1000), now: 1000 + 60000, factor: 3 }), 3);
+assert.equal(elapsedCredits({ startTime: null, now: 5000 }), 0, 'début inconnu');
+assert.equal(elapsedCredits({ startTime: new Date(9000), now: 5000 }), 0, 'horloge décalée');
+
 // ---------------------------------------------------------------- contrôleur
 const C1 = '64b0000000000000000000c1'; const C2 = '64b0000000000000000000c2';
 const E_ONE = '64b000000000000000001001'; const E_ABS = '64b000000000000000001002'; const E_NONUM = '64b000000000000000001003'; const E_FOREIGN = '64b000000000000000001004'; const E_OTHER = '64b000000000000000001005';
@@ -84,7 +90,7 @@ InboundSettings.findOne = () => lean({ voicemailEnabled: true, voice: 'nova' });
 
 const SID_CHILD = `CA${'1'.repeat(32)}`; const SID_PARENT = `CA${'2'.repeat(32)}`; const SID_OTHER_CHILD = `CA${'3'.repeat(32)}`; const SID_FOREIGN_PARENT = `CA${'4'.repeat(32)}`; const SID_ENDED = `CA${'5'.repeat(32)}`;
 const legs = {
-  [SID_CHILD]: { to: 'client:cc-sec1', status: 'in-progress', parentCallSid: SID_PARENT, startTime: new Date(Date.parse('2026-11-02T09:00:08+01:00')) },
+  [SID_CHILD]: { to: 'client:cc-sec1', status: 'in-progress', parentCallSid: SID_PARENT, startTime: new Date(Date.parse('2026-11-02T09:55:08+01:00')) },
   [SID_OTHER_CHILD]: { to: 'client:cc-sec2', status: 'in-progress', parentCallSid: SID_PARENT },
   [`CA${'6'.repeat(32)}`]: { to: 'client:cc-other', status: 'in-progress', parentCallSid: SID_FOREIGN_PARENT },
   [SID_ENDED]: { to: 'client:cc-sec1', status: 'completed', parentCallSid: SID_PARENT },
@@ -96,7 +102,7 @@ setTransferDeps({ twilio: async () => client, minutes: async () => 30, creditFac
 
 let calls = [];
 const resetCalls = () => { calls = [
-  { _id: 'k1', companyId: C1, callSid: SID_PARENT, phoneNumber: '+33140000000', from: '+33655555555', startedAt: new Date(Date.parse('2026-11-02T09:00:00+01:00')), status: 'ringing', waitSeconds: null, transfer: { startedAt: null } },
+  { _id: 'k1', companyId: C1, callSid: SID_PARENT, phoneNumber: '+33140000000', from: '+33655555555', startedAt: new Date(Date.parse('2026-11-02T09:55:00+01:00')), status: 'ringing', waitSeconds: null, transfer: { startedAt: null } },
   { _id: 'k2', companyId: C2, callSid: SID_FOREIGN_PARENT, phoneNumber: '+33150000000', from: '+33644444444', startedAt: new Date(), status: 'ringing', transfer: { startedAt: null } },
 ]; };
 resetCalls();
@@ -173,7 +179,8 @@ r = await call(ctl.transfer, { body: { callSid: SID_CHILD, entryId: E_ONE, to: '
 assert.equal(r.code, 200, JSON.stringify(r.body)); assert.equal(r.body.data.result, 'ringing'); assert.equal(r.body.data.name, 'Mme Martin');
 assert.equal(updates.length, 1); assert.equal(updates[0].sid, SID_PARENT, 'la jambe de l’appelant est mise à jour, pas celle du navigateur');
 assert.match(updates[0].twiml, /Je vous passe Mme Martin/); assert.match(updates[0].twiml, /\+33612345678/); assert.ok(!updates[0].twiml.includes('+33100000000'), 'jamais un numéro envoyé par le navigateur');
-assert.match(updates[0].twiml, /timeLimit="1800"/); assert.match(updates[0].twiml, /callerId="\+33140000000"/);
+// solde 30 min, jambe navigateur en cours depuis 4 min 52 s (5 minutes entamées, pas encore enregistrée) : 25 min disponibles
+assert.match(updates[0].twiml, /timeLimit="1500"/); assert.match(updates[0].twiml, /callerId="\+33140000000"/);
 assert.match(updates[0].twiml, /transfer-result\?s=/);
 { const s0 = new URL(updates[0].twiml.match(/action="([^"]+)"/)[1].replace(/&amp;/g, '&')).searchParams.get('s'); const v = T.verifyTransferState({ secret: 'tok', token: s0, now: NOW }); assert.equal(v.to, '+33612345678', 'numéro composé signé pour le débit'); assert.equal(v.factor, 1); }
 const t0 = calls[0].transfer;
@@ -304,6 +311,15 @@ const { transferLease } = await import('../services/lineCalls.js');
 const out = await transferLease(SID_OUT, SID_OUT_CHILD, { Model: { updateMany: async (f, u) => { moves.push([f, u]); return { modifiedCount: Object.keys(f)[0].startsWith('activeCall.') ? 1 : 0 }; } } });
 assert.equal(out.moved, 1); assert.equal(moves.length, 10); assert.deepEqual(moves[0], [{ 'activeCall.callSid': SID_OUT }, { $set: { 'activeCall.callSid': SID_OUT_CHILD } }]);
 assert.equal(typeof realMoveLease, 'function');
+// jambe navigateur sortante en cours depuis 10 min (déjà 10 crédits) : (30 − 10) / 2 jambes = 10 min ; vers l'international à 3 crédits
+// avec un correspondant à 3 crédits : (30 − 10 × 3) = 0 -> refus
+updates.length = 0; locks.clear(); legs[SID_OUT].startTime = new Date(NOW - 10 * 60000);
+r = await call(ctl.transfer, { body: { callSid: SID_OUT, entryId: E_ONE } });
+assert.equal(r.code, 200); assert.match(updates[0].twiml, /timeLimit="600"/);
+updates.length = 0; locks.clear(); setTransferDeps({ creditFactor: async () => 3 });
+r = await call(ctl.transfer, { body: { callSid: SID_OUT, entryId: E_ONE } });
+assert.equal(r.code, 402, 'solde déjà consommé par la jambe en cours'); assert.equal(updates.length, 0);
+setTransferDeps({ creditFactor: async () => 1 }); delete legs[SID_OUT].startTime;
 // solde épuisé : refus, rien n'est redirigé
 updates.length = 0; locks.clear(); setTransferDeps({ minutes: async () => 0 });
 assert.equal((await call(ctl.transfer, { body: { callSid: SID_OUT, entryId: E_ONE } })).code, 402); assert.equal(updates.length, 0);

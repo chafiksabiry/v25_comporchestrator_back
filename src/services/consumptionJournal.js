@@ -156,7 +156,11 @@ export function buildMinutesRows({ wallet, payments, calls, debits = {} }) {
       quantity: -(billedMinutes * (coefficient || 1)),
       coefficient,
       zone: known ? d.zone : null,
-      reference: { callSid: key, direction, counterpart: maskCounterpart(counterpart), durationSeconds: secs, billedMinutes },
+      reference: {
+        callSid: key, direction, counterpart: maskCounterpart(counterpart), durationSeconds: secs, billedMinutes,
+        // Jambe d'un appel transféré (champ additif) : libellé « Transfert vers <fiche> » et jambe (vers la fiche / reste du correspondant).
+        ...(c.source === 'transfer' ? { label: str(c.handledBy?.name) || 'Transfert', transferLeg: str(c.transfer?.leg) } : {}),
+      },
       source: 'calls',
       reconstructed: true,
     }));

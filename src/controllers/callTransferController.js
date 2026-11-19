@@ -78,6 +78,13 @@ export const setTransferDeps = (over) => Object.assign(deps, over);
 /** Solde de minutes et coefficient de la destination : réutilisés par le transfert de l'agent IA (services/aiInbound.js). */
 export const transferDeps = deps;
 
+/** Crédits déjà consommés par la jambe navigateur en cours : minute entamée × crédits par minute ; 0 si son début est inconnu. */
+export function elapsedCredits({ startTime, now, factor = 1 }) {
+  const start = startTime ? new Date(startTime).getTime() : NaN;
+  if (!Number.isFinite(start) || start > now) return 0;
+  return Math.ceil((now - start) / 60000) * (factor >= 1 ? factor : 1);
+}
+
 async function context(req, res) {
   let access;
   try {
@@ -182,7 +189,12 @@ export const callTransferController = {
         // Sortant : la jambe du correspondant continue PENDANT la jambe vers la fiche et les deux sont débitées ; le plafond partage donc le
         // solde entre elles (crédits par minute additionnés) pour ne pas consommer deux fois le solde.
         const prospectFactor = outbound ? await deps.creditFactor(access.companyId, prospectNumber, lineNumber) : 0;
-        maxSeconds = maxSecondsForBalance(await deps.minutes(access.companyId), { creditFactor: creditFactor + prospectFactor });
+        // La jambe navigateur EN COURS n'est pas encore dans `calls` (le portail l'enregistre à sa fin) : son temps déjà écoulé est retiré
+        // du solde disponible (minute entamée × crédits de cette jambe : 1 en entrant, ceux du correspondant en sortant), sinon le solde
+        // pourrait finir négatif d'autant (30 min avec la secrétaire puis 30 min transférées = −30).
+        const inProgress = elapsedCredits({ startTime: leg.startTime, now, factor: outbound ? prospectFactor : 1 });
+        const balance = await deps.minutes(access.companyId);
+        maxSeconds = maxSecondsForBalance(Number.isFinite(Number(balance)) ? Number(balance) - inProgress : balance, { creditFactor: creditFactor + prospectFactor });
         if (!maxSeconds && creditFactor > 1) {
           const m = insufficientInternationalMessages(creditFactor);
           return fail(res, 402, m.messageFr, { code: 'no_minutes', creditsPerMinute: creditFactor, messageEn: m.message, messageEs: m.messageEs });
@@ -277,7 +289,8 @@ export async function transferResult(req, res) {
     // Transfert d'un appel sortant (poste de l'agent) : résultat consigné sur son verrou.
     let outboundRow = null;
     if (!updated) outboundRow = await OutboundTransfer.findOneAndUpdate({ callSid, companyId, entryId: state.entryId }, { $set: { result, endedAt: new Date(deps.now()) } }, { new: true }).lean().catch(() => null);
-    await billDialLeg({ req, state, companyId, line: updated?.phoneNumber || outboundRow?.lineNumber || '' });
+    const t = updated?.transfer || outboundRow || {};
+    await billDialLeg({ req, state, companyId, line: updated?.phoneNumber || outboundRow?.lineNumber || '', display: { entryName: t.entryName, byUserId: t.byUserId, byName: t.byName } });
     const settings = await InboundSettings.findOne({ companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch(() => null);
     const language = languageForPhone(updated?.phoneNumber || outboundRow?.lineNumber);
     return xml(buildTransferResultTwiml({ dialStatus, name: updated?.transfer?.entryName || outboundRow?.entryName || phrasesFor(language).transferFallbackName, settings, baseUrl: baseUrlOf(req), companyId: state.companyId, language }));
@@ -292,16 +305,18 @@ export async function transferResult(req, res) {
  * syncMinutesFromCalls la débite ensuite (minute entamée, coefficient). Pas décroché / durée nulle : rien. Coefficient > 1 : la décision
  * du plafond est tracée sous ce sid (même zone et même facteur au débit). Ne fait jamais échouer la réponse à Twilio.
  */
-async function billDialLeg({ req, state, companyId, line }) {
+async function billDialLeg({ req, state, companyId, line, display = {} }) {
   try {
     let to = state.to || '';
-    if (!to) {
-      // Jeton émis avant cette version : numéro relu sur la fiche de l'annuaire.
+    const shown = { ...display, byUserId: display.byUserId || state.userId };
+    if (!to || !shown.entryName) {
+      // Jeton émis avant cette version (sans numéro) ou appel sans nom de fiche consigné : fiche relue dans l'annuaire.
       const dir = await deps.directory(companyId).catch(() => null);
       const entry = (dir?.entries || []).find((e) => String(e._id) === String(state.entryId));
-      to = entry?.phone ? normalizeOutboundDestination(entry.phone) || '' : '';
+      if (!to) to = entry?.phone ? normalizeOutboundDestination(entry.phone) || '' : '';
+      if (!shown.entryName) shown.entryName = entry?.name || '';
     }
-    const doc = dialLegCall({ body: req.body || {}, companyId, parentCallSid: state.callSid, from: line, to, now: deps.now() });
+    const doc = dialLegCall({ body: req.body || {}, companyId, parentCallSid: state.callSid, from: line, to, now: deps.now(), display: shown });
     if (!doc) return;
     const factor = state.factor || (to ? await deps.creditFactor(state.companyId, to, line).catch(() => 1) : 1);
     if (factor > 1) await deps.recordDecision({ sid: doc.sid, companyId: state.companyId, factor, zone: 'international', line });

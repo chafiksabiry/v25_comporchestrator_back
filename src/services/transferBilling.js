@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { CALL_SID } from './callTransfer.js';
 
 /**
@@ -15,13 +16,28 @@ import { CALL_SID } from './callTransfer.js';
  */
 export const TRANSFER_SOURCE = 'transfer';
 
+/**
+ * Affichage dans les listes existantes (dash_calls : `repName` = handledBy.name ; journaux) : un document sans `handledBy` s'afficherait
+ * « Agent » / sans nom. On porte donc un libellé « Transfert vers <fiche> » et l'utilisateur qui a transféré (`handledBy.userId`, s'il est
+ * un identifiant valide : jamais pour l'agent IA). `handledBy.userId` évite aussi l'exigence d'`agent` du modèle Call de dash_calls si le
+ * document est un jour enregistré par Mongoose (save). `transfer` garde le détail (fiche, qui a transféré).
+ */
+export function transferDisplay({ entryName = '', byUserId = '', byName = '', leg }) {
+  const name = String(entryName || '').replace(/\s+/g, ' ').trim();
+  const userId = /^[0-9a-fA-F]{24}$/.test(String(byUserId || '')) ? new mongoose.Types.ObjectId(String(byUserId)) : undefined;
+  return {
+    handledBy: { ...(userId ? { userId } : {}), name: name ? `Transfert vers ${name}` : 'Transfert', role: 'member' },
+    transfer: { leg, entryName: name, byUserId: String(byUserId || ''), byName: String(byName || '') },
+  };
+}
+
 const secondsOf = (v) => {
   const n = Math.round(Number(v));
   return Number.isFinite(n) && n > 0 ? n : 0;
 };
 
 /** Document `calls` de la jambe <Dial> vers la fiche, ou null s'il n'y a rien à débiter (pas décroché, durée nulle, sid illisible). */
-export function dialLegCall({ body = {}, companyId, parentCallSid, from = '', to = '', now = Date.now() }) {
+export function dialLegCall({ body = {}, companyId, parentCallSid, from = '', to = '', now = Date.now(), display = {} }) {
   const sid = String(body.DialCallSid || '');
   const status = String(body.DialCallStatus || '').toLowerCase();
   const duration = secondsOf(body.DialCallDuration);
@@ -32,6 +48,7 @@ export function dialLegCall({ body = {}, companyId, parentCallSid, from = '', to
     sid, provider: 'twilio', direction: 'outbound', source: TRANSFER_SOURCE, transferLeg: 'dial',
     parentCallSid: String(parentCallSid || ''), from: from ? String(from) : null, to: to ? String(to) : null,
     status: 'completed', duration, startTime: new Date(endTime.getTime() - duration * 1000), endTime, companyId, isTest: false,
+    ...transferDisplay({ ...display, leg: 'dial' }),
   };
 }
 
@@ -64,5 +81,6 @@ export function outboundRemainderCall({ body = {}, row, now = Date.now() }) {
     sid, provider: 'twilio', direction: 'outbound', source: TRANSFER_SOURCE, transferLeg: 'remainder',
     parentCallSid: String(row.browserCallSid || ''), from: row.lineNumber ? String(row.lineNumber) : null, to: body.To ? String(body.To) : null,
     status: 'completed', duration, startTime: new Date(endedAt - duration * 1000), endTime: new Date(endedAt), companyId: row.companyId, isTest: false,
+    ...transferDisplay({ entryName: row.entryName, byUserId: row.byUserId, byName: row.byName, leg: 'remainder' }),
   };
 }

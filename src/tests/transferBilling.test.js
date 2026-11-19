@@ -213,3 +213,29 @@ test('débit : un même sid inscrit deux fois (sans index unique) n’est débit
   await syncMinutesFromCalls(C1);
   assert.equal(W.minutes, 99);
 });
+
+// --- affichage : libellé « Transfert vers <fiche> » et personne qui a transféré ---------------------------------------------------
+test('affichage : handledBy « Transfert vers <fiche> » (+ utilisateur qui a transféré), journal de consommation libellé', async () => {
+  const U = '64b0000000000000000000a1';
+  inbound.transfer.byUserId = U; inbound.transfer.byName = 'Léa';
+  await hook({ s: stateFor(CALLER, { to: ENTRY_FR, factor: 1 }) }, { CallSid: CALLER, DialCallSid: DIAL, DialCallStatus: 'completed', DialCallDuration: '30' });
+  assert.equal(CALLS[0].handledBy.name, 'Transfert vers Mme Martin'); assert.equal(String(CALLS[0].handledBy.userId), U); assert.equal(CALLS[0].handledBy.role, 'member');
+  assert.deepEqual(CALLS[0].transfer, { leg: 'dial', entryName: 'Mme Martin', byUserId: U, byName: 'Léa' });
+  // agent IA : pas d'identifiant utilisateur, libellé quand même ; nom de fiche relu dans l'annuaire s'il manque
+  CALLS.length = 0; inbound.transfer = { entryId: 'e1', byUserId: 'ai-agent', byName: 'Agent IA' };
+  await hook({ s: stateFor(CALLER, { to: ENTRY_FR, factor: 1, userId: 'ai-agent' }) }, { CallSid: CALLER, DialCallSid: DIAL, DialCallStatus: 'completed', DialCallDuration: '30' });
+  assert.equal(CALLS[0].handledBy.name, 'Transfert vers Mme Martin'); assert.equal(CALLS[0].handledBy.userId, undefined);
+  // reste sortant
+  outboundRows.set(PROSPECT_LEG, { callSid: PROSPECT_LEG, companyId: C1, browserCallSid: BROWSER_OUT, lineNumber: LINE, entryName: 'M. Roux', byUserId: U, byName: 'Léa', startedAt: new Date(NOW - 60000) });
+  await billOutboundTransferRemainder({ CallSid: PROSPECT_LEG, CallStatus: 'completed', CallDuration: '90', To: PROSPECT });
+  const rem = CALLS.find((c) => c.sid === PROSPECT_LEG);
+  assert.equal(rem.handledBy.name, 'Transfert vers M. Roux'); assert.equal(rem.transfer.leg, 'remainder');
+  // journal de consommation (orchestrateur) : libellé additif sur la ligne
+  await syncMinutesFromCalls(C1);
+  const { buildMinutesRows } = await import('../services/consumptionJournal.js');
+  const { rows } = buildMinutesRows({ wallet: W, payments: [], calls: CALLS });
+  const line = rows.find((r) => r.reference?.callSid === PROSPECT_LEG);
+  assert.equal(line.reference.label, 'Transfert vers M. Roux'); assert.equal(line.reference.transferLeg, 'remainder'); assert.equal(line.quantity, -1);
+  const plain = buildMinutesRows({ wallet: { chargedCallSids: ['X'] }, payments: [], calls: [{ sid: 'X', duration: 30, direction: 'outbound', to: ENTRY_FR }] }).rows.find((r) => r.reference?.callSid === 'X');
+  assert.ok(!('label' in plain.reference), 'appel ordinaire inchangé');
+});
