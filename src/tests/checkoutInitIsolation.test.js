@@ -24,6 +24,8 @@ beforeEach(() => {
   clearCompanyCache(); created = 0; registrationDown = false; who = { companyId: C1, isOwner: true };
   stripeService.createCheckoutSession = async () => { created += 1; return { id: 'cs', url: 'https://x' }; };
   stripeService.createEmbeddedSubscriptionCheckout = async () => { created += 1; return { id: 'cs', client_secret: 'x' }; };
+  // Prix d'une offre non Solo : la garde Nomad Solo de /checkout lit les métadonnées du prix (refus 503 si illisibles).
+  stripeService.priceProductMetadata = async () => ({ callcenter_tier: 'full_scope' });
   CompanyPayment.create = async () => { created += 1; return { _id: 'p', save: async () => {} }; };
   global.fetch = async () => { if (registrationDown) throw new Error('down'); return { ok: true, json: async () => ({ success: true, data: who }) }; };
 });

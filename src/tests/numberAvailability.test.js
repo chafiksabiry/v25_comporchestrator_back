@@ -29,13 +29,29 @@ const JP_CO = '64b0000000000000000000c2'; // Japon, pièce japonaise
 const JPUS_CO = '64b0000000000000000000c3'; // Japon, pièce américaine (champ identityCountry)
 const MADE_CO = '64b0000000000000000000c4'; // Maroc, pièce allemande (pas FR/GB/US)
 const OTHER_CO = '64b0000000000000000000c9';
+const STORED_CO = '64b0000000000000000000c5'; // Maroc, pièce américaine : profil exactement tel que l'inscription l'enregistre
+const STORED_DOC_CO = '64b0000000000000000000c6'; // Japon, pays de la pièce seulement sur le justificatif enregistré
+/**
+ * Contrat avec v25_registration_backend : forme EXACTE de `company.profile` en sortie de `normalizeProfile`
+ * (src/services/callCenterWorkspaceStateValidation.js), vérifiée là-bas par src/tests/callCenterWorkspaceStateValidation.test.js
+ * (liste des clés, `identityCountry` et `documents[].issuingCountry` en ISO alpha-2 majuscules). Toute évolution de cette sortie
+ * doit être reportée ici.
+ */
+const STORED = {
+  name: 'Ada', siren: '', representativeEmail: 'ada@example.com', kybStatus: 'submitted',
+  documents: [{ name: 'passeport.pdf', size: 1200, kind: 'identity', issuingCountry: 'US' }],
+  country: 'MA', identityCountry: 'US',
+};
+const STORED_DOC = { name: 'Ken', siren: '', representativeEmail: 'ken@example.com', kybStatus: 'draft', documents: [{ name: 'passport.pdf', size: 10, kind: 'identity', issuingCountry: 'GB' }], country: 'JP' };
 const profile = {
+  [STORED_CO]: STORED,
+  [STORED_DOC_CO]: STORED_DOC,
   [MA_CO]: { country: 'MA', documents: [{ kind: 'identity', name: 'passeport.pdf', size: 1, issuingCountry: 'FR' }, { kind: 'residence', name: 'facture.pdf', size: 1 }] },
   [JP_CO]: { country: 'JP', documents: [{ kind: 'identity', name: 'id.pdf', size: 1, issuingCountry: 'JP' }] },
   [JPUS_CO]: { country: 'JP', identityCountry: 'us', documents: [] },
   [MADE_CO]: { country: 'MA', documents: [{ kind: 'identity', issuingCountry: 'DE' }] },
 };
-const people = { ma: { companyId: MA_CO, isOwner: true }, jp: { companyId: JP_CO, isOwner: true }, jpus: { companyId: JPUS_CO, isOwner: true }, made: { companyId: MADE_CO, isOwner: true }, stranger: { companyId: OTHER_CO, isOwner: true } };
+const people = { stored: { companyId: STORED_CO, isOwner: true }, storeddoc: { companyId: STORED_DOC_CO, isOwner: true }, ma: { companyId: MA_CO, isOwner: true }, jp: { companyId: JP_CO, isOwner: true }, jpus: { companyId: JPUS_CO, isOwner: true }, made: { companyId: MADE_CO, isOwner: true }, stranger: { companyId: OTHER_CO, isOwner: true } };
 
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (u, init) => {
@@ -109,6 +125,17 @@ describe('checkNumberCountry : pièce enregistrée côté serveur, jamais une va
     assert.equal((await checkNumberCountry(req, JP_CO, { countryCode: 'US' })).status, 403);
     assert.equal((await checkNumberCountry(fakeReq('jpus'), JPUS_CO, { countryCode: 'US' })).ok, true);
     assert.equal((await checkNumberCountry(fakeReq('made'), MADE_CO, { countryCode: 'DE' })).status, 403);
+  });
+});
+
+describe('contrat : profil tel qu’enregistré par le service d’inscription (normalizeProfile)', () => {
+  beforeEach(() => clearCompanyCache());
+  it('identityCountry enregistré au niveau du profil, ou seulement sur le justificatif « identity »', async () => {
+    assert.deepEqual(await companyNumberProfile(fakeReq('stored'), STORED_CO), { country: 'MA', identityCountry: 'US' });
+    assert.equal((await checkNumberCountry(fakeReq('stored'), STORED_CO, { countryCode: 'US' })).ok, true);
+    assert.equal((await checkNumberCountry(fakeReq('stored'), STORED_CO, { countryCode: 'FR' })).status, 403);
+    assert.deepEqual(await companyNumberProfile(fakeReq('storeddoc'), STORED_DOC_CO), { country: 'JP', identityCountry: 'GB' });
+    assert.equal((await checkNumberCountry(fakeReq('storeddoc'), STORED_DOC_CO, { countryCode: 'GB' })).ok, true);
   });
 });
 
