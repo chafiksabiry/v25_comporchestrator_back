@@ -8,8 +8,8 @@ import { MAIL_PROVIDERS } from './mailOwnership.js';
  * Migration « boîte mail = propriétaire seulement » (voir mailOwnership.js). PRUDENTE, IDEMPOTENTE, JOURNALISÉE SANS DONNÉE PERSONNELLE :
  *  1. connexions d'entreprise Google / Microsoft ET comptes partagés SANS `connectedBy` : marqués `ownerless` (inutilisables par tous jusqu'à reconnexion, retirables par
  *     le titulaire de la société). Elles ne sont JAMAIS rattachées à quelqu'un au hasard : les lignes qui ont un `connectedBy` gardent ce propriétaire, rien d'autre ne change ;
- *  2. e-mails entrants stockés de l'entreprise SANS propriétaire de connexion (`connectionOwnerId`) : purgés (ils étaient partagés ; ce ne sont que des métadonnées de 30 jours,
- *     relues pour le propriétaire au prochain rafraîchissement) ; les messageries personnelles ne sont pas touchées ;
+ *  2. e-mails entrants stockés de l'entreprise SANS propriétaire de connexion (`connectionOwnerId`) : CONSERVÉS mais masqués (aucune vue ne les montre), comptés
+ *     seulement ; ils expirent par le TTL de 30 jours. Aucune suppression au démarrage (décision du 19/11/2026) ; les messageries personnelles ne sont pas touchées ;
  *  3. réglage `inbound.secretaries` (lecture ouverte aux secrétaires) : remis à faux, sans effet de toute façon.
  * Une seule ligne JSON `mail_ownership_applied` avec des compteurs : ni adresse, ni identifiant, ni société. Appelée au démarrage du serveur ; ne lève jamais.
  */
@@ -21,7 +21,9 @@ export async function applyMailOwnership({ log = console.log } = {}) {
   try {
     result.connectionsOwnerless = count(await SecretariatConnection.updateMany({ provider: { $in: MAIL_PROVIDERS }, ownerless: { $ne: true }, ...noOwner }, { $set: { ownerless: true } }));
     result.sharedAccountsOwnerless = count(await SecretariatSharedAccount.updateMany({ ownerless: { $ne: true }, personalUserId: null, ...noOwner }, { $set: { ownerless: true } }));
-    result.legacyInboxPurged = Number((await InboundEmail.deleteMany({ ownerUserId: null, connectionOwnerId: null }))?.deletedCount ?? 0);
+    // Décision du 19/11/2026 (option B) : pas de suppression au démarrage. Ces anciens e-mails sans propriétaire ne sont montrés à personne
+    // (scopeFilter exige connectionOwnerId) et expirent d'eux-mêmes par le TTL de 30 jours. On les compte seulement.
+    result.legacyInboxHidden = Number((await InboundEmail.countDocuments({ ownerUserId: null, connectionOwnerId: null, deletedAt: null })) ?? 0);
     result.secretariesSettingReset = count(await SecretariatTools.updateMany({ 'inbound.secretaries': true }, { $set: { 'inbound.secretaries': false } }));
     log(JSON.stringify({ event: 'mail_ownership_applied', ...result }));
   } catch (error) {
