@@ -15,7 +15,7 @@ export function parseAllowedOrigins(env = process.env) {
 }
 
 const METHODS = 'GET, POST, PUT, DELETE, OPTIONS, PATCH';
-const HEADERS = 'Content-Type, Authorization, X-Requested-With, x-user-id, x-agent-id, X-Api-Key';
+const HEADERS = 'Content-Type, Authorization, X-Requested-With, x-user-id, x-agent-id, X-Api-Key, x-admin-key';
 
 export function corsMiddleware(env = process.env) {
   const allowed = parseAllowedOrigins(env);

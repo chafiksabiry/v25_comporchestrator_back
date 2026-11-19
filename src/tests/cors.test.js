@@ -45,3 +45,9 @@ test('avec la liste : requête sans Origin (serveur à serveur) non concernée ;
   assert.equal(pub.headers['Access-Control-Allow-Origin'], '*'); assert.equal(pub.headers['Access-Control-Allow-Credentials'], undefined); assert.equal(pub.nexted, true);
   assert.equal(run(ENV, { origin: 'https://customer.example', url: '/api/public/v1/calls', method: 'OPTIONS' }).code, 200);
 });
+
+test("l'en-tête x-admin-key (Inbox support du tableau de bord) est autorisé en pré-vol", () => {
+  const r = run(ENV, { origin: 'https://harx.ai', method: 'OPTIONS', url: '/api/whatsapp/admin/conversations' });
+  assert.equal(r.code, 200);
+  assert.match(r.headers['Access-Control-Allow-Headers'], /x-admin-key/);
+});
