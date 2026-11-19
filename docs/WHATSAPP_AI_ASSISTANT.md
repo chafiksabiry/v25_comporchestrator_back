@@ -53,6 +53,7 @@ Même agent que sur WhatsApp (Claude, base de connaissances, langue, escalade), 
 
 ## Boîte de réception du support (lecture des conversations)
 Page `GET /api/whatsapp/admin/inbox` (statique, sans donnée) : saisir la clé `WHATSAPP_ADMIN_API_KEY` (gardée en sessionStorage, envoyée en en-tête `x-admin-key`). Elle liste les conversations WhatsApp et du chat du site, avec leur historique. Routes JSON : `GET /admin/conversations[?channel=web|whatsapp&limit=]` et `GET /admin/conversations/:id`. Désactivée (404) sans `WHATSAPP_ADMIN_API_KEY`.
+`DELETE /admin/conversations/:id` supprime définitivement une conversation et ses tickets d'escalade (irréversible ; admin uniquement).
 Les routes `/admin/*` acceptent aussi la connexion admin du tableau de bord HARX (`Authorization: Bearer <JWT>` émis par le service d'inscription avec `typeUser: 'admin'`) : c'est ce qu'utilise la page « Inbox » de `harx.ai/admin`, sans saisie de clé.
 
 ## Base de connaissances

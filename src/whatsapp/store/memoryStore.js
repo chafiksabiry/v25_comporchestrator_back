@@ -65,6 +65,11 @@ export function createMemoryStore() {
         .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
         .slice(0, Math.min(Math.max(Number(limit) || 50, 1), 100));
     },
+    async deleteConversation(waId) {
+      const existed = conversations.delete(waId);
+      for (const [id, t] of tickets) if (t.waId === waId) tickets.delete(id);
+      return existed;
+    },
     async createTicket(t) {
       const id = crypto.randomBytes(6).toString('hex');
       const doc = { id, status: 'open', createdAt: new Date(), ...t };
