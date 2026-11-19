@@ -38,6 +38,15 @@ En plus de `pipeline.md`, `faq.md` et du CRM, Claude dispose de deux outils, `se
 - La base décrit le fonctionnement du produit, pas les décisions métier (qui sélectionne, sous quel délai) : pour cela, `knowledge/` reste la source.
 - Pour mettre à jour la base après une évolution du code : `npm run whatsapp:kb`.
 
+## Inbox support (tableau de bord admin)
+Chaque échange (message du visiteur + réponse de l'agent) est copié dans la base de l'Inbox support (`src/salesiq/inboxRecorder.js`, conversation `salesiq:<empreinte>`), à côté des conversations WhatsApp et du chat du site : `harx.ai/admin/inbox`, filtre « SalesIQ », temps réel.
+- Non bloquant : la copie se fait sans attente et ne peut jamais retarder ni faire échouer la réponse au visiteur (base indisponible comprise).
+- L'identifiant est une empreinte SHA-256 de la clé visiteur SalesIQ : ni e-mail ni identifiant Zoho dans l'URL ou l'interface. Un visiteur non identifiable n'est pas enregistré.
+- Mode `shadow` : la réponse de Claude n'est pas envoyée, elle est enregistrée comme « Brouillon non envoyé ». Mode `off` : rien n'est enregistré.
+- Une demande que Claude ne peut pas traiter seul (`flag_for_team`) marque la conversation « À traiter » dans l'Inbox.
+- Lecture seule côté SalesIQ : pour répondre à un visiteur, utiliser Zoho SalesIQ ; supprimer une conversation dans l'Inbox ne supprime que la copie.
+- Ne couvre que les échanges à partir de la mise en service. Désactivable : `SALESIQ_INBOX_RECORD=0`. Le texte des messages reste absent des journaux.
+
 ## Variables d'environnement (Railway)
 | Variable | Rôle |
 |---|---|
@@ -49,6 +58,7 @@ En plus de `pipeline.md`, `faq.md` et du CRM, Claude dispose de deux outils, `se
 | `ANTHROPIC_API_KEY` | déjà présente sur le service |
 | `SALESIQ_CLAUDE_MODEL` (défaut `claude-sonnet-5-5`), `SALESIQ_CLAUDE_EFFORT` | modèle et effort |
 | `SALESIQ_SCREENNAME` (`harxtechnologiesinc`), `SALESIQ_OPERATOR_ID`, `ZOHO_CRM_PIPELINE` (`Reps Pipeline`) | paramètres HARX |
+| `SALESIQ_INBOX_RECORD` | `0` pour ne pas copier les échanges dans l'Inbox support (défaut : activé) |
 | `SALESIQ_LOG_PAYLOAD_SHAPE` | journalise la structure (jamais les valeurs) des webhooks, pour le premier branchement |
 
 Scopes OAuth du Self Client : `SalesIQ.callbacks.UPDATE,SalesIQ.conversations.READ,SalesIQ.conversations.CREATE,SalesIQ.conversations.UPDATE,ZohoCRM.modules.deals.READ`.

@@ -92,7 +92,7 @@ export function createWhatsAppRouter({ agent, store, whatsapp, kb, cfg, auth = a
     return res.type('html').send(ADMIN_INBOX_HTML);
   });
   router.get('/admin/conversations', admin, async (req, res) => {
-    const channel = ['web', 'whatsapp'].includes(String(req.query.channel)) ? String(req.query.channel) : undefined;
+    const channel = ['web', 'whatsapp', 'salesiq'].includes(String(req.query.channel)) ? String(req.query.channel) : undefined;
     res.set('Cache-Control', 'no-store');
     res.json({ conversations: await store.listConversations({ channel, limit: req.query.limit }) });
   });

@@ -533,3 +533,63 @@ for (const bad of ['Cela vient de v25_matching_backend.', 'Voir src/routes/agent
 assert.equal(checkReply('Votre profil est comparé aux exigences du gig : langues, compétences et disponibilités.').ok, true);
 
 console.log('salesiq tests: OK');
+
+// --- Copie des échanges dans l'Inbox support (src/salesiq/inboxRecorder.js) ---
+{
+  const { createInboxRecorder, siqConversationId, isSalesIqConversation } = await import('../salesiq/inboxRecorder.js');
+  const { createMemoryStore } = await import('../whatsapp/store/memoryStore.js');
+  const store = createMemoryStore();
+  const record = createInboxRecorder(store, { logger: quiet });
+  const build2 = (script, env) => {
+    const zoho = fakeZoho();
+    const cfg = cfgOf(env);
+    const claude = fakeClaude(script);
+    const agent = createAgent({ cfg, claude, zoho, tools: createToolRunner({ zoho, logger: quiet }), knowledge, logger: quiet, record });
+    return { agent, zoho };
+  };
+  // Salutation : échange enregistré (visiteur + réponse envoyée), identifiant = empreinte, sans e-mail ni identifiant Zoho
+  const g = build2([]);
+  const r1 = await g.agent.handleWebhook(body('Bonjour', { visitor: { id: 'v-secret-1', email: 'jean.dupont@example.com' } }));
+  await r1.done; await tick();
+  const id = siqConversationId('v-secret-1');
+  assert.ok(isSalesIqConversation(id) && !id.includes('secret') && !id.includes('dupont'), 'identifiant opaque');
+  let conv = await store.getConversation(id);
+  assert.deepEqual(conv.messages.map((m) => m.role), ['user', 'assistant']);
+  assert.equal(conv.messages[0].text, 'Bonjour');
+  assert.equal(conv.messages[1].text, r1.response.replies[0], 'la réponse enregistrée est celle envoyée au visiteur');
+  assert.equal(conv.handoff?.active, false);
+  // Demande que Claude ne peut pas traiter seul : conversation marquée « à traiter »
+  const f = build2([use('flag_for_team', { reason: 'demande de remboursement', urgency: 'high' })]);
+  const r2 = await f.agent.handleWebhook(body('Je veux un remboursement immédiat', { visitor: { id: 'v-flag' } }));
+  await r2.done; await tick();
+  conv = await store.getConversation(siqConversationId('v-flag'));
+  assert.equal(conv.handoff.active, true);
+  assert.equal(conv.messages.length, 2);
+  // Mode shadow : la réponse de Claude n'est PAS envoyée ; elle est enregistrée comme brouillon
+  const sh = build2([{ stop_reason: 'end_turn', content: [{ type: 'text', text: 'Voici la réponse proposée.' }] }], { SALESIQ_MODE: 'shadow' });
+  const r3 = await sh.agent.handleWebhook(body('Comment publier mon profil ?', { visitor: { id: 'v-shadow' } }));
+  await r3.done; await tick();
+  conv = await store.getConversation(siqConversationId('v-shadow'));
+  assert.match(conv.messages[1].text, /^\(Brouillon non envoyé/);
+  assertAck(r3.response); // le visiteur n'a reçu que la réponse de repli
+  // Visiteur non identifiable : rien n'est enregistré (on ne mélange pas des visiteurs)
+  const before = (await store.listConversations({ channel: 'salesiq' })).length;
+  const r4 = await g.agent.handleWebhook({ handler: 'message', operation: 'chat', visitor: {}, request: { request_id: 'r', message: { text: 'Bonjour' } }, attachments: [] });
+  await r4.done; await tick();
+  assert.equal((await store.listConversations({ channel: 'salesiq' })).length, before);
+  // Filtres de canal : SalesIQ ni WhatsApp ni site ne se mélangent
+  await store.getOrCreateConversation('212600000001', {});
+  await store.getOrCreateConversation('web:abcdefghijklmnopqrstuv', {});
+  assert.ok((await store.listConversations({ channel: 'salesiq' })).every((c) => c.waId.startsWith('salesiq:')));
+  assert.ok((await store.listConversations({ channel: 'whatsapp' })).every((c) => !/^(web|salesiq):/.test(c.waId)));
+  assert.equal((await store.listConversations({ channel: 'web' })).length, 1);
+  // Une base en panne ne change rien pour le visiteur
+  const broken = createInboxRecorder({ getOrCreateConversation: async () => { throw new Error('db down'); } }, { logger: quiet });
+  const bAgent = createAgent({ cfg: cfgOf(), claude: fakeClaude([]), zoho: fakeZoho(), tools: createToolRunner({ zoho: fakeZoho(), logger: quiet }), knowledge, logger: quiet, record: broken });
+  const rb = await bAgent.handleWebhook(body('Bonjour', { visitor: { id: 'v-db' } }));
+  await rb.done; await tick();
+  assert.equal(rb.response.action, 'reply');
+  // Désactivation
+  assert.equal(createInboxRecorder(store, { enabled: false }), null);
+  console.log('salesiq inbox recording: OK');
+}
