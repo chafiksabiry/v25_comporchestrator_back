@@ -270,6 +270,19 @@ try {
   // HTML seul -> texte ; 20 000 caractères max
   on('GET', /graph\.microsoft\.com\/v1\.0\/me\/messages\/g1\?/, () => ({ status: 200, json: { body: { contentType: 'html', content: `<p>${'a'.repeat(30000)}</p>` } } }));
   assert.equal((await req('GET', `/inbound-emails/${C1}/${mid}/body`, { user: 'owner1' })).body.data.text.length, 20000);
+  // Partie HTML d'origine (Gmail, format=full) : renvoyée en plus du texte (mise en page), plafonnée ; absente quand le message n'a que du texte brut.
+  // Testée directement sur le fournisseur Google (la boîte de ce scénario est Microsoft).
+  {
+    const { google: G } = await import('../services/secretariatProviders/google.js');
+    const b64 = (t) => Buffer.from(t).toString('base64url');
+    const gmail = (payload) => async () => ({ status: 200, json: { payload }, headers: {} });
+    let out = await G.readBodyFull({ http: gmail({ mimeType: 'multipart/alternative', parts: [{ mimeType: 'text/plain', body: { data: b64('Bonjour en texte') } }, { mimeType: 'text/html', body: { data: b64('<table><tr><td style="color:red">Bonjour en HTML</td></tr></table>') } }] }), accessToken: 't', id: 'g1' });
+    assert.equal(out.text, 'Bonjour en texte'); assert.equal(out.html, '<table><tr><td style="color:red">Bonjour en HTML</td></tr></table>', 'HTML d’origine renvoyé');
+    out = await G.readBodyFull({ http: gmail({ mimeType: 'text/html', body: { data: b64(`<p>${'b'.repeat(500000)}</p>`) } }), accessToken: 't', id: 'g1' });
+    assert.equal(out.html.length, 400000, 'HTML plafonné à 400 000 caractères');
+    out = await G.readBodyFull({ http: gmail({ mimeType: 'text/plain', body: { data: b64('Texte seul') } }), accessToken: 't', id: 'g1' });
+    assert.deepEqual(out, { text: 'Texte seul' }, 'pas de HTML quand le message n’en a pas');
+  }
   // panne fournisseur -> 502
   on('GET', /graph\.microsoft\.com\/v1\.0\/me\/messages\/g1\?/, () => ({ status: 503, json: null }));
   r = await req('GET', `/inbound-emails/${C1}/${mid}/body`, { user: 'owner1' }); assert.equal(r.status, 502); assert.equal(r.body.code, 'provider_error');
@@ -306,8 +319,25 @@ try {
   assert.equal(r.status, 200, r.text); assert.equal(r.body.data.items.length, 1);
   const gq = qs(providerCalls()[0].url); assert.equal(gq.$top, '25'); assert.equal(gq.$select, 'id,subject,from,receivedDateTime,bodyPreview');
   assert.deepEqual(r.body.data.items[0].from, { name: 'Léa', email: 'lea@contoso.test' }); assert.equal(r.body.data.items[0].snippet, 'Bonjour !');
-  r = await req('GET', `/inbound-emails/${C1}/${r.body.data.items[0].id}/body`, { user: 'owner1' });
-  assert.equal(r.status, 200); assert.equal(r.body.data.text, `${BODY_SECRET}\n\nMerci`); assert.match(providerCalls().at(-1).headers.Prefer, /text/);
+  const oid1 = r.body.data.items[0].id;
+  // affichage : corps HTML d'origine demandé (sans « Prefer: text »), texte tiré du HTML ; analyse IA : texte seul demandé à Graph
+  r = await req('GET', `/inbound-emails/${C1}/${oid1}/body`, { user: 'owner1' });
+  assert.equal(r.status, 200); assert.equal(r.body.data.text, `${BODY_SECRET}\n\nMerci`); assert.equal(r.body.data.html, `<p>${BODY_SECRET}</p><br>Merci`);
+  assert.equal(providerCalls().at(-1).headers.Prefer, undefined);
+  r = await req('GET', `/inbound-emails/${C1}/${oid1}/body?purpose=ai`, { user: 'owner1' });
+  assert.equal(r.status, 200); assert.equal(r.body.data.text, `${BODY_SECRET}\n\nMerci`); assert.equal(r.body.data.html, undefined); assert.match(providerCalls().at(-1).headers.Prefer, /text/);
+  // texte seul (réponse / citation) : comme l'IA, aucune partie HTML ni image lue
+  r = await req('GET', `/inbound-emails/${C1}/${oid1}/body?purpose=text`, { user: 'owner1' });
+  assert.equal(r.status, 200); assert.equal(r.body.data.html, undefined); assert.match(providerCalls().at(-1).headers.Prefer, /text/);
+  // `purpose` normalisé : une seule chaîne connue ; tableau (paramètre répété), objet ou valeur inconnue -> 400, sans appel au fournisseur
+  {
+    const before = providerCalls().length;
+    for (const q of ['purpose=ai&purpose=ai', 'purpose[]=ai', 'purpose[x]=ai', 'purpose=autre', 'purpose=']) {
+      r = await req('GET', `/inbound-emails/${C1}/${oid1}/body?${q}`, { user: 'owner1' });
+      assert.equal(r.status, 400, q); assert.equal(r.body.code, 'invalid_request', q);
+    }
+    assert.equal(providerCalls().length, before, 'aucun appel au fournisseur pour un usage invalide');
+  }
 
   // ---------- 10. purge : désactivation et déconnexion
   reset(); enable(); putConnection(C1, 'microsoft', { scopes: READ_M }); graphStd();
