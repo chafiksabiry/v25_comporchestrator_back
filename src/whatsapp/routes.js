@@ -5,6 +5,7 @@ import { verifyMetaSignature } from './signature.js';
 import { issueLinkCode } from './identity.js';
 import { missingConfig } from './config.js';
 import { createRateLimiter } from './rateLimit.js';
+import { isWebConversation } from './webChat.js';
 
 const safeEqual = (a, b) => {
   const x = Buffer.from(String(a || ''));
@@ -82,7 +83,8 @@ export function createWhatsAppRouter({ agent, store, whatsapp, kb, cfg, auth = a
     const text = String(req.body?.text || '').trim();
     if (!text) return res.status(400).json({ error: 'text is required' });
     try {
-      const ids = await whatsapp.sendText(ticket.waId, text);
+      // Visiteur du chat du site : pas de message Meta, la réponse est lue par le navigateur dans l'historique.
+      const ids = isWebConversation(ticket.waId) ? [] : await whatsapp.sendText(ticket.waId, text);
       await store.appendMessage(ticket.waId, { role: 'human_agent', text, wamid: ids[0] || null });
       if (req.body?.resolve) {
         await store.updateTicket(req.params.id, { status: 'resolved', resolvedAt: new Date() });
