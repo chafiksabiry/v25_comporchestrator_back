@@ -88,6 +88,7 @@ beforeEach(() => {
   stripeService.getPublicPlans = async () => Object.entries(products).map(([id, metadata]) => ({ id, unit_amount: 2999, currency: 'eur', product: { id: `prod_${id}`, metadata } }));
   stripeService.resolvePromotionCode = async () => { calls.resolved += 1; return 'promo_resolved'; };
   stripeService.priceAllowsPromotionCodes = async (id) => promotionCodesAllowed(products[id]);
+  stripeService.priceProductMetadata = async (id) => products[id] || null;
   stripeService.createEmbeddedSubscriptionSession = async (...args) => { calls.sessions.push(['embedded', ...args]); return { id: 'cs', client_secret: 'sec' }; };
   stripeService.createCheckoutSession = async (...args) => { calls.sessions.push(['hosted', ...args]); return { id: 'cs', url: 'https://checkout' }; };
   stripeService.getSharedClient = () => ({ coupons: { list: async () => { calls.couponReads += 1; return { data: [] }; } } });
