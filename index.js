@@ -59,6 +59,13 @@ mongoose.connect(config.mongodbUri, {
   applyMailOwnership();
   // Pilote agent IA : réglages d'avant (niveau / déclencheurs) → horaires + priorité (idempotent).
   migrateAiAgentSettings().catch((e) => console.error('[ai-inbound] migration des réglages :', e?.message || e));
+  // Branchement des numéros : avec INBOUND_WEBHOOK_RESYNC=1, chaque ligne Twilio active de CETTE base est rebranchée sur l'API de CET
+  // environnement (recette et production partagent le compte Twilio). Sans la variable : rien.
+  if (String(process.env.INBOUND_WEBHOOK_RESYNC || '').trim() === '1') {
+    Promise.all([import('./src/services/inboundWebhook.js'), import('./src/services/phoneNumberService.js'), import('./src/models/PhoneNumber.js')])
+      .then(([{ resyncInboundWebhooks }, { phoneNumberService }, { PhoneNumber }]) => resyncInboundWebhooks({ PhoneNumber, twilioClient: phoneNumberService.twilioClient }))
+      .catch((e) => console.error('[inbound-resync] :', e?.message || e));
+  }
 }).catch((error) => {
   console.error('❌ MongoDB connection error:', error);
   process.exit(1); // Exit if we can't connect to database

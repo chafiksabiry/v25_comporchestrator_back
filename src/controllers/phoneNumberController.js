@@ -15,6 +15,7 @@ import { isPremiumRate, MESSAGES as DESTINATION_MESSAGES, DESTINATION_NOT_ALLOWE
 import { paypalService } from '../services/paypalService.js';
 import { stripeService } from '../services/stripeService.js';
 import { config } from '../config/env.js';
+import { applyInboundWebhook, inboundWebhookUrls, NUMBER_OWNED_BY_PRODUCTION, NUMBER_OWNED_BY_PRODUCTION_MESSAGE, maskNumber, hostOf } from '../services/inboundWebhook.js';
 import telnyx from 'telnyx';
 import mongoose from 'mongoose';
 import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
@@ -679,6 +680,7 @@ class PhoneNumberController {
             trialExpiresAt,
             ...(isMonthly ? { billingModel: BILLING_MODEL_MONTHLY } : {}),
             ...assignmentOptions(a),
+            webhookUrls: inboundWebhookUrls({ req }),
           }
         ),
       });
@@ -918,6 +920,7 @@ class PhoneNumberController {
             trialExpiresAt,
             ...(isMonthly ? { billingModel: BILLING_MODEL_MONTHLY } : {}),
             ...assignmentOptions(a),
+            webhookUrls: inboundWebhookUrls({ req }),
           }
         ),
       });
@@ -1889,6 +1892,7 @@ class PhoneNumberController {
           paymentRef: payment._id,
           ...(isMonthly ? { billingModel: BILLING_MODEL_MONTHLY } : {}),
           ...assignmentOptions(recoverAssignment),
+          webhookUrls: inboundWebhookUrls({ req }),
         }
       );
       if (isMonthly) {
@@ -2379,7 +2383,10 @@ class PhoneNumberController {
       if (!config.twilioAccountSid || !config.twilioAuthToken) {
         return res.status(500).json({ error: 'Server Configuration', code: 'TELEPHONY_NOT_CONFIGURED', message: 'La configuration téléphonie du serveur est incomplète.' });
       }
-      const voiceUrl = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/inbound-call`;
+      const urls = inboundWebhookUrls({ req });
+      if (!urls) {
+        return res.status(500).json({ error: 'Server Configuration', code: 'TELEPHONY_NOT_CONFIGURED', message: 'La configuration téléphonie du serveur est incomplète.' });
+      }
       let sid = line.twilioId ? String(line.twilioId) : '';
       if (!sid) {
         const found = await phoneNumberService.twilioClient.incomingPhoneNumbers.list({ phoneNumber: e164, limit: 1 });
@@ -2388,8 +2395,11 @@ class PhoneNumberController {
       if (!sid) {
         return res.status(404).json({ error: 'Not Found', code: 'LINE_NOT_FOUND_AT_PROVIDER', message: "La ligne n'a pas été retrouvée chez l'opérateur." });
       }
-      await phoneNumberService.twilioClient.incomingPhoneNumbers(sid).update({ voiceUrl, voiceMethod: 'POST' });
-      await PhoneNumber.updateOne({ _id: line._id }, { $set: { 'metadata.inboundWebhook': voiceUrl } });
+      const branched = await applyInboundWebhook({ twilioClient: phoneNumberService.twilioClient, PhoneNumber, line, sid, urls, req });
+      if (branched.refused) {
+        console.warn(`🛑 Test d'appel entrant refusé sur ${maskNumber(e164)} : numéro branché sur ${hostOf(branched.from)}`);
+        return res.status(409).json({ error: 'Conflict', code: NUMBER_OWNED_BY_PRODUCTION, message: NUMBER_OWNED_BY_PRODUCTION_MESSAGE });
+      }
       const session = startInboundTestSession(e164);
       res.json({ success: true, data: { phoneNumber: e164, status: session.status, startedAt: session.startedAt, expiresAt: session.expiresAt } });
     } catch (error) {
@@ -2709,8 +2719,7 @@ class PhoneNumberController {
       }
       if (!isAvailable(userId)) console.log(`🎧 Conseiller ${userId} disponible pour l'entreprise ${companyId}`);
       markAvailable({ userId, companyId, name: req.user?.name || '' });
-      const voiceUrl = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/inbound-call`;
-      this.ensureInboundWebhook(companyId, voiceUrl).catch((e) => console.error('ensureInboundWebhook:', e.message));
+      this.ensureInboundWebhook(companyId, inboundWebhookUrls({ req })).catch((e) => console.error('ensureInboundWebhook:', e.message));
       res.json({ success: true, data: { available: true } });
     } catch (error) {
       console.error('Error in voicePresence:', error.message);
@@ -2718,13 +2727,18 @@ class PhoneNumberController {
     }
   }
 
-  /** Toute ligne Twilio de l'entreprise doit envoyer ses appels entrants au serveur. */
-  async ensureInboundWebhook(companyId, voiceUrl) {
+  /**
+   * Toute ligne Twilio de l'entreprise doit envoyer ses appels entrants à l'API de CET environnement. `urls` : résultat de
+   * inboundWebhookUrls() (une voice_url seule est acceptée). Hors production, un numéro branché sur la production n'est jamais réécrit.
+   */
+  async ensureInboundWebhook(companyId, urls) {
     if (!mongoose.Types.ObjectId.isValid(String(companyId))) return;
-    const lines = await PhoneNumber.find({ companyId, twilioId: { $exists: true, $ne: null }, 'metadata.inboundWebhook': { $ne: voiceUrl } });
+    const wanted = typeof urls === 'string' ? { voiceUrl: urls, voiceMethod: 'POST' } : urls;
+    if (!wanted?.voiceUrl) return;
+    const lines = await PhoneNumber.find({ companyId, twilioId: { $exists: true, $ne: null }, 'metadata.inboundWebhook': { $ne: wanted.voiceUrl } });
     for (const line of lines) {
-      await phoneNumberService.twilioClient.incomingPhoneNumbers(String(line.twilioId)).update({ voiceUrl, voiceMethod: 'POST' });
-      await PhoneNumber.updateOne({ _id: line._id }, { $set: { 'metadata.inboundWebhook': voiceUrl } });
+      const out = await applyInboundWebhook({ twilioClient: phoneNumberService.twilioClient, PhoneNumber, line, urls: wanted });
+      if (out.refused) console.warn(`🛑 ${maskNumber(line.phoneNumber)} branché sur ${hostOf(out.from)} : pas rebranché depuis cet environnement.`);
     }
   }
 
