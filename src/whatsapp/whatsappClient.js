@@ -99,6 +99,22 @@ export function createWhatsAppClient({ config = getWhatsAppConfig(), fetchImpl =
       return ids;
     },
     /**
+     * Envoie un modèle de message approuvé (hors fenêtre de 24 h, Meta n'accepte que cela). `params` : valeurs du corps ({{1}}, {{2}}…) ;
+     * Meta refuse retours à la ligne, tabulations et plus de 4 espaces consécutifs dans un paramètre : ils sont aplatis ici.
+     * @returns {Promise<string[]>} identifiants wamid
+     */
+    async sendTemplate(to, { name, lang = 'fr', params = [] } = {}) {
+      if (!name) throw new WhatsAppSendError('template name missing', { retryable: false });
+      const flat = (v) => String(v ?? '').replace(/[\r\n\t]+/g, ' | ').replace(/ {2,}/g, ' ').trim().slice(0, 1000);
+      const target = isPhoneNumberId(to) ? { to: String(to) } : { recipient: String(to) };
+      const json = await post({
+        messaging_product: 'whatsapp', recipient_type: 'individual', ...target, type: 'template',
+        template: { name, language: { code: lang }, ...(params.length ? { components: [{ type: 'body', parameters: params.map((t) => ({ type: 'text', text: flat(t) })) }] } : {}) },
+      });
+      const id = json?.messages?.[0]?.id;
+      return id ? [id] : [];
+    },
+    /**
      * Télécharge une image reçue (2 appels : métadonnées, puis fichier) et la renvoie prête pour l'API Claude.
      * @returns {Promise<{ mediaType: string, data: string, bytes: number }>} données en base64
      */
