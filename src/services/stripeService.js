@@ -193,8 +193,9 @@ async function cancelCheckoutAuthorization(sessionId) {
 }
 
 async function retrieveSession(sessionId) {
+  // latest_charge déplié : un remboursement (charge.refunded / amount_refunded) se lit sans appel supplémentaire.
   return getStripe().checkout.sessions.retrieve(sessionId, {
-    expand: ['payment_intent']
+    expand: ['payment_intent.latest_charge']
   });
 }
 
