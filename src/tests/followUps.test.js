@@ -167,8 +167,8 @@ assert.equal(r.code, 403, 'autre centre refusé');
 
 // un agent ne crée pas, ne transfère pas, ne touche pas ce qui n'est pas à lui
 me = { isOwner: false, isAgent: true, companyId: COMPANY, permissions: {} };
-r = await call(ctl.create, { user: 'agent1', body: { companyId: COMPANY, model: 'transfer', assigneeId: 'm2' } });
-assert.equal(r.code, 403);
+r = await call(ctl.create, { user: 'agent1', body: { companyId: COMPANY, model: 'voicemail_callback', assigneeId: 'm2' } });
+assert.equal(r.code, 403, 'un agent ne crée que des rendez-vous et des tâches confiées à un collègue');
 r = await call(ctl.patch, { user: 'agent1', params: { id: 'id1' }, body: { status: 'done' } });
 assert.equal(r.code, 404, 'élément d’un autre : introuvable pour l’agent');
 store[1].assigneeId = 'agent1';

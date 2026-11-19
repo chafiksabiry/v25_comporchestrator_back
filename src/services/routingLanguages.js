@@ -9,12 +9,12 @@
 const L = (code, nameFr, nameNative, nameEn, voice, ttsLanguage, phrase) => ({ code, nameFr, nameNative, nameEn, voice, ttsLanguage, phrase });
 
 export const ROUTING_LANGUAGES = [
-  L('fr', 'français', 'Français', 'French', 'Polly.Lea', 'fr-FR', (k) => `Pour le français, tapez ${k}.`),
-  L('en', 'anglais', 'English', 'English', 'Polly.Joanna', 'en-US', (k) => `For English, press ${k}.`),
-  L('es', 'espagnol', 'Español', 'Spanish', 'Polly.Lucia', 'es-ES', (k) => `Para español, pulse ${k}.`),
-  L('de', 'allemand', 'Deutsch', 'German', 'Polly.Vicki', 'de-DE', (k) => `Für Deutsch drücken Sie die ${k}.`),
-  L('it', 'italien', 'Italiano', 'Italian', 'Polly.Carla', 'it-IT', (k) => `Per l'italiano, premi ${k}.`),
-  L('pt', 'portugais', 'Português', 'Portuguese', 'Polly.Ines', 'pt-PT', (k) => `Para português, prima ${k}.`),
+  L('fr', 'français', 'Français', 'French', 'Polly.Lea-Generative', 'fr-FR', (k) => `Pour le français, tapez ${k}.`),
+  L('en', 'anglais', 'English', 'English', 'Polly.Joanna-Generative', 'en-US', (k) => `For English, press ${k}.`),
+  L('es', 'espagnol', 'Español', 'Spanish', 'Polly.Lucia-Generative', 'es-ES', (k) => `Para español, pulse ${k}.`),
+  L('de', 'allemand', 'Deutsch', 'German', 'Polly.Vicki-Generative', 'de-DE', (k) => `Für Deutsch drücken Sie die ${k}.`),
+  L('it', 'italien', 'Italiano', 'Italian', 'Polly.Bianca-Generative', 'it-IT', (k) => `Per l'italiano, premi ${k}.`),
+  L('pt', 'portugais', 'Português', 'Portuguese', 'Polly.Ines-Neural', 'pt-PT', (k) => `Para português, prima ${k}.`),
   L('nl', 'néerlandais', 'Nederlands', 'Dutch', 'Polly.Lotte', 'nl-NL', (k) => `Voor Nederlands, druk op ${k}.`),
   L('ar', 'arabe', 'العربية', 'Arabic', 'Polly.Zeina', 'arb', (k) => `للعربية، اضغط ${k}.`),
   L('ru', 'russe', 'Русский', 'Russian', 'Polly.Tatyana', 'ru-RU', (k) => `Для русского языка нажмите ${k}.`),

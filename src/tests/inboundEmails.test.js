@@ -2,6 +2,8 @@
 // E-mails ENTRANTS : réglage, scope de lecture optionnel, lecture des métadonnées, corps en direct, « traité », purge. Base et réseau SIMULÉS
 // (aucun appel vers un vrai fournisseur). Les points d'accès Gmail / Graph réels restent À VÉRIFIER en recette avec de vrais comptes.
 import assert from 'node:assert/strict';
+// Scopes Gmail restreints : désactivés par défaut côté serveur (GOOGLE_RESTRICTED_SCOPES) ; ces tests couvrent la fonction activée.
+process.env.GOOGLE_RESTRICTED_SCOPES = 'true';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 
@@ -130,7 +132,7 @@ const graphStd = () => {
 
 // ---------- 2. démarrage de l'autorisation : scope de lecture optionnel
 const qs = (u) => Object.fromEntries(new URL(u).searchParams);
-const FULL = { INTEGRATIONS_ENC_KEY: ENC_KEY, PUBLIC_API_BASE_URL: 'https://api.test/api', GOOGLE_CLIENT_ID: 'i', GOOGLE_CLIENT_SECRET: 's', MICROSOFT_CLIENT_ID: 'i', MICROSOFT_CLIENT_SECRET: 's', ZOOM_CLIENT_ID: 'i', ZOOM_CLIENT_SECRET: 's' };
+const FULL = { GOOGLE_RESTRICTED_SCOPES: 'true', INTEGRATIONS_ENC_KEY: ENC_KEY, PUBLIC_API_BASE_URL: 'https://api.test/api', GOOGLE_CLIENT_ID: 'i', GOOGLE_CLIENT_SECRET: 's', MICROSOFT_CLIENT_ID: 'i', MICROSOFT_CLIENT_SECRET: 's', ZOOM_CLIENT_ID: 'i', ZOOM_CLIENT_SECRET: 's' };
 const base = { companyId: C1, userId: 'owner1', returnTo: 'tools' };
 assert.equal(qs(S.startAuthorization({ ...base, provider: 'google' }, FULL)).scope, 'openid email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.events', 'sans read : inchangé');
 assert.equal(qs(S.startAuthorization({ ...base, provider: 'google', read: false }, FULL)).scope, qs(S.startAuthorization({ ...base, provider: 'google' }, FULL)).scope);
@@ -270,6 +272,19 @@ try {
   // HTML seul -> texte ; 20 000 caractères max
   on('GET', /graph\.microsoft\.com\/v1\.0\/me\/messages\/g1\?/, () => ({ status: 200, json: { body: { contentType: 'html', content: `<p>${'a'.repeat(30000)}</p>` } } }));
   assert.equal((await req('GET', `/inbound-emails/${C1}/${mid}/body`, { user: 'owner1' })).body.data.text.length, 20000);
+  // Partie HTML d'origine (Gmail, format=full) : renvoyée en plus du texte (mise en page), plafonnée ; absente quand le message n'a que du texte brut.
+  // Testée directement sur le fournisseur Google (la boîte de ce scénario est Microsoft, qui ne renvoie que le texte).
+  {
+    const { google: G } = await import('../services/secretariatProviders/google.js');
+    const b64 = (t) => Buffer.from(t).toString('base64url');
+    const gmail = (payload) => async () => ({ status: 200, json: { payload }, headers: {} });
+    let out = await G.readBodyFull({ http: gmail({ mimeType: 'multipart/alternative', parts: [{ mimeType: 'text/plain', body: { data: b64('Bonjour en texte') } }, { mimeType: 'text/html', body: { data: b64('<table><tr><td style="color:red">Bonjour en HTML</td></tr></table>') } }] }), accessToken: 't', id: 'g1' });
+    assert.equal(out.text, 'Bonjour en texte'); assert.equal(out.html, '<table><tr><td style="color:red">Bonjour en HTML</td></tr></table>', 'HTML d’origine renvoyé');
+    out = await G.readBodyFull({ http: gmail({ mimeType: 'text/html', body: { data: b64(`<p>${'b'.repeat(500000)}</p>`) } }), accessToken: 't', id: 'g1' });
+    assert.equal(out.html.length, 400000, 'HTML plafonné à 400 000 caractères');
+    out = await G.readBodyFull({ http: gmail({ mimeType: 'text/plain', body: { data: b64('Texte seul') } }), accessToken: 't', id: 'g1' });
+    assert.deepEqual(out, { text: 'Texte seul' }, 'pas de HTML quand le message n’en a pas');
+  }
   // panne fournisseur -> 502
   on('GET', /graph\.microsoft\.com\/v1\.0\/me\/messages\/g1\?/, () => ({ status: 503, json: null }));
   r = await req('GET', `/inbound-emails/${C1}/${mid}/body`, { user: 'owner1' }); assert.equal(r.status, 502); assert.equal(r.body.code, 'provider_error');

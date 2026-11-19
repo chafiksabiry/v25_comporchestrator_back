@@ -20,10 +20,10 @@ assert.match(buildInboundTwiml({ ...common, settings: { ringTimeoutSeconds: 45 }
 
 // Accueil : voix de synthèse selon le genre de la voix
 const t1 = buildInboundTwiml({ ...common, settings: { greetingText: 'Bonjour', voice: 'onyx' }, identities: ['cc-u1'] });
-assert.ok(t1.startsWith('<Say language="fr-FR" voice="Polly.Mathieu">Bonjour</Say><Dial'));
-assert.ok(buildInboundTwiml({ ...common, settings: { greetingText: 'Bonjour', voice: 'shimmer' }, identities: ['cc-u1'] }).includes('Polly.Lea'));
-assert.equal(pollyVoice('coral'), 'Polly.Lea');
-assert.equal(pollyVoice('ash'), 'Polly.Mathieu');
+assert.ok(t1.startsWith('<Say language="fr-FR" voice="Polly.Remi-Neural">Bonjour</Say><Dial'));
+assert.ok(buildInboundTwiml({ ...common, settings: { greetingText: 'Bonjour', voice: 'shimmer' }, identities: ['cc-u1'] }).includes('Polly.Lea-Generative'));
+assert.equal(pollyVoice('coral'), 'Polly.Lea-Generative');
+assert.equal(pollyVoice('ash'), 'Polly.Remi-Neural');
 
 // Accueil désactivé : l'appel entre directement (ni texte ni audio), la sonnerie est inchangée
 const off = buildInboundTwiml({ ...common, settings: { greetingText: 'Bonjour', voice: 'onyx', greetingEnabled: false }, identities: ['cc-u1'] });
@@ -51,12 +51,12 @@ const vmAudio = { voicemailText: 'Laissez un mot', voice: 'nova', voicemailAudio
 assert.ok(buildInboundTwiml({ ...common, settings: vmAudio, identities: [] }).startsWith(`<Play>${base}/api/inbound-settings/audio/${companyId}/voicemail/abc123def456.mp3</Play><Record`));
 assert.ok(buildInboundTwiml({ ...common, settings: { voicemailText: 'Laissez un mot' }, identities: [] }).includes('>Laissez un mot</Say><Record'));
 // accueil + invitation
-assert.ok(buildInboundTwiml({ ...common, settings: { greetingText: 'Bonjour' }, identities: [] }).startsWith('<Say language="fr-FR" voice="Polly.Lea">Bonjour</Say><Say'));
+assert.ok(buildInboundTwiml({ ...common, settings: { greetingText: 'Bonjour' }, identities: [] }).startsWith('<Say language="fr-FR" voice="Polly.Lea-Generative">Bonjour</Say><Say'));
 
 // Répondeur désactivé : message actuel + raccrochage
 assert.equal(
   buildInboundTwiml({ ...common, settings: { voicemailEnabled: false }, identities: [] }),
-  '<Say language="fr-FR" voice="Polly.Lea">Cette ligne est active sur la plateforme Harx. Aucun conseiller n&apos;est disponible pour le moment. Au revoir.</Say><Hangup/>'
+  '<Say language="fr-FR" voice="Polly.Lea-Generative">Cette ligne est active sur la plateforme Harx. Aucun conseiller n&apos;est disponible pour le moment. Au revoir.</Say><Hangup/>'
 );
 
 // Échappement XML de tout texte inséré
@@ -73,12 +73,12 @@ assert.equal(na('completed'), '<Hangup/>');
 assert.equal(na('answered'), '<Hangup/>');
 assert.equal(
   na('no-answer', { voicemailEnabled: false }),
-  '<Say language="fr-FR" voice="Polly.Lea">Aucun conseiller n&apos;a pu répondre. Veuillez rappeler plus tard. Au revoir.</Say><Hangup/>'
+  '<Say language="fr-FR" voice="Polly.Lea-Generative">Aucun conseiller n&apos;a pu répondre. Veuillez rappeler plus tard. Au revoir.</Say><Hangup/>'
 );
 assert.ok(!na('no-answer', { greetingText: 'Bonjour' }).includes('Bonjour'), "l'accueil n'est pas rejoué");
 
 // Remerciement
-assert.equal(buildVoicemailDoneTwiml(), '<Say language="fr-FR" voice="Polly.Lea">Merci, votre message a bien été enregistré. Au revoir.</Say><Hangup/>');
+assert.equal(buildVoicemailDoneTwiml(), '<Say language="fr-FR" voice="Polly.Lea-Generative">Merci, votre message a bien été enregistré. Au revoir.</Say><Hangup/>');
 
 // settings déjà publics acceptés
 assert.ok(buildInboundTwiml({ ...common, settings: toPublicSettings(validated), identities: [] }).includes('greeting/abc123def456.mp3'));

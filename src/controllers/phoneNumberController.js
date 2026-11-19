@@ -1257,7 +1257,9 @@ class PhoneNumberController {
       // be rejected (21649) after payment. Other markets (US, etc.) are
       // Telnyx and must not be blocked by a missing Twilio bundle — that
       // used to abort checkout before Stripe/PayPal returned a URL.
-      const lineProvider = resolvePhoneProvider(req.body.lineProvider, { phoneNumber });
+      // Telnyx n'est pas en service : sans opérateur demandé, la ligne est une ligne Twilio (l'achat passe par Twilio, la Téléphonie
+      // n'envoie pas `lineProvider`). Le contrôle du crédit Telnyx ne s'applique que si Telnyx est demandé explicitement.
+      const lineProvider = resolvePhoneProvider(req.body.lineProvider || 'twilio', { phoneNumber });
       const isoCountry = phoneNumberService.guessCountryFromE164(phoneNumber);
       // Un numéro déjà dans l'inventaire Twilio a déjà son dossier : aucun contrôle de dossier avant paiement.
       const inventoryCheck = lineProvider === 'twilio' ? await phoneNumberService.findClaimableInventoryNumber(phoneNumber) : null;
@@ -2178,11 +2180,11 @@ class PhoneNumberController {
       const gatherAction = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/test-call-gather`;
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say language="fr-FR" voice="Polly.Lea">Bonjour, ceci est un appel de test depuis la plateforme Harx. Appuyez sur la touche 1 pour confirmer que vous avez bien reçu cet appel.</Say>
+  <Say language="fr-FR" voice="Polly.Lea-Generative">Bonjour, ceci est un appel de test depuis la plateforme Harx. Appuyez sur la touche 1 pour confirmer que vous avez bien reçu cet appel.</Say>
   <Gather numDigits="1" timeout="20" action="${gatherAction}" method="POST">
-    <Say language="fr-FR" voice="Polly.Lea">Je répète : appuyez sur 1 maintenant pour confirmer.</Say>
+    <Say language="fr-FR" voice="Polly.Lea-Generative">Je répète : appuyez sur 1 maintenant pour confirmer.</Say>
   </Gather>
-  <Say language="fr-FR" voice="Polly.Lea">Aucune confirmation reçue. Au revoir.</Say>
+  <Say language="fr-FR" voice="Polly.Lea-Generative">Aucune confirmation reçue. Au revoir.</Say>
   <Hangup/>
 </Response>`;
       res.type('text/xml').status(200).send(twiml);
@@ -2241,6 +2243,7 @@ class PhoneNumberController {
       await phoneNumberService.twilioClient.incomingPhoneNumbers(sid).update({ voiceUrl, voiceMethod: 'POST' });
       await PhoneNumber.updateOne({ _id: line._id }, { $set: { 'metadata.inboundWebhook': voiceUrl } });
       const session = startInboundTestSession(e164);
+      console.log(`🧪 Test d'appel entrant démarré sur ${e164} (société ${line.companyId}) jusqu'à ${new Date(session.expiresAt).toISOString()}`);
       res.json({ success: true, data: { phoneNumber: e164, status: session.status, startedAt: session.startedAt, expiresAt: session.expiresAt } });
     } catch (error) {
       console.error('Error in startInboundTest:', error.message);
@@ -2588,13 +2591,14 @@ class PhoneNumberController {
       // Langue des textes de l'entreprise dits à l'appelant : pays de la ligne appelée (français sans numéro lisible).
       const language = languageForPhone(to);
       const received = to ? receiveInboundCall(to, { from, callSid }) : null;
+      if (!received) console.log(`📞 Appel entrant sur ${to || '(numéro illisible)'} depuis ${from} : aucun test en attente (état : ${JSON.stringify(to ? getInboundTest(to) : null)})`);
       if (received) {
         await PhoneNumber.updateMany(
           { phoneNumber: { $in: [to, to.replace(/^\+/, '')] } },
           { $set: { 'metadata.inboundTest': { testedAt: new Date(received.receivedAt).toISOString(), from, callSid } } }
         );
         console.log(`✅ Test d'appel entrant reçu sur ${to} depuis ${from}`);
-        return reply('<Say language="fr-FR" voice="Polly.Lea">Test d\'appel entrant réussi. Votre ligne reçoit bien les appels. Au revoir.</Say><Hangup/>');
+        return reply('<Say language="fr-FR" voice="Polly.Lea-Generative">Test d\'appel entrant réussi. Votre ligne reçoit bien les appels. Au revoir.</Say><Hangup/>');
       }
       // Appel réel : on fait sonner les conseillers disponibles de l'entreprise propriétaire de la ligne.
       const line = to
@@ -2986,12 +2990,12 @@ class PhoneNumberController {
       const twiml = confirmed
         ? `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say language="fr-FR" voice="Polly.Lea">Merci. Confirmation reçue. Votre ligne fonctionne correctement. Au revoir.</Say>
+  <Say language="fr-FR" voice="Polly.Lea-Generative">Merci. Confirmation reçue. Votre ligne fonctionne correctement. Au revoir.</Say>
   <Hangup/>
 </Response>`
         : `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say language="fr-FR" voice="Polly.Lea">Confirmation invalide. Au revoir.</Say>
+  <Say language="fr-FR" voice="Polly.Lea-Generative">Confirmation invalide. Au revoir.</Say>
   <Hangup/>
 </Response>`;
       res.type('text/xml').status(200).send(twiml);

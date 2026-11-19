@@ -873,7 +873,7 @@ test('line_not_assigned : message en ANGLAIS, code stable, lineStatus joint ; Tw
 
 test('buildRefusalTwiml : voix française par défaut (clients actuels inchangés), voix paramétrable', async () => {
   const { buildRefusalTwiml } = await import('../services/voicemailCallback.js');
-  assert.match(buildRefusalTwiml('Appel non autorisé.'), /language="fr-FR" voice="Polly.Lea"/);
+  assert.match(buildRefusalTwiml('Appel non autorisé.'), /language="fr-FR" voice="Polly.Lea-Generative"/);
   assert.match(buildRefusalTwiml('No.', { language: 'en-US', voice: 'Polly.Joanna' }), /language="en-US" voice="Polly.Joanna"/);
 });
 

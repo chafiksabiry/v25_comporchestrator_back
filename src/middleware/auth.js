@@ -1,11 +1,10 @@
 import jwt from 'jsonwebtoken';
 
 /**
- * Requires a valid JWT (issued by v25_registration_backend). Rejects any
- * request with no token or an invalid/expired one. Money-moving routes
- * (wallet-company, escrow, minutes-company, tokens-company) had no such
- * check at all (cahier de recette PAY-12): an unauthenticated caller could
- * invoke them directly with an arbitrary companyId.
+ * Requires a valid JWT issued by the registration service.
+ * Money routes take companyId from the URL or body, so a missing check
+ * lets any caller act on any company. Server-to-server routes stay outside
+ * this middleware because the other services have no user token to send.
  */
 export function authenticate(req, res, next) {
   try {

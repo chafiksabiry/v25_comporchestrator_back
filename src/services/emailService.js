@@ -9,7 +9,7 @@ import axios from 'axios';
  * Expéditeur : adresse vérifiée de la plateforme, nom affiché = nom du centre ; réponse = adresse de la personne connectée.
  * Aucun contenu complet n'est conservé (voir EmailLog).
  */
-export const TEMPLATES = ['callback_confirmation', 'appointment_confirmation', 'free'];
+export const TEMPLATES = ['callback_confirmation', 'appointment_confirmation', 'appointment_cancellation', 'free'];
 export const MAX_RECIPIENTS = 5;
 /** Copie (Cc) : utile surtout pour « Répondre à tous ». */
 export const MAX_CC = 10;

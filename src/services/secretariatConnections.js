@@ -106,8 +106,13 @@ const stateSecret = () => {
 export function startAuthorization({ companyId, userId, provider, returnTo, shared, read = false, write = false, pend = false }, env = process.env) {
   const cfg = providerConfig(provider, env);
   if (!cfg) throw new SecretariatError('unavailable', messages.unavailable(provider));
-  // GOOGLE : la lecture (gmail.readonly) est demandée comme pour Microsoft ; l'écriture (gmail.modify) jamais, quel que soit l'appelant.
+  // GOOGLE : l'écriture (gmail.modify) n'est jamais demandée, quel que soit l'appelant.
   if (provider === 'google' && write) throw new SecretariatError('invalid_request', GOOGLE_MAILBOX_WRITE_UNAVAILABLE);
+  // Lecture Gmail (gmail.readonly, scope RESTREINT) : tant que Google ne l'a pas validée pour l'application (évaluation de sécurité), elle n'est jamais
+  // demandée. GOOGLE_RESTRICTED_SCOPES=true la réactive. Les autorisations déjà accordées restent valables.
+  if (provider === 'google' && read && String(env.GOOGLE_RESTRICTED_SCOPES || '').toLowerCase() !== 'true') {
+    throw new SecretariatError('invalid_request', 'La lecture des e-mails reçus n’est pas encore disponible avec Google.');
+  }
   // `read` : demande EN PLUS le scope (optionnel) de lecture de la boîte de réception (e-mails entrants). Les scopes obtenus sont lus au callback.
   if (read && !PROVIDERS[provider].readScope) throw new SecretariatError('invalid_request', 'La lecture des e-mails n’est pas disponible pour ce fournisseur.');
   if (write && !PROVIDERS[provider].writeScope) throw new SecretariatError('invalid_request', 'La gestion de la messagerie n’est pas disponible pour ce fournisseur.');

@@ -9,12 +9,32 @@ function toCompanyObjectId(companyId) {
   return new mongoose.Types.ObjectId(s);
 }
 
+const DUPLICATE_GRANT_WINDOW_MS = 15 * 60 * 1000;
+
+function subscriptionRef(subscription) {
+  return String(subscription?.stripeSubscriptionId || subscription?._id || '');
+}
+
+function periodStartMs(subscription) {
+  const raw = subscription?.currentPeriodStart;
+  const ms = raw ? new Date(raw).getTime() : Date.now();
+  return Number.isFinite(ms) ? ms : Date.now();
+}
+
 function periodGrantKey(subscription) {
-  const subRef = subscription.stripeSubscriptionId || String(subscription._id);
-  const periodStart = subscription.currentPeriodStart
-    ? new Date(subscription.currentPeriodStart).toISOString()
-    : 'unknown';
-  return `tokens:${subRef}:${periodStart}`;
+  const bucket = Math.floor(periodStartMs(subscription) / 60000) * 60000;
+  return `tokens:${subscriptionRef(subscription)}:${new Date(bucket).toISOString()}`;
+}
+
+function splitTokenGrantKey(grantKey) {
+  const raw = String(grantKey || '');
+  if (!raw.startsWith('tokens:')) return null;
+  const body = raw.slice('tokens:'.length);
+  const idx = body.indexOf(':');
+  if (idx <= 0) return null;
+  const at = Date.parse(body.slice(idx + 1));
+  if (Number.isNaN(at)) return null;
+  return { subRef: body.slice(0, idx), at };
 }
 
 /**
@@ -38,6 +58,8 @@ export async function ensurePlanTokensGranted(companyId) {
   }
 
   const grantKey = periodGrantKey(subscription);
+  const subRef = subscriptionRef(subscription);
+  const periodAt = periodStartMs(subscription);
   let wallet = await TokensCompany.findOne({ companyId: oid });
   if (!wallet) {
     wallet = await TokensCompany.create({
@@ -48,6 +70,15 @@ export async function ensurePlanTokensGranted(companyId) {
       planTokensGranted: 0,
       planGrantKeys: [],
     });
+  }
+
+  const alreadyThisPeriod = (wallet.planGrantKeys || []).some((key) => {
+    const parsed = splitTokenGrantKey(key);
+    if (!parsed || parsed.subRef !== subRef) return false;
+    return Math.abs(parsed.at - periodAt) <= DUPLICATE_GRANT_WINDOW_MS;
+  });
+  if (alreadyThisPeriod) {
+    return { granted: false, allowance, alreadyGranted: true, planName: limits?.planName || null };
   }
 
   const updated = await TokensCompany.findOneAndUpdate(

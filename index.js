@@ -36,6 +36,8 @@ import { aiAgentRoutes } from './src/routes/aiAgent.js';
 import { lineCapacityRoutes } from './src/routes/lineCapacity.js';
 import { purgeExpiredBenchRecordings, migrateAiAgentSettings } from './src/services/aiInbound.js';
 import { companyNotificationRoutes } from './src/routes/companyNotifications.js';
+import { createWhatsAppModule } from './src/whatsapp/index.js';
+import { createSalesIqModule } from './src/salesiq/index.js';
 import { startMessageReminders } from './src/services/messageReminders.js';
 import { scanLowResources } from './src/services/companyNotificationService.js';
 import { clearExpiredRetractions } from './src/services/retractionService.js';
@@ -68,6 +70,10 @@ mongoose.connect(config.mongodbUri, {
 app.use(corsMiddleware());
 if (!parseAllowedOrigins()) console.warn('[security] CORS_ALLOWED_ORIGINS absent : toute origine est acceptée avec credentials (comportement historique)');
 
+// HARX SalesIQ Support Agent : webhook Zobot -> Claude -> réponse en temps réel (voir docs/SALESIQ_SUPPORT_AGENT.md).
+// Monté AVANT le contrôle de connexion MongoDB et avant express.json() : il n'utilise pas la base et lit le corps brut.
+app.use('/api/salesiq', createSalesIqModule().router);
+
 // Database connection health check middleware
 app.use((req, res, next) => {
   if (mongoose.connection.readyState !== 1 || !mongoose.connection.db) {
@@ -83,7 +89,9 @@ app.use((req, res, next) => {
   // Exclure les webhooks du parsing JSON global pour permettre l'accès au raw body (Stripe, Telnyx, etc.)
   const isWebhook = 
     req.originalUrl === '/api/phone-numbers/webhooks/telnyx/number-order' ||
-    req.originalUrl === '/api/subscriptions/webhook';
+    req.originalUrl === '/api/subscriptions/webhook' ||
+    // Webhook WhatsApp (Meta) : corps brut requis pour vérifier X-Hub-Signature-256.
+    req.originalUrl.split('?')[0] === '/api/whatsapp/webhook';
 
   if (isWebhook) {
     next();
@@ -129,6 +137,9 @@ app.use('/api/secretariat', secretariatToolsRoutes);
 app.use('/api/reach', reachRoutes);
 app.use('/api/device-link', deviceLinkRoutes);
 app.use('/api/company-notifications', companyNotificationRoutes);
+
+// HARX WhatsApp AI Assistant : webhook Meta + liaison de compte + administration du support (voir docs/WHATSAPP_AI_ASSISTANT.md).
+app.use('/api/whatsapp', createWhatsAppModule().router);
 
 // Health check to verify deployment
 app.get('/api/health', (req, res) => {

@@ -126,13 +126,15 @@ class PhoneNumberService {
         const phoneNumberData = {
           phoneNumber: phoneNumber,
           provider: 'telnyx',
-          status: response.data.status || 'pending',
+          // The order is placed. HARX treats a purchased line as active
+          // instead of leaving Telnyx's initial "pending" on the document.
+          status: 'active',
           gigId,
           companyId,
           orderId: response.data.id,
           telnyxId: response.data.phone_numbers[0]?.id,
           features: {
-            voice: false,
+            voice: true,
             sms: false,
             mms: false
           },
@@ -566,15 +568,24 @@ class PhoneNumberService {
         } = phoneNumberData;
 
         // Trouver le numéro dans notre base de données par telnyxId
-        const phoneNumber = await PhoneNumber.findOne({ telnyxId });
+        let phoneNumber = telnyxId ? await PhoneNumber.findOne({ telnyxId }) : null;
+        if (!phoneNumber && phoneNumberData.phone_number) {
+          phoneNumber = await PhoneNumber.findOne({ phoneNumber: phoneNumberData.phone_number });
+        }
+        if (!phoneNumber && orderId) {
+          phoneNumber = await PhoneNumber.findOne({ orderId });
+        }
 
         if (!phoneNumber) {
           console.warn(`⚠️ Phone number not found in DB for telnyxId: ${telnyxId}`);
           continue;
         }
 
-        // Mettre à jour le statut avec celui envoyé par Telnyx
-        phoneNumber.status = status;
+        // A purchased line stays active. Only a hard failure leaves that state.
+        const raw = String(status || '').toLowerCase();
+        phoneNumber.status = (raw === 'failed' || raw === 'error' || raw === 'cancelled')
+          ? 'error'
+          : 'active';
 
         // Sauvegarder les changements
         await phoneNumber.save();
@@ -807,6 +818,15 @@ class PhoneNumberService {
 
   }
 
+  async getAllPhoneNumbers() {
+    // Lines already bought were stored as Telnyx "pending". A purchase is active.
+    await PhoneNumber.updateMany(
+      { status: { $regex: /^pending$/i } },
+      { $set: { status: 'active', 'features.voice': true } }
+    );
+    return await PhoneNumber.find();
+  }
+
   async getPhoneNumberByNumber(phoneNumber) {
     return await PhoneNumber.findOne({ phoneNumber });
   }
@@ -907,18 +927,44 @@ class PhoneNumberService {
           console.warn(`⚠️ Twilio SID missing for ${e164} — skipping provider release`);
         }
       } else if (provider === 'telnyx' || doc.telnyxId) {
-        let tid = doc.telnyxId ? String(doc.telnyxId) : '';
-        if (!tid && this.telnyxClient) {
-          const response = await this.telnyxClient.phoneNumbers.list({
-            filter: { phone_number: e164 },
-          });
-          tid = response?.data?.[0]?.id ? String(response.data[0].id) : '';
+        const numbersApi = this.telnyxClient?.phoneNumbers;
+        if (!numbersApi) {
+          throw new Error('Telnyx client is not configured');
         }
-        if (tid && this.telnyxClient) {
-          await this.telnyxClient.phoneNumbers.delete(tid);
-          console.log(`🗑️ Released Telnyx number ${e164} (${tid})`);
+        const release = async (id) => {
+          // telnyx@1.x exposes `del` (delete is a reserved word). Newer SDKs use `delete`.
+          if (typeof numbersApi.del === 'function') {
+            await numbersApi.del(id);
+          } else if (typeof numbersApi.delete === 'function') {
+            await numbersApi.delete(id);
+          } else {
+            throw new Error('Telnyx SDK cannot release phone numbers');
+          }
+        };
+        const unlock = async (id) => {
+          // Portal lock "Prevent deletion" (deletion_lock_enabled) rejects DELETE.
+          if (typeof numbersApi.update === 'function') {
+            await numbersApi.update(id, { deletion_lock_enabled: false });
+          }
+        };
+
+        let tid = '';
+        try {
+          const listed = await numbersApi.list({ filter: { phone_number: e164 } });
+          const rows = Array.isArray(listed?.data) ? listed.data : [];
+          const live = rows.find((row) => String(row?.phone_number || '') === e164);
+          if (live?.id) tid = String(live.id);
+        } catch (listErr) {
+          console.warn(`⚠️ Telnyx lookup failed for ${e164}: ${listErr?.message || listErr}`);
+        }
+        if (!tid && doc.telnyxId) tid = String(doc.telnyxId);
+
+        if (!tid) {
+          console.warn(`⚠️ Telnyx number ${e164} is already absent — removing HARX record only`);
         } else {
-          console.warn(`⚠️ Telnyx id missing for ${e164} — skipping provider release`);
+          await unlock(tid);
+          await release(tid);
+          console.log(`🗑️ Released Telnyx number ${e164} (${tid})`);
         }
       } else {
         console.warn(`⚠️ Unknown provider for ${e164} — DB delete only`);

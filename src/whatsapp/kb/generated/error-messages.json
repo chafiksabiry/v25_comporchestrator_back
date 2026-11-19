@@ -1,0 +1,1385 @@
+{
+ "generatedFrom": "scripts/buildKnowledgeBase.mjs",
+ "chunks": [
+  {
+   "title": "Error messages - v25_comporchestrator_back - addressController",
+   "heading": "Messages returned by addressController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/addressController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/addressController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Country code must be a 2-letter ISO code\"\n4xx/5xx - \"Telnyx API Error\"\n500 - \"Internal Server Error\"\n400 - \"Address ID is required\"\n404 - \"Address not found\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - callController",
+   "heading": "Messages returned by callController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/callController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/callController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to handle call\"\n500 - \"Failed to initiate call\"\n500 - \"Failed to hang up call\"\n500 - \"Failed to start recording\"\n500 - \"Failed to stop recording\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - callEndedController",
+   "heading": "Messages returned by callEndedController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/callEndedController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/callEndedController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n401 - \"Invalid service token\"\n400 - \"companyId and call.sid are required\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - contactController",
+   "heading": "Messages returned by contactController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/contactController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/contactController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Un contact porte déjà ce numéro.\"\n4xx/5xx - \"Un autre contact porte déjà ce numéro.\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - deviceLinkController",
+   "heading": "Messages returned by deviceLinkController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/deviceLinkController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/deviceLinkController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Code invalide ou expiré.\"\n401 - \"Authentication required\"\n500 - \"Impossible de générer le code.\"\n429 - \"Trop de tentatives. Réessayez dans une minute.\"\n500 - \"Erreur serveur.\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - documentController",
+   "heading": "Messages returned by documentController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/documentController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/documentController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"No file uploaded\"\n400 - \"File size exceeds 5MB limit\"\n4xx/5xx - \"Telnyx API Error\"\n500 - \"Internal Server Error\"\n400 - \"Document ID is required\"\n404 - \"Document not found\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - escrowController",
+   "heading": "Messages returned by escrowController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/escrowController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/escrowController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Une décision prise par votre assistant IA cette semaine est à confirmer ou contredire.\"\n400 - \"companyId is required\"\n500 - \"Failed to fetch wallet balance\"\n500 - \"Failed to fetch wallet status\"\n500 - \"Failed to fetch transaction history\"\n400 - \"companyId and positive amount are required\"\n500 - \"Failed to process deposit\"\n400 - \"Insufficient balance\"\n500 - \"Failed to process withdrawal\"\n400 - \"companyId and positive minutes volume are required\"\n500 - \"Failed to process minutes purchase\"\n400 - \"Nombre de minutes disponibles insuffisant pour établir ce séquestre. Veuillez d'abord acheter des minutes.\"\n500 - \"Failed to establish escrow lock\"\n400 - \"contractId and companyId are required\"\n404 - \"Wallet not found\"\n404 - \"Escrow contract not found\"\n500 - \"Failed to release escrow funds\"\n500 - \"Failed to refund escrow funds\"\n500 - \"Failed to fetch gigs and enrolled representatives\"\n500 - \"Failed to fetch company calls\"\n400 - \"callId, companyId, and action are required\"\n404 - \"Call not found\"\n500 - \"Failed to process transaction approval\"\n400 - \"agentId is required\"\n500 - \"Failed to fetch rep transactions\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - escrowController",
+   "heading": "Messages returned by escrowController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/escrowController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/escrowController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to fetch company rep transactions\"\n400 - \"agentId, companyId and positive amount are required\"\n409 - \"Bonus already booked or invalid input\"\n500 - \"Failed to award bonus\"\n500 - \"Failed to fetch agent wallet\"\n500 - \"Failed to fetch agent withdrawals\"\n400 - \"No phone number on file for this agent\"\n500 - \"SMS verification is not configured\"\n500 - \"Failed to send verification code\"\n400 - \"agentId, positive amount, and method are required\"\n400 - \"Verification code is required\"\n400 - \"Code de vérification incorrect ou expiré.\"\n400 - \"Insufficient available balance\"\n500 - \"Failed to request withdrawal\"\n400 - \"withdrawalId and action are required\"\n404 - \"Withdrawal request not found\"\n403 - \"You do not have access to this company\"\n500 - \"Failed to process withdrawal action\"\n400 - \"Company ID is required\"\n200 - \"Reconciliation triggered\"\n500 - \"Failed to trigger reconciliation\"\n400 - \"callId is required\"\n404 - \"No call commission found for this call\"\n409 - \"Commission already cancelled\"\n410 - \"Cancellation window has expired for this call\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - escrowController",
+   "heading": "Messages returned by escrowController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/escrowController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/escrowController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to cancel call commission\"\n400 - \"transactionId is required\"\n500 - \"Failed to fetch pending reviews\"\n500 - \"Failed to compute AI agreement rate\"\n500 - \"Failed to fetch AI delegation settings\"\n400 - \"companyId and a boolean enabled are required\"\n500 - \"Failed to update AI delegation settings\"\n500 - \"Failed to fetch AI audits\"\n400 - \"repTransactionId and a boolean confirm are required\"\n404 - \"Audit row not found\"\n409 - \"Audit already answered\"\n500 - \"Failed to respond to AI audit\"\n400 - \"repTransactionId and action (\"approve\"|\"refuse\") are required\"\n404 - \"Call commission not found\"\n409 - \"This commission is not awaiting review\"\n500 - \"Failed to process call commission decision\"\n500 - \"Failed to fetch Harx commissions\"\n400 - \"callId and repId are required\"\n400 - \"companyId and callId are required\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - minutesCompanyController",
+   "heading": "Messages returned by minutesCompanyController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/minutesCompanyController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/minutesCompanyController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"companyId is required\"\n500 - \"Failed to fetch minutes\"\n400 - \"companyId and positive amount are required\"\n500 - \"Failed to buy minutes\"\n400 - \"companyId and callSid are required\"\n500 - \"Failed to charge call minutes\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - paymentCheckoutController",
+   "heading": "Messages returned by paymentCheckoutController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/paymentCheckoutController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/paymentCheckoutController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to load checkout config\"\n400 - \"Valid companyId is required\"\n400 - \"purpose must be 'wallet_deposit', 'minutes_purchase', 'tokens_purchase' or 'bundle_purchase'\"\n400 - \"provider must be 'stripe' or 'paypal'\"\n400 - \"Invalid amount, minutes or tokens quantity\"\n503 - \"PayPal not configured\"\n4xx/5xx - \"Définissez PAYPAL_CLIENT_ID et PAYPAL_CLIENT_SECRET sur le serveur.\"\n502 - \"PayPal order missing approval URL\"\n4xx/5xx - \"La commande PayPal n'a pas pu être créée.\"\n503 - \"Stripe not configured\"\n4xx/5xx - \"Définissez STRIPE_SECRET_KEY sur le serveur.\"\n502 - \"Stripe checkout creation failed\"\n503 - \"PayPal authentication failed\"\n500 - \"Failed to initialize checkout\"\n400 - \"Valid paymentId is required\"\n404 - \"Payment not found\"\n400 - \"PayPal order ID (providerRef) is required\"\n402 - \"PayPal payment not completed\"\n400 - \"Stripe session ID (providerRef) is required\"\n502 - \"Stripe session retrieval failed\"\n402 - \"Stripe payment not completed\"\n500 - \"Failed to confirm checkout\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - phoneNumberController",
+   "heading": "Messages returned by phoneNumberController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/phoneNumberController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/phoneNumberController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to search phone numbers\"\n400 - \"Missing required fields\"\n402 - \"Payment required\"\n4xx/5xx - \"Approuvez d'abord la carte ou PayPal. Le montant n'est encaissé qu'après l'achat du numéro.\"\n400 - \"Payment / number mismatch\"\n4xx/5xx - \"The payment was not authorized for this exact phone number.\"\n402 - \"Number purchase failed\"\n400 - \"Invalid companyId\"\n500 - \"Failed to check trial eligibility\"\n400 - \"Regulatory Bundle Required\"\n400 - \"Twilio Trial Limit Reached\"\n402 - \"Provider credit insufficient\"\n402 - \"Payment Required\"\n400 - \"phoneNumber, companyId and provider are required\"\n400 - \"provider must be either 'stripe' or 'paypal'\"\n409 - \"Number not available\"\n4xx/5xx - \"Ce numéro n’est pas disponible.\"\n4xx/5xx - \"L'achat de numéro est temporairement indisponible. Aucun paiement n'a été pris. Réessayez plus tard ou contactez le support.\"\n503 - \"PayPal not configured\"\n4xx/5xx - \"Définissez PAYPAL_CLIENT_ID et PAYPAL_CLIENT_SECRET sur le serveur.\"\n502 - \"PayPal order missing approval URL\"\n4xx/5xx - \"La commande PayPal a été créée sans URL d'approbation.\"\n503 - \"Stripe not configured\"\n4xx/5xx - \"Définissez STRIPE_SECRET_KEY sur le serveur.\"\n502 - \"Stripe checkout URL missing\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - phoneNumberController",
+   "heading": "Messages returned by phoneNumberController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/phoneNumberController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/phoneNumberController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Stripe n'a pas renvoyé d'URL de paiement.\"\n502 - \"Stripe checkout creation failed\"\n503 - \"PayPal authentication failed\"\n500 - \"Failed to initialize checkout\"\n400 - \"Valid paymentId is required\"\n404 - \"Payment not found\"\n400 - \"PayPal order ID (providerRef) is required\"\n402 - \"PayPal not approved\"\n4xx/5xx - \"Le paiement PayPal n'est pas encore approuvé. Le montant n'est encaissé qu'après l'achat du numéro.\"\n400 - \"Stripe session ID (providerRef) is required\"\n502 - \"Stripe session retrieval failed\"\n402 - \"Stripe payment not authorized\"\n500 - \"Failed to confirm checkout\"\n500 - \"Failed to load checkout config\"\n500 - \"Failed to list orphan payments\"\n400 - \"paymentId is required\"\n400 - \"Payment not succeeded\"\n400 - \"Payment missing phoneNumber or companyId\"\n4xx/5xx - \"Cannot recover this payment record — it is missing required fields.\"\n500 - \"Failed to fetch phone numbers\"\n400 - \"gigId is required\"\n500 - \"Internal Server Error\"\n4xx/5xx - \"Failed to check gig number\"\n400 - \"fromNumber and toNumber are required\"\n400 - \"Numéros invalides. Utilisez le format international (+…).\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - phoneNumberController",
+   "heading": "Messages returned by phoneNumberController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/phoneNumberController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/phoneNumberController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n404 - \"Ce numéro n'est pas le vôtre ou n'est plus actif.\"\n500 - \"Server Configuration\"\n4xx/5xx - \"La configuration téléphonie du serveur est incomplète.\"\n4xx/5xx - \"Failed to test call\"\n400 - \"callId is required\"\n500 - \"Failed to fetch call status\"\n500 - \"Failed to hang up\"\n400 - \"Numéro invalide. Utilisez le format international (+…).\"\n400 - \"Le test d'appel entrant n'est pas disponible pour ce type de ligne.\"\n404 - \"La ligne n'a pas été retrouvée chez l'opérateur.\"\n500 - \"Failed to start inbound test\"\n4xx/5xx - \"Impossible de préparer le test d'appel entrant : \"\n500 - \"Failed to read inbound test\"\n4xx/5xx - \"Lecture du test d'appel entrant impossible.\"\n401 - \"Authentication required\"\n500 - \"Failed to create voice token\"\n4xx/5xx - \"Téléphone du navigateur indisponible pour le moment.\"\n4xx/5xx - \"Entreprise invalide.\"\n4xx/5xx - \"Vérification de la destination impossible pour le moment.\"\n500 - \"Failed to update presence\"\n4xx/5xx - \"Disponibilité non enregistrée.\"\n400 - \"companyId invalide.\"\n500 - \"Failed to read inbound stats\"\n4xx/5xx - \"Statistiques des appels entrants indisponibles.\"\n400 - \"Invalid phone number format\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - phoneNumberController",
+   "heading": "Messages returned by phoneNumberController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/phoneNumberController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/phoneNumberController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Phone number must be in E.164 format (e.g., +33123456789)\"\n404 - \"Phone number not found\"\n4xx/5xx - \"The specified phone number is not found in our database\"\n400 - \"Invalid number status\"\n4xx/5xx - \"Phone number must be in success status to configure voice feature\"\n4xx/5xx - \"Voice feature configured successfully\"\n404 - \"Telnyx configuration error\"\n4xx/5xx - \"Phone number not found in Telnyx system\"\n4xx/5xx - \"Telnyx API error\"\n500 - \"Internal server error\"\n4xx/5xx - \"Failed to configure voice feature\"\n400 - \"Missing required headers\"\n200 - \"Event type not handled\"\n400 - \"Invalid signature\"\n4xx/5xx - \"The webhook signature verification failed\"\n500 - \"Failed to process webhook\"\n500 - \"Failed to fetch Twilio requirements\"\n500 - \"Failed to create End User\"\n400 - \"File is required\"\n500 - \"Failed to upload document\"\n500 - \"Failed to create Bundle\"\n500 - \"Failed to assign item\"\n500 - \"Failed to submit Bundle\"\n500 - \"Failed to create Address\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - portalController",
+   "heading": "Messages returned by portalController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/portalController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/portalController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n404 - \"Aucun abonnement à gérer.\"\n403 - \"Accès refusé.\"\n503 - \"Le portail de gestion n'est pas disponible pour le moment.\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - receptionLineController",
+   "heading": "Messages returned by receptionLineController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/receptionLineController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/receptionLineController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n403 - \"Aucune entreprise rattachée.\"\n500 - \"Lecture de la ligne d’accueil impossible.\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - requirementController",
+   "heading": "Messages returned by requirementController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/requirementController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/requirementController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Country code is required\"\n500 - \"Internal Server Error\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - seatsController",
+   "heading": "Messages returned by seatsController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/seatsController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/seatsController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n404 - \"Aucun centre rattaché à ce compte.\"\n500 - \"Impossible de lire les sièges.\"\n200 - \"Mise à jour de la facturation des sièges différée.\"\n4xx/5xx - \"La facturation des sièges sera mise à jour au prochain essai.\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - subscriptionController",
+   "heading": "Messages returned by subscriptionController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/subscriptionController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/subscriptionController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Error fetching plans from Stripe\"\n4xx/5xx - \"No subscription found\"\n500 - \"Error fetching subscription\"\n400 - \"userId, companyId, priceId and provider are required\"\n400 - \"provider must be 'stripe' or 'paypal'\"\n4xx/5xx - \"Le code promotionnel n\\u2019est disponible que pour le paiement par carte (Stripe).\"\n503 - \"Stripe not configured\"\n4xx/5xx - \"Définissez STRIPE_SECRET_KEY.\"\n404 - \"Plan not found for this priceId\"\n503 - \"PayPal not configured\"\n4xx/5xx - \"Définissez PAYPAL_* sur le serveur.\"\n502 - \"PayPal approval URL missing\"\n400 - \"Valid paymentId is required\"\n404 - \"Subscription payment not found\"\n404 - \"Plan not found\"\n400 - \"PayPal order ID required\"\n402 - \"PayPal capture failed\"\n402 - \"PayPal payment not completed\"\n400 - \"Stripe session ID required\"\n402 - \"Stripe payment not completed\"\n500 - \"Failed to confirm subscription checkout\"\n500 - \"Error creating checkout session\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - telnyxRequirementGroupController",
+   "heading": "Messages returned by telnyxRequirementGroupController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/telnyxRequirementGroupController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/telnyxRequirementGroupController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Company ID and destination zone are required\"\n400 - \"Destination zone must be a 2-letter country code\"\n500 - \"Internal Server Error\"\n404 - \"No requirement group found for this company and destination\"\n400 - \"Requirements array is required and must not be empty\"\n400 - \"Each requirement must have requirementId and value\"\n4xx/5xx - \"Failed to fetch address details\"\n4xx/5xx - \"Failed to fetch document details\"\n404 - \"Requirement group not found\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - tokensCompanyController",
+   "heading": "Messages returned by tokensCompanyController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/tokensCompanyController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/tokensCompanyController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"companyId is required\"\n500 - \"Failed to fetch tokens\"\n400 - \"Invalid companyId\"\n500 - \"Failed to fetch token purchases\"\n500 - \"Failed to update AI providers\"\n400 - \"companyId and positive amount are required\"\n500 - \"Failed to buy tokens\"\n400 - \"companyId and usageId are required\"\n4xx/5xx - \"Solde de tokens AI insuffisant. Rechargez pour continuer.\"\n500 - \"Failed to charge AI tokens\"\n500 - \"Failed to check tokens\"\n500 - \"Failed to fetch token usage\"\n500 - \"Failed to aggregate token usage by gig\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - walletCompanyController",
+   "heading": "Messages returned by walletCompanyController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/walletCompanyController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/walletCompanyController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"companyId is required\"\n500 - \"Failed to fetch wallet\"\n400 - \"companyId and positive amount are required\"\n500 - \"Failed to deposit funds\"\n404 - \"Wallet not found\"\n400 - \"Insufficient balance\"\n500 - \"Failed to withdraw funds\"\n500 - \"Failed to fetch wallet entries\"\n500 - \"Failed to fetch agent withdrawals\"\n400 - \"withdrawalId and action are required\"\n404 - \"Withdrawal request not found\"\n403 - \"You do not have access to this company\"\n500 - \"Failed to process withdrawal action\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - urlGuard",
+   "heading": "Messages returned by urlGuard",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/integrations/urlGuard.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/integrations/urlGuard.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Adresse invalide.\"\n4xx/5xx - \"L’adresse doit commencer par https://.\"\n4xx/5xx - \"L’adresse ne doit pas contenir d’identifiants.\"\n4xx/5xx - \"Cette adresse n’est pas accessible depuis Internet.\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - auth",
+   "heading": "Messages returned by auth",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/middleware/auth.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/middleware/auth.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n401 - \"Authentication required\"\n401 - \"Authentication failed\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - companyAccess",
+   "heading": "Messages returned by companyAccess",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/middleware/companyAccess.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/middleware/companyAccess.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"companyId is required\"\n403 - \"You do not have access to this company\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - companyScope",
+   "heading": "Messages returned by companyScope",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/middleware/companyScope.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/middleware/companyScope.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n403 - \"Forbidden: not your company\"\n500 - \"Company check failed\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - phoneScope",
+   "heading": "Messages returned by phoneScope",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/middleware/phoneScope.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/middleware/phoneScope.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n403 - \"Not allowed for this company\"\n500 - \"Access check failed\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - companyNotifications",
+   "heading": "Messages returned by companyNotifications",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/companyNotifications.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/routes/companyNotifications.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Invalid companyId\"\n500 - \"Failed to list notifications\"\n500 - \"Failed to mark notifications as read\"\n404 - \"Notification not found\"\n500 - \"Failed to update notification\"\n500 - \"Failed to delete notification\"\n500 - \"Failed to clear notifications\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - internal",
+   "heading": "Messages returned by internal",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/routes/internal.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/routes/internal.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Invalid companyId format\"\n500 - \"Failed to read tokens balance\"\n401 - \"Invalid service token\"\n400 - \"companyId, key and title are required\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - browserOutbound",
+   "heading": "Messages returned by browserOutbound",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/services/browserOutbound.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/services/browserOutbound.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Numéro non autorisé.\"\n4xx/5xx - \"Aucun abonnement actif.\"\n4xx/5xx - \"Aucune ligne disponible pour appeler.\"\n4xx/5xx - \"Solde de minutes insuffisant.\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - callQueues",
+   "heading": "Messages returned by callQueues",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/services/callQueues.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/services/callQueues.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Les langues doivent être une liste.\"\n4xx/5xx - \"Les compétences doivent être une liste.\"\n4xx/5xx - \"Chaque compétence doit être un texte.\"\n4xx/5xx - \"Une compétence contient des caractères non autorisés.\"\n4xx/5xx - \"Corps de requête invalide.\"\n4xx/5xx - \"La touche du menu doit être un chiffre de 1 à 9.\"\n4xx/5xx - \"La liste des files est invalide.\"\n4xx/5xx - \"Une seule file entrante peut être la file par défaut.\"\n4xx/5xx - \"Une même file apparaît deux fois.\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - contacts",
+   "heading": "Messages returned by contacts",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/services/contacts.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/services/contacts.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Numéro de téléphone invalide.\"\n4xx/5xx - \"Adresse e-mail invalide.\"\n4xx/5xx - \"Statut inconnu.\"\n4xx/5xx - \"Langue inconnue.\"\n4xx/5xx - \"Indiquez au moins un nom, une société ou un numéro de téléphone.\"\n4xx/5xx - \"Aucune modification.\"\n4xx/5xx - \"Identifiant d’appel manquant.\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - numberCountry",
+   "heading": "Messages returned by numberCountry",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/services/numberCountry.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/services/numberCountry.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Company country lookup failed\"\n4xx/5xx - \"Country not allowed\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - phoneNumberService",
+   "heading": "Messages returned by phoneNumberService",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/services/phoneNumberService.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/services/phoneNumberService.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"No active phone numbers found for this gig\"\n4xx/5xx - \"Phone number terminated at provider and removed\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - visio",
+   "heading": "Messages returned by visio",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/services/visio.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/services/visio.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Le lien de visio doit être un texte.\"\n4xx/5xx - \"Indiquez le lien de votre salle de visio.\"\n4xx/5xx - \"Le lien de visio doit être une adresse https:// valide (ex. https://meet.google.com/abc-defg-hij).\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - routes",
+   "heading": "Messages returned by routes",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/whatsapp/routes.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/whatsapp/routes.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n401 - \"Authentication required\"\n429 - \"Too many requests\"\n500 - \"Could not create link code\"\n404 - \"Ticket not found\"\n400 - \"text is required\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - tools",
+   "heading": "Messages returned by tools",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/whatsapp/tools.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/whatsapp/tools.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Account lookup is temporarily unavailable. Tell the user and offer escalation if it persists.\"\n4xx/5xx - \"billing data temporarily unavailable\""
+  },
+  {
+   "title": "Error messages - v25_dash_calls_backend - agents",
+   "heading": "Messages returned by agents",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/controllers/agents.js"
+   ],
+   "text": "API error / status messages returned by v25_dash_calls_backend/src/controllers/agents.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n404 - \"Agent not found\"\n404 - \"Agent profile not found\""
+  },
+  {
+   "title": "Error messages - v25_dash_calls_backend - auth",
+   "heading": "Messages returned by auth",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/controllers/auth.js"
+   ],
+   "text": "API error / status messages returned by v25_dash_calls_backend/src/controllers/auth.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Please provide an email and password\"\n401 - \"Invalid credentials\""
+  },
+  {
+   "title": "Error messages - v25_dash_calls_backend - calls",
+   "heading": "Messages returned by calls",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/controllers/calls.js"
+   ],
+   "text": "API error / status messages returned by v25_dash_calls_backend/src/controllers/calls.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Agent ID est requis\"\n500 - \"Erreur serveur\"\n400 - \"companyId is required\"\n500 - \"Server error\"\n400 - \"agentId is required\"\n404 - \"Call not found\"\n400 - \"callerNumber et calleeNumber sont requis\"\n200 - \"Dialplan créé avec succès\"\n500 - \"Erreur lors de la création du Dialplan\"\n200 - \"Appel lancé avec succès\"\n500 - \"Erreur lors du lancement de l'appel\"\n400 - \"leadId is required\"\n404 - \"Lead not found\"\n404 - \"Lead has no gig\"\n404 - \"No active phone number for this gig\"\n500 - \"Failed to resolve gig phone line\"\n400 - \"User ID is required\"\n409 - \"Vous avez déjà un appel en cours. Terminez-le avant de lancer un nouvel appel.\"\n402 - \"Solde de minutes épuisé. Rechargez pour pouvoir passer des appels.\"\n402 - \"Solde insuffisant. Rechargez votre portefeuille pour pouvoir passer des appels.\"\n200 - \"Call initiated\"\n500 - \"Failed to initiate call\"\n400 - \"Call SID and User ID are required\"\n500 - \"Failed to track call status\"\n500 - \"Failed to hang up call\""
+  },
+  {
+   "title": "Error messages - v25_dash_calls_backend - calls",
+   "heading": "Messages returned by calls",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/controllers/calls.js"
+   ],
+   "text": "API error / status messages returned by v25_dash_calls_backend/src/controllers/calls.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to generate token\"\n500 - \"Failed to save center call\"\n500 - \"Failed to attach recording\"\n400 - \"Call SID / externalId is required\"\n500 - \"Failed to save call details\"\n400 - \"externalId is required\"\n500 - \"Failed to finalize Telnyx call\"\n400 - \"Recording URL and User ID are required\"\n500 - \"Error fetching the recording\"\n500 - \"Failed to store call details\"\n400 - \"Transcription is required\"\n500 - \"Failed to get AI assistance\"\n500 - \"Failed to get personality analysis\"\n4xx/5xx - \"Call already transcribed\"\n4xx/5xx - \"Call already analyzed\"\n202 - \"Analysis already in progress for this call.\"\n400 - \"No transcript or recording available for analysis\"\n4xx/5xx - \"Call analysis completed\"\n500 - \"Failed to analyze call\"\n400 - \"Call analysis already completed\"\n4xx/5xx - \"Company notified\"\n500 - \"Failed to notify company\"\n400 - \"verdict must be \"up\" or \"down\"\"\n400 - \"explanation is required when disagreeing with the score\"\n400 - \"Short calls are not analyzed — calibration unavailable\""
+  },
+  {
+   "title": "Error messages - v25_dash_calls_backend - calls",
+   "heading": "Messages returned by calls",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/controllers/calls.js"
+   ],
+   "text": "API error / status messages returned by v25_dash_calls_backend/src/controllers/calls.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Call has no AI score to calibrate\"\n4xx/5xx - \"Calibration saved\"\n500 - \"Failed to save calibration\"\n500 - \"Failed to start recording\"\n500 - \"Failed to stop recording\"\n500 - \"Failed to get Telnyx login token\"\n400 - \"callControlId is required\"\n500 - \"Failed to start Telnyx recording\""
+  },
+  {
+   "title": "Error messages - v25_dash_calls_backend - callsAnalytics",
+   "heading": "Messages returned by callsAnalytics",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/controllers/callsAnalytics.js"
+   ],
+   "text": "API error / status messages returned by v25_dash_calls_backend/src/controllers/callsAnalytics.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Company ID is required\"\n400 - \"Invalid company ID format\""
+  },
+  {
+   "title": "Error messages - v25_dash_calls_backend - fraudReview",
+   "heading": "Messages returned by fraudReview",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/controllers/fraudReview.js"
+   ],
+   "text": "API error / status messages returned by v25_dash_calls_backend/src/controllers/fraudReview.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Valid call id is required\"\n400 - \"decision must be \"overturn\" or \"confirm\"\"\n404 - \"Call not found\"\n400 - \"This call is not currently flagged as fraud\"\n500 - \"Server error\"\n400 - \"companyId is required\""
+  },
+  {
+   "title": "Error messages - v25_dash_calls_backend - vertexController",
+   "heading": "Messages returned by vertexController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/controllers/vertexController.js"
+   ],
+   "text": "API error / status messages returned by v25_dash_calls_backend/src/controllers/vertexController.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"recordingId or file_uri is required\"\n400 - \"fileUri and textToCompare are required\"\n400 - \"Audio data (base64) is required\"\n400 - \"fileUri (gs://...) is required\"\n400 - \"filePath and destinationName are required\"\n400 - \"File and destinationName are required\""
+  },
+  {
+   "title": "Error messages - v25_dash_calls_backend - companyScope",
+   "heading": "Messages returned by companyScope",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/middleware/companyScope.js"
+   ],
+   "text": "API error / status messages returned by v25_dash_calls_backend/src/middleware/companyScope.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Authentication is not configured\"\n401 - \"Authentication required\"\n401 - \"Authentication failed\""
+  },
+  {
+   "title": "Error messages - v25_dash_calls_backend - aiVoiceTools",
+   "heading": "Messages returned by aiVoiceTools",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/services/aiVoiceTools.js"
+   ],
+   "text": "API error / status messages returned by v25_dash_calls_backend/src/services/aiVoiceTools.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"query required\"\n4xx/5xx - \"no company context for this call\"\n4xx/5xx - \"invalid leadId\"\n4xx/5xx - \"lead not found\"\n4xx/5xx - \"callId required\"\n4xx/5xx - \"call not found\""
+  },
+  {
+   "title": "Error messages - v25_dash_calls_backend - callRecording",
+   "heading": "Messages returned by callRecording",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/utils/callRecording.js"
+   ],
+   "text": "API error / status messages returned by v25_dash_calls_backend/src/utils/callRecording.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Appel pas encore inscrit\"\n4xx/5xx - \"Appel d’une autre entreprise\""
+  },
+  {
+   "title": "Error messages - v25_dash_calls_backend - speechToText",
+   "heading": "Messages returned by speechToText",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/websocket/speechToText.js"
+   ],
+   "text": "API error / status messages returned by v25_dash_calls_backend/src/websocket/speechToText.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Backend failed to initialize Speech Client\"\n4xx/5xx - \"Failed to start speech stream\"\n4xx/5xx - \"Ready for streaming\""
+  },
+  {
+   "title": "Error messages - v25_dash_rep_back - NotificationController",
+   "heading": "Messages returned by NotificationController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_rep_back/src/controllers/NotificationController.js"
+   ],
+   "text": "API error / status messages returned by v25_dash_rep_back/src/controllers/NotificationController.js (REP dashboard). Use to explain an error the user quotes; the file name tells which area it belongs to.\n404 - \"Notification not found\"\n400 - \"notificationKey required\""
+  },
+  {
+   "title": "Error messages - v25_dash_rep_back - ProfileController",
+   "heading": "Messages returned by ProfileController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_rep_back/src/controllers/ProfileController.js"
+   ],
+   "text": "API error / status messages returned by v25_dash_rep_back/src/controllers/ProfileController.js (REP dashboard). Use to explain an error the user quotes; the file name tells which area it belongs to.\n404 - \"Profile not found\"\n500 - \"Internal server error\"\n400 - \"User ID is required\"\n400 - \"Profile ID is required\"\n400 - \"Name and email are required in personal info\"\n400 - \"Title, company, and start date are required for experience\"\n400 - \"Name and email cannot be empty\"\n400 - \"Title, company, and start date are required for each experience entry\"\n400 - \"Experience must be an array\"\n400 - \"Skills object is required\"\n400 - \"Language and assessment results are required\"\n400 - \"Assessment must include skill and results\"\n404 - \"Plan not found\"\n400 - \"No profile photo to compare against\"\n500 - \"Identity recheck failed\"\n500 - \"Accent recheck failed\"\n400 - \"No video file provided\"\n500 - \"Video analysis failed\"\n400 - \"languageName is required\"\n400 - \"expectedProficiency is required\"\n202 - \"Video uploaded. Analysis is running in the background.\"\n500 - \"Language video analysis failed\"\n404 - \"Analysis job not found\"\n500 - \"Could not load analysis status\""
+  },
+  {
+   "title": "Error messages - v25_dash_rep_back - auth",
+   "heading": "Messages returned by auth",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_rep_back/src/middleware/auth.js"
+   ],
+   "text": "API error / status messages returned by v25_dash_rep_back/src/middleware/auth.js (REP dashboard). Use to explain an error the user quotes; the file name tells which area it belongs to.\n401 - \"No token or identification provided\"\n403 - \"Invalid token\""
+  },
+  {
+   "title": "Error messages - v25_dashboard_backend - addressController",
+   "heading": "Messages returned by addressController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/controllers/addressController.js"
+   ],
+   "text": "API error / status messages returned by v25_dashboard_backend/src/controllers/addressController.js (dashboard (leads import, CRM, integrations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Country code must be a 2-letter ISO code\"\n4xx/5xx - \"Telnyx API Error\"\n500 - \"Internal Server Error\"\n400 - \"Address ID is required\"\n404 - \"Address not found\""
+  },
+  {
+   "title": "Error messages - v25_dashboard_backend - auth",
+   "heading": "Messages returned by auth",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/controllers/auth.js"
+   ],
+   "text": "API error / status messages returned by v25_dashboard_backend/src/controllers/auth.js (dashboard (leads import, CRM, integrations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Please provide an email and password\"\n401 - \"Invalid credentials\""
+  },
+  {
+   "title": "Error messages - v25_dashboard_backend - callController",
+   "heading": "Messages returned by callController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/controllers/callController.js"
+   ],
+   "text": "API error / status messages returned by v25_dashboard_backend/src/controllers/callController.js (dashboard (leads import, CRM, integrations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to handle call\"\n500 - \"Failed to initiate call\"\n500 - \"Failed to hang up call\"\n500 - \"Failed to start recording\"\n500 - \"Failed to stop recording\""
+  },
+  {
+   "title": "Error messages - v25_dashboard_backend - calls",
+   "heading": "Messages returned by calls",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/controllers/calls.js"
+   ],
+   "text": "API error / status messages returned by v25_dashboard_backend/src/controllers/calls.js (dashboard (leads import, CRM, integrations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n404 - \"Call not found\"\n400 - \"Please provide agent ID and phone number\"\n400 - \"Please provide user ID or agent ID\""
+  },
+  {
+   "title": "Error messages - v25_dashboard_backend - documentController",
+   "heading": "Messages returned by documentController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/controllers/documentController.js"
+   ],
+   "text": "API error / status messages returned by v25_dashboard_backend/src/controllers/documentController.js (dashboard (leads import, CRM, integrations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"No file uploaded\"\n400 - \"File size exceeds 5MB limit\"\n4xx/5xx - \"Telnyx API Error\"\n500 - \"Internal Server Error\"\n400 - \"Document ID is required\"\n404 - \"Document not found\""
+  },
+  {
+   "title": "Error messages - v25_dashboard_backend - leads",
+   "heading": "Messages returned by leads",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/controllers/leads.js"
+   ],
+   "text": "API error / status messages returned by v25_dashboard_backend/src/controllers/leads.js (dashboard (leads import, CRM, integrations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"User ID is required\"\n400 - \"Invalid user ID format\"\n404 - \"Lead not found\"\n400 - \"No leads provided or invalid format\"\n207 - \"Some leads were created, but duplicates were skipped\"\n400 - \"Invalid lead ID\"\n400 - \"Invalid gig ID\"\n400 - \"No leads to archive\"\n400 - \"Pipeline and stage parameters are required\"\n400 - \"Gig ID is required\"\n400 - \"Invalid gig ID format\"\n400 - \"Search query is required\"\n400 - \"Company ID is required\"\n400 - \"Invalid company ID format\"\n400 - \"agentId is required\"\n409 - \"Lead is already open in another agent cockpit\"\n409 - \"Could not claim cockpit for this lead\"\n400 - \"Invalid disposition value\"\n400 - \"approve (boolean) is required\"\n403 - \"Lead does not belong to this company\"\n400 - \"No pending disposition to confirm\""
+  },
+  {
+   "title": "Error messages - v25_dashboard_backend - phoneNumberController",
+   "heading": "Messages returned by phoneNumberController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/controllers/phoneNumberController.js"
+   ],
+   "text": "API error / status messages returned by v25_dashboard_backend/src/controllers/phoneNumberController.js (dashboard (leads import, CRM, integrations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to search phone numbers\"\n500 - \"Failed to search Twilio phone numbers\"\n400 - \"Missing required fields\"\n400 - \"Invalid provider\"\n402 - \"Payment Required\"\n500 - \"Internal Server Error\"\n500 - \"Failed to purchase Twilio phone number\"\n500 - \"Failed to fetch phone numbers\"\n400 - \"gigId is required\"\n4xx/5xx - \"Failed to check gig number\"\n500 - \"Failed to delete phone number\"\n400 - \"Invalid phone number format\"\n4xx/5xx - \"Phone number must be in E.164 format (e.g., +33123456789)\"\n404 - \"Phone number not found\"\n4xx/5xx - \"The specified phone number is not found in our database\"\n400 - \"Invalid number status\"\n4xx/5xx - \"Phone number must be in success status to configure voice feature\"\n4xx/5xx - \"Voice feature configured successfully\"\n404 - \"Telnyx configuration error\"\n4xx/5xx - \"Phone number not found in Telnyx system\"\n4xx/5xx - \"Telnyx API error\"\n500 - \"Internal server error\"\n4xx/5xx - \"Failed to configure voice feature\"\n400 - \"Missing required headers\"\n200 - \"Event type not handled\""
+  },
+  {
+   "title": "Error messages - v25_dashboard_backend - phoneNumberController",
+   "heading": "Messages returned by phoneNumberController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/controllers/phoneNumberController.js"
+   ],
+   "text": "API error / status messages returned by v25_dashboard_backend/src/controllers/phoneNumberController.js (dashboard (leads import, CRM, integrations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Invalid signature\"\n4xx/5xx - \"The webhook signature verification failed\"\n500 - \"Failed to process webhook\""
+  },
+  {
+   "title": "Error messages - v25_dashboard_backend - requirementController",
+   "heading": "Messages returned by requirementController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/controllers/requirementController.js"
+   ],
+   "text": "API error / status messages returned by v25_dashboard_backend/src/controllers/requirementController.js (dashboard (leads import, CRM, integrations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Country code is required\"\n500 - \"Internal Server Error\""
+  },
+  {
+   "title": "Error messages - v25_dashboard_backend - telnyxRequirementGroupController",
+   "heading": "Messages returned by telnyxRequirementGroupController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/controllers/telnyxRequirementGroupController.js"
+   ],
+   "text": "API error / status messages returned by v25_dashboard_backend/src/controllers/telnyxRequirementGroupController.js (dashboard (leads import, CRM, integrations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Company ID and destination zone are required\"\n400 - \"Destination zone must be a 2-letter country code\"\n500 - \"Internal Server Error\"\n404 - \"No requirement group found for this company and destination\"\n400 - \"Requirements array is required and must not be empty\"\n400 - \"Each requirement must have requirementId and value\"\n4xx/5xx - \"Failed to fetch address details\"\n4xx/5xx - \"Failed to fetch document details\"\n404 - \"Requirement group not found\""
+  },
+  {
+   "title": "Error messages - v25_dashboard_backend - vertex",
+   "heading": "Messages returned by vertex",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/controllers/vertex.js"
+   ],
+   "text": "API error / status messages returned by v25_dashboard_backend/src/controllers/vertex.js (dashboard (leads import, CRM, integrations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"file_uri is required\"\n500 - \"Internal Server Error\""
+  },
+  {
+   "title": "Error messages - v25_dashboard_backend - zoho",
+   "heading": "Messages returned by zoho",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/controllers/zoho.js"
+   ],
+   "text": "API error / status messages returned by v25_dashboard_backend/src/controllers/zoho.js (dashboard (leads import, CRM, integrations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n401 - \"Configuration Zoho CRM requise. Veuillez configurer via /api/zoho/configure\"\n401 - \"Échec du rafraîchissement du token. Veuillez reconfigurer.\"\n400 - \"ID de conversation requis\"\n400 - \"Format d'ID de conversation invalide\"\n401 - \"Configuration Zoho CRM requise. Utilisez /api/zoho/configure pour configurer.\"\n500 - \"Erreur lors de la récupération des deals\"\n4xx/5xx - \"Erreur lors de la récupération des leads\"\n400 - \"Aucun lead à sauvegarder.\"\n500 - \"Erreur lors de la sauvegarde des leads\"\n500 - \"Erreur lors de la récupération des contacts\"\n400 - \"id et message sont requis\"\n500 - \"Erreur lors de l'envoi du message\"\n500 - \"Erreur lors de la récupération des dossiers\"\n500 - \"Erreur lors de la récupération des emails envoyés\"\n500 - \"Erreur lors de la récupération des emails de la boîte de réception\"\n500 - \"Erreur lors de la récupération des emails archivés\"\n400 - \"ID du lead est requis\"\n500 - \"Erreur lors de la mise à jour du lead\"\n400 - \"Le paramètre pipeline est requis\"\n4xx/5xx - \"Erreur lors de la récupération des leads du pipeline\"\n400 - \"Email et mot de passe requis\"\n401 - \"Authentification OAuth nécessaire\"\n500 - \"Erreur lors de la génération du token\"\n401 - \"Authentification échouée\"\n401 - \"Erreur lors de la vérification des identifiants\""
+  },
+  {
+   "title": "Error messages - v25_dashboard_backend - zoho",
+   "heading": "Messages returned by zoho",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/controllers/zoho.js"
+   ],
+   "text": "API error / status messages returned by v25_dashboard_backend/src/controllers/zoho.js (dashboard (leads import, CRM, integrations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"userId, companyId, refreshToken, clientId et clientSecret sont requis\"\n4xx/5xx - \"Configuration Zoho CRM mise à jour avec succès\"\n401 - \"Token d'autorisation requis\"\n401 - \"Format d'autorisation invalide. Format attendu: gigId:userId\"\n4xx/5xx - \"Déconnexion réussie\"\n500 - \"Erreur lors de la déconnexion\"\n401 - \"Utilisateur non authentifié\"\n404 - \"Aucune configuration trouvée\"\n4xx/5xx - \"Configuration valide\"\n500 - \"Erreur lors de la vérification de la configuration\"\n500 - \"Erreur lors de la récupération des pipelines\"\n400 - \"ID de l'email requis\"\n4xx/5xx - \"Erreur lors de l'archivage de l'email\"\n401 - \"Token d'accès Zoho non disponible\"\n4xx/5xx - \"Lead non trouvé après sauvegarde\"\n500 - \"Erreur lors de la synchronisation des leads\"\n400 - \"userId invalide\"\n400 - \"companyId invalide ou manquant\"\n404 - \"Configuration non trouvée pour cet utilisateur et cette entreprise\"\n500 - \"Erreur lors de la récupération de la configuration\"\n500 - \"Erreur lors de la récupération des configurations\"\n400 - \"Indiquez le nom (ou prénom et nom), l'e-mail et le téléphone.\"\n404 - \"Configuration Zoho non trouvée\""
+  },
+  {
+   "title": "Error messages - v25_dashboard_backend - error",
+   "heading": "Messages returned by error",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/middleware/error.js"
+   ],
+   "text": "API error / status messages returned by v25_dashboard_backend/src/middleware/error.js (dashboard (leads import, CRM, integrations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n403 - \"CORS:Origin not allowed\"\n502 - \"Service temporarily unavailable. Please try again later.\"\n520 - \"Unable to connect to external service. Please try again later.\"\n4xx/5xx - \"Connection Error\"\n520 - \"External service temporarily unavailable. Please try again later.\""
+  },
+  {
+   "title": "Error messages - v25_dashboard_backend - zohoTokenMiddleware",
+   "heading": "Messages returned by zohoTokenMiddleware",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/middleware/zohoTokenMiddleware.js"
+   ],
+   "text": "API error / status messages returned by v25_dashboard_backend/src/middleware/zohoTokenMiddleware.js (dashboard (leads import, CRM, integrations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n419 - \"Token d'autorisation requis\"\n419 - \"Format d'autorisation invalide\"\n449 - \"Configuration Zoho non trouvée\"\n401 - \"Refresh token expiré. Veuillez vous reconnecter à Zoho.\"\n500 - \"Erreur lors du rafraîchissement du token. Déconnectez puis reconnectez Zoho.\"\n500 - \"Erreur lors de la vérification du token Zoho\"\n401 - \"Configuration Zoho requise\""
+  },
+  {
+   "title": "Error messages - v25_dashboard_backend - file-processing",
+   "heading": "Messages returned by file-processing",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/routes/file-processing.js"
+   ],
+   "text": "API error / status messages returned by v25_dashboard_backend/src/routes/file-processing.js (dashboard (leads import, CRM, integrations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"File processing API is working\"\n400 - \"No file uploaded\"\n400 - \"Invalid mapping JSON\"\n400 - \"Mapping incomplete: require Phone, and either Deal_Name (full name) or First_Name + Last_Name.\"\n400 - \"Invalid gigId\""
+  },
+  {
+   "title": "Error messages - v25_dashboard_backend - leads",
+   "heading": "Messages returned by leads",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/routes/leads.js"
+   ],
+   "text": "API error / status messages returned by v25_dashboard_backend/src/routes/leads.js (dashboard (leads import, CRM, integrations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Aucun fichier reçu.\"\n500 - \"Erreur lors de l'enregistrement des leads.\"\n400 - \"Aucun lead valide trouvé dans le fichier.\"\n500 - \"Erreur serveur.\""
+  },
+  {
+   "title": "Error messages - v25_dashboard_backend - zoho",
+   "heading": "Messages returned by zoho",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/routes/zoho.js"
+   ],
+   "text": "API error / status messages returned by v25_dashboard_backend/src/routes/zoho.js (dashboard (leads import, CRM, integrations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Authorization code is required\"\n4xx/5xx - \"Successfully authenticated with Zoho\"\n400 - \"User ID is required and cannot be empty\"\n400 - \"Refresh token is required\"\n4xx/5xx - \"Token refreshed successfully\"\n404 - \"Configuration not found for this user\"\n400 - \"No refresh token found for this user\""
+  },
+  {
+   "title": "Error messages - v25_dashboard_backend - phoneNumberService",
+   "heading": "Messages returned by phoneNumberService",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dashboard_backend/src/services/phoneNumberService.js"
+   ],
+   "text": "API error / status messages returned by v25_dashboard_backend/src/services/phoneNumberService.js (dashboard (leads import, CRM, integrations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"No active phone numbers found for this gig\"\n4xx/5xx - \"Phone number deleted successfully\""
+  },
+  {
+   "title": "Error messages - v25_gigsmanualcreation_backend - aiController",
+   "heading": "Messages returned by aiController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_gigsmanualcreation_backend/src/controllers/aiController.ts"
+   ],
+   "text": "API error / status messages returned by v25_gigsmanualcreation_backend/src/controllers/aiController.ts (gigs (GIG creation and management)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Le service IA est temporairement indisponible. Veuillez contacter le support HARX.\"\n503 - \"Le service IA est temporairement surchargé. Réessayez dans quelques instants.\"\n4xx/5xx - \"Quota IA épuisé. Veuillez contacter le support HARX.\"\n4xx/5xx - \"Le service IA est temporairement indisponible. Réessayez dans quelques instants.\"\n4xx/5xx - \"Une erreur interne est survenue. Réessayez ou contactez le support.\"\n400 - \"Audio file is required (multipart field \"audio\")\"\n400 - \"Description is required\"\n400 - \"Title is required\"\n400 - \"Target markets are required\"\n4xx/5xx - \"All API connections successful\"\n200 - \"Populate test successful\"\n200 - \"Categories retrieved successfully\"\n200 - \"Timezones retrieved successfully\"\n400 - \"Activities array is required\"\n200 - \"Activity mapping test completed\""
+  },
+  {
+   "title": "Error messages - v25_gigsmanualcreation_backend - bulkController",
+   "heading": "Messages returned by bulkController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_gigsmanualcreation_backend/src/controllers/bulkController.ts"
+   ],
+   "text": "API error / status messages returned by v25_gigsmanualcreation_backend/src/controllers/bulkController.ts (gigs (GIG creation and management)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Data must be an array\"\n500 - \"Bulk processing failed\"\n400 - \"Countries data must be an array\"\n400 - \"Type must be either \"gigs\" or \"countries\"\"\n500 - \"Validation failed\""
+  },
+  {
+   "title": "Error messages - v25_gigsmanualcreation_backend - countryController",
+   "heading": "Messages returned by countryController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_gigsmanualcreation_backend/src/controllers/countryController.ts"
+   ],
+   "text": "API error / status messages returned by v25_gigsmanualcreation_backend/src/controllers/countryController.ts (gigs (GIG creation and management)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to fetch countries\"\n404 - \"Country not found\"\n500 - \"Failed to fetch country\"\n400 - \"Country with this CCA2 code already exists\"\n201 - \"Country created successfully\"\n400 - \"Validation error\"\n500 - \"Failed to create country\"\n200 - \"Country updated successfully\"\n500 - \"Failed to update country\"\n200 - \"Country deleted successfully\"\n500 - \"Failed to delete country\"\n400 - \"Countries data must be an array\"\n4xx/5xx - \"Missing required fields: name.common, name.official, or cca2\"\n400 - \"No valid countries found\"\n207 - \"Some countries could not be created\"\n500 - \"Failed to create countries\""
+  },
+  {
+   "title": "Error messages - v25_gigsmanualcreation_backend - currencyController",
+   "heading": "Messages returned by currencyController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_gigsmanualcreation_backend/src/controllers/currencyController.ts"
+   ],
+   "text": "API error / status messages returned by v25_gigsmanualcreation_backend/src/controllers/currencyController.ts (gigs (GIG creation and management)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Currencies retrieved successfully\"\n200 - \"All currencies retrieved successfully\"\n500 - \"Failed to get currencies\"\n400 - \"Invalid ID format\"\n404 - \"Currency not found\"\n200 - \"Currency retrieved successfully\"\n500 - \"Failed to get currency\"\n400 - \"Missing required fields\"\n4xx/5xx - \"Code, name, and symbol are required\"\n409 - \"Currency already exists\"\n201 - \"Currency created successfully\"\n500 - \"Failed to create currency\"\n200 - \"Currency updated successfully\"\n500 - \"Failed to update currency\"\n200 - \"Currency deactivated successfully\"\n500 - \"Failed to delete currency\"\n404 - \"Currencies file not found\"\n4xx/5xx - \"currencies.json file not found\"\n500 - \"Failed to seed currencies\"\n4xx/5xx - \"Currency statistics retrieved successfully\"\n500 - \"Failed to get currency statistics\""
+  },
+  {
+   "title": "Error messages - v25_gigsmanualcreation_backend - gigController",
+   "heading": "Messages returned by gigController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_gigsmanualcreation_backend/src/controllers/gigController.ts"
+   ],
+   "text": "API error / status messages returned by v25_gigsmanualcreation_backend/src/controllers/gigController.ts (gigs (GIG creation and management)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Title is required\"\n400 - \"destination_zone must be a valid MongoDB ObjectId\"\n201 - \"Gig created successfully\"\n200 - \"Gigs retrieved successfully\"\n500 - \"Failed to retrieve gigs\"\n200 - \"Active gigs retrieved successfully\"\n500 - \"Failed to retrieve active gigs\"\n400 - \"Invalid Gig ID format\"\n404 - \"Gig not found\"\n200 - \"Gig retrieved successfully\"\n500 - \"Failed to retrieve gig\"\n200 - \"Gig details retrieved successfully\"\n500 - \"Failed to retrieve gig details\"\n400 - \"Impossible d'activer ce gig : complétez toutes les étapes de configuration avant l'activation.\"\n400 - \"Impossible d'activer ce gig : companyId manquant.\"\n400 - \"Solde insuffisant. Vous devez alimenter votre compte pour activer ce gig.\"\n500 - \"Impossible de vérifier la limite de GIG actifs. Réessayez.\"\n200 - \"Gig updated successfully\"\n500 - \"Failed to update gig\"\n400 - \"No valid setupSteps fields provided\"\n200 - \"Setup steps updated successfully\"\n500 - \"Failed to update setup steps\"\n404 - \"Destination zone not set\"\n404 - \"Country not found in database\"\n200 - \"Gig destination zone retrieved successfully\""
+  },
+  {
+   "title": "Error messages - v25_gigsmanualcreation_backend - gigController",
+   "heading": "Messages returned by gigController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_gigsmanualcreation_backend/src/controllers/gigController.ts"
+   ],
+   "text": "API error / status messages returned by v25_gigsmanualcreation_backend/src/controllers/gigController.ts (gigs (GIG creation and management)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to retrieve gig destination zone\"\n4xx/5xx - \"Unknown error\"\n200 - \"Gig deleted successfully\"\n500 - \"Failed to delete gig\"\n400 - \"Invalid User ID format\"\n400 - \"Invalid Company ID format\"\n200 - \"Company gig status retrieved successfully\"\n500 - \"Failed to check company gigs\"\n200 - \"Company leads status retrieved successfully\"\n500 - \"Failed to check company leads\"\n404 - \"Company not found for this user\"\n200 - \"Company retrieved successfully\"\n500 - \"Failed to retrieve company\"\n404 - \"No gigs found for this company\"\n200 - \"Last gig retrieved successfully\"\n500 - \"Failed to retrieve last gig\"\n400 - \"DALL-E URL is required\"\n200 - \"Image uploaded to Cloudinary successfully\""
+  },
+  {
+   "title": "Error messages - v25_gigsmanualcreation_backend - sectorController",
+   "heading": "Messages returned by sectorController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_gigsmanualcreation_backend/src/controllers/sectorController.ts"
+   ],
+   "text": "API error / status messages returned by v25_gigsmanualcreation_backend/src/controllers/sectorController.ts (gigs (GIG creation and management)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to fetch sectors\"\n404 - \"Sector not found\"\n500 - \"Failed to fetch sector\"\n400 - \"Sector with this name already exists\"\n201 - \"Sector created successfully\"\n500 - \"Failed to create sector\"\n200 - \"Sector updated successfully\"\n500 - \"Failed to update sector\"\n200 - \"Sector deleted successfully\"\n500 - \"Failed to delete sector\""
+  },
+  {
+   "title": "Error messages - v25_knowledgebase_backend - analysisController",
+   "heading": "Messages returned by analysisController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/controllers/analysisController.js"
+   ],
+   "text": "API error / status messages returned by v25_knowledgebase_backend/src/controllers/analysisController.js (knowledge base (documents and RAG)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Failed to parse analysis results as JSON\"\n429 - \"An analysis is already in progress for this company\"\n429 - \"Please wait at least 10 seconds between analysis requests\"\n400 - \"No documents found for analysis\"\n200 - \"Using existing analysis\"\n200 - \"Analysis started successfully\"\n500 - \"Failed to start analysis\"\n500 - \"Failed to fetch analysis\"\n500 - \"Failed to fetch analyses\"\n400 - \"User ID and query are required\"\n500 - \"Failed to process question\"\n429 - \"Analysis already in progress for this company\"\n202 - \"Analysis started\"\n500 - \"Failed to initiate analysis\""
+  },
+  {
+   "title": "Error messages - v25_knowledgebase_backend - callRecordingController",
+   "heading": "Messages returned by callRecordingController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/controllers/callRecordingController.js"
+   ],
+   "text": "API error / status messages returned by v25_knowledgebase_backend/src/controllers/callRecordingController.js (knowledge base (documents and RAG)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"No file uploaded\"\n404 - \"Company not found\"\n201 - \"Call recording uploaded successfully\"\n500 - \"Failed to upload call recording\"\n400 - \"User ID is required\"\n404 - \"Company not found for this user\"\n500 - \"Failed to fetch call recordings\"\n404 - \"Call recording not found\"\n4xx/5xx - \"Call recording deleted successfully\"\n500 - \"Failed to delete call recording\"\n400 - \"No audio file found for this recording\"\n4xx/5xx - \"Audio summary retrieved from cache\"\n4xx/5xx - \"Audio summary generated successfully\"\n500 - \"Failed to generate audio summary\"\n500 - \"Internal server error\"\n4xx/5xx - \"Audio transcription retrieved from cache\"\n4xx/5xx - \"Audio transcription generated successfully\"\n500 - \"Failed to generate audio transcription\"\n4xx/5xx - \"Call scoring retrieved from cache\"\n4xx/5xx - \"Call scoring generated successfully\"\n500 - \"Failed to generate call scoring\""
+  },
+  {
+   "title": "Error messages - v25_knowledgebase_backend - companyController",
+   "heading": "Messages returned by companyController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/controllers/companyController.js"
+   ],
+   "text": "API error / status messages returned by v25_knowledgebase_backend/src/controllers/companyController.js (knowledge base (documents and RAG)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n201 - \"Company added successfully\"\n500 - \"Failed to add company\""
+  },
+  {
+   "title": "Error messages - v25_knowledgebase_backend - documentController",
+   "heading": "Messages returned by documentController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/controllers/documentController.js"
+   ],
+   "text": "API error / status messages returned by v25_knowledgebase_backend/src/controllers/documentController.js (knowledge base (documents and RAG)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"No file uploaded\"\n400 - \"User ID is required\"\n404 - \"Company not found\"\n201 - \"Document uploaded successfully\"\n500 - \"Failed to upload document\"\n404 - \"No company found for this user\"\n500 - \"Failed to fetch documents\"\n400 - \"gigId is required\"\n404 - \"Document not found\"\n500 - \"Failed to fetch document\"\n200 - \"Document deleted successfully\"\n500 - \"Failed to delete document\"\n200 - \"Document updated successfully\"\n500 - \"Failed to update document\"\n500 - \"Failed to analyze document\""
+  },
+  {
+   "title": "Error messages - v25_knowledgebase_backend - fineTuningController",
+   "heading": "Messages returned by fineTuningController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/controllers/fineTuningController.js"
+   ],
+   "text": "API error / status messages returned by v25_knowledgebase_backend/src/controllers/fineTuningController.js (knowledge base (documents and RAG)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Document IDs are required\"\n404 - \"No documents found with the provided IDs\"\n201 - \"Fine-tuning job created successfully\"\n500 - \"Failed to create fine-tuning job\"\n500 - \"Failed to fetch fine-tuning jobs\"\n404 - \"Fine-tuning job not found\"\n500 - \"Failed to fetch fine-tuning job\"\n200 - \"Fine-tuning job status updated\"\n500 - \"Failed to update fine-tuning job status\"\n200 - \"Fine-tuning job cancelled\"\n500 - \"Failed to cancel fine-tuning job\"\n400 - \"Model ID and content are required\"\n500 - \"Failed to test fine-tuned model\""
+  },
+  {
+   "title": "Error messages - v25_knowledgebase_backend - ragController",
+   "heading": "Messages returned by ragController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/controllers/ragController.js"
+   ],
+   "text": "API error / status messages returned by v25_knowledgebase_backend/src/controllers/ragController.js (knowledge base (documents and RAG)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"targetClient and language are required\"\n4xx/5xx - \"script array must contain at least one dialogue line\"\n400 - \"Company ID is required\"\n200 - \"RAG corpus initialized successfully\"\n500 - \"Failed to initialize RAG corpus\"\n200 - \"Documents synced to RAG corpus successfully\"\n500 - \"Failed to sync documents to RAG corpus\"\n400 - \"Company ID and query are required\"\n500 - \"Failed to query knowledge base\"\n500 - \"Failed to get corpus status\"\n500 - \"Failed to get corpus documents\"\n400 - \"Company ID and Document ID are required\"\n500 - \"Failed to get document content\"\n500 - \"Failed to get corpus stats\"\n400 - \"Search term is required\"\n500 - \"Failed to search in corpus\"\n400 - \"Document ID is required\"\n404 - \"Document not found\"\n500 - \"Failed to analyze document\"\n400 - \"A gig selection is required to generate a script.\"\n502 - \"Targeted script edit failed: model did not return a valid patched stage.\"\n502 - \"Format de script généré incompatible. Veuillez réessayer.\"\n500 - \"Failed to generate script\"\n400 - \"gigId query param is required\"\n500 - \"Failed to list scripts\""
+  },
+  {
+   "title": "Error messages - v25_knowledgebase_backend - ragController",
+   "heading": "Messages returned by ragController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/controllers/ragController.js"
+   ],
+   "text": "API error / status messages returned by v25_knowledgebase_backend/src/controllers/ragController.js (knowledge base (documents and RAG)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"gigId is required\"\n500 - \"Failed to create script\"\n400 - \"scriptId is required\"\n404 - \"Script not found\"\n400 - \"Script does not belong to this gig\"\n500 - \"Failed to update script\"\n400 - \"isActive boolean is required\"\n500 - \"Failed to update script status\"\n500 - \"Failed to delete script\"\n400 - \"Analysis object and target language are required\"\n500 - \"Failed to translate analysis\""
+  },
+  {
+   "title": "Error messages - v25_knowledgebase_backend - scriptController",
+   "heading": "Messages returned by scriptController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/controllers/scriptController.js"
+   ],
+   "text": "API error / status messages returned by v25_knowledgebase_backend/src/controllers/scriptController.js (knowledge base (documents and RAG)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"gigId is required\"\n500 - \"Failed to fetch scripts for gig\"\n400 - \"companyId is required\"\n500 - \"Failed to fetch scripts for company\"\n400 - \"scriptId is required\"\n400 - \"isActive must be a boolean value\"\n404 - \"Script not found\"\n500 - \"Failed to update script status\"\n200 - \"Script deleted successfully\"\n500 - \"Failed to delete script\"\n400 - \"Company ID not found in request headers\"\n200 - \"Script regenerated successfully\"\n500 - \"Failed to regenerate script\"\n400 - \"Company ID is required\"\n400 - \"Invalid step index\"\n200 - \"Script part refined successfully\"\n500 - \"Failed to refine script part\"\n400 - \"scriptId, stepIndex, and newContent.replica are required\"\n200 - \"Script content updated successfully\"\n500 - \"Failed to update script content\"\n400 - \"Missing required fields\"\n400 - \"Invalid phase\"\n400 - \"Invalid actor\"\n400 - \"Invalid insert index\"\n200 - \"Replica added successfully\""
+  },
+  {
+   "title": "Error messages - v25_knowledgebase_backend - scriptController",
+   "heading": "Messages returned by scriptController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/controllers/scriptController.js"
+   ],
+   "text": "API error / status messages returned by v25_knowledgebase_backend/src/controllers/scriptController.js (knowledge base (documents and RAG)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to add replica\"\n400 - \"Invalid replica index\"\n400 - \"Invalid operation\"\n200 - \"Replica deleted successfully\"\n500 - \"Failed to delete replica\""
+  },
+  {
+   "title": "Error messages - v25_knowledgebase_backend - callRecordingRoutes",
+   "heading": "Messages returned by callRecordingRoutes",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/routes/callRecordingRoutes.js"
+   ],
+   "text": "API error / status messages returned by v25_knowledgebase_backend/src/routes/callRecordingRoutes.js (knowledge base (documents and RAG)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"User ID is required\"\n400 - \"Call Recording ID is required\""
+  },
+  {
+   "title": "Error messages - v25_knowledgebase_backend - repNotificationClient",
+   "heading": "Messages returned by repNotificationClient",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_knowledgebase_backend/src/services/repNotificationClient.js"
+   ],
+   "text": "API error / status messages returned by v25_knowledgebase_backend/src/services/repNotificationClient.js (knowledge base (documents and RAG)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Un nouveau script a été ajouté sur votre GIG.\"\n4xx/5xx - \"Un script n’est plus actif sur votre GIG.\""
+  },
+  {
+   "title": "Error messages - v25_matching_backend - agentController",
+   "heading": "Messages returned by agentController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/controllers/agentController.js"
+   ],
+   "text": "API error / status messages returned by v25_matching_backend/src/controllers/agentController.js (matching (REP/GIG matching, enrollment, time slots and reservations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Agent not found\"\n4xx/5xx - \"Agent deleted successfully\"\n4xx/5xx - \"Error fetching agents from Zoho CRM\"\n4xx/5xx - \"Error fetching all data\""
+  },
+  {
+   "title": "Error messages - v25_matching_backend - enrollmentController",
+   "heading": "Messages returned by enrollmentController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/controllers/enrollmentController.js"
+   ],
+   "text": "API error / status messages returned by v25_matching_backend/src/controllers/enrollmentController.js (matching (REP/GIG matching, enrollment, time slots and reservations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Agent not found\"\n4xx/5xx - \"Gig not found\"\n4xx/5xx - \"Invitation créée mais erreur lors de l'envoi de l'email\"\n4xx/5xx - \"Invitation d'enrôlement envoyée avec succès\"\n4xx/5xx - \"Token d'invitation OU ID d'enrôlement requis\"\n4xx/5xx - \"Invitation invalide\"\n4xx/5xx - \"Cette invitation a expiré\"\n4xx/5xx - \"Cette invitation ne peut plus être utilisée\"\n4xx/5xx - \"Enrôlement accepté avec succès\"\n4xx/5xx - \"Enrôlement refusé\"\n4xx/5xx - \"Enrôlement non trouvé\"\n4xx/5xx - \"Seules les invitations en attente peuvent être renvoyées\"\n4xx/5xx - \"Invitation mise à jour mais erreur lors de l'envoi de l'email\"\n4xx/5xx - \"Invitation d'enrôlement renvoyée avec succès\"\n4xx/5xx - \"Seules les invitations en attente peuvent être annulées\"\n4xx/5xx - \"Invitation d'enrôlement annulée avec succès\"\n4xx/5xx - \"Seuls les enrôlements en attente peuvent être acceptés\"\n4xx/5xx - \"Aucun enrôlement trouvé pour cet agent\"\n4xx/5xx - \"Seuls les enrôlements en attente peuvent être refusés\"\n4xx/5xx - \"Une demande d'enrôlement existe déjà et ne peut pas être modifiée\"\n4xx/5xx - \"Demande d'enrôlement envoyée avec succès\"\n4xx/5xx - \"Demande d'enrôlement non trouvée\"\n4xx/5xx - \"Seules les demandes d'enrôlement peuvent être acceptées\"\n4xx/5xx - \"Demande d'enrôlement acceptée avec succès\"\n4xx/5xx - \"Seules les demandes d'enrôlement peuvent être refusées\""
+  },
+  {
+   "title": "Error messages - v25_matching_backend - enrollmentController",
+   "heading": "Messages returned by enrollmentController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/controllers/enrollmentController.js"
+   ],
+   "text": "API error / status messages returned by v25_matching_backend/src/controllers/enrollmentController.js (matching (REP/GIG matching, enrollment, time slots and reservations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Demande d'enrôlement refusée\"\n4xx/5xx - \"Agent retiré du gig avec succès\"\n4xx/5xx - \"Gig non trouvé\"\n4xx/5xx - \"Aucun gig créé pour cette company\""
+  },
+  {
+   "title": "Error messages - v25_matching_backend - gigAgentController",
+   "heading": "Messages returned by gigAgentController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/controllers/gigAgentController.js"
+   ],
+   "text": "API error / status messages returned by v25_matching_backend/src/controllers/gigAgentController.js (matching (REP/GIG matching, enrollment, time slots and reservations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"GigAgent not found\"\n4xx/5xx - \"Agent not found\"\n4xx/5xx - \"Gig not found\"\n4xx/5xx - \"Une assignation existe déjà pour cet agent et ce gig\"\n4xx/5xx - \"Invitation renvoyée avec succès\"\n4xx/5xx - \"Assignation créée avec succès\"\n4xx/5xx - \"GigAgent updated successfully\"\n4xx/5xx - \"GigAgent deleted successfully\"\n4xx/5xx - \"gigId, agentId and standing (active|paused) are required\"\n4xx/5xx - \"Enrolled rep not found on this gig\"\n4xx/5xx - \"Invitation not found\"\n4xx/5xx - \"Only invited enrollments can be accepted by agent\"\n4xx/5xx - \"Invitation has expired\"\n4xx/5xx - \"Invitation accepted successfully\"\n4xx/5xx - \"Enrollment request not found\"\n4xx/5xx - \"Only requested enrollments can be accepted\"\n4xx/5xx - \"Enrollment request accepted successfully\"\n4xx/5xx - \"Only pending enrollment requests can be cancelled\"\n4xx/5xx - \"Enrollment request cancelled successfully\"\n4xx/5xx - \"Only requested enrollments can be rejected\"\n4xx/5xx - \"Enrollment request rejected successfully\"\n4xx/5xx - \"Only pending invitations can be archived\"\n4xx/5xx - \"Invitation archived successfully\"\n4xx/5xx - \"Only invited enrollments can be rejected by agent\"\n4xx/5xx - \"Invitation rejected successfully\""
+  },
+  {
+   "title": "Error messages - v25_matching_backend - gigAgentController",
+   "heading": "Messages returned by gigAgentController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/controllers/gigAgentController.js"
+   ],
+   "text": "API error / status messages returned by v25_matching_backend/src/controllers/gigAgentController.js (matching (REP/GIG matching, enrollment, time slots and reservations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Cannot request enrollment for this gig at this time\"\n4xx/5xx - \"Enrollment request sent successfully\"\n4xx/5xx - \"Agent gigs retrieved successfully\"\n4xx/5xx - \"Gig agents retrieved successfully\"\n4xx/5xx - \"gigId and agentId (or repId) are required\"\n4xx/5xx - \"GigAgent not found for this gig and agent\"\n4xx/5xx - \"gigId, agentId (or repId), and mode are required\"\n4xx/5xx - \"weekStart must be a valid date (Monday of week will be used)\"\n4xx/5xx - \"mode must be \"template\" or \"week\"\""
+  },
+  {
+   "title": "Error messages - v25_matching_backend - gigController",
+   "heading": "Messages returned by gigController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/controllers/gigController.js"
+   ],
+   "text": "API error / status messages returned by v25_matching_backend/src/controllers/gigController.js (matching (REP/GIG matching, enrollment, time slots and reservations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Gig not found\"\n4xx/5xx - \"Gig deleted successfully\"\n4xx/5xx - \"Gig availability saved successfully\"\n4xx/5xx - \"Gig availability retrieved successfully\"\n4xx/5xx - \"Gig availability updated successfully\"\n404 - \"Agent not found\"\n500 - \"Error finding matching gigs\"\n500 - \"Error finding matching agents\""
+  },
+  {
+   "title": "Error messages - v25_matching_backend - gigMatchingWeightsController",
+   "heading": "Messages returned by gigMatchingWeightsController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/controllers/gigMatchingWeightsController.js"
+   ],
+   "text": "API error / status messages returned by v25_matching_backend/src/controllers/gigMatchingWeightsController.js (matching (REP/GIG matching, enrollment, time slots and reservations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n404 - \"Gig not found\"\n200 - \"Matching weights updated successfully\"\n500 - \"Internal server error\"\n404 - \"No matching weights found for this gig\"\n200 - \"Matching weights retrieved successfully\"\n404 - \"Matching weights not found\"\n200 - \"Matching weights deleted successfully\"\n200 - \"Matching weights reset to defaults\"\n200 - \"Gigs with weights retrieved successfully\""
+  },
+  {
+   "title": "Error messages - v25_matching_backend - matchController",
+   "heading": "Messages returned by matchController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/controllers/matchController.js"
+   ],
+   "text": "API error / status messages returned by v25_matching_backend/src/controllers/matchController.js (matching (REP/GIG matching, enrollment, time slots and reservations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Match not found\"\n4xx/5xx - \"Match deleted successfully\"\n4xx/5xx - \"Gig not found\"\n4xx/5xx - \"No agents available for matching\"\n4xx/5xx - \"Agent not found\"\n4xx/5xx - \"Une assignation existe déjà pour cet agent et ce gig\"\n4xx/5xx - \"Assignation créée avec succès\""
+  },
+  {
+   "title": "Error messages - v25_matching_backend - slotController",
+   "heading": "Messages returned by slotController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/controllers/slotController.js"
+   ],
+   "text": "API error / status messages returned by v25_matching_backend/src/controllers/slotController.js (matching (REP/GIG matching, enrollment, time slots and reservations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"reservationDate does not match this slot date\"\n4xx/5xx - \"reservationDate (yyyy-MM-dd) is required for recurring weekly slots\"\n4xx/5xx - \"Invalid reservationDate\"\n4xx/5xx - \"Slot uses an unsupported date pattern\"\n4xx/5xx - \"Selected reservationDate does not match this slot weekday\"\n400 - \"Missing required fields: gigId, startDate, endDate, slotDuration, capacity are required\"\n200 - \"No new slots to create\"\n500 - \"Error generating slots\"\n500 - \"Error fetching slots\"\n400 - \"agentId or repId is required\"\n404 - \"Slot not found\"\n400 - \"Cannot reserve a slot that has already passed\"\n400 - \"Slot is full\"\n400 - \"Agent already reserved this slot\"\n400 - \"You have an overlapping reservation\"\n200 - \"Slot reserved successfully\"\n500 - \"Error reserving slot\"\n404 - \"Reservation not found\"\n400 - \"Reservation already cancelled\"\n200 - \"Reservation cancelled successfully\"\n500 - \"Error cancelling reservation\"\n200 - \"Reservation updated successfully\"\n500 - \"Error updating reservation\"\n500 - \"Error fetching reservations\"\n400 - \"Missing required fields\""
+  },
+  {
+   "title": "Error messages - v25_matching_backend - slotController",
+   "heading": "Messages returned by slotController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/controllers/slotController.js"
+   ],
+   "text": "API error / status messages returned by v25_matching_backend/src/controllers/slotController.js (matching (REP/GIG matching, enrollment, time slots and reservations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Error upserting slot\"\n200 - \"Slot and its reservations deleted successfully\"\n500 - \"Error deleting slot\"\n400 - \"gigId and slots array are required\"\n500 - \"Error in bulk upsert\""
+  },
+  {
+   "title": "Error messages - v25_matching_backend - repNotificationClient",
+   "heading": "Messages returned by repNotificationClient",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_matching_backend/src/services/repNotificationClient.js"
+   ],
+   "text": "API error / status messages returned by v25_matching_backend/src/services/repNotificationClient.js (matching (REP/GIG matching, enrollment, time slots and reservations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Votre candidature n'a pas été retenue. Vous pouvez re-postuler.\"\n4xx/5xx - \"Le statut de votre candidature a changé.\""
+  },
+  {
+   "title": "Error messages - v25_platform_training_backend - aiController",
+   "heading": "Messages returned by aiController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/controllers/aiController.ts"
+   ],
+   "text": "API error / status messages returned by v25_platform_training_backend/src/controllers/aiController.ts (training (journeys, assessments)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Veo operation completed but no downloadable video URL was returned.\"\n400 - \"gigId is required\"\n201 - \"Training journey generated successfully\"\n400 - \"message is required\"\n400 - \"Aucun plan valide trouvé dans la dernière réponse assistant.\"\n400 - \"trainingJourneyId is required for content validation.\"\n404 - \"Journey not found.\"\n400 - \"Invalid sessionId\"\n404 - \"Chat session not found\"\n400 - \"No file uploaded\"\n400 - \"Analysis data is required\"\n400 - \"Curriculum data is required\"\n400 - \"Slide data and prompt are required\"\n400 - \"At least one analysis is required for synthesis\"\n400 - \"Presentation data is required\"\n403 - \"La formation doit être validée avant de générer l'audio.\"\n400 - \"trainingDigest is required\"\n502 - \"Le modèle n’a pas renvoyé de script.\"\n400 - \"currentScript is required\"\n502 - \"Réponse IA invalide pour podcast chat.\"\n502 - \"Le script mis à jour est vide.\"\n400 - \"title is required\"\n400 - \"script is required\"\n400 - \"prompt is required\"\n404 - \"Video generation job not found\""
+  },
+  {
+   "title": "Error messages - v25_platform_training_backend - aiController",
+   "heading": "Messages returned by aiController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/controllers/aiController.ts"
+   ],
+   "text": "API error / status messages returned by v25_platform_training_backend/src/controllers/aiController.ts (training (journeys, assessments)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"videoUrl is required (or completed jobId)\"\n400 - \"jobId is required. Use /api/ai/training-images/status/:jobId or /api/ai/training-images/status?jobId=...\"\n404 - \"Training image job not found\""
+  },
+  {
+   "title": "Error messages - v25_platform_training_backend - certificationController",
+   "heading": "Messages returned by certificationController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/controllers/certificationController.ts"
+   ],
+   "text": "API error / status messages returned by v25_platform_training_backend/src/controllers/certificationController.ts (training (journeys, assessments)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"repId is required\"\n400 - \"certificateId is required\"\n400 - \"repId and journeyId are required\""
+  },
+  {
+   "title": "Error messages - v25_platform_training_backend - journeyController",
+   "heading": "Messages returned by journeyController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/controllers/journeyController.ts"
+   ],
+   "text": "API error / status messages returned by v25_platform_training_backend/src/controllers/journeyController.ts (training (journeys, assessments)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"journeyId is required\"\n400 - \"prompt is required\"\n422 - \"AI did not return a valid title\"\n400 - \"companyId is required\"\n502 - \"AI thumbnail generation failed before Cloudinary save. Check OPENAI_API_KEY, ANTHROPIC_API_KEY, and Cloudinary credentials.\"\n422 - \"AI did not return usable training vision content\"\n400 - \"allowedRoles is required\"\n422 - \"AI could not determine suitable target roles from the provided gig context\"\n400 - \"repId is required\"\n400 - \"gigId is required\"\n400 - \"repId and journeyId are required\"\n400 - \"repId and courseId are required\"\n400 - \"repId and gigId are required\""
+  },
+  {
+   "title": "Error messages - v25_platform_training_backend - uploadController",
+   "heading": "Messages returned by uploadController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_platform_training_backend/src/controllers/uploadController.ts"
+   ],
+   "text": "API error / status messages returned by v25_platform_training_backend/src/controllers/uploadController.ts (training (journeys, assessments)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"No file uploaded\"\n200 - \"All storage providers unavailable\"\n200 - \"File deleted successfully\""
+  },
+  {
+   "title": "Error messages - v25_registration_backend - auth",
+   "heading": "Messages returned by auth",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/controllers/auth.js"
+   ],
+   "text": "API error / status messages returned by v25_registration_backend/src/controllers/auth.js (registration (accounts, login, company members, call-center)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n201 - \"Registration successful\"\n500 - \"Failed to authenticate with LinkedIn\""
+  },
+  {
+   "title": "Error messages - v25_registration_backend - authController",
+   "heading": "Messages returned by authController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/controllers/authController.js"
+   ],
+   "text": "API error / status messages returned by v25_registration_backend/src/controllers/authController.js (registration (accounts, login, company members, call-center)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n201 - \"Registration successful\"\n409 - \"Email already registered\"\n409 - \"Phone already registered\"\n4xx/5xx - \"Verification code sent\"\n403 - \"Account not verified\"\n500 - \"Failed to authenticate with LinkedIn\"\n400 - \"userId and phoneNumber are required\"\n400 - \"userId and otp are required\"\n400 - \"userId is required\"\n500 - \"LinkedIn authentication failed\"\n400 - \"Both userId and newType are required\"\n200 - \"User type updated successfully\"\n401 - \"Authentication required\"\n200 - \"Verification code resent successfully\""
+  },
+  {
+   "title": "Error messages - v25_registration_backend - files",
+   "heading": "Messages returned by files",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/controllers/files.js"
+   ],
+   "text": "API error / status messages returned by v25_registration_backend/src/controllers/files.js (registration (accounts, login, company members, call-center)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"No file uploaded\"\n500 - \"Server error\""
+  },
+  {
+   "title": "Error messages - v25_registration_backend - userController",
+   "heading": "Messages returned by userController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/controllers/userController.js"
+   ],
+   "text": "API error / status messages returned by v25_registration_backend/src/controllers/userController.js (registration (accounts, login, company members, call-center)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"User ID is required\"\n200 - \"User details retrieved successfully\"\n404 - \"User not found\"\n200 - \"Profile updated successfully\"\n500 - \"Une erreur est survenue.\"\n200 - \"Email updated successfully\"\n200 - \"Password updated successfully\"\n200 - \"Phone updated successfully\"\n200 - \"User IP history retrieved successfully\""
+  },
+  {
+   "title": "Error messages - v25_registration_backend - index",
+   "heading": "Messages returned by index",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/index.js"
+   ],
+   "text": "API error / status messages returned by v25_registration_backend/src/index.js (registration (accounts, login, company members, call-center)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n200 - \"Server is running\"\n4xx/5xx - \"Too many attempts. Please wait a few minutes and try again.\""
+  },
+  {
+   "title": "Error messages - v25_registration_backend - auth",
+   "heading": "Messages returned by auth",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/middleware/auth.js"
+   ],
+   "text": "API error / status messages returned by v25_registration_backend/src/middleware/auth.js (registration (accounts, login, company members, call-center)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n401 - \"Authentication required\"\n403 - \"Password change required before continuing\"\n401 - \"Invalid token\"\n403 - \"Accès refusé.\""
+  },
+  {
+   "title": "Error messages - v25_registration_backend - callCenterAuth",
+   "heading": "Messages returned by callCenterAuth",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/middleware/callCenterAuth.js"
+   ],
+   "text": "API error / status messages returned by v25_registration_backend/src/middleware/callCenterAuth.js (registration (accounts, login, company members, call-center)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n401 - \"Authentication required. Sign in again or refresh the page.\"\n401 - \"Authentication required. Sign in again.\""
+  },
+  {
+   "title": "Error messages - v25_registration_backend - errorHandler",
+   "heading": "Messages returned by errorHandler",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/middleware/errorHandler.js"
+   ],
+   "text": "API error / status messages returned by v25_registration_backend/src/middleware/errorHandler.js (registration (accounts, login, company members, call-center)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Validation error\"\n500 - \"Internal server error\""
+  },
+  {
+   "title": "Error messages - v25_registration_backend - authService",
+   "heading": "Messages returned by authService",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/services/authService.js"
+   ],
+   "text": "API error / status messages returned by v25_registration_backend/src/services/authService.js (registration (accounts, login, company members, call-center)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"invalid or expired code. Please try again.\"\n4xx/5xx - \"OTP sent successfully\"\n4xx/5xx - \"OTP verified successfully\"\n4xx/5xx - \"Invalid OTP. Please try again.\"\n4xx/5xx - \"Account is already verified\"\n4xx/5xx - \"Account verified successfully\"\n4xx/5xx - \"Mot de passe changé avec succès.\"\n4xx/5xx - \"Verification email sent successfully\""
+  },
+  {
+   "title": "Error messages - v25_registration_backend - callCenterWorkspaceStateValidation",
+   "heading": "Messages returned by callCenterWorkspaceStateValidation",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/services/callCenterWorkspaceStateValidation.js"
+   ],
+   "text": "API error / status messages returned by v25_registration_backend/src/services/callCenterWorkspaceStateValidation.js (registration (accounts, login, company members, call-center)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Les files doivent être une liste.\"\n4xx/5xx - \"Les lignes testées doivent être un objet.\"\n4xx/5xx - \"La mise en route doit être un objet.\"\n4xx/5xx - \"Le profil du centre doit être un objet.\"\n4xx/5xx - \"L’appel de test doit être un objet.\"\n4xx/5xx - \"L’écran client doit être un objet.\""
+  },
+  {
+   "title": "Error messages - v25_registration_backend - userService",
+   "heading": "Messages returned by userService",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_registration_backend/src/services/userService.js"
+   ],
+   "text": "API error / status messages returned by v25_registration_backend/src/services/userService.js (registration (accounts, login, company members, call-center)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Verification code sent to your current email\"\n4xx/5xx - \"OTP sent to the new phone number\""
+  },
+  {
+   "title": "Error messages - v25_repscreationwizard_backend - activityController",
+   "heading": "Messages returned by activityController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/controllers/activityController.js"
+   ],
+   "text": "API error / status messages returned by v25_repscreationwizard_backend/src/controllers/activityController.js (REP profile wizard (REP profile, skills, languages, REP subscription)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Activities retrieved successfully\"\n500 - \"Failed to retrieve activities\"\n404 - \"Activity not found\"\n4xx/5xx - \"Activity retrieved successfully\"\n500 - \"Failed to retrieve activity\"\n500 - \"Failed to retrieve activities by category\"\n201 - \"Activity created successfully\"\n500 - \"Failed to create activity\"\n4xx/5xx - \"Activity updated successfully\"\n500 - \"Failed to update activity\"\n4xx/5xx - \"Activity deleted successfully\"\n500 - \"Failed to delete activity\"\n500 - \"Failed to toggle activity status\"\n4xx/5xx - \"Activity categories retrieved successfully\"\n500 - \"Failed to retrieve activity categories\""
+  },
+  {
+   "title": "Error messages - v25_repscreationwizard_backend - agentController",
+   "heading": "Messages returned by agentController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/controllers/agentController.js"
+   ],
+   "text": "API error / status messages returned by v25_repscreationwizard_backend/src/controllers/agentController.js (REP profile wizard (REP profile, skills, languages, REP subscription)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"languageCode is required\"\n400 - \"No file uploaded\"\n400 - \"No video file uploaded\""
+  },
+  {
+   "title": "Error messages - v25_repscreationwizard_backend - contactCenterController",
+   "heading": "Messages returned by contactCenterController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/controllers/contactCenterController.js"
+   ],
+   "text": "API error / status messages returned by v25_repscreationwizard_backend/src/controllers/contactCenterController.js (REP profile wizard (REP profile, skills, languages, REP subscription)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Skill name is required\"\n500 - \"Failed to generate scenario\"\n400 - \"Response, scenario, and skill name are required\"\n500 - \"Failed to analyze response\""
+  },
+  {
+   "title": "Error messages - v25_repscreationwizard_backend - cvController",
+   "heading": "Messages returned by cvController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/controllers/cvController.js"
+   ],
+   "text": "API error / status messages returned by v25_repscreationwizard_backend/src/controllers/cvController.js (REP profile wizard (REP profile, skills, languages, REP subscription)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Content is required\"\n500 - \"Failed to extract basic information from CV\"\n500 - \"Failed to analyze experience\"\n500 - \"Failed to analyze skills\"\n500 - \"Failed to analyze achievements\"\n500 - \"Failed to analyze availability\"\n400 - \"Profile data is required\"\n500 - \"Failed to generate summary\"\n500 - \"Failed to translate\""
+  },
+  {
+   "title": "Error messages - v25_repscreationwizard_backend - industryController",
+   "heading": "Messages returned by industryController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/controllers/industryController.js"
+   ],
+   "text": "API error / status messages returned by v25_repscreationwizard_backend/src/controllers/industryController.js (REP profile wizard (REP profile, skills, languages, REP subscription)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Industries retrieved successfully\"\n500 - \"Failed to retrieve industries\"\n404 - \"Industry not found\"\n4xx/5xx - \"Industry retrieved successfully\"\n500 - \"Failed to retrieve industry\"\n201 - \"Industry created successfully\"\n500 - \"Failed to create industry\"\n4xx/5xx - \"Industry updated successfully\"\n500 - \"Failed to update industry\"\n4xx/5xx - \"Industry deleted successfully\"\n500 - \"Failed to delete industry\"\n500 - \"Failed to toggle industry status\""
+  },
+  {
+   "title": "Error messages - v25_repscreationwizard_backend - languageAssessmentController",
+   "heading": "Messages returned by languageAssessmentController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/controllers/languageAssessmentController.js"
+   ],
+   "text": "API error / status messages returned by v25_repscreationwizard_backend/src/controllers/languageAssessmentController.js (REP profile wizard (REP profile, skills, languages, REP subscription)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Passage and language are required\"\n500 - \"Failed to analyze language assessment\"\n400 - \"Language is required\"\n500 - \"Failed to get language code\"\n500 - \"Failed to get passage\"\n400 - \"Language and target language code are required\"\n500 - \"Failed to generate passage\""
+  },
+  {
+   "title": "Error messages - v25_repscreationwizard_backend - languageController",
+   "heading": "Messages returned by languageController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/controllers/languageController.js"
+   ],
+   "text": "API error / status messages returned by v25_repscreationwizard_backend/src/controllers/languageController.js (REP profile wizard (REP profile, skills, languages, REP subscription)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Languages retrieved successfully\"\n500 - \"Failed to retrieve languages\"\n400 - \"Language code is required\"\n404 - \"Language not found\"\n4xx/5xx - \"Language retrieved successfully\"\n500 - \"Failed to retrieve language\"\n400 - \"Search term must be at least 2 characters long\"\n4xx/5xx - \"Search completed successfully\"\n500 - \"Failed to search languages\"\n4xx/5xx - \"Popular languages retrieved successfully\"\n500 - \"Failed to retrieve popular languages\"\n4xx/5xx - \"Language statistics retrieved successfully\"\n500 - \"Failed to retrieve language statistics\""
+  },
+  {
+   "title": "Error messages - v25_repscreationwizard_backend - skillController",
+   "heading": "Messages returned by skillController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/controllers/skillController.js"
+   ],
+   "text": "API error / status messages returned by v25_repscreationwizard_backend/src/controllers/skillController.js (REP profile wizard (REP profile, skills, languages, REP subscription)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Agent skills retrieved successfully\"\n4xx/5xx - \"Skills added to agent successfully\"\n4xx/5xx - \"Agent skills updated successfully\"\n4xx/5xx - \"Skills removed from agent successfully\"\n4xx/5xx - \"Skills statistics retrieved successfully\""
+  },
+  {
+   "title": "Error messages - v25_repscreationwizard_backend - speechToTextController",
+   "heading": "Messages returned by speechToTextController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/controllers/speechToTextController.js"
+   ],
+   "text": "API error / status messages returned by v25_repscreationwizard_backend/src/controllers/speechToTextController.js (REP profile wizard (REP profile, skills, languages, REP subscription)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"No audio file uploaded\"\n400 - \"Missing language in request body\"\n400 - \"Missing languageCode or fileUri in request body\""
+  },
+  {
+   "title": "Error messages - v25_repscreationwizard_backend - stripeController",
+   "heading": "Messages returned by stripeController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/controllers/stripeController.js"
+   ],
+   "text": "API error / status messages returned by v25_repscreationwizard_backend/src/controllers/stripeController.js (REP profile wizard (REP profile, skills, languages, REP subscription)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Valid agentId is required\"\n400 - \"Stripe priceId is required\"\n503 - \"Stripe not configured\"\n4xx/5xx - \"Définissez STRIPE_SECRET_KEY.\"\n400 - \"Rep plan not found for Stripe price\"\n400 - \"Plan does not match Stripe price\"\n502 - \"Stripe session incomplete\"\n4xx/5xx - \"client_secret manquant.\"\n500 - \"Failed to initialize subscription checkout\"\n404 - \"Agent not found\"\n403 - \"Not authorized to cancel this subscription\"\n4xx/5xx - \"Failed to cancel subscription\"\n400 - \"sessionId is required\"\n402 - \"Stripe payment not completed\"\n500 - \"Failed to confirm subscription checkout\""
+  },
+  {
+   "title": "Error messages - v25_repscreationwizard_backend - vertexController",
+   "heading": "Messages returned by vertexController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/controllers/vertexController.js"
+   ],
+   "text": "API error / status messages returned by v25_repscreationwizard_backend/src/controllers/vertexController.js (REP profile wizard (REP profile, skills, languages, REP subscription)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"fileUri is required\"\n400 - \"fileUri and textToCompare are required\"\n400 - \"fileUri and destinationName are required\"\n400 - \"File and destinationName are required\"\n400 - \"fileUri and scenarioData are required\""
+  },
+  {
+   "title": "Error messages - v25_repscreationwizard_backend - errorHandler",
+   "heading": "Messages returned by errorHandler",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/middleware/errorHandler.js"
+   ],
+   "text": "API error / status messages returned by v25_repscreationwizard_backend/src/middleware/errorHandler.js (REP profile wizard (REP profile, skills, languages, REP subscription)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Validation error\"\n409 - \"Duplicate key error\""
+  },
+  {
+   "title": "Error messages - v25_repscreationwizard_backend - validators",
+   "heading": "Messages returned by validators",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/middleware/validators.js"
+   ],
+   "text": "API error / status messages returned by v25_repscreationwizard_backend/src/middleware/validators.js (REP profile wizard (REP profile, skills, languages, REP subscription)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Email and password are required\"\n400 - \"Invalid email format\"\n400 - \"Password must be at least 6 characters long\"\n400 - \"Personal info and professional summary are required\"\n400 - \"Name and email are required in personal info\"\n400 - \"Assessment data is required and must be an object\"\n400 - \"Score must be a number between 0 and 100\"\n400 - \"keyMetrics must be an object\""
+  },
+  {
+   "title": "Error messages - v25_repscreationwizard_backend - internalRoutes",
+   "heading": "Messages returned by internalRoutes",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/routes/internalRoutes.js"
+   ],
+   "text": "API error / status messages returned by v25_repscreationwizard_backend/src/routes/internalRoutes.js (REP profile wizard (REP profile, skills, languages, REP subscription)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n404 - \"Agent not found\"\n500 - \"Failed to resolve plan limits\""
+  },
+  {
+   "title": "Error messages - v25_repscreationwizard_backend - ipRoutes",
+   "heading": "Messages returned by ipRoutes",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/routes/ipRoutes.js"
+   ],
+   "text": "API error / status messages returned by v25_repscreationwizard_backend/src/routes/ipRoutes.js (REP profile wizard (REP profile, skills, languages, REP subscription)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Invalid IP address provided\"\n500 - \"Internal server error\"\n4xx/5xx - \"Test completed\"\n4xx/5xx - \"Cannot geolocate private/local IP addresses\"\n500 - \"Failed to get IP information\"\n400 - \"Invalid user ID provided\"\n404 - \"User not found\"\n404 - \"No IP history found for this user\"\n4xx/5xx - \"Test user created with IP history\"\n500 - \"Failed to create test user\""
+  },
+  {
+   "title": "Error messages - v25_repscreationwizard_backend - timezoneRoutes",
+   "heading": "Messages returned by timezoneRoutes",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/routes/timezoneRoutes.js"
+   ],
+   "text": "API error / status messages returned by v25_repscreationwizard_backend/src/routes/timezoneRoutes.js (REP profile wizard (REP profile, skills, languages, REP subscription)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Error fetching timezones\"\n500 - \"Error fetching countries\"\n500 - \"Error fetching timezones for country\"\n404 - \"Timezone not found\"\n500 - \"Error fetching timezone\""
+  },
+  {
+   "title": "Error messages - v25_searchcompanywizard_backend - companyController",
+   "heading": "Messages returned by companyController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_searchcompanywizard_backend/src/infrastructure/controllers/companyController.ts"
+   ],
+   "text": "API error / status messages returned by v25_searchcompanywizard_backend/src/infrastructure/controllers/companyController.ts (company profile wizard (company search/profile)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Company saved successfully\"\n200 - \"Companies retrieved successfully\"\n404 - \"Company not found\"\n200 - \"Company retrieved successfully\"\n200 - \"Company updated successfully\"\n200 - \"Company deleted successfully\"\n400 - \"Invalid subscription plan\"\n500 - \"Error updating subscription\"\n404 - \"Company details not found\"\n200 - \"Company details retrieved successfully\""
+  },
+  {
+   "title": "Error messages - v25_searchcompanywizard_backend - onboardingProgressController",
+   "heading": "Messages returned by onboardingProgressController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_searchcompanywizard_backend/src/infrastructure/controllers/onboardingProgressController.ts"
+   ],
+   "text": "API error / status messages returned by v25_searchcompanywizard_backend/src/infrastructure/controllers/onboardingProgressController.ts (company profile wizard (company search/profile)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Onboarding progress already exists for this company\"\n500 - \"Error initializing onboarding progress\"\n404 - \"Onboarding progress not found\"\n500 - \"Error fetching onboarding progress\"\n404 - \"Phase not found\"\n404 - \"Step not found\"\n400 - \"Cannot modify steps in phase \"\n500 - \"Error updating step progress\"\n400 - \"companyId is required in query parameters\"\n500 - \"Error completing step\"\n400 - \"Cannot access phase \"\n500 - \"Error updating current phase\"\n500 - \"Error resetting onboarding progress\"\n404 - \"No company found for this user\"\n404 - \"No onboarding progress found\"\n500 - \"Error retrieving onboarding progress\"\n4xx/5xx - \"Current phase fixed successfully\"\n4xx/5xx - \"No active phase found\"\n500 - \"Error fixing current phase\"\n404 - \"No phases found\"\n404 - \"No steps found in last phase\"\n4xx/5xx - \"Last phase and step completed successfully\"\n500 - \"Error completing last phase and step\""
+  },
+  {
+   "title": "Error messages - v25_searchcompanywizard_backend - openaiController",
+   "heading": "Messages returned by openaiController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_searchcompanywizard_backend/src/infrastructure/controllers/openaiController.ts"
+   ],
+   "text": "API error / status messages returned by v25_searchcompanywizard_backend/src/infrastructure/controllers/openaiController.ts (company profile wizard (company search/profile)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Query is required\"\n500 - \"Failed to perform search\"\n400 - \"A valid url is required\"\n400 - \"Invalid URL format\"\n502 - \"Failed to scrape and generate profile\"\n400 - \"Company information is required\"\n500 - \"AI generation failed\"\n400 - \"Company profile is required\""
+  },
+  {
+   "title": "Error messages - v25_searchcompanywizard_backend - uploadsController",
+   "heading": "Messages returned by uploadsController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_searchcompanywizard_backend/src/infrastructure/controllers/uploadsController.ts"
+   ],
+   "text": "API error / status messages returned by v25_searchcompanywizard_backend/src/infrastructure/controllers/uploadsController.ts (company profile wizard (company search/profile)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Cloudinary is not configured on the server. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET.\"\n400 - \"No file provided (field name: \"file\").\"\n400 - \"Only image files are allowed.\"\n400 - \"File too large (max 5 MB).\""
+  },
+  {
+   "title": "Error messages - v25_searchcompanywizard_backend - errorHandler",
+   "heading": "Messages returned by errorHandler",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_searchcompanywizard_backend/src/infrastructure/middleware/errorHandler.ts"
+   ],
+   "text": "API error / status messages returned by v25_searchcompanywizard_backend/src/infrastructure/middleware/errorHandler.ts (company profile wizard (company search/profile)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Validation Error\"\n409 - \"Duplicate Entry\"\n500 - \"Internal Server Error\""
+  }
+ ]
+}

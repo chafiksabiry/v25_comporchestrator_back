@@ -99,6 +99,7 @@ assert.match(send({ subject: 'a\nBcc: x@y.fr' }).error, /une seule ligne/);
 assert.match(send({ subject: ' ' }).error, /objet/);
 assert.match(send({ body: 'x'.repeat(5001) }).error, /5000/);
 assert.match(send({ template: 'inconnu' }).error, /Modèle/);
+for (const t of ['callback_confirmation', 'appointment_confirmation', 'appointment_cancellation', 'free']) assert.equal(send({ template: t }).value?.template, t, `modèle ${t} accepté (ceux proposés par l’application)`);
 assert.match(send({ followUpId: 'zz' }).error, /invalide/);
 assert.match(send({ attachIcs: true }).error, /rendez-vous/);
 assert.equal(send({ followUpId: '64b0000000000000000000a1', attachIcs: true }).value.attachIcs, true);
@@ -390,5 +391,18 @@ assert.match(I.buildAppointmentIcs(r.body.data) , /STATUS:CANCELLED/);
   assert.equal(appendSignature('Bonjour', ''), 'Bonjour');
   assert.equal(appendSignature('Bonjour', undefined), 'Bonjour');
   assert.equal(appendSignature('Bonjour DIGITAL ASSURANCE merci', 'DIGITAL ASSURANCE'), 'Bonjour DIGITAL ASSURANCE merci\n\nDIGITAL ASSURANCE', 'une simple mention au milieu ne compte pas');
+}
+// « Annulation de rendez-vous » envoyée par e-mail : le rendez-vous lié est annulé (et retiré de l'agenda connecté) ; jamais un autre élément
+{
+  const { cancelAppointmentAfterEmail } = await import('../controllers/followUpController.js');
+  let saves = 0;
+  const appt = { _id: APPT, model: 'appointment', status: 'todo', sequence: 2, companyId: COMPANY, title: 'RDV', dueAt: new Date('2026-11-03T09:00:00Z'), save: async () => { saves += 1; } };
+  await cancelAppointmentAfterEmail(appt, { userId: 'owner1' });
+  assert.equal(appt.status, 'canceled'); assert.equal(appt.sequence, 3); assert.equal(appt.closedById, 'owner1'); assert.ok(appt.closedAt instanceof Date); assert.ok(saves >= 1);
+  const after = saves; await cancelAppointmentAfterEmail(appt, { userId: 'owner1' });
+  assert.equal(appt.sequence, 3, 'déjà annulé : rien ne change'); assert.equal(saves, after);
+  const other = { _id: APPT, model: 'voicemail_callback', status: 'todo', save: async () => { saves += 1; } };
+  await cancelAppointmentAfterEmail(other, { userId: 'owner1' }); assert.equal(other.status, 'todo', 'seul un rendez-vous est annulé');
+  await cancelAppointmentAfterEmail(null, { userId: 'owner1' });
 }
 console.log('secretariat: ok');

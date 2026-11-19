@@ -3,6 +3,8 @@
 // (même adresse obligatoire, aucun scope d'écriture), purge à l'arrêt et à la déconnexion, métadonnées seulement (TTL 30 jours), corps jamais stocké,
 // reconnexion signalée sans repli. Base et réseau SIMULÉS : aucun appel vers un vrai Gmail / Graph, aucune authentification réelle.
 import assert from 'node:assert/strict';
+// Scopes Gmail restreints : désactivés par défaut côté serveur (GOOGLE_RESTRICTED_SCOPES) ; ces tests couvrent la fonction activée.
+process.env.GOOGLE_RESTRICTED_SCOPES = 'true';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 

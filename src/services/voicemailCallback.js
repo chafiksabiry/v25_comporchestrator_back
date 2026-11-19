@@ -61,7 +61,7 @@ export const buildCallbackTwiml = ({ callerId, to, maxSeconds, recording = null,
   return wrap(`<Dial callerId="${xmlEscape(callerId)}" answerOnBridge="true" timeout="30"${limit}${record}${onEnd}><Number${whisper}>${xmlEscape(to)}</Number></Dial>`);
 };
 
-export const buildRefusalTwiml = (message, { language = 'fr-FR', voice = 'Polly.Lea' } = {}) =>
+export const buildRefusalTwiml = (message, { language = 'fr-FR', voice = 'Polly.Lea-Generative' } = {}) =>
   wrap(`<Say language="${language}" voice="${voice}">${xmlEscape(message)}</Say><Hangup/>`);
 
 /**

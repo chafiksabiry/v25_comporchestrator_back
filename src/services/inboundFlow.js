@@ -20,7 +20,7 @@ const WEBHOOK_PATH = '/api/phone-numbers/webhooks/twilio';
 export const xmlEscape = (value) => String(value ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 
-export const pollyVoice = (voice) => (FEMALE_VOICES.includes(voice) || !voice ? 'Polly.Lea' : 'Polly.Mathieu');
+export const pollyVoice = (voice) => (FEMALE_VOICES.includes(voice) || !voice ? 'Polly.Lea-Generative' : 'Polly.Remi-Neural');
 
 /** <Say> dans la langue de la société (français par défaut) ; la voix féminine ou masculine suit le réglage de voix de l'entreprise. */
 export const say = (text, voice, language = 'fr') => {

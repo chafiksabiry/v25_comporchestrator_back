@@ -100,6 +100,25 @@ async function syncExternal(item, { wasStatus, keys, videoChanged, access, token
   await item.save();
 }
 
+/**
+ * Un e-mail « annulation de rendez-vous » envoyé pour un rendez-vous l'annule : le rendez-vous passe en « annulé » et disparaît de l'agenda
+ * connecté (même répercussion que l'annulation à la main). Ne lève jamais : l'e-mail est déjà parti, l'annulation ne doit pas le contredire.
+ */
+export async function cancelAppointmentAfterEmail(item, access) {
+  try {
+    if (!item || item.model !== 'appointment' || item.status === 'canceled') return;
+    const wasStatus = item.status;
+    item.status = 'canceled';
+    item.sequence = (item.sequence || 0) + 1;
+    item.closedAt = new Date();
+    item.closedById = access.userId;
+    await item.save();
+    await syncExternal(item, { wasStatus, keys: ['status'], videoChanged: false, access });
+  } catch (e) {
+    console.error('cancelAppointmentAfterEmail:', e.message);
+  }
+}
+
 /** Droits de l'appelant + sa société. Répond lui-même et renvoie null en cas de refus. */
 async function context(req, res) {
   let access;
@@ -206,7 +225,7 @@ export const followUpController = {
       const access = await context(req, res);
       if (!access) return;
       // Titulaire et responsables créent tout ; une secrétaire réserve seulement des rendez-vous (pour elle ou une personne de l'annuaire).
-      if (!canManage(access) && !(access.role === 'agent' && req.body?.model === 'appointment')) return fail(res, 403, NOT_ALLOWED);
+      if (!canManage(access) && !(access.role === 'agent' && ['appointment', 'transfer'].includes(req.body?.model))) return fail(res, 403, NOT_ALLOWED);
       const checked = validateCreate(req.body, access);
       if (checked.error) return fail(res, 400, checked.error);
       const v = checked.value;

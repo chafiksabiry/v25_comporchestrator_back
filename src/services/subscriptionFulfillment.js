@@ -75,9 +75,6 @@ export async function activateCompanySubscription({
   status = 'active',
   periodDays = 30
 }) {
-  const now = new Date();
-  const periodEnd = new Date(now.getTime() + periodDays * 24 * 60 * 60 * 1000);
-
   const subId =
     stripeSubscriptionId
     || (provider === 'paypal' && providerRef ? `paypal_${providerRef}` : null);
@@ -85,6 +82,19 @@ export async function activateCompanySubscription({
   if (!subId) {
     throw new Error('Missing subscription reference after payment');
   }
+
+  const existing = await Subscription.findOne({ userId });
+  const now = new Date();
+  const existingStart = existing?.currentPeriodStart ? new Date(existing.currentPeriodStart) : null;
+  const sameOpenPeriod = Boolean(
+    existing?.stripeSubscriptionId === subId
+    && existingStart
+    && (now.getTime() - existingStart.getTime()) < 60 * 60 * 1000
+  );
+  const periodStart = sameOpenPeriod ? existingStart : now;
+  const periodEnd = sameOpenPeriod && existing?.currentPeriodEnd
+    ? new Date(existing.currentPeriodEnd)
+    : new Date(periodStart.getTime() + periodDays * 24 * 60 * 60 * 1000);
 
   await Subscription.findOneAndUpdate(
     { userId },
@@ -97,7 +107,7 @@ export async function activateCompanySubscription({
       stripeCustomerId: stripeCustomerId || (provider === 'paypal' ? 'paypal' : ''),
       providerRef: providerRef || stripeSubscriptionId,
       status,
-      currentPeriodStart: now,
+      currentPeriodStart: periodStart,
       currentPeriodEnd: periodEnd,
       cancelAtPeriodEnd: false
     },
@@ -164,23 +174,29 @@ export async function activateFromStripeCheckoutSession(session) {
     throw new Error(`Plan not found for price ${priceId}`);
   }
 
-  // current_period_start/end can be absent on a subscription that hasn't
-  // billed yet (e.g. a 100%-off promo code, or a free trial) — fall back to
-  // Stripe's own stable start_date/created fields, never to `new Date()`.
-  // A wall-clock fallback makes periodGrantKey() (below) non-deterministic:
-  // two concurrent callers (the Stripe webhook + the frontend's post-redirect
-  // confirm call) would each compute a different grantKey for the exact same
-  // period and both pass ensurePlanMinutesGranted's idempotency check,
-  // double-crediting the plan's included minutes.
-  // Selon la version de l'API Stripe, les dates de période sont sur l'abonnement ou sur sa première ligne.
+  // current_period_start/end can be absent before the first invoice (promo code, free trial).
+  // Never fall back to wall-clock time first: prefer Stripe's stable start_date/created so the
+  // webhook and the post-checkout confirm share one grantKey (no double plan credit).
+  // Depending on the Stripe API version, period dates sit on the subscription or on its first item.
   const period = subscriptionPeriod(stripeSubscription);
-  const stableStart = (period.start ? period.start.getTime() / 1000 : null)
+  const startUnix = (period.start ? period.start.getTime() / 1000 : null)
     || stripeSubscription.start_date
     || stripeSubscription.created;
-  const periodStart = stableStart ? new Date(stableStart * 1000) : new Date();
+  const existing = userId ? await Subscription.findOne({ userId }) : null;
+  const now = new Date();
+  const existingStart = existing?.currentPeriodStart ? new Date(existing.currentPeriodStart) : null;
+  const sameOpenPeriod = Boolean(
+    existing?.stripeSubscriptionId === stripeSubscriptionId
+    && existingStart
+    && (now.getTime() - existingStart.getTime()) < 60 * 60 * 1000
+  );
+  const periodStart = startUnix
+    ? new Date(Number(startUnix) * 1000)
+    : (sameOpenPeriod ? existingStart : now);
   const periodEnd = period.end
+    || (sameOpenPeriod && existing?.currentPeriodEnd ? new Date(existing.currentPeriodEnd) : null)
     || (stripeSubscription.trial_end ? new Date(stripeSubscription.trial_end * 1000) : null)
-    || new Date((stableStart || Math.floor(Date.now() / 1000)) * 1000 + 30 * 24 * 60 * 60 * 1000);
+    || new Date(periodStart.getTime() + 30 * 24 * 60 * 60 * 1000);
 
   // L'abonnement précédent (autre offre) est lu AVANT d'être remplacé, puis résilié APRÈS : son événement
   // « customer.subscription.deleted » ne doit pas retrouver notre enregistrement sous son ancien identifiant.

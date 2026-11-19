@@ -254,11 +254,12 @@ assert.equal((await call(fu.list, { user: 'sec1' })).body.data.counts.newMessage
 assert.equal((await call(ctl.markSeen, { user: 'sec1', params: { id: 'zzz' } })).code, 404);
 
 
-// une secrétaire réserve un rendez-vous (seul modèle qu'elle crée), pour elle ou une personne de l'annuaire qui a un compte
+// une secrétaire réserve un rendez-vous ou confie une tâche à une collègue (seuls modèles qu'elle crée), pour elle ou une personne de l'annuaire qui a un compte
 const FUTURE = new Date(Date.now() + 5 * 86400000).toISOString();
 r = await call(fu.directory, { user: 'sec2' });
 assert.deepEqual(r.body.data.people.map((p) => p.id).sort(), ['owner1', 'sec1', 'sec2'], 'secrétaire : elle-même + les personnes de l’annuaire avec un compte');
-assert.equal((await call(fu.create, { user: 'sec2', body: { model: 'transfer', assigneeId: 'sec1' } })).code, 403, 'une secrétaire ne crée pas de transfert');
+r = await call(fu.create, { user: 'sec2', body: { model: 'transfer', title: 'Rappeler Mme Durand', assigneeId: 'sec1' } });
+assert.equal(r.code, 201, JSON.stringify(r.body)); assert.equal(r.body.data.assignee.id, 'sec1', 'une secrétaire confie une tâche à une collègue');
 assert.equal((await call(fu.create, { user: 'sec2', body: { model: 'missed_callback', origin: { type: 'none' }, dueAt: FUTURE } })).code, 403);
 r = await call(fu.create, { user: 'sec2', body: { model: 'appointment', contactName: 'Mme Durand', dueAt: FUTURE, assigneeId: 'owner1' } });
 assert.equal(r.code, 201, JSON.stringify(r.body)); assert.equal(r.body.data.assignee.id, 'owner1');

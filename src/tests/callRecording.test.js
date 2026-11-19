@@ -49,7 +49,7 @@ assert.equal(await R.shouldRecordCompany('', async () => cc('full_scope')), fals
 for (const lang of ['fr', 'en', 'es', 'ar']) {
   const say = R.consentSay(lang);
   assert.ok(say.includes(R.CONSENT_TEXTS[lang]), lang);
-  assert.match(say, /^<Say language="[^"]+" voice="Polly\.[A-Za-z]+">/);
+  assert.match(say, /^<Say language="[^"]+" voice="Polly\.[A-Za-z-]+">/);
 }
 assert.match(R.consentSay('fr'), /Cet appel peut être enregistré/);
 assert.match(R.consentSay('en'), /may be recorded/);
