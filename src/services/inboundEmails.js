@@ -233,22 +233,30 @@ export async function refreshInbound(scope, now = Date.now()) {
   return inboundView(s);
 }
 
-/** Corps d'un message lu EN DIRECT (texte, ≤ 20 000 caractères). Jamais stocké, jamais journalisé. */
+/** `display` (défaut) : texte + HTML avec images intégrées ; `text` : texte seul (réponse, citation), sans image lue ; `ai` : texte seul, refusé pour Google. */
+export const BODY_PURPOSES = ['display', 'text', 'ai'];
 /**
- * Corps d'un e-mail, relu en direct. `purpose: 'ai'` (corps demandé pour une analyse IA) : refusé pour un e-mail Google (409 `google_ai_disabled`, AVANT tout appel Gmail).
- * @returns {Promise<{text: string, aiAllowed: boolean}>}
+ * Corps d'un e-mail, relu EN DIRECT (texte ≤ 20 000 caractères, plus la partie HTML d'origine quand le fournisseur la renvoie). Jamais stocké, jamais journalisé.
+ * `purpose: 'ai'` (corps demandé pour une analyse IA) : refusé pour un e-mail Google (409 `google_ai_disabled`, AVANT tout appel Gmail).
+ * @returns {Promise<{text: string, html?: string, aiAllowed: boolean}>}
  */
 export async function readInboundBody(scope, id, { purpose } = {}) {
   const s = asScope(scope);
   if (!isId(id)) throw new SecretariatError('invalid_request', 'Identifiant d’e-mail invalide.');
-  if (purpose !== undefined && purpose !== 'ai' && purpose !== 'display') throw new SecretariatError('invalid_request', 'Usage invalide : « display » ou « ai ».');
+  // `purpose` vient de la requête : une seule chaîne parmi les valeurs connues (un tableau `?purpose=ai&purpose=ai` ou un objet est refusé).
+  if (purpose !== undefined && (typeof purpose !== 'string' || !BODY_PURPOSES.includes(purpose))) throw new SecretariatError('invalid_request', 'Usage invalide : « display », « text » ou « ai ».');
   const access = await requireReadAccess(s);
   const doc = await InboundEmail.findOne({ _id: oid(id), ...scopeFilter(s), deletedAt: null }).select('provider providerMessageId').lean();
   if (!doc) throw new SecretariatError('not_found', 'E-mail introuvable.');
   if (doc.provider !== access.provider) throw new SecretariatError('no_mailbox', ERRORS.no_mailbox); // la messagerie a changé depuis la lecture
   if (purpose === 'ai') assertAiAllowed(doc.provider); // aucune donnée Google envoyée à une IA
-  const text = await connect(s, access.provider, (accessToken, http) => PROVIDERS[access.provider].readBody({ http, accessToken, id: doc.providerMessageId }));
-  return { text, aiAllowed: aiAllowedFor(doc.provider) };
+  const P = PROVIDERS[access.provider];
+  // Texte seul (`text`, `ai`) : aucune image intégrée lue ; affichage : HTML d'origine avec ses images intégrées converties en `data:`.
+  const textOnly = purpose === 'ai' || purpose === 'text';
+  const out = await connect(s, access.provider, async (accessToken, http) => (P.readBodyFull && !textOnly
+    ? P.readBodyFull({ http, accessToken, id: doc.providerMessageId })
+    : { text: await P.readBody({ http, accessToken, id: doc.providerMessageId }) }));
+  return out.html ? { text: out.text, html: out.html, aiAllowed: aiAllowedFor(doc.provider) } : { text: out.text, aiAllowed: aiAllowedFor(doc.provider) };
 }
 
 /** Limites de « Répondre à tous » : celles de l'envoi (POST /api/emails : `to` 5 adresses, `cc` 10 adresses). */
