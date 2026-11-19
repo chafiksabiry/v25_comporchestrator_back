@@ -9,6 +9,8 @@ import { syncAppointment } from '../services/calendarSync.js';
 import { buildAppointmentIcs, icsFilename } from '../services/ics.js';
 import { createVideo, removeVideoResource, updateVideoResource } from '../services/secretariatActions.js';
 import { SecretariatError } from '../services/secretariatProviders/common.js';
+import { loadCompanyPlanLimits } from '../services/planLimits.js';
+import { offerKind } from '../services/lineAssignment.js';
 import {
   createDelegatedEvent, DELEGATED_VIDEO_CODE, delegatedVideoError, discardDelegatedEvent, openDelegatedAccount, syncDelegated,
 } from '../services/delegatedAppointments.js';
@@ -20,6 +22,26 @@ import {
 const validId = (v) => typeof v === 'string' && /^[0-9a-fA-F]{24}$/.test(v) && mongoose.Types.ObjectId.isValid(v);
 const fail = (res, status, message) => res.status(status).json({ success: false, error: message, message });
 const NOT_ALLOWED = 'Vous n’avez pas accès à cet écran.';
+
+/** Code stable du refus « appels manqués réservés à l'offre Accueil » (agent d'une offre Call Centre). */
+export const MISSED_CALLS_RECEPTION_ONLY = 'MISSED_CALLS_RECEPTION_ONLY';
+const MISSED_CALLS_RECEPTION_ONLY_MESSAGE = 'Les appels manqués sont réservés aux secrétaires de l’offre Accueil.';
+const missedCallsRefused = (res) => res.status(403).json({ success: false, code: MISSED_CALLS_RECEPTION_ONLY, error: MISSED_CALLS_RECEPTION_ONLY_MESSAGE, message: MISSED_CALLS_RECEPTION_ONLY_MESSAGE });
+
+/**
+ * Un agent lit-il les appels manqués de la société active ? Seulement en offre Accueil (secrétaire sur la ligne commune).
+ * En Call Centre (Full Scope, Multi-clients…), un appel entrant est pris par un agent en ligne ou perdu : pas de liste d'appels manqués
+ * pour les agents. Titulaire et membres : inchangé (true). Offre illisible : refus (jamais d'ouverture sur incident).
+ */
+async function agentMayReadMissedCalls(access) {
+  if (access.role !== 'agent') return true;
+  try {
+    return offerKind(await loadCompanyPlanLimits(access.companyId)) === 'accueil';
+  } catch (error) {
+    console.warn('followUps offre illisible, appels manqués refusés à l’agent :', error?.message || error);
+    return false;
+  }
+}
 
 /** Erreur d'un fournisseur connecté (lien de visio) : message clair, 409 si la connexion est à refaire, 502 sinon. */
 const providerFail = (res, error) => {
@@ -207,9 +229,10 @@ export const followUpController = {
     try {
       const access = await context(req, res);
       if (!access) return;
-      // La secrétaire (agent) répond sur la ligne commune : elle voit aussi ses appels manqués (« Pour moi » de Mon espace), toujours ceux
-      // de la société sur laquelle elle travaille (choisie parmi ses emplois par `context`).
+      // La secrétaire (agent) de l'offre Accueil répond sur la ligne commune : elle voit aussi ses appels manqués (« Pour moi » de Mon espace),
+      // toujours ceux de la société sur laquelle elle travaille (choisie parmi ses emplois par `context`). Agent d'une offre Call Centre : 403.
       if (!canManage(access) && access.role !== 'agent') return fail(res, 403, NOT_ALLOWED);
+      if (!(await agentMayReadMissedCalls(access))) return missedCallsRefused(res);
       const companyId = new mongoose.Types.ObjectId(access.companyId);
       const rows = await InboundCall.find({ companyId, status: { $in: MISSED_STATUSES }, startedAt: { $gte: new Date(Date.now() - 30 * 86400000) } })
         .sort({ startedAt: -1 }).limit(50).select('from phoneNumber startedAt status').lean();
@@ -234,6 +257,9 @@ export const followUpController = {
       const checked = validateCreate(req.body, access);
       if (checked.error) return fail(res, 400, checked.error);
       const v = checked.value;
+      // Rappel d'un appel manqué : il lit l'appel (numéro de l'appelant). Réservé, pour un agent, à l'offre Accueil comme la liste des appels
+      // manqués. Rappels d'un message vocal, rendez-vous et demandes / tâches : inchangés pour tous les agents.
+      if (v.originType === 'missed_call' && !(await agentMayReadMissedCalls(access))) return missedCallsRefused(res);
       const people = await assignees(req, access);
       const assignee = people.find((p) => p.id === v.assigneeId);
       if (!assignee) return fail(res, 422, 'Ce collaborateur ne fait pas partie de votre centre.');

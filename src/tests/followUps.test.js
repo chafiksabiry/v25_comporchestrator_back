@@ -11,6 +11,13 @@ const { default: FollowUpItem } = await import('../models/FollowUpItem.js');
 const { default: Voicemail } = await import('../models/Voicemail.js');
 const { default: SecretariatTools } = await import('../models/SecretariatTools.js');
 const { followUpController: ctl } = await import('../controllers/followUpController.js');
+const { Subscription } = await import('../models/Subscription.js');
+
+// Offre de chaque société (forfait de l'abonnement) : Accueil par défaut ; `offers[companyId]` la remplace. Chaque lecture est notée.
+const tierPlan = (tier) => ({ _id: `plan-${tier}`, name: tier, metadata: { harx_product: 'callcenter', callcenter_tier: tier } });
+const offers = {};
+const offerLookups = [];
+Subscription.findOne = (f) => { offerLookups.push(String(f.companyId)); return { populate: async () => ({ planId: tierPlan(offers[String(f.companyId)] || 'accueil') }) }; };
 
 const NOW = Date.parse('2026-11-02T10:00:00Z');
 const FUTURE_REAL = () => new Date(Date.now() + 2 * 86400000).toISOString();
@@ -269,6 +276,89 @@ assert.match(r.body.message, /pas rattaché à cette entreprise/);
   assert.ok(missedFilters.length && missedFilters.every((f) => String(f.companyId) === B), 'appels manqués lus dans B seulement');
   r = await call(ctl.missedCalls, { user: 'agent1', query: { companyId: C } });
   assert.equal(r.code, 403, 'appels manqués d’une société non autorisée : refusé');
+}
+
+// --- décision du 19/11 : appels manqués réservés à l'offre Accueil. Un agent Call Centre crée rappels et tâches, mais ne lit pas
+// les appels manqués (un appel entrant y est pris par un agent en ligne ou perdu). Titulaire et membres : inchangé.
+{
+  const A = COMPANY, B = SECOND, C = '64b0000000000000000000d9';
+  const { default: InboundCall } = await import('../models/InboundCall.js');
+  const VM_B = '64b0000000000000000000b4', MISSED_B = '64b0000000000000000000b5', MISSED_A = '64b0000000000000000000a5';
+  const own = { [VM_B]: B, [MISSED_B]: B, [MISSED_A]: A };
+  const missedReads = [];
+  const lookup = (f) => (own[String(f._id)] === String(f.companyId) ? { from: '+33611111111', followUpStatus: 'new' } : null);
+  Voicemail.findOne = (f) => ({ select: () => ({ lean: async () => lookup(f) }) });
+  InboundCall.findOne = (f) => { missedReads.push(String(f.companyId)); return { select: () => ({ lean: async () => lookup(f) }) }; };
+  InboundCall.find = (f) => { missedReads.push(String(f.companyId)); return { sort() { return this; }, limit() { return this; }, select() { return this; }, lean: async () => [{ _id: MISSED_B, from: '+33611111111', phoneNumber: '+33100000000', startedAt: new Date(), status: 'no-answer' }] }; };
+  FollowUpItem.find = () => ({ select() { return this; }, lean: async () => [] });
+  FollowUpItem.exists = async () => false;
+  // A : Accueil (secrétaires) ; B : Call Centre Full Scope ; l'agent est employé par les deux.
+  offers[A] = 'accueil'; offers[B] = 'full_scope';
+  me = { isOwner: false, isAgent: true, companyId: A, companyIds: [A, B], permissions: {} };
+
+  // secrétaire Accueil : lit les appels manqués de A
+  r = await call(ctl.missedCalls, { user: 'agent1', query: { companyId: A } });
+  assert.equal(r.code, 200, 'secrétaire de l’offre Accueil : appels manqués lisibles');
+  assert.equal(offerLookups.at(-1), A, 'offre lue pour la société active');
+
+  // agent Call Centre (B) : 403 sur les appels manqués, rien lu
+  offerLookups.length = 0; missedReads.length = 0;
+  r = await call(ctl.missedCalls, { user: 'agent1', query: { companyId: B } });
+  assert.equal(r.code, 403, 'agent Call Centre : appels manqués refusés');
+  assert.equal(r.body.code, 'MISSED_CALLS_RECEPTION_ONLY');
+  assert.deepEqual(offerLookups, [B], 'offre lue pour la société active, jamais une autre');
+  assert.equal(missedReads.length, 0, 'aucun appel manqué lu');
+  for (const tier of ['multi_clients', 'nomad_solo']) {
+    offers[B] = tier;
+    assert.equal((await call(ctl.missedCalls, { user: 'agent1', query: { companyId: B } })).code, 403, `agent ${tier} : refusé`);
+  }
+  offers[B] = 'full_scope';
+
+  // agent Call Centre : rappel d'un appel manqué refusé (il lirait l'appel), rien créé ni lu
+  const count = store.length;
+  r = await call(ctl.create, { user: 'agent1', body: { companyId: B, model: 'missed_callback', origin: { type: 'missed_call', id: MISSED_B }, dueAt: FUTURE_REAL() } });
+  assert.equal(r.code, 403, 'agent Call Centre : rappel d’un appel manqué refusé'); assert.equal(r.body.code, 'MISSED_CALLS_RECEPTION_ONLY');
+  assert.equal(store.length, count, 'rien créé'); assert.equal(missedReads.length, 0, 'appel manqué non lu');
+
+  // … mais il crée toujours des rappels (message vocal), des tâches et des rendez-vous, dans la société active
+  r = await call(ctl.create, { user: 'agent1', body: { companyId: B, model: 'voicemail_callback', origin: { type: 'voicemail', id: VM_B } } });
+  assert.equal(r.code, 201, 'agent Call Centre : rappel d’un message vocal'); assert.equal(String(store.at(-1).companyId), B);
+  r = await call(ctl.create, { user: 'agent1', body: { companyId: B, model: 'transfer', title: 'Rappeler M. Martin', assigneeId: 'agent1' } });
+  assert.equal(r.code, 400, 'tâche à soi-même : refusée comme avant (validation inchangée)');
+  ReceptionDirectory.findOne = (f) => ({ lean: async () => (String(f.companyId) === B ? { entries: [{ userId: 'm2', name: 'Membre Deux', kind: 'member' }] } : null) });
+  r = await call(ctl.create, { user: 'agent1', body: { companyId: B, model: 'transfer', title: 'Rappeler M. Martin', assigneeId: 'm2' } });
+  assert.equal(r.code, 201, 'agent Call Centre : demande / tâche'); assert.equal(String(store.at(-1).companyId), B);
+  r = await call(ctl.create, { user: 'agent1', body: { companyId: B, model: 'appointment', contactName: 'M. Martin', dueAt: FUTURE_REAL() } });
+  assert.equal(r.code, 201, 'agent Call Centre : rendez-vous'); assert.equal(String(store.at(-1).companyId), B);
+  ReceptionDirectory.findOne = () => ({ lean: async () => null });
+
+  // la même personne, sur A (Accueil), planifie le rappel d'un appel manqué de A ; un appel de B reste introuvable depuis A
+  r = await call(ctl.create, { user: 'agent1', body: { companyId: A, model: 'missed_callback', origin: { type: 'missed_call', id: MISSED_A }, dueAt: FUTURE_REAL() } });
+  assert.equal(r.code, 201, 'secrétaire Accueil : rappel d’un appel manqué'); assert.equal(String(store.at(-1).companyId), A);
+  r = await call(ctl.create, { user: 'agent1', body: { companyId: A, model: 'missed_callback', origin: { type: 'missed_call', id: MISSED_B }, dueAt: FUTURE_REAL() } });
+  assert.equal(r.code, 404, 'appel manqué de B introuvable depuis A');
+
+  // société qui n'est pas l'un de ses emplois : 403 avant toute lecture d'offre
+  offerLookups.length = 0;
+  r = await call(ctl.missedCalls, { user: 'agent1', query: { companyId: C } });
+  assert.equal(r.code, 403); assert.match(r.body.message, /pas rattaché à cette entreprise/); assert.equal(offerLookups.length, 0, 'offre de C jamais lue');
+
+  // offre illisible : refus pour l'agent (jamais d'ouverture sur incident)
+  const realFindOne = Subscription.findOne;
+  Subscription.findOne = () => ({ populate: async () => { throw new Error('base indisponible'); } });
+  assert.equal((await call(ctl.missedCalls, { user: 'agent1', query: { companyId: A } })).code, 403, 'offre illisible : refus');
+  Subscription.findOne = realFindOne;
+
+  // titulaire et membres d'un Call Centre : inchangé, l'offre n'est pas consultée
+  offerLookups.length = 0;
+  me = { isOwner: true, companyId: B, permissions: {} };
+  r = await call(ctl.missedCalls, { query: { companyId: B } });
+  assert.equal(r.code, 200, 'titulaire Call Centre : appels manqués lisibles'); assert.equal(r.body.data.items.length, 1);
+  me = { isOwner: false, isAgent: false, companyId: B, permissions: { 'calls.view': true } };
+  r = await call(ctl.missedCalls, { user: 'm2', query: { companyId: B } });
+  assert.equal(r.code, 200, 'membre avec droit sur les appels : inchangé');
+  assert.equal(offerLookups.length, 0, 'offre non consultée pour titulaire et membres');
+  delete offers[A]; delete offers[B];
 }
 
 // Appel rattaché à un élément : validation
