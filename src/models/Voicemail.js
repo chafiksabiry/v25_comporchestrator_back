@@ -25,6 +25,10 @@ const schema = new mongoose.Schema(
     note: { type: String, default: '', maxlength: 1000 },
     handledBy: { type: String, default: null },
     analysisStatus: { type: String, enum: ['pending', 'done', 'failed', 'needs_tokens'], default: 'pending' },
+    /** Reprise différée (voicemailAnalysis.retryFailedAnalyses) : échec transitoire repris, nombre de reprises faites, date du dernier échec. Absents sur les anciens messages. */
+    analysisRetryable: { type: Boolean, default: undefined },
+    analysisAttempts: { type: Number, default: 0 },
+    analysisFailedAt: { type: Date, default: undefined },
     analysis: {
       transcript: String,
       summary: String,
