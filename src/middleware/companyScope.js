@@ -154,9 +154,10 @@ export function identityCountryOf(profile) {
 /**
  * Pays de l'entreprise (`country`, vide si non renseigné) et pays de la pièce d'identité déclarée (`identityCountry`, vide sinon),
  * lus en une fois dans l'état de l'espace de travail. Mêmes contrôles, même cache et mêmes erreurs que `companyCountryRaw`.
+ * `fresh` : relit le service d'inscription sans utiliser le cache (garde de paiement Nomad Solo : le profil vient d'être enregistré).
  * @returns {Promise<{country: string, identityCountry: string}>}
  */
-export async function companyNumberProfile(req, companyId) {
+export async function companyNumberProfile(req, companyId, { fresh = false } = {}) {
   const id = String(companyId || '');
   const userId = req.user && (req.user.userId || req.user.id);
   const token = req.headers?.authorization?.split(' ')[1];
@@ -166,7 +167,7 @@ export async function companyNumberProfile(req, companyId) {
   // Clé par personne ET entreprise : un autre appelant repasse toujours par le contrôle d'accès du service d'inscription.
   const key = `${userId}:${id}`;
   const cached = countryByCompany.get(key);
-  if (cached && cached.expires > Date.now()) return { country: cached.country, identityCountry: cached.identityCountry || '' };
+  if (!fresh && cached && cached.expires > Date.now()) return { country: cached.country, identityCountry: cached.identityCountry || '' };
 
   const origin = registrationOrigin();
   if (!origin) throw new ScopeError(503, 'Company country lookup is not configured', 'COMPANY_COUNTRY_LOOKUP_NOT_CONFIGURED');

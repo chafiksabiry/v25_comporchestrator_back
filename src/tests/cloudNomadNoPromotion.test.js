@@ -17,6 +17,8 @@ const { subscriptionRoutes } = await import('../routes/subscription.js');
 const { SubscriptionPlan } = await import('../models/SubscriptionPlan.js');
 const { default: CompanyPayment } = await import('../models/CompanyPayment.js');
 const { clearCompanyCache } = await import('../middleware/companyScope.js');
+const { phoneNumberService } = await import('../services/phoneNumberService.js');
+const { clearAvailabilityCache } = await import('../services/numberAvailability.js');
 
 const C1 = '64b0000000000000000000c1';
 const CLOUD = { harx_product: 'callcenter', callcenter_tier: 'accueil', offer_version: '2026-11' };
@@ -91,9 +93,15 @@ beforeEach(() => {
   stripeService.getSharedClient = () => ({ coupons: { list: async () => { calls.couponReads += 1; return { data: [] }; } } });
   SubscriptionPlan.findOne = async ({ stripePriceId }) => ({ _id: `plan_${stripePriceId}`, name: 'Plan', price: 29.99, currency: 'eur', stripePriceId, metadata: products[stripePriceId] });
   CompanyPayment.create = async (doc) => { calls.payments += 1; return { _id: 'pay_1', ...doc, save: async () => {} }; };
-  global.fetch = async () => ({ ok: true, json: async () => ({ success: true, data: { companyId: C1, isOwner: true } }) });
+  // Nomad Solo : garde « numéros disponibles » avant paiement (voir subscriptionSoloGuard.test.js) ; ici, profil FR et stock simulé.
+  clearAvailabilityCache();
+  phoneNumberService.listClaimableInventory = async () => [{ phoneNumber: '+33100000000' }];
+  global.fetch = async (u) => (String(u).includes('/api/call-center/workspace-state')
+    ? { ok: true, json: async () => ({ success: true, data: { company: { profile: { country: 'FR' } } } }) }
+    : { ok: true, json: async () => ({ success: true, data: { companyId: C1, isOwner: true } }) });
 });
-after(() => { Object.assign(console, saved); Object.assign(stripeService, orig); });
+const origPhone = { ...phoneNumberService };
+after(() => { Object.assign(console, saved); Object.assign(stripeService, orig); Object.assign(phoneNumberService, origPhone); });
 
 async function call(method, path, body = {}) {
   const layer = subscriptionRoutes.stack.find((l) => l.route && l.route.path === path && l.route.methods[method]);

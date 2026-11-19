@@ -1,6 +1,7 @@
 import { phoneNumberService } from './phoneNumberService.js';
 import { checkNumberCountry } from './numberCountry.js';
-import { normalizeCountryCode } from '../middleware/companyScope.js';
+import { companyNumberProfile, normalizeCountryCode, ScopeError } from '../middleware/companyScope.js';
+import { IDENTITY_NUMBER_COUNTRIES } from '../utils/europeZone.js';
 
 /**
  * Disponibilité des numéros dans un pays (décision du 19/11) : Nomad Solo n'est souscrit que là où HARX peut vraiment fournir un
@@ -69,4 +70,70 @@ export async function availabilityFor(req, { countryCode, companyId } = {}, deps
   }
   const value = await countryAvailability(cc, deps);
   return { status: 200, body: { ...value, countryCode: cc } };
+}
+
+export const NO_NUMBERS_IN_COUNTRY = 'NO_NUMBERS_IN_COUNTRY';
+export const RESIDENCE_COUNTRY_REQUIRED = 'RESIDENCE_COUNTRY_REQUIRED';
+export const AVAILABILITY_UNAVAILABLE = 'AVAILABILITY_UNAVAILABLE';
+
+/**
+ * Éligibilité Nomad Solo AVANT paiement (décisions du 19/11), calculée côté serveur à partir du profil ENREGISTRÉ seulement
+ * (service d'inscription : `company.profile.country` et `company.profile.identityCountry`, sinon `issuingCountry` du justificatif
+ * « identity ») ; aucune valeur de la requête n'est lue. Éligible si le pays de résidence a des numéros, ou si le pays de la pièce
+ * d'identité est FR, GB ou US et a des numéros.
+ *  - pays de résidence non enregistré : 409 RESIDENCE_COUNTRY_REQUIRED (le front doit l'enregistrer avant le paiement) ;
+ *  - aucun numéro : 409 NO_NUMBERS_IN_COUNTRY ;
+ *  - lecture du profil ou de la disponibilité impossible : 503 AVAILABILITY_UNAVAILABLE (`retryable: true`), jamais « éligible ».
+ * @returns {Promise<{ok: true, numberCountry: string} | {ok: false, status: number, body: object}>}
+ */
+export async function soloCheckoutEligibility(req, companyId, deps = {}) {
+  const unavailable = () => ({
+    ok: false,
+    status: 503,
+    body: { error: 'Number availability lookup failed', code: AVAILABILITY_UNAVAILABLE, retryable: true },
+  });
+  let scope;
+  try {
+    // Profil relu sans cache : le front enregistre le pays de résidence et celui de la pièce juste avant le paiement.
+    scope = await (deps.profile || companyNumberProfile)(req, companyId, { fresh: true });
+  } catch (error) {
+    if (error instanceof ScopeError && error.status !== 503) {
+      return { ok: false, status: error.status, body: { error: error.message, code: error.code } };
+    }
+    return unavailable();
+  }
+  const residence = normalizeCountryCode(scope?.country);
+  const identity = normalizeCountryCode(scope?.identityCountry);
+  if (!/^[A-Z]{2}$/.test(residence)) {
+    return {
+      ok: false,
+      status: 409,
+      body: { error: 'Residence country is not saved on the profile', code: RESIDENCE_COUNTRY_REQUIRED },
+    };
+  }
+  const candidates = [residence];
+  if (IDENTITY_NUMBER_COUNTRIES.includes(identity) && identity !== residence) candidates.push(identity);
+  let failed = false;
+  const reasons = {};
+  for (const cc of candidates) {
+    try {
+      const value = await countryAvailability(cc, deps);
+      if (value.available) return { ok: true, numberCountry: cc };
+      reasons[cc] = value.reason || 'no_inventory';
+    } catch {
+      failed = true;
+    }
+  }
+  if (failed) return unavailable();
+  return {
+    ok: false,
+    status: 409,
+    body: {
+      error: 'No phone number is available for this subscriber',
+      code: NO_NUMBERS_IN_COUNTRY,
+      countryCode: residence,
+      ...(identity ? { identityCountry: identity } : {}),
+      reasons,
+    },
+  };
 }
