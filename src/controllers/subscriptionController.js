@@ -1,4 +1,3 @@
-import { aiAgentFromMetadata } from '../services/planLimits.js';
 import { promotionCodesAllowed } from '../services/promotionCode.js';
 import mongoose from 'mongoose';
 import { guardCompanyAccess } from '../middleware/companyGuard.js';
@@ -6,7 +5,7 @@ import { SubscriptionPlan } from '../models/SubscriptionPlan.js';
 import { Subscription } from '../models/Subscription.js';
 import CompanyPayment from '../models/CompanyPayment.js';
 import { stripeService } from '../services/stripeService.js';
-import { callcenterTierFromMetadata, isCallcenterMetadata } from '../services/callcenterTier.js';
+import { isCallcenterProduct, listPublishedPlans } from '../services/publishedPlans.js';
 import { subscriptionUpdateFields } from '../services/subscriptionPeriod.js';
 import { paypalService } from '../services/paypalService.js';
 import {
@@ -17,7 +16,7 @@ import {
 import { fulfillStripeCheckoutSessionPayment } from '../services/paymentFulfillment.js';
 import { config } from '../config/env.js';
 import { handlePhoneLineInvoiceEvent, handlePhoneLineSubscriptionDeleted } from '../services/phoneLineSubscription.js';
-import { currencyForCountry, normalizeCurrency, pickCurrency, priceAmounts } from '../services/currency.js';
+import { currencyForCountry, pickCurrency } from '../services/currency.js';
 import { stripeLocaleFromRequest } from '../services/stripeLocale.js';
 
 function numberOrNull(value) {
@@ -147,34 +146,7 @@ export function sanitizeReturnUrl(url, fallback) {
 }
 
 /** Produit Call Centre (voir isCallcenterMetadata) ; exporté pour les tests. */
-export function isCallcenterProduct(product) {
-  return isCallcenterMetadata(product?.metadata);
-}
-
-/** Inscrit en base les prix Stripe actifs et récurrents des produits Call Centre qui n'y sont pas encore. */
-async function registerCallcenterPlans(stripePrices) {
-  for (const price of stripePrices) {
-    try {
-      const product = price.product;
-      if (!isCallcenterProduct(product) || !price.recurring || price.unit_amount == null) continue;
-      if (await SubscriptionPlan.exists({ stripePriceId: price.id })) continue;
-      await SubscriptionPlan.create({
-        name: product.name,
-        price: Number((price.unit_amount / 100).toFixed(2)),
-        currency: price.currency || 'eur',
-        stripePriceId: price.id,
-        description: product.description || '',
-        // Les métadonnées du produit (palier, limites) sont lues par les autres services dès le premier achat : la
-        // limite de lignes et de sièges de Nomad Solo ne doit pas attendre la première lecture de l'abonnement.
-        metadata: Object.fromEntries(
-          Object.entries(metadataObject(product.metadata)).map(([key, value]) => [key, String(value ?? '')])
-        ),
-      });
-    } catch (err) {
-      console.warn('[subscriptions/plans] Call Centre plan registration failed:', err.message);
-    }
-  }
-}
+export { isCallcenterProduct };
 
 export const subscriptionController = {
   /**
@@ -187,122 +159,20 @@ export const subscriptionController = {
     res.json({ offers: [] });
   },
 
+  /**
+   * GET /api/subscriptions/plans (public). Catalogue publié : services/publishedPlans.js (même liste pour l'assistant IA).
+   * `?product=callcenter` : forfaits CLOUD / NOMAD, sinon Marketplace (TAAS).
+   * `?currency=usd|gbp|eur` : prix dans cette devise quand le prix Stripe la propose (mêmes montants), sinon devise de base.
+   * `?country=GB|US|…` (sans `currency`) : devise déduite du pays du souscripteur (GB -> gbp, US -> usd, sinon eur).
+   */
   getPlans: async (req, res) => {
     try {
-      const callcenterOnly = req.query.product === 'callcenter';
-      // `?currency=usd|gbp|eur` : prix dans cette devise quand le prix Stripe la propose (mêmes montants), sinon devise de base.
-      // `?country=GB|US|…` (sans `currency`) : devise déduite du pays du souscripteur (GB -> gbp, US -> usd, sinon eur).
-      const requestedCurrency = req.query.currency
-        ? normalizeCurrency(req.query.currency, '')
-        : req.query.country
-          ? currencyForCountry(req.query.country)
-          : '';
-
-      // 1. Métadonnées Stripe (prix actuel, nom produit) pour les plans connus.
-      let stripePrices = [];
-      try {
-        stripePrices = await stripeService.getPublicPlans();
-      } catch (err) {
-        console.warn('[subscriptions/plans] Stripe lookup failed, using DB only:', err.message);
-      }
-
-      // 2. La DB est la source de vérité : seuls les plans listés ici sont publiés.
-      //    Les forfaits Call Centre y sont inscrits dès qu'un prix Stripe actif porte harx_product=callcenter.
-      await registerCallcenterPlans(stripePrices);
-      const dbPlans = await SubscriptionPlan.find({ stripePriceId: { $exists: true, $ne: '' } });
-
-      const seen = new Set();
-      const mergedPlans = (
-        await Promise.all(
-          dbPlans.map(async (dbPlan) => {
-            if (!dbPlan.stripePriceId) return null;
-
-            let effectivePriceId = dbPlan.stripePriceId;
-            if (stripeService.isConfigured()) {
-              try {
-                effectivePriceId = await stripeService.resolveSubscriptionPriceId({
-                  priceId: dbPlan.stripePriceId,
-                  planName: dbPlan.name,
-                });
-                if (effectivePriceId !== dbPlan.stripePriceId) {
-                  await SubscriptionPlan.findByIdAndUpdate(dbPlan._id, {
-                    stripePriceId: effectivePriceId,
-                  });
-                }
-              } catch (err) {
-                console.warn(
-                  `[subscriptions/plans] Skip ${dbPlan.name}: ${err.message}`
-                );
-                return null;
-              }
-            }
-
-            if (seen.has(effectivePriceId)) return null;
-            seen.add(effectivePriceId);
-
-            let stripePrice = stripePrices.find((p) => p.id === effectivePriceId);
-            if (!stripePrice && stripeService.isConfigured()) {
-              try {
-                stripePrice = await stripeService.retrievePriceWithProduct(effectivePriceId);
-              } catch (err) {
-                console.warn(
-                  `[subscriptions/plans] retrieve ${effectivePriceId} failed:`,
-                  err.message
-                );
-              }
-            }
-            // Stripe Catalog only — skip plans that have no live price/product.
-            if (!stripePrice || !stripePrice.product || typeof stripePrice.product !== 'object') {
-              console.warn(
-                `[subscriptions/plans] Skip ${dbPlan.name}: no active Stripe price/product for ${effectivePriceId}`
-              );
-              return null;
-            }
-            const product = stripePrice.product;
-            // Marketplace et Call Centre ont chacun leur catalogue : on ne mélange pas les forfaits.
-            if (isCallcenterProduct(product) !== callcenterOnly) return null;
-            const marketingFeatures = stripeService.extractStripeProductFeatures(product);
-            const stripeLimits = stripeService.extractStripeProductLimits(product);
-            const displayFeatures = stripeService.buildStripePlanDisplayFeatures(product);
-            const amounts = priceAmounts(stripePrice);
-            const baseCurrency = stripePrice.currency || 'eur';
-            const shownCurrency = pickCurrency(requestedCurrency, amounts, baseCurrency);
-            const shownCents = amounts[shownCurrency] ?? stripePrice.unit_amount;
-
-            return {
-              _id: dbPlan._id,
-              name: product.name || dbPlan.name,
-              // Keep integer Stripe cents — never round euros for display.
-              priceCents: shownCents,
-              price: Number((shownCents / 100).toFixed(2)),
-              currency: shownCurrency,
-              /** Montants (centimes) par devise proposée par le prix Stripe, ex. { eur: 4900, usd: 4900, gbp: 4900 }. */
-              prices: amounts,
-              currencies: Object.keys(amounts),
-              stripePriceId: effectivePriceId,
-              description: product.description || '',
-              features: displayFeatures,
-              marketingFeatures,
-              metadata: product.metadata || {},
-              /** Palier canonique (nomad_solo, accueil, full_scope, multi_clients) ; anciennes valeurs converties. */
-              callcenterTier: callcenterTierFromMetadata(product.metadata),
-              /** Formule « Secrétariat avec agent IA » (palier accueil + `ai_agent=true`) : distincte de l'Accueil seul (autre prix, autre ligne). */
-              ...(() => { const ai = aiAgentFromMetadata(product.metadata); return { aiAgent: ai.aiAgent, aiAgentIncludedMinutes: ai.aiAgentIncludedMinutes, aiAgentOverageCentsTtc: ai.aiAgentOverageCentsTtc }; })(),
-              isPopular: Boolean(dbPlan.isPopular),
-              maxGigs: stripeLimits.maxGigs,
-              maxReps: stripeLimits.maxReps,
-              communicationMinutes: stripeLimits.communicationMinutes,
-              activeLocalNumbers: stripeLimits.activeLocalNumbers,
-              aiToken: stripeLimits.aiToken,
-              aiTokensIncluded: stripeLimits.aiTokensIncluded,
-            };
-          })
-        )
-      )
-        .filter(Boolean)
-        .sort((a, b) => a.price - b.price);
-
-      res.json(mergedPlans);
+      const { plans } = await listPublishedPlans({
+        product: req.query.product === 'callcenter' ? 'callcenter' : 'marketplace',
+        currency: req.query.currency,
+        country: req.query.country,
+      });
+      res.json(plans);
     } catch (error) {
       console.error('Error fetching plans:', error);
       res.status(500).json({ error: 'Error fetching plans from Stripe' });
