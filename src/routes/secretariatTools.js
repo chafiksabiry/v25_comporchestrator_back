@@ -20,11 +20,14 @@ router.post('/tools/:companyId/agenda-feed', authenticate, requireCompanyParam, 
 router.get('/connections/:companyId', authenticate, requireCompanyParam, cx.list);
 router.post('/connections/:companyId/:provider/start', authenticate, requireCompanyParam, cx.start);
 router.delete('/connections/:companyId/:provider', authenticate, requireCompanyParam, cx.remove);
+// Finalisation AUTHENTIFIÉE d'une autorisation OAuth en attente (tous types : connexion d'entreprise, compte partagé, messagerie personnelle) : seul l'utilisateur qui l'a démarrée.
+router.post('/connections/:companyId/:provider/complete', authenticate, requireCompanyParam, cx.complete);
 // E-mails ENTRANTS (messagerie connectée, métadonnées seulement ; corps relu en direct) : titulaire/responsable autorisé, ou secrétaire si l'entreprise l'a ouvert (contrôleur).
 router.get('/inbound-emails/:companyId/access', authenticate, requireCompanyParam, ib.access);
 router.get('/inbound-emails/:companyId', authenticate, requireCompanyParam, ib.list);
 router.post('/inbound-emails/:companyId/refresh', authenticate, requireCompanyParam, ib.refresh);
 router.get('/inbound-emails/:companyId/:id/body', authenticate, requireCompanyParam, ib.body);
+router.get('/inbound-emails/:companyId/:id/reply-all', authenticate, requireCompanyParam, ib.replyAll);
 router.patch('/inbound-emails/:companyId/:id', authenticate, requireCompanyParam, ib.update);
 router.delete('/inbound-emails/:companyId/:id', authenticate, requireCompanyParam, ib.remove);
 router.post('/inbound-emails/:companyId/delete-many', authenticate, requireCompanyParam, ib.deleteMany);
@@ -41,6 +44,7 @@ router.post('/accounts/:companyId/mine/inbound/:accountId/refresh', authenticate
 router.post('/accounts/:companyId/mine/inbound/:accountId/delete-many', authenticate, requireCompanyParam, mi.deleteMany);
 router.post('/accounts/:companyId/mine/inbound/:accountId/archive-many', authenticate, requireCompanyParam, mi.archiveMany);
 router.get('/accounts/:companyId/mine/inbound/:accountId/emails/:id/body', authenticate, requireCompanyParam, mi.body);
+router.get('/accounts/:companyId/mine/inbound/:accountId/emails/:id/reply-all', authenticate, requireCompanyParam, mi.replyAll);
 router.patch('/accounts/:companyId/mine/inbound/:accountId/emails/:id', authenticate, requireCompanyParam, mi.update);
 router.delete('/accounts/:companyId/mine/inbound/:accountId/emails/:id', authenticate, requireCompanyParam, mi.remove);
 router.post('/accounts/:companyId/mine/:provider/start', authenticate, requireCompanyParam, ac.startMine);

@@ -141,6 +141,11 @@ const phoneNumberSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.Mixed,
     default: undefined
   },
+  // Appels simultanés choisis par l'entreprise (titulaire seulement) : 1 = « une ligne = un appel » (défaut, comportement d'avant). Chaque appel
+  // au-delà du premier est une ligne supplémentaire facturée (décidée à l'avance par ce choix). Emplacements des appels 2 à 10 : activeCall2…10,
+  // écrits UNIQUEMENT par services/lineCalls.js, comme activeCall.
+  maxConcurrentCalls: { type: Number, min: 1, max: 10, default: undefined },
+  ...Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`activeCall${i + 2}`, { type: mongoose.Schema.Types.Mixed, default: undefined }])),
   // Identifiant (chaîne) de l'agent titulaire de la ligne ; null = ligne libre. Un agent n'a qu'UNE ligne par centre (index unique ci-dessous).
   assignedAgentId: {
     type: String,

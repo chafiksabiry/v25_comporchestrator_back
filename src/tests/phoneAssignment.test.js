@@ -123,6 +123,13 @@ beforeEach(() => {
   stripeService.createOneShotCheckoutSession = async (o) => { calls.push(['stripe.checkout', o]); return { id: 'cs_new', url: 'https://stripe.test/pay' }; };
   stripeService.cancelCheckoutAuthorization = async (ref) => { calls.push(['stripe.releaseAuth', ref]); };
   stripeService.refundCheckoutSession = async (ref) => { calls.push(['stripe.refund', ref]); };
+  // État Stripe simulé, cohérent avec la base : relu avant toute reprise d'un paiement autorisé / encaissé.
+  stripeService.retrieveSession = async (ref) => {
+    const statuses = Object.values(payments).filter((p) => p.providerRef === ref).map((p) => p.status);
+    if (statuses.includes('succeeded')) return { status: 'complete', payment_status: 'paid', payment_intent: { status: 'succeeded' } };
+    if (statuses.includes('authorized')) return { status: 'complete', payment_status: 'unpaid', payment_intent: { status: 'requires_capture' } };
+    return { status: 'open', payment_status: 'unpaid', payment_intent: null }; // carte pas encore approuvée
+  };
   paypalService.isConfigured = () => true;
   phoneNumberService.assertTelnyxCanOrderNumber = async () => {};
   phoneNumberService.findClaimableInventoryNumber = async () => null;
@@ -1075,16 +1082,18 @@ test('première ligne incluse : sans offre Call Centre à ligne incluse (TaaS, s
   assert.equal((await configAs({ companyId: 'pas-un-id' })).body.included, false);
 });
 
-test('première ligne incluse : une offre sans prix de ligne configuré ne bloque pas la config (rien à payer), mais bloque toujours dès la 2e ligne', async () => {
-  planMetadata = { harx_product: 'callcenter', callcenter_tier: 'multi_clients' }; // pas de phone_line_price_cents
-  const first = await configAs();
-  assert.equal(first.statusCode, 200);
-  assert.deepEqual([first.body.included, first.body.pricing.amountCents, first.body.pricing.trialDays], [true, null, null]);
-  addLine();
-  const second = await configAs();
-  assert.equal(second.statusCode, 409);
-  assert.equal(second.body.code, 'PHONE_LINE_PRICE_NOT_CONFIGURED');
-  assert.equal(second.body.included, undefined);
+test('première ligne incluse puis 2e ligne : une offre sans prix de ligne dans Stripe prend le repli 14,99 € (arbitrage 9), Accueil compris', async () => {
+  for (const tier of ['multi_clients', 'accueil']) {
+    calls = []; lines = {}; seq = 0;
+    planMetadata = { harx_product: 'callcenter', callcenter_tier: tier }; // pas de phone_line_price_cents
+    const first = await configAs();
+    assert.equal(first.statusCode, 200);
+    assert.deepEqual([first.body.included, first.body.pricing.amountCents], [true, 1499], tier); // incluse : rien à payer, le prix d'une ligne en plus est connu
+    addLine();
+    const second = await configAs();
+    assert.equal(second.statusCode, 200, tier);
+    assert.deepEqual([second.body.included, second.body.pricing.amountCents], [false, 1499], tier);
+  }
 });
 
 // ───────── ligne incluse : `isIncluded` en liste, non libérable (Accueil : la plus ancienne) ─────────

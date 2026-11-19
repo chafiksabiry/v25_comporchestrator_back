@@ -10,8 +10,8 @@ import { messagePayload, notifyOwners } from './webPush.js';
  * Relance automatique des messages pris à l'accueil (tâche planifiée simple, un minuteur dans l'orchestrateur).
  *  1. « À rappeler avant » dépassé, ou message URGENT non lu depuis 2 h (réglable) : nouvelle alerte dans l'application à la personne visée
  *     (le message redevient « nouveau »), plus un push web si elle est abonnée (silencieux sinon).
- *  2. Toujours pas traité après le délai de transmission (1 h, réglable) : alerte aux responsables et e-mail depuis la messagerie connectée
- *     de l'entreprise, jamais depuis HARX (sans messagerie : l'alerte seule).
+ *  2. Toujours pas traité après le délai de transmission (1 h, réglable) : alerte aux responsables et e-mail depuis la boîte de CELUI QUI A CRÉÉ
+ *     l'élément (sa connexion ou sa messagerie personnelle), jamais celle d'un autre ni HARX (sans boîte : l'alerte seule).
  * Idempotent : chaque palier est « réservé » par une mise à jour atomique (`remindedAt`, `escalatedAt`) ; deux passages, ou deux instances, ne relancent pas deux fois.
  * Désactivable : MESSAGE_REMINDERS_DISABLED=1. Aucun e-mail, SMS ni appel n'est émis pour la personne visée : application et push seulement.
  */
@@ -61,7 +61,7 @@ export async function runMessageReminders({ now = Date.now(), deps: custom } = {
           await deps.mail({
             companyId: String(item.companyId), followUpId: item._id, entry: { name: t.name, email: t.email, userId: t.userId },
             message: { callerName: item.contactName, callerCompany: item.callerCompany, callerPhone: item.contactPhone, reason: item.note, urgency: item.urgency, callbackBefore: item.dueAt, escalationFor: item.forName || item.assigneeName },
-            takenBy: { id: 'system', name: '' }, companyName: doc?.general?.companyName || '', timeZone: tz,
+            takenBy: { id: item.createdById || '', name: item.createdByName || '' }, companyName: doc?.general?.companyName || '', timeZone: tz,
           });
         }
       }

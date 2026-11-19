@@ -9,6 +9,8 @@ export function buildUnansweredBody({ callSid, companyId, gigId, from, to, start
     direction: 'inbound',
     unanswered: true,
     outcome: voicemail ? 'voicemail' : undefined,
+    // Répondeur / sonnerie sans réponse : jamais enregistré par conception (contrat dash_calls, champ additif).
+    recordingReason: 'not_applicable',
     from: from || undefined,
     to: to || undefined,
     startTime: new Date(startedAt || Date.now()).toISOString(),
@@ -46,6 +48,8 @@ export function buildForwardedBody({ callSid, companyId, gigId, from, to, starte
     gigId: gigId ? String(gigId) : undefined,
     direction: 'inbound',
     status: 'completed',
+    // Renvoi sur le mobile du titulaire : jamais enregistré par conception (contrat dash_calls, champ additif).
+    recordingReason: 'not_applicable',
     from: from || undefined,
     to: to || undefined,
     durationSeconds: Math.max(0, Number(durationSeconds) || 0),

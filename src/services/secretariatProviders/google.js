@@ -1,18 +1,26 @@
 import { randomUUID } from 'node:crypto';
-import { call, ensure, eventWindow, SecretariatError, VIDEO_LINK_RE } from './common.js';
+import { call, ensure, eventWindow, READ_SCOPE, SecretariatError, VIDEO_LINK_RE } from './common.js';
 import { dialIn, plainDescription, safeVideoUrl, videoUrlIn } from './eventConnection.js';
+import { cleanSnippet, cleanSubject, htmlToText, limitBody, parseAddress, stripQuoted } from './mailText.js';
 import { DEFAULT_TIME_ZONE } from '../timeZone.js';
 import { buildMime, toBase64Url } from './mime.js';
+import { parseAddressList } from './addressList.js';
+import { cidRefs, inlineCidImages, INLINE_COUNT_MAX, INLINE_IMAGE_MAX, INLINE_TOTAL_MAX, normCid, safeImageType } from './inlineImages.js';
+
+/** Au-delà (octets du message MIME), envoi par le point d'upload plutôt que par le champ JSON `raw`. */
+const RAW_JSON_MAX = 900_000;
 
 /**
- * Google : Gmail (ENVOI seulement), Agenda (événements), Meet (via un événement). Tous les points d'accès ci-dessous sont les points
+ * Google : Gmail (envoi + LECTURE de la boîte de réception), Agenda (événements), Meet (via un événement). Tous les points d'accès ci-dessous sont les points
  * publics standards ; AUCUN n'a été essayé avec un vrai compte (aucun identifiant n'existe encore) : tout est « À VÉRIFIER » en recette.
- * AUCUNE lecture ni écriture de la boîte Gmail : les scopes restreints de lecture et d'écriture ne sont plus jamais demandés, et les
- * appels Gmail de lecture / écriture (liste de la boîte, corps, corbeille, archivage) ont été retirés. Le serveur refuse explicitement toute
- * lecture d'une messagerie Google (code `read_unavailable`, voir services/inboundEmails.js).
+ * Lecture : scope restreint gmail.readonly, OPTIONNEL (`read: true`), utilisable par la SEULE personne qui a connecté la boîte (règle du propriétaire).
+ * AUCUNE écriture de la boîte : gmail.modify n'est jamais demandé (pas de corbeille ni d'archivage Gmail : suppression / archivage dans HARX seulement).
  */
 const SCOPE_GMAIL_SEND = 'https://www.googleapis.com/auth/gmail.send';
+/** Partie HTML d'un message renvoyée à l'application (mise en page) : plafond en caractères. */
+const MAX_HTML = 400_000;
 const SCOPE_CALENDAR = 'https://www.googleapis.com/auth/calendar.events';
+const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const CAL = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
 
 export const google = {
@@ -20,7 +28,8 @@ export const google = {
   scopes: ['openid', 'email', SCOPE_GMAIL_SEND, SCOPE_CALENDAR],
   /** Scopes sans lesquels la connexion est inutilisable (l'utilisateur peut en décocher à l'écran de consentement). */
   requiredScopes: [SCOPE_GMAIL_SEND, SCOPE_CALENDAR],
-  // Aucun readScope ni writeScope : Google ne demande plus jamais la lecture ni l'écriture de la boîte.
+  /** Lecture de la boîte de réception (e-mails entrants) : OPTIONNEL, demandé seulement avec `read: true`. Aucun writeScope (gmail.modify jamais demandé). */
+  readScope: READ_SCOPE.google,
   authorizeUrl: () => 'https://accounts.google.com/o/oauth2/v2/auth',
   tokenUrl: () => 'https://oauth2.googleapis.com/token',
   /** Paramètres propres à Google : refresh_token seulement avec access_type=offline + prompt=consent. */
@@ -41,14 +50,37 @@ export const google = {
     await call(http, { method: 'POST', url: 'https://oauth2.googleapis.com/revoke', form: { token } });
   },
 
-  /** Gmail users.messages.send : RFC 822 en base64url ; From = compte connecté. */
+  /**
+   * Gmail users.messages.send : RFC 822 ; From = compte connecté. Message court : champ JSON `raw` (base64url, comme avant). Message volumineux (pièces
+   * jointes) : point d'upload `uploadType=media` (message/rfc822, jusqu'à 35 Mo côté API ; le champ JSON `raw` est limité à quelques Mo).
+   * Réponse : en-têtes In-Reply-To / References transmis (fil conservé chez le destinataire).
+   */
   async sendMail({ http, accessToken, account, message }) {
-    const raw = toBase64Url(buildMime({
-      from: { email: account, name: message.fromName }, to: message.to, replyTo: message.replyTo, subject: message.subject,
-      text: message.text, html: message.html, attachments: message.attachments,
-    }));
-    const res = ensure(await call(http, { method: 'POST', url: 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send', headers: { Authorization: `Bearer ${accessToken}` }, body: { raw } }), 'Envoi Gmail', [200]);
+    const mime = buildMime({
+      from: { email: account, name: message.fromName }, to: message.to, cc: message.cc, replyTo: message.replyTo, subject: message.subject,
+      text: message.text, html: message.html, attachments: message.attachments, inReplyTo: message.inReplyTo, references: message.references,
+    });
+    const headers = { Authorization: `Bearer ${accessToken}` };
+    const req = Buffer.byteLength(mime, 'utf8') > RAW_JSON_MAX
+      ? { method: 'POST', url: 'https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media', headers: { ...headers, 'Content-Type': 'message/rfc822' }, body: mime, timeoutMs: 120000 }
+      : { method: 'POST', url: 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send', headers, body: { raw: toBase64Url(mime) } };
+    const res = ensure(await call(http, req), 'Envoi Gmail', [200]);
     return { id: res.json?.id || '' };
+  },
+
+  /**
+   * Destinataires d'un message reçu, lus EN DIRECT (format=metadata, en-têtes seulement ; rien n'est stocké) pour « Répondre à tous » :
+   * From, Reply-To, To, Cc, Message-ID, References, Subject.
+   */
+  async readRecipients({ http, accessToken, id }) {
+    const q = ['From', 'Reply-To', 'To', 'Cc', 'Message-ID', 'References', 'Subject'].map((h) => `metadataHeaders=${encodeURIComponent(h)}`).join('&');
+    const res = ensure(await call(http, { method: 'GET', url: `${GMAIL}/messages/${encodeURIComponent(id)}?format=metadata&${q}`, headers: { Authorization: `Bearer ${accessToken}` } }), 'Lecture d’un message Gmail', [200]);
+    const all = (name) => (res.json?.payload?.headers || []).filter((x) => String(x?.name).toLowerCase() === name).map((x) => String(x?.value || ''));
+    return {
+      from: parseAddressList(all('from').join(', ')).slice(0, 1), replyTo: parseAddressList(all('reply-to').join(', ')),
+      to: parseAddressList(all('to').join(', ')), cc: parseAddressList(all('cc').join(', ')),
+      messageId: all('message-id')[0] || '', references: all('references').join(' '), subject: cleanSubject(all('subject')[0] || ''),
+    };
   },
 
   /**
@@ -94,11 +126,102 @@ export const google = {
     });
   },
 
+  /**
+   * E-mails ENTRANTS (scope gmail.readonly) : messages récents de la boîte de réception. `users.messages.list` (q « in:inbox newer_than:7d »)
+   * puis `get` format=metadata (en-têtes From / Subject / Date + extrait) : AUCUN corps n'est lu ici. Un message disparu entre-temps (404) est ignoré.
+   * [À VÉRIFIER en recette avec un vrai compte : format des en-têtes, limites de débit, comportement du scope restreint gmail.readonly.]
+   * @returns {Promise<Array<{id: string, fromName: string, fromEmail: string, subject: string, receivedAt: Date, snippet: string}>>}
+   */
+  async listInbox({ http, accessToken, limit = 25 }) {
+    const headers = { Authorization: `Bearer ${accessToken}` };
+    const q = new URLSearchParams({ q: 'in:inbox newer_than:7d', maxResults: String(limit) });
+    const list = ensure(await call(http, { method: 'GET', url: `${GMAIL}/messages?${q}`, headers }), 'Lecture de la boîte Gmail', [200]);
+    const ids = (Array.isArray(list.json?.messages) ? list.json.messages : []).map((m) => String(m?.id || '')).filter(Boolean).slice(0, limit);
+    const out = [];
+    for (let i = 0; i < ids.length; i += 5) {
+      const rows = await Promise.all(ids.slice(i, i + 5).map(async (id) => {
+        const res = ensure(await call(http, { method: 'GET', url: `${GMAIL}/messages/${encodeURIComponent(id)}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`, headers }), 'Lecture d’un message Gmail', [200, 404]);
+        return res.status === 404 ? null : { id, json: res.json };
+      }));
+      for (const row of rows) {
+        if (!row) continue;
+        const h = (name) => String((row.json?.payload?.headers || []).find((x) => String(x?.name).toLowerCase() === name)?.value || '');
+        const from = parseAddress(h('from'));
+        const ms = Number(row.json?.internalDate);
+        const date = Number.isFinite(ms) && ms > 0 ? new Date(ms) : new Date(h('date'));
+        out.push({ id: row.id, fromName: from.name, fromEmail: from.email, subject: cleanSubject(h('subject')), receivedAt: Number.isNaN(date.getTime()) ? new Date() : date, snippet: cleanSnippet(row.json?.snippet) });
+      }
+    }
+    return out;
+  },
+
+  /** Corps d'un message lu EN DIRECT (format=full) : texte brut de préférence, sinon HTML nettoyé en texte ; citations retirées, 20 000 caractères max. Jamais stocké. */
+  async readBody(args) {
+    return (await google.readBodyFull({ ...args, inlineImages: false })).text;
+  },
+
+  /**
+   * Même lecture, avec en plus la partie HTML d'origine (mise en page et design du message, 400 000 caractères max) : l'application l'affiche dans un cadre
+   * isolé (sans script, images distantes bloquées tant que l'utilisateur ne les demande pas). Jamais stocké.
+   * Images INTÉGRÉES (`<img src="cid:…">` + partie image inline avec Content-ID) : remplacées par des `data:` (voir inlineImages.js), en lisant la pièce
+   * jointe (`messages.attachments.get`) quand la partie n'a qu'un `attachmentId`. `inlineImages: false` (texte seul) : aucune image lue.
+   */
+  async readBodyFull({ http, accessToken, id, inlineImages = true }) {
+    const headers = { Authorization: `Bearer ${accessToken}` };
+    const res = ensure(await call(http, { method: 'GET', url: `${GMAIL}/messages/${encodeURIComponent(id)}?format=full`, headers }), 'Lecture d’un message Gmail', [200]);
+    const plain = []; const html = []; const inline = new Map();
+    const walk = (part, depth = 0) => {
+      if (!part || typeof part !== 'object' || depth > 12) return;
+      const type = String(part.mimeType || '').toLowerCase();
+      if (!part.filename && typeof part.body?.data === 'string' && part.body.data) {
+        const text = Buffer.from(part.body.data, 'base64url').toString('utf8');
+        if (type === 'text/plain') plain.push(text); else if (type === 'text/html') html.push(text);
+      }
+      if (type.startsWith('image/')) {
+        const h = (name) => String((Array.isArray(part.headers) ? part.headers : []).find((x) => String(x?.name).toLowerCase() === name)?.value || '');
+        const cid = normCid(h('content-id') || h('x-attachment-id'));
+        if (cid && !inline.has(cid)) inline.set(cid, { type, size: Number(part.body?.size) || 0, data: typeof part.body?.data === 'string' ? part.body.data : '', attachmentId: String(part.body?.attachmentId || '') });
+      }
+      for (const p of Array.isArray(part.parts) ? part.parts : []) walk(p, depth + 1);
+    };
+    walk(res.json?.payload);
+    const text = limitBody(stripQuoted(plain.length ? plain.join('\n') : htmlToText(html.join('\n'))));
+    let htmlOut = html.join('\n').slice(0, MAX_HTML);
+    if (!htmlOut.trim()) return { text };
+    if (inlineImages) htmlOut = await gmailInlineImages({ http, headers, id, html: htmlOut, inline });
+    return { text, html: htmlOut };
+  },
+
   /** Suppression ; 404 et 410 (déjà supprimé) comptent comme réussis. */
   async deleteEvent({ http, accessToken, id }) {
     ensure(await call(http, { method: 'DELETE', url: `${CAL}/${encodeURIComponent(id)}?sendUpdates=none`, headers: { Authorization: `Bearer ${accessToken}` } }), 'Suppression Google Agenda', [200, 204, 404, 410]);
   },
 };
+
+/**
+ * Images intégrées d'un message Gmail : seules les parties référencées par le HTML, de type sûr, sous les plafonds (taille annoncée vérifiée AVANT
+ * de lire la pièce jointe), sont lues. Une pièce jointe illisible (erreur, 404) est ignorée : l'image garde son texte alternatif.
+ * [À VÉRIFIER en recette avec un vrai compte : en-têtes Content-ID / X-Attachment-Id des images collées dans Gmail.]
+ */
+async function gmailInlineImages({ http, headers, id, html, inline }) {
+  const images = new Map();
+  let budget = 0;
+  for (const cid of cidRefs(html).slice(0, INLINE_COUNT_MAX)) {
+    const part = inline.get(cid);
+    if (!part || !safeImageType(part.type) || part.size > INLINE_IMAGE_MAX || budget + part.size > INLINE_TOTAL_MAX) continue;
+    let b64 = part.data;
+    if (!b64 && part.attachmentId) {
+      let r = null;
+      try { r = await call(http, { method: 'GET', url: `${GMAIL}/messages/${encodeURIComponent(id)}/attachments/${encodeURIComponent(part.attachmentId)}`, headers }); } catch { r = null; }
+      b64 = r?.status === 200 && typeof r.json?.data === 'string' ? r.json.data : '';
+    }
+    if (!b64) continue;
+    const data = Buffer.from(b64, 'base64url');
+    budget += data.length;
+    images.set(cid, { type: part.type, data });
+  }
+  return images.size ? inlineCidImages(html, images).html : html;
+}
 
 /** Pour rejoindre : lien (Meet, sinon un lien de visio du lieu / de la description), numéros d'appel, code de réunion, description. */
 function connection(e) {

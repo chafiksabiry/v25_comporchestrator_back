@@ -11,7 +11,9 @@ import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { isPremiumRate, MESSAGES as DESTINATION_MESSAGES } from '../services/outboundDestinations.js';
-import { freshMinutesBalance, maxSecondsForBalance, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed } from '../services/browserOutbound.js';
+import { freshMinutesBalance, maxSecondsForBalance, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, spokenLanguage, spokenRefusal } from '../services/browserOutbound.js';
+import { outboundCreditFactor } from '../services/creditCoefficient.js';
+import { loadCompanyPlanLimits } from '../services/planLimits.js';
 import InboundSettings from '../models/InboundSettings.js';
 import { callerAccess } from '../middleware/companyScope.js';
 import { buildCallbackTwiml, buildRefusalTwiml, CALLBACK_WEBHOOK_PATH, ensureCallbackApp, pickDestination, signTicket, verifyTicket } from '../services/voicemailCallback.js';
@@ -172,8 +174,13 @@ export const voicemailController = {
       // Un rappel est un appel sortant : il consomme des minutes, donc seulement avec des minutes disponibles, et il est
       // coupé quand elles sont écoulées.
       const minutes = await freshMinutesBalance(String(vm.companyId), { sync: syncMinutesFromCalls, grant: ensurePlanMinutesGranted, readWallet: (id) => MinutesCompany.findOne({ companyId: id }).select('minutes').lean() });
-      const maxSeconds = maxSecondsForBalance(minutes);
-      if (!maxSeconds) return send(buildRefusalTwiml('Solde de minutes insuffisant.'));
+      // Crédits par minute vers ce numéro (1, ou N à l'international) : durée maximale = solde / N.
+      let planLimits = null;
+      try { planLimits = await loadCompanyPlanLimits(String(vm.companyId)); } catch { planLimits = null; }
+      const creditFactor = await outboundCreditFactor({ companyId: String(vm.companyId), limits: planLimits, to, lineNumber: line.phoneNumber });
+      const maxSeconds = maxSecondsForBalance(minutes, { creditFactor });
+      // Refus international : même texte que sur tous les canaux, dans la langue de la ligne appelante (en / fr / es).
+      if (!maxSeconds) return send(creditFactor > 1 ? spokenRefusal('insufficient_minutes_international', spokenLanguage(line.phoneNumber), { credits: creditFactor }) : buildRefusalTwiml('Solde de minutes insuffisant.'));
       return send(buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds }));
     } catch (error) {
       console.error('[voicemail] callbackVoice failed:', error.message);

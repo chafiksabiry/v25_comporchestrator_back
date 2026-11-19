@@ -320,3 +320,52 @@ test('fin d\'appel : sans jeton, jeton d\'un autre appel ou jeton falsifié -> 4
   await endCall('CA1');
   assert.deepEqual([busy('l1'), busy('l2')], [false, true]);
 });
+
+// ───────── appels simultanés choisis par l'entreprise (maxConcurrentCalls) : capacité 1 = comportement ci-dessus, inchangé ─────────
+const slots = (id) => ['activeCall', 'activeCall2', 'activeCall3'].map((k) => lines.find((l) => l._id === id)[k]?.callSid).filter(Boolean);
+
+test('capacité 2 : le deuxième appel entrant sur la ligne est pris (sonnerie), le troisième suit le flux classique de la règle', async () => {
+  rule(); present('owner');
+  lines[0].maxConcurrentCalls = 2;
+  assert.ok(rings(await inbound(L1, 'CA1')));
+  assert.ok(rings(await inbound(L1, 'CA2')), 'deuxième appel simultané : pris');
+  assert.deepEqual(slots('l1'), ['CA1', 'CA2']);
+  const third = await inbound(L1, 'CA3');
+  assert.ok(!rings(third), 'capacité épuisée : flux classique (répondeur / occupé)');
+  assert.deepEqual(slots('l1'), ['CA1', 'CA2']);
+  // Relivraison du même webhook : l'appel garde son emplacement, aucun doublon.
+  await inbound(L1, 'CA2');
+  assert.deepEqual(slots('l1'), ['CA1', 'CA2']);
+});
+
+test('capacité 2 : fin d\'appel (statut Twilio de fin de sonnerie) libère l\'emplacement ; un nouvel appel est de nouveau pris', async () => {
+  rule(); present('owner');
+  lines[0].maxConcurrentCalls = 2;
+  await inbound(L1, 'CA1'); await inbound(L1, 'CA2');
+  await hit('handleTwilioInboundDialResult', { body: { CallSid: 'CA2', DialCallStatus: 'completed', DialCallDuration: '12' }, query: {} });
+  assert.deepEqual(slots('l1'), ['CA1']);
+  await hit('handleTwilioInboundDialResult', { body: { CallSid: 'CA1', DialCallStatus: 'completed', DialCallDuration: '40' }, query: {} });
+  assert.deepEqual(slots('l1'), []);
+  assert.ok(rings(await inbound(L1, 'CA3')));
+});
+
+test('capacité 2 : un emplacement oublié est repris (appel terminé chez Twilio, ou expiration de sécurité)', async () => {
+  rule(); present('owner');
+  lines[0].maxConcurrentCalls = 2;
+  lines[0].activeCall = { callSid: 'OLD1', direction: 'inbound', startedAt: new Date(), expiresAt: new Date(Date.now() + 3600_000) };
+  lines[0].activeCall2 = { callSid: 'OLD2', direction: 'inbound', startedAt: new Date(), expiresAt: new Date(Date.now() - 1000) };
+  assert.ok(rings(await inbound(L1, 'CA1')), 'emplacement expiré : repris');
+  twilioCalls.OLD1 = 'completed';
+  assert.ok(rings(await inbound(L1, 'CA2')), 'appel terminé chez Twilio : repris');
+  assert.deepEqual(slots('l1').sort(), ['CA1', 'CA2']);
+});
+
+test('sortant : même capacité ; les lignes libres d\'abord, puis les appels simultanés choisis, puis « ligne occupée »', async () => {
+  rule();
+  lines[0].maxConcurrentCalls = 2;
+  const a = await outbound('CA1'); const b = await outbound('CA2'); const c = await outbound('CA3');
+  assert.deepEqual([callerIdOf(a), callerIdOf(b), callerIdOf(c)], [L1, L2, L1], 'L2 libre avant le 2e appel de L1');
+  assert.match(await outbound('CA4'), /All lines are busy/);
+  await endCall('CA3');
+  assert.equal(callerIdOf(await outbound('CA5')), L1);
+});

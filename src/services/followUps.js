@@ -252,6 +252,7 @@ export function toItem(i) {
     sequence: o.sequence || 0,
     updatedAt: o.updatedAt || null,
     fromAiPlan: o.fromAiPlan === true,
+    fromAiAgent: o.fromAiAgent === true,
     calendar: {
       status: o.calendarStatus || 'not_connected', provider: o.calendarProvider || null,
       accountId: o.calendarAccountId || null, accountLabel: o.calendarAccountId ? o.calendarAccountLabel || null : null, message: o.calendarMessage || null,

@@ -7,6 +7,41 @@ import { ensurePlanTokensGranted } from '../services/planTokensGrant.js';
 import TokensUsageLedger from '../models/TokensUsageLedger.js';
 import CompanyPayment from '../models/CompanyPayment.js';
 import mongoose from 'mongoose';
+import crypto from 'node:crypto';
+import jwt from 'jsonwebtoken';
+import { guardCompanyAccess } from '../middleware/companyGuard.js';
+
+const enforceChargeUsageAuth = () => ['true', '1', 'yes', 'on'].includes(String(process.env.TOKENS_CHARGE_USAGE_ENFORCE_AUTH ?? '').trim().toLowerCase());
+
+/**
+ * Autorisation de POST /charge-usage (route service à service : le front et dash_calls l'appellent aujourd'hui SANS aucune identité, avec des
+ * jetons déclarés par l'appelant, donc sans source de vérité à relire comme pour charge-call).
+ *  - clé de service (en-tête `x-service-key` égal à TOKENS_SERVICE_KEY) : acceptée ;
+ *  - JWT valide : l'appelant doit être propriétaire ou membre de la société débitée (une autre société : 403, toujours) ;
+ *  - aucune identité : acceptée par défaut (comportement actuel, avertissement journalisé) ; REFUSÉE (401) quand
+ *    TOKENS_CHARGE_USAGE_ENFORCE_AUTH est actif : à activer une fois que le front envoie son JWT et dash_calls la clé de service.
+ * @returns {Promise<boolean>} true si la charge peut avoir lieu ; false si la réponse d'erreur est déjà envoyée.
+ */
+async function authorizeChargeUsage(req, res, companyId) {
+  const serviceKey = process.env.TOKENS_SERVICE_KEY;
+  const given = req.headers?.['x-service-key'];
+  if (serviceKey && typeof given === 'string' && given.length === serviceKey.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(serviceKey))) return true;
+  const bearer = req.headers?.authorization?.split(' ')[1];
+  let verified = null;
+  if (bearer) {
+    try { verified = jwt.verify(bearer, process.env.JWT_SECRET); } catch { verified = null; } // JWT invalide ou expiré : absence d'identité
+  }
+  if (verified) {
+    req.user = verified;
+    return Boolean(await guardCompanyAccess(req, res, companyId));
+  }
+  if (enforceChargeUsageAuth()) {
+    res.status(401).json({ error: 'Authentication required', code: 'AUTH_REQUIRED' });
+    return false;
+  }
+  console.warn(`[tokens] charge-usage sans identité (entreprise ${String(companyId).slice(0, 24)}) : accepté tant que TOKENS_CHARGE_USAGE_ENFORCE_AUTH est coupé`);
+  return true;
+}
 
 async function ensureWallet(companyId) {
   let wallet = await TokensCompany.findOne({ companyId });
@@ -95,6 +130,8 @@ export const tokensCompanyController = {
   getTokens: async (req, res) => {
     const { companyId } = req.params;
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    // Isolation : propriétaire ou membre de CETTE société (la lecture octroie les jetons du forfait et crée le portefeuille : garde avant tout).
+    if (!(await guardCompanyAccess(req, res, companyId))) return;
     try {
       await ensurePlanTokensGranted(companyId).catch((err) => {
         console.warn('[tokens] plan grant failed:', err?.message || err);
@@ -119,6 +156,7 @@ export const tokensCompanyController = {
   getPurchases: async (req, res) => {
     const { companyId } = req.params;
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    if (!(await guardCompanyAccess(req, res, companyId))) return;
     try {
       const companyOid = toObjectIdOrNull(companyId);
       if (!companyOid) return res.status(400).json({ error: 'Invalid companyId' });
@@ -155,6 +193,8 @@ export const tokensCompanyController = {
     const { companyId } = req.params;
     const raw = req.body?.aiProviders || req.body?.providers || req.body;
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    // Écriture : propriétaire de CETTE société uniquement.
+    if (!(await guardCompanyAccess(req, res, companyId, { ownerOnly: true }))) return;
     try {
       const wallet = await ensureWallet(companyId);
       const next = normalizeAiProviders({
@@ -171,28 +211,13 @@ export const tokensCompanyController = {
     }
   },
 
-  buyTokens: async (req, res) => {
-    const { companyId, amount } = req.body;
-    if (!companyId || !amount || amount <= 0) {
-      return res.status(400).json({ error: 'companyId and positive amount are required' });
-    }
-    try {
-      let wallet = await TokensCompany.findOne({ companyId });
-      if (!wallet) {
-        wallet = new TokensCompany({ companyId, tokens: 0 });
-      }
-      const purchased = Math.round(Number(amount));
-      wallet.tokens = (wallet.tokens || 0) + purchased;
-      wallet.purchasedTokens = (wallet.purchasedTokens || 0) + purchased;
-      wallet.lastPurchasedAt = new Date();
-      await wallet.save();
-
-      res.status(200).json({ success: true, data: wallet });
-    } catch (err) {
-      console.error('Error buying tokens:', err);
-      res.status(500).json({ error: 'Failed to buy tokens' });
-    }
-  },
+  // SUPPRIMÉ : cette route créditait des jetons d'un montant arbitraire SANS aucun paiement (n'importe quelle société, n'importe quelle quantité).
+  // Aucun appelant (front, autres services) : l'achat réel passe par le paiement (/api/payments/checkout, purpose=tokens_purchase).
+  buyTokens: async (req, res) => res.status(410).json({
+    error: 'Token purchases are only possible through the payment checkout',
+    code: 'buy_tokens_disabled',
+    message: 'Utilisez le paiement (Stripe ou PayPal) pour acheter des jetons AI.'
+  }),
 
   /**
    * Body: { companyId, usageId, tokensUsed, tool?, gigId?, meta? }
@@ -211,6 +236,8 @@ export const tokensCompanyController = {
     }
 
     const resolvedGigId = extractGigId(meta, gigId);
+
+    if (!(await authorizeChargeUsage(req, res, companyId))) return;
 
     try {
       const wallet = await ensureWallet(companyId);
@@ -304,6 +331,7 @@ export const tokensCompanyController = {
     const { companyId } = req.params;
     const minRequired = Math.max(0, Math.round(Number(req.query.min || 1)));
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    if (!(await guardCompanyAccess(req, res, companyId))) return;
     try {
       const wallet = await ensureWallet(companyId);
       const tokens = typeof wallet.tokens === 'number' ? wallet.tokens : 0;
@@ -327,6 +355,7 @@ export const tokensCompanyController = {
   getUsage: async (req, res) => {
     const { companyId } = req.params;
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    if (!(await guardCompanyAccess(req, res, companyId))) return;
     try {
       const limit = Math.min(200, Math.max(1, Math.round(Number(req.query.limit || 50))));
       const filter = { companyId };
@@ -368,6 +397,7 @@ export const tokensCompanyController = {
   getUsageByGig: async (req, res) => {
     const { companyId } = req.params;
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
+    if (!(await guardCompanyAccess(req, res, companyId))) return;
     try {
       const companyOid = toObjectIdOrNull(companyId);
       if (!companyOid) return res.status(400).json({ error: 'Invalid companyId' });
