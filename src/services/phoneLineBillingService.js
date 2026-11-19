@@ -141,9 +141,10 @@ async function acquire(Model, doc, extra = {}) {
   return Boolean(got);
 }
 
+/** Ligne d'un achat qui n'a pas abouti (jamais activée) : numéro venu du stock remis en stock, numéro neuf rendu à l'opérateur. */
 async function releaseLine(line) {
   try {
-    await phoneNumberService.deletePhoneNumber({ id: line._id, companyId: line.companyId });
+    await phoneNumberService.releaseFailedPurchase({ id: line._id, companyId: line.companyId, line });
     return true;
   } catch (err) {
     await markLineReleaseFailed(line, err.message);
@@ -314,7 +315,8 @@ export async function reconcilePendingMonthlyLines({ now = new Date(), minAgeMs 
   for (const line of failedReleases) {
     try {
       if (!(await acquire(PhoneNumber, line, { billingStatus: 'release_failed' }))) continue;
-      await phoneNumberService.deletePhoneNumber({ id: line._id, companyId: line.companyId });
+      // `release_failed` ne vient que d'un achat défait (rollback ou réconciliation) : même règle stock / opérateur.
+      await phoneNumberService.releaseFailedPurchase({ id: line._id, companyId: line.companyId, line });
       result.releaseRetried += 1;
     } catch (err) {
       console.warn(`[phoneLineBilling] release still failing for ${line.phoneNumber}: ${err.message}`);

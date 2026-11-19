@@ -144,7 +144,8 @@ beforeEach(() => {
   };
   stripeService.createOneShotCheckoutSession = async (opts) => { calls.push(['stripe.checkout', opts]); return { id: 'cs_new', url: 'https://stripe.test/pay' }; };
   stripeService.captureCheckoutSession = async (ref) => { calls.push(['stripe.capture', ref]); if (captureError) throw captureError; };
-  stripeService.retrieveSession = async (ref) => (sessionCaptured[ref]
+  // État Stripe simulé de la session : encaissé si le test le dit (sessionCaptured) ou si le paiement est déjà « succeeded » en base.
+  stripeService.retrieveSession = async (ref) => (sessionCaptured[ref] || Object.values(payments).some((p) => p.providerRef === ref && p.status === 'succeeded')
     ? { payment_status: 'paid', payment_intent: { status: 'succeeded' } }
     : { payment_status: 'unpaid', payment_intent: { status: 'requires_capture' } });
   stripeService.getSubscription = async (id) => {
