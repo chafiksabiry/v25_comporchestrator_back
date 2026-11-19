@@ -137,6 +137,23 @@ export async function resolveCompanyStripeCustomerId(companyId, { activeOnly = f
 }
 
 /**
+ * Devise déjà fixée sur le client Stripe de l'abonnement d'offre ACTIF de l'entreprise (minuscules), ou null (Stripe absent,
+ * aucun abonnement d'offre actif, client sans devise). L'abonnement mensuel d'une ligne est créé sur ce client : Stripe refuse
+ * d'y mélanger deux devises, la ligne doit donc être facturée dans celle-ci. Ne lève jamais (null en cas d'erreur).
+ */
+export async function offerCustomerCurrency(companyId) {
+  try {
+    if (!companyId || !stripeService.isConfigured()) return null;
+    const customerId = await resolveCompanyStripeCustomerId(companyId, { activeOnly: true });
+    if (!customerId) return null;
+    return await stripeService.getCustomerCurrency(customerId);
+  } catch (error) {
+    console.warn('[phoneLine] devise du client Stripe illisible :', error?.message);
+    return null;
+  }
+}
+
+/**
  * Vérifie, AVANT toute commande de numéro, que les renouvellements pourront être prélevés. Renvoie le client Stripe.
  * Lève LINE_SUBSCRIPTION_UNAVAILABLE (Stripe absent), LINE_SUBSCRIPTION_PRODUCT_MISSING (ni STRIPE_PRODUCT_PHONE_LINE ni STRIPE_PRICE_PHONE_LINE valide), LINE_SUBSCRIPTION_NO_CUSTOMER ou LINE_SUBSCRIPTION_NO_PAYMENT_METHOD.
  */

@@ -126,6 +126,15 @@ export const DEFAULT_COMPANY_COUNTRY = 'FR';
  * @returns {Promise<string>} code ISO en majuscules (GB pour UK)
  */
 export async function companyCountry(req, companyId) {
+  return (await companyCountryRaw(req, companyId)) || DEFAULT_COMPANY_COUNTRY;
+}
+
+/**
+ * Comme `companyCountry`, mais renvoie une chaîne VIDE quand l'entreprise n'a pas de pays renseigné (au lieu de FR) : permet à
+ * l'appelant de distinguer « France » de « pays inconnu » (devise d'une ligne). Mêmes contrôles, même cache, mêmes erreurs.
+ * @returns {Promise<string>} code ISO en majuscules (GB pour UK), ou '' si non renseigné
+ */
+export async function companyCountryRaw(req, companyId) {
   const id = String(companyId || '');
   const userId = req.user && (req.user.userId || req.user.id);
   const token = req.headers?.authorization?.split(' ')[1];
@@ -152,7 +161,7 @@ export async function companyCountry(req, companyId) {
     if (!payload || payload.success === false || !company || typeof company !== 'object') {
       throw new ScopeError(503, 'Company country lookup failed', 'COMPANY_COUNTRY_LOOKUP_FAILED');
     }
-    const country = normalizeCountryCode(company.profile?.country) || DEFAULT_COMPANY_COUNTRY;
+    const country = normalizeCountryCode(company.profile?.country);
     countryByCompany.set(key, { country, expires: Date.now() + CACHE_TTL_MS });
     return country;
   } catch (error) {
