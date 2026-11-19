@@ -1,4 +1,5 @@
-import { buildLocalSearchOptions } from './numberSearchOptions.js';
+import { buildLocalSearchOptions, buildPrefixSearchOptions } from './numberSearchOptions.js';
+import { frenchZoneFor, frenchZonePrefix, zoneOfFrenchNumber } from './frenchZones.js';
 import { addressSidFromAssignments, isRejectedRange, rememberRejectedRange } from './rejectedNumberRanges.js';
 import { countryOfE164 } from '../utils/e164Country.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
@@ -12,6 +13,9 @@ import mongoose from 'mongoose';
 
 /** Nom convivial donné par la plateforme aux numéros qu'elle achète : sert à reconnaître l'inventaire proposable. */
 export const INVENTORY_FRIENDLY_PREFIX = 'Gig Number:';
+
+/** Nombre de numéros d'une zone française en dessous duquel la recherche par ville est complétée par le préfixe de la zone. */
+export const MIN_ZONE_RESULTS = 12;
 
 class PhoneNumberService {
   constructor() {
@@ -252,6 +256,27 @@ class PhoneNumberService {
       numbers = await listWithTimeout(buildLocalSearchOptions({ pageSize, areaCode, locality: searchParams.locality }));
 
       console.log(`✅ Found ${numbers.length} numbers for ${countryCode}`);
+
+      // FR avec une ville (ou un département, un code postal) reconnue : Twilio renseigne rarement la localité des numéros français,
+      // la recherche par ville revient souvent vide. On garde ce qu'elle a trouvé dans la zone, puis on complète par le préfixe de la
+      // zone (`contains: "+334"` pour le Sud-Est). Ville non reconnue : rien ne change.
+      const zone = countryCode === 'FR' ? frenchZoneFor(searchParams.locality, { postalCode: searchParams.postalCode }) : null;
+      if (zone) {
+        const inZone = numbers.filter((n) => zoneOfFrenchNumber(n.phoneNumber) === zone);
+        if (inZone.length < MIN_ZONE_RESULTS) {
+          const prefix = frenchZonePrefix(zone);
+          const byPrefix = await listWithTimeout(buildPrefixSearchOptions({ pageSize, prefix }));
+          console.log(`✅ Found ${byPrefix.length} numbers for ${countryCode} with prefix ${prefix}`);
+          const seen = new Set(inZone.map((n) => n.phoneNumber));
+          for (const n of byPrefix) {
+            if (zoneOfFrenchNumber(n.phoneNumber) === zone && !seen.has(n.phoneNumber)) {
+              seen.add(n.phoneNumber);
+              inZone.push(n);
+            }
+          }
+        }
+        numbers = inZone;
+      }
 
       // Twilio's "local" search bucket sometimes returns numbers that legally
       // require a DIFFERENT regulatory bundle than the one we have approved
