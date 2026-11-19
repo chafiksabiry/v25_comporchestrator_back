@@ -166,3 +166,10 @@ test('soloCheckoutEligibility : profil non lisible pour cause d’authentificati
   const ok = await soloCheckoutEligibility({}, C1, { profile: async () => ({ country: 'JP', identityCountry: 'GB' }), service: { listClaimableInventory: async () => [], searchTwilioNumbers: async ({ countryCode }) => (countryCode === 'GB' ? [{}] : []) } });
   assert.deepEqual(ok, { ok: true, numberCountry: 'GB' });
 });
+
+test('/checkout : métadonnées du prix illisibles (panne Stripe) -> 503 réessayable, garde jamais sautée, aucun paiement', async () => {
+  const r = await post('/checkout', LEGACY({ priceId: 'price_inconnu' }));
+  assert.equal(r.code, 503, JSON.stringify(r.body));
+  assert.equal(r.body.retryable, true);
+  assert.equal(calls.payments + calls.sessions, 0);
+});
