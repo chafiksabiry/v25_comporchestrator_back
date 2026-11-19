@@ -9,7 +9,7 @@ import { callingInfoOf } from '../services/outboundDestinations.js';
 import { LINE_BUSY_CODE, LINE_BUSY_MESSAGE, LINE_CALL_END_PATH, capacityOf, hasFreeLine, signLineCallEnd, verifyLineCallEnd, lineCallsEnforced, releaseCall, staleCheckFor, takeFirstFreeLine, takeLine } from '../services/lineCalls.js';
 import { checkNumberCountry } from '../services/numberCountry.js';
 import { mergeSearchResults } from '../services/numberSearchMerge.js';
-import { purchaseCurrency } from '../services/purchaseCurrency.js';
+import { phoneLineCurrency, purchaseCurrency } from '../services/purchaseCurrency.js';
 import { checkCompanyDestination } from '../services/outboundPolicy.js';
 import { isPremiumRate, MESSAGES as DESTINATION_MESSAGES, DESTINATION_NOT_ALLOWED } from '../services/outboundDestinations.js';
 import { paypalService } from '../services/paypalService.js';
@@ -1324,8 +1324,10 @@ class PhoneNumberController {
           });
         }
       }
-      // Devise du pays de l'entreprise (mêmes montants dans les trois devises), EUR si le pays n'est pas lisible.
-      const lineCurrency = await purchaseCurrency(req, companyId);
+      // Devise de la ligne (mêmes montants dans les trois devises) : celle du client Stripe de l'offre pour une ligne mensuelle,
+      // sinon celle du pays de l'entreprise (GB -> GBP, US -> USD, sinon EUR). Le premier mois ET l'abonnement mensuel
+      // (startMonthlyLineSubscription reprend payment.currency) sont dans cette devise.
+      const { currency: lineCurrency } = await phoneLineCurrency(req, companyId, { monthly: linePricing.monthly, hintCountry: req.body?.country });
 
       payment = await PhoneNumberPayment.create({
         companyId: new mongoose.Types.ObjectId(companyId),
@@ -1586,8 +1588,11 @@ class PhoneNumberController {
       // Dans ce cas l'absence de prix configuré ne bloque pas (il n'y a rien à encaisser).
       const included = await this.isFirstLineIncluded(req.query?.companyId);
       if (linePricing.unavailable && !included) return res.status(409).json(PHONE_LINE_PRICE_NOT_CONFIGURED_BODY);
-      // `?companyId=` : devise du pays de l'entreprise (mêmes montants) ; sans lui, la devise de base (EUR).
-      const currency = req.query?.companyId ? await purchaseCurrency(req, req.query.companyId) : String(linePricing.currency || 'EUR').toUpperCase();
+      // `?companyId=` : même devise que celle qui sera facturée (phoneLineCurrency, comme checkout/init) ; sans lui, la devise de base (EUR).
+      // `?country=` : pays de l'entreprise connu de l'application, utilisé seulement si le serveur n'en lit aucun.
+      const currency = req.query?.companyId
+        ? (await phoneLineCurrency(req, req.query.companyId, { monthly: linePricing.monthly, hintCountry: req.query?.country })).currency
+        : String(linePricing.currency || 'EUR').toUpperCase();
       res.json({
         success: true,
         paypal: {
