@@ -56,6 +56,9 @@ Page `GET /api/whatsapp/admin/inbox` (statique, sans donnée) : saisir la clé `
 `DELETE /admin/conversations/:id` supprime définitivement une conversation et ses tickets d'escalade (irréversible ; admin uniquement).
 Les routes `/admin/*` acceptent aussi la connexion admin du tableau de bord HARX (`Authorization: Bearer <JWT>` émis par le service d'inscription avec `typeUser: 'admin'`) : c'est ce qu'utilise la page « Inbox » de `harx.ai/admin`, sans saisie de clé.
 
+### Temps réel (WebSocket `/support-inbox`)
+L'Inbox du tableau de bord reçoit un signal dès qu'un message arrive, qu'une conversation est transmise à un humain, qu'un ticket change ou qu'une conversation est supprimée. Connexion : `new WebSocket(url, ['bearer', <jeton admin>])` (sous-protocole uniquement, jamais `?token=`) ; refus 401 sans jeton admin ; fermeture 4401 à l'expiration du jeton ; ping toutes les 30 s. Le serveur n'envoie que `{ type: 'inbox.changed', waId, reason }` (reason : `message`, `handoff`, `ticket`, `deleted`), sans contenu : le client relit les données par les routes HTTP authentifiées. Code : `src/websocket/supportInbox.js`, évènements : `src/whatsapp/events.js` (le store est enveloppé dans `createWhatsAppModule`). Les serveurs WebSocket (escrow et Inbox) sont en mode `noServer` ; `upgradeFallback.js` refuse (400) les autres chemins.
+
 ## Base de connaissances
 `npm run whatsapp:kb -- <dossier des dépôts v25_*>` régénère routes, permissions, messages d'erreur, énumérations et textes d'interface depuis le code ; `npm run whatsapp:kb:check` signale les rubriques dont les fichiers source ont disparu. Les rubriques rédigées portent `sources:` et `verified:` ; les zones non confirmées sont listées dans `kb/coverage-and-limits.md`.
 

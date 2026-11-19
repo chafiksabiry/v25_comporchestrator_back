@@ -21,6 +21,7 @@ import { agentIdsOfUser } from '../middleware/agentGuard.js';
  * acceptées et reçoivent l'ancien flux non filtré ; un jeton présenté est toujours vérifié et filtré. Valeur par défaut : true.
  */
 
+export const ESCROW_PATH = '/escrow-updates';
 let wss;
 
 export function wsAuthRequired(env = process.env) {
@@ -109,9 +110,10 @@ export function setupEscrowWebSocket(server, options = {}) {
   if (!wsAuthRequired()) {
     console.warn('⚠️ [Escrow WS] ESCROW_WS_AUTH_REQUIRED=false : connexions sans jeton acceptées, flux NON filtré pour elles (transition uniquement)');
   }
+  // Mode « noServer » : ce serveur ne traite que /escrow-updates, ce qui laisse un autre serveur WebSocket (Inbox support) vivre sur le même
+  // port (avec `server` + `path`, ws répondrait 400 aux autres chemins).
   wss = new WebSocketServer({
-    server,
-    path: '/escrow-updates',
+    noServer: true,
     // Le navigateur exige que le serveur choisisse un des sous-protocoles proposés : on choisit `bearer`, jamais le jeton.
     handleProtocols: (protocols) => {
       for (const p of protocols) if (String(p).toLowerCase() === 'bearer') return p;
@@ -126,6 +128,11 @@ export function setupEscrowWebSocket(server, options = {}) {
         })
         .catch(() => done(false, 503, 'Service Unavailable'));
     },
+  });
+
+  server.on('upgrade', (req, socket, head) => {
+    if (String(req.url || '').split('?')[0] !== ESCROW_PATH) return;
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
   });
 
   wss.on('connection', (ws, req) => {
