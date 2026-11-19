@@ -5,7 +5,8 @@ import { getSeatsState, syncSeats, SEATS_NOT_AVAILABLE_CODE } from '../services/
 
 /**
  * Sièges en plus. `GET /api/subscriptions/seats` : état (titulaire et membres). `POST /api/subscriptions/seats/sync` : titulaire seulement.
- * Sièges supplémentaires hors vente (EXTRA_SEATS_FOR_SALE) : la synchronisation répond 409 SEATS_NOT_AVAILABLE au-delà des sièges inclus et déjà facturés.
+ * Sièges supplémentaires hors vente (EXTRA_SEATS_FOR_SALE) : la synchronisation répond 409 SEATS_NOT_AVAILABLE au-delà des sièges inclus et des sièges payés
+ * pour la période en cours ; une baisse prend effet au renouvellement (sans prorata ni avoir).
  * Le centre est celui de l'appelant (service d'inscription), jamais un identifiant envoyé par le navigateur.
  * Les dépendances sont injectables pour les tests.
  */
