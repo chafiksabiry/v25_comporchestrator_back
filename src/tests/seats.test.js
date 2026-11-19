@@ -72,11 +72,12 @@ assert.equal(await countSeatsUsed(fakeDb(baseData()), C, { membersOnly: true }),
 assert.equal(await countSeatsUsed(fakeDb({ companies: [{ _id: C, userId: OWNER }] }), C), 1);
 
 // --- faux Stripe --------------------------------------------------------------------------------------------------------
-function fakeStripe({ items = [], products, discount = null } = {}) {
+function fakeStripe({ items = [], products, discount = null, periodEnd = null, metadata = {} } = {}) {
   const calls = [];
-  const state = { items: items.map((i) => ({ ...i })) };
+  const state = { items: items.map((i) => ({ ...i })), metadata: { ...metadata }, periodEnd };
   const stripe = {
     calls,
+    state,
     products: {
       list: async () => ({
         data: products ?? [
@@ -91,7 +92,13 @@ function fakeStripe({ items = [], products, discount = null } = {}) {
         data: [{ id: product === 'prod_a' ? 'price_a' : 'price_f', unit_amount: product === 'prod_a' ? 3900 : 5900, currency: 'eur', recurring: { interval: 'month' } }],
       }),
     },
-    subscriptions: { retrieve: async () => ({ id: 'sub_1', discount, items: { data: state.items } }) },
+    subscriptions: {
+      retrieve: async () => ({
+        id: 'sub_1', discount, metadata: { ...state.metadata },
+        items: { data: state.items.map((i) => (state.periodEnd ? { ...i, current_period_end: state.periodEnd } : i)) },
+      }),
+      update: async (id, a) => { calls.push(['subUpdate', id, a]); Object.assign(state.metadata, a.metadata || {}); },
+    },
     subscriptionItems: {
       create: async (a) => { calls.push(['create', a]); state.items.push({ id: 'si_seat', quantity: a.quantity, price: { id: a.price, product: 'prod_a' }, metadata: a.metadata }); },
       update: async (id, a) => { calls.push(['update', id, a]); state.items.find((i) => i.id === id).quantity = a.quantity; },
@@ -319,6 +326,58 @@ assert.deepEqual([mc.tier, mc.used, mc.included, mc.canAddSeat], ['full_scope', 
   const n3 = fakeStripe({ items: [planItem] });
   rr = await syncSeats({ db: fakeDb(baseData({ companymemberships: [], agentinvitations: [{ companyId: C, userId: 'a2', email: 'a2@x.fr', kind: 'agent', status: 'pending' }] })), stripe: n3, companyId: C });
   assert.deepEqual([rr.used, rr.extra, rr.action, n3.calls.length], [1, 0, 'unchanged', 0], 'agents seulement : pas de « sièges pas disponibles »');
+}
+
+// --- Retrait en cours de période (décision du 18/11/2026 : « le client paie ce siège, il doit pouvoir l'utiliser ») ------------------
+{
+  clearSeatPriceCache();
+  const P1 = 1795000000; // fin de la période payée
+  const seatItem = () => ({ id: 'si_seat', quantity: 2, price: { id: 'price_f', product: 'prod_f' }, metadata: { harx_product: 'callcenter_seat' } });
+  const sp = fakeStripe({ items: [planItem, seatItem()], periodEnd: P1 });
+  const prorations = () => sp.calls.filter((c) => JSON.stringify(c).includes('create_prorations')).length;
+  // 4 personnes, 2 sièges en plus payés ; m4 retiré -> 3 personnes : baisse sans prorata, places de la période conservées
+  let x = await syncSeats({ db: fakeDb(baseData()), stripe: sp, companyId: C });
+  assert.equal(x.action, 'updated');
+  assert.deepEqual(sp.calls[0], ['subUpdate', 'sub_1', { metadata: { harx_seat_paid_quantity: '2', harx_seat_paid_period_end: String(P1) } }]);
+  assert.deepEqual([sp.calls[1][0], sp.calls[1][2].quantity, sp.calls[1][2].proration_behavior], ['update', 1, 'none'], 'baisse effective au renouvellement, sans avoir');
+  assert.deepEqual([x.billedQuantity, x.renewalQuantity], [2, 1]);
+  let st = await getSeatsState({ db: fakeDb(baseData()), stripe: sp, companyId: C });
+  assert.deepEqual([st.used, st.billedQuantity, st.renewalQuantity, st.canAddSeat], [3, 2, 1, true], 'la place payée reste utilisable');
+  // remplaçant m5 invité dans la période : accepté, sans aucune facture (remontée sans prorata)
+  const replaced = baseData({ agentinvitations: [...baseData().agentinvitations, { companyId: C, email: 'm5@x.fr', kind: 'member', status: 'pending' }] });
+  x = await syncSeats({ db: fakeDb(replaced), stripe: sp, companyId: C });
+  assert.deepEqual([x.action, sp.calls[2][0], sp.calls[2][2].quantity, sp.calls[2][2].proration_behavior], ['updated', 'update', 2, 'none']);
+  assert.equal(prorations(), 0, 'remplacement : aucune facture');
+  // une cinquième personne : au-delà des places payées -> refus, aucune écriture
+  const n = sp.calls.length;
+  const five = baseData({ agentinvitations: [...replaced.agentinvitations, { companyId: C, email: 'm6@x.fr', kind: 'member', status: 'pending' }] });
+  x = await syncSeats({ db: fakeDb(five), stripe: sp, companyId: C });
+  assert.deepEqual([x.action, sp.calls.length], ['refused', n]);
+  // tous les sièges en plus retirés : ligne supprimée sans prorata, places conservées ; un remplaçant la recrée sans facture
+  x = await syncSeats({ db: fakeDb(baseData({ companymemberships: [], agentinvitations: [] })), stripe: sp, companyId: C });
+  assert.deepEqual([x.action, sp.calls.at(-1)[0], sp.calls.at(-1)[2].proration_behavior, x.billedQuantity], ['removed', 'del', 'none', 2]);
+  x = await syncSeats({ db: fakeDb(fourMembers), stripe: sp, companyId: C });
+  assert.deepEqual([x.action, sp.calls.at(-1)[1].quantity, sp.calls.at(-1)[1].proration_behavior], ['created', 2, 'none']);
+  assert.equal(prorations(), 0);
+}
+{
+  // retrait sans remplacement : la quantité baissée est celle facturée au renouvellement ; la période suivante n'a plus que ces places
+  clearSeatPriceCache();
+  const P1 = 1795000000;
+  const sp = fakeStripe({ items: [planItem, { id: 'si_seat', quantity: 2, price: { id: 'price_f', product: 'prod_f' }, metadata: { harx_product: 'callcenter_seat' } }], periodEnd: P1 });
+  await syncSeats({ db: fakeDb(baseData()), stripe: sp, companyId: C });
+  assert.equal(sp.state.items.find((i) => i.id === 'si_seat').quantity, 1, 'le renouvellement facture 1 siège en plus');
+  sp.state.periodEnd = P1 + 30 * 86400; // renouvellement passé
+  const st = await getSeatsState({ db: fakeDb(baseData()), stripe: sp, companyId: C });
+  assert.deepEqual([st.billedQuantity, st.renewalQuantity, st.canAddSeat], [1, 1, false], 'nouvelle période : places = inclus + facturés');
+  // période inconnue : aucune mémoire, places = quantité Stripe (jamais de place en plus non payée)
+  const nop = fakeStripe({ items: [planItem, { id: 'si_seat', quantity: 2, price: { id: 'price_f', product: 'prod_f' }, metadata: { harx_product: 'callcenter_seat' } }] });
+  await syncSeats({ db: fakeDb(baseData()), stripe: nop, companyId: C });
+  assert.equal(nop.calls.filter((c) => c[0] === 'subUpdate').length, 0);
+  assert.equal((await getSeatsState({ db: fakeDb(baseData()), stripe: nop, companyId: C })).billedQuantity, 1);
+  // Nomad Solo inchangé : aucun siège, aucune écriture
+  const nomadSt = await getSeatsState({ db: fakeDb(baseData({ subscriptionplans: [{ _id: PLAN, metadata: { harx_product: 'callcenter', callcenter_tier: 'nomad_solo' } }] })), stripe: sp, companyId: C });
+  assert.deepEqual([nomadSt.applicable, nomadSt.reason, nomadSt.canAddSeat], [false, 'nomad_solo', false]);
 }
 
 console.log('seats OK');
