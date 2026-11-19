@@ -907,7 +907,7 @@ export async function chargeCallMinutes(companyId, call) {
   // B.1 : débit atomique et idempotent (chargedCallSids), borné par le solde : jamais sous zéro, la grâce n'est pas facturée.
   const durationMinutes = Math.ceil(durationSeconds / 60);
   const done = await debitMinutesClamped({ companyId, keys: [callKey], cost: durationMinutes, seconds: durationSeconds });
-  return Boolean(done);
+  return Boolean(done?.wallet);
 }
 
 // Replay all completed calls for a company and ensure each one was deducted

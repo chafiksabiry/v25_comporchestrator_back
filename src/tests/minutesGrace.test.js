@@ -61,6 +61,7 @@ function memoryDeadlines() {
     if (k === 'childSids') return (row.childSids || []).includes(v);
     if (v && typeof v === 'object' && !(v instanceof Date)) {
       if ('$lte' in v) return row[k] != null && new Date(row[k]).getTime() <= new Date(v.$lte).getTime();
+      if ('$gt' in v) return row[k] != null && new Date(row[k]).getTime() > new Date(v.$gt).getTime();
     }
     if (v instanceof Date) return row[k] instanceof Date && row[k].getTime() === v.getTime();
     return String(row[k]) === String(v);
@@ -90,13 +91,13 @@ function memoryDeadlines() {
 }
 
 /** Client Twilio simulé : les coupures sont notées, jamais envoyées. */
-function fakeTwilio({ fail = null, parents = {} } = {}) {
+function fakeTwilio({ fail = null, parents = {}, statuses = {} } = {}) {
   const hangups = [];
   return {
     hangups,
     calls: (callSid) => ({
       update: async (params) => { if (fail) throw fail(callSid); hangups.push({ callSid, ...params }); return { sid: callSid, status: 'completed' }; },
-      fetch: async () => ({ sid: callSid, status: 'in-progress', parentCallSid: parents[callSid] || null }),
+      fetch: async () => ({ sid: callSid, status: statuses[callSid] || 'in-progress', parentCallSid: parents[callSid] || null }),
     }),
   };
 }
@@ -168,7 +169,7 @@ test('grâce : 5 minutes après les secondes couvertes ; timeLimit du <Dial> pla
   assert.equal(G.GRACE_SECONDS, 300);
   assert.equal(G.graceLimitSeconds(600), 900);
   assert.equal(G.graceLimitSeconds(14400), 14400, 'plafond de Twilio');
-  assert.equal(G.graceLimitSeconds(0), 0);
+  assert.equal(G.graceLimitSeconds(0), 300, 'solde déjà réservé par les appels en cours : grâce dès le début');
   const p = G.planGrace({ coveredSeconds: 600, now: 1_000_000 });
   assert.equal(p.graceStartsAt.getTime(), 1_000_000 + 600_000);
   assert.equal(p.deadline.getTime(), 1_000_000 + 900_000);
@@ -348,3 +349,79 @@ test('GET call-grace : vue de l\'appel (grâce, coupure) ; jambe du navigateur (
   r = await get(C2, sid('d'), C2); assert.equal(r.body.data, null, 'jamais l\'appel d\'une autre entreprise');
   r = await get(C1, 'nope'); assert.equal(r.code, 400);
 });
+
+// ---------------------------------------------------------------- revue : appels simultanés, webhook entrant borné, filet entrant, retry_later
+
+const spoken = (row) => (row.deadline.getTime() - row.startedAt.getTime()) / 1000;
+
+test('3 appels sortants simultanés sur 10 min de solde : la somme des coupures ne dépasse pas 10 min + 3 × 5 min', async () => {
+  W.minutes = 10;
+  const limits = [];
+  for (const c of ['1', '2', '3']) limits.push(timeLimit(await outbound(sid(c))));
+  const rows = [...DL.rows.values()];
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows.map((x) => x.coveredSeconds), [600, 0, 0], 'le premier réserve tout le solde, les suivants démarrent en grâce');
+  assert.deepEqual(limits, [900, 300, 300], 'timeLimit = couvertes + 5 min');
+  const total = rows.reduce((n, x) => n + spoken(x), 0);
+  assert.ok(total <= 600 + 3 * 300, `total ${total} s`);
+});
+
+test('3 appels simultanés mélangés (entrant, sortant, entrant) : même plafond global ; un appel terminé libère sa réserve', async () => {
+  W.minutes = 10;
+  await inbound(sid('4')); await outbound(sid('5')); await inbound(sid('6'));
+  const rows = [...DL.rows.values()];
+  assert.ok(rows.reduce((n, x) => n + spoken(x), 0) <= 600 + 3 * 300);
+  // Le premier appel est terminé chez Twilio : il ne réserve plus rien, le suivant retrouve tout le solde.
+  DL.rows.clear();
+  await outbound(sid('7'));
+  twilio = fakeTwilio({ statuses: { [sid('7')]: 'completed' } }); phoneNumberService.twilioClient = twilio;
+  await outbound(sid('8'));
+  const row8 = [...DL.rows.values()].find((x) => x.callSid === sid('8'));
+  assert.equal(row8.coveredSeconds, 600);
+  assert.equal([...DL.rows.values()].find((x) => x.callSid === sid('7')).status, 'ended');
+});
+
+test('refus seulement à solde nul : solde > 0 entièrement réservé => l\'appel démarre (grâce), solde 0 => refus', async () => {
+  W.minutes = 2;
+  await outbound(sid('9'));
+  const xml = await outbound(sid('a'));
+  assert.match(xml, /<Dial/); assert.equal(timeLimit(xml), 300);
+  W.minutes = 0;
+  assert.doesNotMatch(await outbound(sid('b')), /<Dial/);
+});
+
+test('webhook entrant : lecture du solde qui pend => réponse en moins de 3 s, sonnerie sans blocage ni échéance', async () => {
+  MinutesCompany.findOne = () => ({ select: () => ({ lean: () => new Promise(() => {}) }) });
+  const t0 = Date.now();
+  const xml = await inbound(sid('c'));
+  assert.ok(Date.now() - t0 < 3000, `${Date.now() - t0} ms`);
+  assert.match(xml, /<Client>/);
+  assert.doesNotMatch(xml, /timeLimit=/);
+  assert.equal(DL.rows.size, 0);
+});
+
+test('webhook entrant : ni octroi de la période ni synchronisation des appels (lecture directe du portefeuille)', async () => {
+  let synced = false;
+  Object.defineProperty(mongoose.connection, 'db', { get: () => { synced = true; return { collection: () => ({ find: () => ({ toArray: async () => [] }), findOne: async () => null }) }; }, configurable: true });
+  let subs = 0; Subscription.findOne = () => { subs += 1; return { populate: async () => ({ planId: { name: 'Offre', metadata: OFFERS[plan] } }) }; };
+  const before = subs;
+  assert.equal((await pc.inboundMinutes(C1)).coveredSeconds, 600);
+  assert.equal(synced, false, 'collection calls non relue'); assert.equal(subs, before, 'abonnement (octroi) non relu');
+});
+
+test('filet entrant : <Dial> vers les navigateurs avec timeLimit = couvertes + 5 min', async () => {
+  W.minutes = 10;
+  const xml = await inbound(sid('d'));
+  assert.match(xml, /<Dial [^>]*timeLimit="900"[^>]*>.*<Client>/);
+});
+
+test('/charge-call : verrou du solde perdu à chaque essai => reason « retry_later », rien débité (jamais « Already charged »)', async () => {
+  W.minutes = 5;
+  CALLS = [{ sid: 'CA_R', duration: 60, companyId: C1, direction: 'outbound', to: CALLER, from: LINE }];
+  MinutesCompany.findOneAndUpdate = async () => { W.minutes += 0; return null; };
+  const r = { code: 200 }; r.status = (c) => { r.code = c; return r; }; r.json = (b) => { r.body = b; return r; };
+  await minutesCompanyController.chargeCall({ body: { companyId: C1, callSid: 'CA_R', duration: 60 } }, r);
+  assert.equal(r.body.charged, false); assert.equal(r.body.reason, 'retry_later');
+  assert.equal(W.minutes, 5); assert.deepEqual(W.chargedCallSids, []);
+});
+

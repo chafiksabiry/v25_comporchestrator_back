@@ -24,12 +24,63 @@ export const STALE_CLAIM_MS = 60_000;
 export const MAX_HANGUP_ATTEMPTS = 5;
 const RETENTION_MS = 2 * 24 * 60 * 60 * 1000;
 
-/** Durée maximale d'un <Dial> : secondes couvertes + grâce, 4 h au plus. 0 couvert (appel refusé en amont) : 0. */
+/**
+ * Durée maximale d'un <Dial> : secondes couvertes + grâce, 4 h au plus. 0 couvert (solde déjà réservé par les appels en cours) : l'appel
+ * démarre directement en grâce (5 min). Le refus d'un appel sans minutes se décide en amont (solde à zéro).
+ */
 export function graceLimitSeconds(coveredSeconds) {
   const covered = Math.max(0, Math.floor(Number(coveredSeconds) || 0));
-  if (!covered) return 0;
   return Math.min(covered + GRACE_SECONDS, GRACE_MAX_CALL_SECONDS);
 }
+
+/**
+ * Secondes couvertes par le solde pour un NOUVEL appel : minutes entières du solde moins les crédits encore réservés par les appels en cours
+ * de la même entreprise (`committed`), divisées par les crédits par minute de cet appel. Jamais négatif (0 : grâce dès le début).
+ */
+export function coveredSecondsFor({ balance, committed = 0, creditFactor = 1 }) {
+  const whole = Math.floor(Number(balance) || 0);
+  const factor = Number(creditFactor) > 1 ? Number(creditFactor) : 1;
+  const free = Math.max(0, whole - Math.max(0, Number(committed) || 0));
+  return Math.floor(free / factor) * 60;
+}
+
+const FINISHED = new Set(['completed', 'canceled', 'failed', 'busy', 'no-answer']);
+const withTimeout = (promise, ms, fallback) => {
+  let timer;
+  const late = new Promise((resolve) => { timer = setTimeout(() => resolve(fallback), ms); });
+  return Promise.race([Promise.resolve(promise).catch(() => fallback), late]).finally(() => clearTimeout(timer));
+};
+
+/**
+ * Crédits encore réservés par les appels EN COURS d'une entreprise : pour chaque échéance `scheduled` dont la grâce n'a pas commencé,
+ * minutes couvertes restantes (minute entamée) × crédits par minute. Un appel déjà terminé chez Twilio (lecture par le client existant)
+ * ne réserve plus rien et son échéance passe à `ended`. Lecture de l'état impossible : l'appel est compté comme en cours (prudence).
+ */
+export async function committedCredits({ companyId, client = null, now = Date.now(), Model = CallGraceDeadline, statusTimeoutMs = 1500 }) {
+  if (!companyId) return 0;
+  const rows = await Model.find({ companyId, status: 'scheduled', graceStartsAt: { $gt: new Date(now) } }).lean();
+  let total = 0;
+  await Promise.all((rows || []).map(async (row) => {
+    if (client) {
+      const status = await withTimeout(Promise.resolve().then(() => client.calls(row.callSid).fetch()).then((c) => String(c?.status || '')), statusTimeoutMs, '');
+      if (FINISHED.has(status)) {
+        await Model.updateOne({ _id: row._id, status: 'scheduled' }, { $set: { status: 'ended' } }).catch(() => {});
+        return;
+      }
+    }
+    const remaining = Math.ceil((new Date(row.graceStartsAt).getTime() - now) / 60_000);
+    total += Math.max(0, remaining) * (Number(row.creditFactor) > 1 ? Number(row.creditFactor) : 1);
+  }));
+  return total;
+}
+
+/** Même lecture, bornée dans le temps (webhook) : au-delà de `ms`, ou en cas d'erreur, 0 (comportement d'avant : solde entier). */
+export function committedCreditsWithin(args, ms = 2000) {
+  return withTimeout(committedCredits(args), ms, 0);
+}
+
+/** Valeur ou `fallback` au-delà de `ms` (lecture de base qui pend pendant un webhook). */
+export const raceTimeout = withTimeout;
 
 /**
  * Échéances d'un appel qui démarre à `now` avec `coveredSeconds` couvertes par le solde : début de la grâce et coupure (début + couvertes + 5 min).
@@ -63,7 +114,8 @@ export function clampDebit(cost, balance) {
  * Débit atomique d'un ou plusieurs appels (clés `keys`, idempotence `chargedCallSids` inchangée), borné par le solde (`clampDebit`) :
  * le solde ne passe jamais sous zéro, la part non couverte est consignée dans `graceWaivedMinutes` (jamais facturée).
  * Concurrence : le solde lu fait partie du filtre ; s'il a changé entre la lecture et l'écriture, on relit (3 essais).
- * @returns {Promise<null | { wallet: object, debit: number, waived: number }>} null : déjà débité (ou débit concurrent, repris plus tard)
+ * @returns {Promise<null | { wallet: object, debit: number, waived: number } | { wallet: null, retryLater: true }>} null : déjà débité ;
+ *   `retryLater` : le solde a changé à chaque essai (débits concurrents) — rien n'est débité, l'appel sera repris à la prochaine lecture du solde.
  */
 export async function debitMinutesClamped({ companyId, keys, cost, seconds, batch = false, Wallet = MinutesCompany, attempts = 3 }) {
   const list = [...new Set((keys || []).map(String).filter(Boolean))];
@@ -91,7 +143,7 @@ export async function debitMinutesClamped({ companyId, keys, cost, seconds, batc
       return { wallet: updated, debit, waived };
     }
   }
-  return null;
+  return { wallet: null, retryLater: true };
 }
 
 /** Clé de l'idempotence : un appel n'a qu'une échéance (la première écrite gagne : un webhook rejoué ne la repousse pas). */

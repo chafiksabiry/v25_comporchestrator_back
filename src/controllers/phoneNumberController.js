@@ -46,7 +46,7 @@ import { billLineCallEnd, transferResult } from './callTransferController.js';
 import { buildRecordingPlan, consentLanguageFor, consentTwiml, mapCallRecordingCallback, normalizeConsentLanguage, planForCall, verifyRecordingToken } from '../services/callRecording.js';
 import { attachRecordingTracked, firstRecordingDecision, recordDecision } from '../services/recordingStatus.js';
 import { journalForwardedCall, journalUnansweredCall } from '../services/journalCall.js';
-import { scheduleGraceDeadline } from '../services/minutesGrace.js';
+import { committedCreditsWithin, coveredSecondsFor, graceLimitSeconds, raceTimeout, scheduleGraceDeadline } from '../services/minutesGrace.js';
 import ReachSettings from '../models/ReachSettings.js';
 import { decideInboundRoute, mobileTarget, shouldRingMobileAfter } from '../services/reach.js';
 import { callPayload, notifyOwners, voicemailPayload } from '../services/webPush.js';
@@ -2598,7 +2598,9 @@ class PhoneNumberController {
       // Crédits débités par minute vers cette destination (1, ou N à l'international) : plafonne la durée à solde / N.
       let credit = await outboundCreditDecision({ companyId, limits, to, lineNumber: callerLine?.phoneNumber });
       let creditFactor = credit.factor;
-      let decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, creditFactor });
+      // B.1 : crédits déjà réservés par les appels en cours de l'entreprise (ce nouvel appel n'est couvert que par le reste du solde).
+      const committedCredits = await this.graceCommitted(companyId);
+      let decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, creditFactor, committedCredits });
       if (!decision.ok) {
         console.warn(`[browser-outbound] refusé pour l'entreprise ${companyId} : ${decision.message}`);
         return send(spokenRefusal(decision.key, spokenLanguage(callerLine?.phoneNumber), { credits: decision.creditFactor }));
@@ -2618,7 +2620,7 @@ class PhoneNumberController {
           // La ligne réellement prise dans la réserve peut être d'un autre pays que la première : le facteur (donc le plafond) est recalculé avec elle.
           credit = await outboundCreditDecision({ companyId, limits, to, lineNumber: callerLine?.phoneNumber });
           creditFactor = credit.factor;
-          decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, creditFactor, action: `https://${req.get('host')}${LINE_CALL_END_PATH}?t=${signLineCallEnd({ secret: config.twilioAuthToken, callSid: sidForLine })}` });
+          decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, creditFactor, committedCredits, action: `https://${req.get('host')}${LINE_CALL_END_PATH}?t=${signLineCallEnd({ secret: config.twilioAuthToken, callSid: sidForLine })}` });
         } catch (error) {
           console.error('[browser-outbound] contrôle de ligne ignoré :', error?.message || error);
         }
@@ -2642,21 +2644,30 @@ class PhoneNumberController {
   }
 
   /**
-   * B.1 : solde de minutes d'un appel entrant (1 crédit la minute). `exhausted` : moins d'une minute entière (même règle que les sortants).
-   * Lecture impossible : null (aucun blocage, aucune échéance).
+   * B.1 : solde de minutes d'un appel entrant (1 crédit la minute). Lecture DIRECTE du portefeuille (ni octroi de la période ni
+   * synchronisation des appels : trop lents pour un webhook), bornée à 2 s. `exhausted` : moins d'une minute entière (même règle que les
+   * sortants). Secondes couvertes : solde moins les crédits réservés par les appels en cours. Lecture impossible ou trop lente : null
+   * (aucun blocage, aucune échéance).
    */
-  async inboundMinutes(companyId) {
+  async inboundMinutes(companyId, { timeoutMs = 2000 } = {}) {
     if (!this.dbReady()) return null;
-    try {
-      const minutes = await freshMinutesBalance(String(companyId), { sync: syncMinutesFromCalls, grant: ensurePlanMinutesGranted, readWallet: (id) => MinutesCompany.findOne({ companyId: id }).select('minutes').lean() });
-      const balance = Number.isFinite(Number(minutes)) ? Number(minutes) : 0;
-      // Démarrage : au moins une minute entière (maxSecondsForBalance). Échéance : minutes entières du solde, sans le plafond de 4 h d'un <Dial>.
-      const exhausted = maxSecondsForBalance(balance) === 0;
-      return { minutes, coveredSeconds: exhausted ? 0 : Math.floor(balance) * 60, exhausted };
-    } catch (error) {
-      console.warn('[minutes] solde illisible pour un appel entrant, aucun contrôle :', error?.message || error);
+    const TIMEOUT = Symbol('timeout');
+    const wallet = await raceTimeout(Promise.resolve().then(() => MinutesCompany.findOne({ companyId }).select('minutes').lean()), timeoutMs, TIMEOUT);
+    if (wallet === TIMEOUT) {
+      console.warn('[minutes] solde illisible (délai ou erreur) pour un appel entrant : aucun contrôle');
       return null;
     }
+    const balance = Number.isFinite(Number(wallet?.minutes)) ? Number(wallet.minutes) : 0;
+    const exhausted = maxSecondsForBalance(balance) === 0;
+    if (exhausted) return { minutes: balance, coveredSeconds: 0, exhausted };
+    const committed = await this.graceCommitted(companyId);
+    return { minutes: balance, coveredSeconds: coveredSecondsFor({ balance, committed }), exhausted };
+  }
+
+  /** B.1 : crédits réservés par les appels en cours (échéances `scheduled`), lecture bornée à 1 s ; base absente ou trop lente : 0. */
+  async graceCommitted(companyId) {
+    if (!this.dbReady()) return 0;
+    return committedCreditsWithin({ companyId, client: phoneNumberService.twilioClient }, 1000);
   }
 
   /** Base connectée ? (B.1 : sans base, ni contrôle du solde entrant ni échéance ; jamais d'attente pendant un webhook.) */
@@ -2885,6 +2896,8 @@ class PhoneNumberController {
       }
       return reply(buildInboundTwiml({
         solo,
+        // B.1 : filet de Twilio si l'échéance n'a pas pu être écrite ou si le balayeur est arrêté (couvertes + 5 min de grâce).
+        timeLimit: minutesState && !noMinutes ? graceLimitSeconds(minutesState.coveredSeconds) : 0,
         settings,
         baseUrl,
         companyId: line?.companyId ? String(line.companyId) : '',
