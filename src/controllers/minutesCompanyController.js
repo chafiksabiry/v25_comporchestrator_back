@@ -155,6 +155,11 @@ export const minutesCompanyController = {
       const done = await debitMinutesClamped({ companyId, keys: [chargeKey], cost: durationMinutes, seconds: durationSeconds });
       const updated = done?.wallet;
 
+      // Verrou du solde perdu à chaque essai (débits concurrents) : rien n'est débité ici, la prochaine lecture du solde le reprendra.
+      if (done?.retryLater) {
+        return res.status(200).json({ success: true, charged: false, reason: 'retry_later' });
+      }
+
       if (!updated) {
         const wallet = await MinutesCompany.findOne({ companyId });
         return res.status(200).json({
