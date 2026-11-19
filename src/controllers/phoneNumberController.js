@@ -41,7 +41,7 @@ import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
 import { insufficientInternationalMessages, outboundCreditFactor, outboundCreditDecision, recordCallDecision } from '../services/creditCoefficient.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
-import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket, MINUTES_INSUFFICIENT_CODE, MINUTES_INSUFFICIENT_MESSAGE, spokenLanguage, spokenRefusal, SPOKEN_REFUSALS } from '../services/browserOutbound.js';
+import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket, MINUTES_INSUFFICIENT_CODE, MINUTES_INSUFFICIENT_MESSAGE, spokenLanguage, spokenRefusal, SPOKEN_REFUSALS } from '../services/browserOutbound.js';
 import { billLineCallEnd, transferResult } from './callTransferController.js';
 import { buildRecordingPlan, consentLanguageFor, consentTwiml, mapCallRecordingCallback, normalizeConsentLanguage, planForCall, verifyRecordingToken } from '../services/callRecording.js';
 import { attachRecordingTracked, firstRecordingDecision, recordDecision } from '../services/recordingStatus.js';
@@ -2489,7 +2489,7 @@ class PhoneNumberController {
         // Plus de minutes : refus AVANT d'émettre le jeton (lecture du solde en échec : jamais de blocage).
         const shortfall = await this.minutesShortfall(companyId);
         if (shortfall) return res.status(402).json(shortfall);
-        const appSid = await ensureOutboundApp(client, `https://${req.get('host')}${OUTBOUND_WEBHOOK_PATH}`);
+        const appSid = await ensureOutboundApp(client, { req });
         const outboundToken = await createVoiceToken({ client, accountSid: config.twilioAccountSid, identity, outgoingApplicationSid: appSid, pushCredentialSid });
         const ticket = signOutboundTicket({ secret: config.twilioAuthToken, companyId, identity, secretary });
         return res.json({ success: true, data: { token: outboundToken, identity, expiresIn: VOICE_TOKEN_TTL_S, params: { CompanyId: companyId, Ticket: ticket }, ...(gate?.applicable ? { lineStatus: lineStatusView(gate) } : {}) } });
