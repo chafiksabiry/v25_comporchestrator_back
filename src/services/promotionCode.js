@@ -1,4 +1,5 @@
-/** Code promotionnel d'abonnement (offre de lancement). Jamais utilisé pour les achats de minutes ou de jetons. */
+/** Code promotionnel d'abonnement (offres TAAS). Jamais utilisé pour les achats de minutes ou de jetons, ni pour les offres CLOUD et NOMAD. */
+import { isCallcenterMetadata } from './callcenterTier.js';
 
 const CODE_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -30,10 +31,23 @@ export async function resolvePromotionCodeId(stripe, value) {
 }
 
 /**
+ * Un code promotionnel est-il accepté pour ce produit Stripe ? Non pour les offres CLOUD et NOMAD (`harx_product=callcenter`,
+ * grille 2026-11 : « Tarifs de lancement », aucune promotion, décision du 18/11/2026). Oui pour les offres TAAS (inchangées).
+ */
+export function promotionCodesAllowed(productMetadata) {
+  return !isCallcenterMetadata(productMetadata);
+}
+
+/**
  * Paramètres de session Checkout : Stripe interdit `discounts` avec `allow_promotion_codes`.
  * Avec un code résolu on applique `discounts` ; sans code, le champ de saisie reste proposé.
+ * `allowPromotionCodes: false` (offres CLOUD et NOMAD) : ni champ de saisie (`allow_promotion_codes=false`) ni `discounts`, même si un code est passé.
  */
-export function withPromotion(params, promotionCodeId) {
+export function withPromotion(params, promotionCodeId, { allowPromotionCodes = true } = {}) {
+  if (!allowPromotionCodes) {
+    const { discounts: _d, allow_promotion_codes: _a, ...rest } = params;
+    return { ...rest, allow_promotion_codes: false };
+  }
   if (!promotionCodeId) return { ...params, allow_promotion_codes: true };
   const { allow_promotion_codes: _ignored, ...rest } = params;
   return { ...rest, discounts: [{ promotion_code: promotionCodeId }] };

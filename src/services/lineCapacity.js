@@ -20,8 +20,9 @@ export function validateMaxConcurrentCalls(v) {
 }
 
 /** Vue de l'écran : capacité, appels en cours et lignes facturables par numéro, puis total mensuel (information). */
-export function capacityView(lines, { enforced = false, env = process.env, now = Date.now() } = {}) {
-  const unit = extraLinePriceTtcCents(env);
+export function capacityView(lines, { enforced = false, env = process.env, now = Date.now(), unitPriceTtcCents } = {}) {
+  // Prix de la ligne supplémentaire de l'offre (métadonnée Stripe `phone_line_price_cents`, sinon repli) quand l'appelant le connaît.
+  const unit = Number.isInteger(unitPriceTtcCents) && unitPriceTtcCents > 0 ? unitPriceTtcCents : extraLinePriceTtcCents(env);
   const rows = (lines || []).map((l) => {
     const maxConcurrentCalls = capacityOf(l);
     return { lineId: String(l._id), phoneNumber: l.phoneNumber || '', maxConcurrentCalls, activeCalls: liveCallCount(l, now), billableLines: maxConcurrentCalls - 1 };

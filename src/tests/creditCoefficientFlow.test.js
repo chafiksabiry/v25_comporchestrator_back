@@ -326,7 +326,10 @@ test('B2 : direction absente, « incoming », « inbound » ou appel vers une li
 
 test('C4 : le transfert passe au calcul la ligne réellement utilisée (celle qui a reçu l\'appel)', async () => {
   const src = (await import('node:fs')).readFileSync(new URL('../controllers/callTransferController.js', import.meta.url), 'utf8');
-  assert.match(src, /deps\.creditFactor\(access\.companyId, number, call\.phoneNumber\)/);
+  // Entrant : la ligne qui a reçu l'appel ; sortant (poste de l'agent) : la ligne d'où part la jambe du correspondant.
+  assert.match(src, /deps\.creditFactor\(access\.companyId, number, lineNumber\)/);
+  assert.match(src, /lineNumber = call\.phoneNumber;/);
+  assert.match(src, /lineNumber = String\(child\.from \|\| ''\);/);
 });
 
 test('journal de consommation : à N > 1 les lignes d\'appels montrent le facteur RÉELLEMENT débité (trace du webhook, reclassement, entrant, interne), tous canaux', async () => {
