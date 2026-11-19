@@ -8,6 +8,7 @@ import { createWhatsAppRouter } from './routes.js';
 import { createMongoStore } from './store/mongoStore.js';
 import { createWebChatRouter } from './webChat.js';
 import { createInboxBus, withInboxEvents } from './events.js';
+import { createWebMirror } from './webMirror.js';
 
 /**
  * Assemble le module WhatsApp AI Assistant. Toutes les dépendances sont substituables (tests) ;
@@ -47,7 +48,8 @@ export function createWhatsAppModule(overrides = {}) {
   const agent = createAgent({ store, claude, whatsapp, kb, tools, cfg, logger });
   const router = createWhatsAppRouter({ agent, store, whatsapp, kb, cfg, logger, auth: overrides.auth });
   // Chat sur le site (sans redirection vers l'application WhatsApp) : même agent, transport sans réseau.
-  const webChat = createWebChatRouter({ store, claude, kb, tools, cfg, logger });
+  const mirror = overrides.mirror !== undefined ? overrides.mirror : createWebMirror({ whatsapp, cfg, logger });
+  const webChat = createWebChatRouter({ store, claude, kb, tools, cfg, logger, mirror });
   router.use('/web-chat', webChat.router);
 
   const missing = missingConfig(cfg);

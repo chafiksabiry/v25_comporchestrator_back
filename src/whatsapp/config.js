@@ -44,6 +44,15 @@ export function getWhatsAppConfig(env = process.env) {
     maxInboundChars: int(env.WHATSAPP_MAX_INBOUND_CHARS, 2000),
     rateLimitPerMinute: int(env.WHATSAPP_RATE_LIMIT_PER_MINUTE, 10),
     rateLimitPerDay: int(env.WHATSAPP_RATE_LIMIT_PER_DAY, 200),
+    /**
+     * Copie du chat du site vers WhatsApp : numéro de l'équipe (E.164 sans « + »). Vide = désactivée.
+     * Hors fenêtre de 24 h, Meta exige un modèle approuvé : WHATSAPP_WEB_MIRROR_TEMPLATE (nom, un paramètre {{1}} = le texte) et sa langue.
+     */
+    webMirrorNumber: String(env.WHATSAPP_WEB_MIRROR_NUMBER || '').replace(/\D/g, ''),
+    webMirrorTemplate: env.WHATSAPP_WEB_MIRROR_TEMPLATE || '',
+    webMirrorTemplateLang: env.WHATSAPP_WEB_MIRROR_TEMPLATE_LANG || 'fr',
+    /** Plafond de copies par heure (protège le coût Meta et l'équipe contre un afflux ou un abus). */
+    webMirrorMaxPerHour: int(env.WHATSAPP_WEB_MIRROR_MAX_PER_HOUR, 200),
     /** Chat sur le site : limites par adresse IP (en plus de celles par session). */
     webRateLimitPerMinute: int(env.WHATSAPP_WEB_RATE_LIMIT_PER_MINUTE, 12),
     webRateLimitPerDay: int(env.WHATSAPP_WEB_RATE_LIMIT_PER_DAY, 150),

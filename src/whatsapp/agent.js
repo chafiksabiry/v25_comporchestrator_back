@@ -241,6 +241,9 @@ export function createAgent({ store, claude, whatsapp, kb, tools, cfg, logger = 
       }
       const done = Promise.all(messages.map(async (m) => {
         try {
+          // Le numéro d'équipe qui reçoit la copie du chat du site n'est pas un utilisateur : l'assistant ne lui répond pas
+          // (son message ouvre quand même la fenêtre de 24 h de Meta, ce qui permet de continuer à recevoir les copies).
+          if (cfg.webMirrorNumber && m.from === cfg.webMirrorNumber) return { id: m.id, ignored: 'team-mirror-number' };
           if (!(await store.claimMessage(m.id))) return { id: m.id, duplicate: true };
           if (cfg.humanMode) {
             // Mode « Claude répond » : aucun appel à l'API Anthropic ; le message est journalisé pour traitement par un humain / une session Claude Code.
