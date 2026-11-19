@@ -2,6 +2,9 @@ import mongoose from 'mongoose';
 import InboundCall from '../models/InboundCall.js';
 import InboundSettings from '../models/InboundSettings.js';
 import ReceptionDirectory from '../models/ReceptionDirectory.js';
+import { PhoneNumber } from '../models/PhoneNumber.js';
+import OutboundTransfer from '../models/OutboundTransfer.js';
+import { ENDED, LINE_CALL_END_PATH, releaseCall, signLineCallEnd, transferLease } from '../services/lineCalls.js';
 import { config } from '../config/env.js';
 import { callerAccess, scopeToCompany, ScopeError } from '../middleware/companyScope.js';
 import { canUse } from '../services/followUps.js';
@@ -21,6 +24,10 @@ import {
  * Contrôles côté serveur (le navigateur n'est cru sur rien) : l'appelant est du personnel d'accueil de la société choisie (scopeToCompany),
  * la jambe navigateur indiquée est un appel EN COURS adressé à SON identité, et l'appel d'origine appartient à cette société.
  * La destination est TOUJOURS le numéro d'une fiche de l'annuaire de la société, relu en base : aucun numéro n'arrive du navigateur.
+ *
+ * Appel SORTANT du navigateur (poste de l'agent de centre d'appels) : la jambe navigateur est alors l'appel parent (`from` = l'identité
+ * de la personne connectée) et la jambe du correspondant est son enfant. C'est cette jambe enfant qui est redirigée vers la fiche ; elle
+ * doit partir d'une ligne de la société (relue en base). Un seul transfert : la jambe navigateur se termine dès la redirection.
  */
 const fail = (res, status, message, extra = {}) => res.status(status).json({ success: false, error: extra.code || message, message, ...extra });
 const oid = (id) => new mongoose.Types.ObjectId(String(id));
@@ -43,6 +50,16 @@ const deps = {
     return outboundCreditFactor({ companyId, limits, to, lineNumber });
   },
   now: () => Date.now(),
+  /** La ligne appelante d'un appel sortant appartient-elle à la société ? */
+  lineOfCompany: async (companyId, phoneNumber) => Boolean(phoneNumber && await PhoneNumber.exists({ companyId, phoneNumber, status: 'active' })),
+  /** Verrou d'une jambe sortante (index unique) : false si elle est déjà transférée. */
+  lockOutbound: async (doc) => {
+    try { await OutboundTransfer.create(doc); return true; } catch (e) { if (e?.code === 11000) return false; throw e; }
+  },
+  unlockOutbound: async (callSid) => { await OutboundTransfer.deleteOne({ callSid }); },
+  /** Bail de ligne (« une ligne = un appel ») : passe de la jambe navigateur à celle du correspondant. */
+  moveLease: (fromSid, toSid) => transferLease(fromSid, toSid),
+  releaseLine: (callSid) => releaseCall(callSid),
 };
 export const setTransferDeps = (over) => Object.assign(deps, over);
 /** Solde de minutes et coefficient de la destination : réutilisés par le transfert de l'agent IA (services/aiInbound.js). */
@@ -64,6 +81,32 @@ async function context(req, res) {
 
 const baseUrlOf = (req) => `https://${req.get ? req.get('host') : req.headers?.host}`;
 
+/** Statut Twilio d'une jambe : 'ended', 'live' ou 'unknown' (erreur de lecture). */
+async function legState(client, sid) {
+  try {
+    const leg = await client.calls(sid).fetch();
+    return ENDED.includes(String(leg?.status || '').toLowerCase()) ? 'ended' : 'live';
+  } catch { return 'unknown'; }
+}
+
+/**
+ * Redirection refusée par Twilio alors que le bail de ligne était déjà passé à la jambe du correspondant. Logique prudente :
+ *  - navigateur en cours ou état inconnu : bail rendu au navigateur (son action de <Dial> le libérera), puis revérification : s'il s'est
+ *    terminé entre-temps, la ligne est libérée ;
+ *  - navigateur terminé et correspondant en cours : le bail reste au correspondant. Son statusCallback n'a PAS été installé (la mise à
+ *    jour a échoué) : la ligne se libère par le constat de bail périmé (staleCheckFor, à la prochaine prise) ou par l'expiration (TTL) ;
+ *  - les deux terminés : ligne libérée.
+ */
+async function restoreLeaseAfterFailure(client, { browserSid, childSid }) {
+  const browser = await legState(client, browserSid);
+  if (browser !== 'ended') {
+    await deps.moveLease(childSid, browserSid);
+    if ((await legState(client, browserSid)) === 'ended') await deps.releaseLine(browserSid);
+    return;
+  }
+  if ((await legState(client, childSid)) === 'ended') await deps.releaseLine(childSid);
+}
+
 export const callTransferController = {
   async transfer(req, res) {
     try {
@@ -80,17 +123,31 @@ export const callTransferController = {
       const entry = (dir?.entries || []).find((e) => String(e._id) === entryId);
       if (!entry) return fail(res, 404, 'Cette personne ne figure pas dans l’annuaire de l’entreprise.');
 
-      // L'appel : jambe navigateur en cours, adressée à CETTE secrétaire ; l'appel d'origine doit appartenir à la société.
+      // L'appel : jambe navigateur en cours de CETTE personne. Entrant : adressée à elle, l'appel d'origine (parent) appartient à la
+      // société. Sortant : partie d'elle, la jambe du correspondant (enfant) part d'une ligne de la société.
       const client = await deps.twilio();
+      const identity = `client:${voiceIdentity(access.userId)}`;
       let leg;
       try { leg = await client.calls(callSid).fetch(); } catch { return fail(res, 404, 'Appel introuvable.'); }
-      if (String(leg?.to || '') !== `client:${voiceIdentity(access.userId)}`) return fail(res, 403, 'Cet appel n’a pas été décroché par vous.');
+      const outbound = String(leg?.to || '') !== identity && String(leg?.from || '') === identity;
+      if (!outbound && String(leg?.to || '') !== identity) return fail(res, 403, 'Cet appel n’a pas été décroché par vous.');
       if (leg.status !== 'in-progress') return fail(res, 409, 'Cet appel n’est plus en cours.');
-      const parentSid = String(leg.parentCallSid || '');
-      if (!CALL_SID.test(parentSid)) return fail(res, 404, 'Appel introuvable.');
-      const call = await InboundCall.findOne({ callSid: parentSid, companyId }).lean();
-      if (!call) return fail(res, 403, 'Cet appel n’appartient pas à votre entreprise.');
-      if (call.transfer?.startedAt) return fail(res, 409, 'Cet appel a déjà été transféré.');
+      let parentSid; let call = null; let lineNumber;
+      if (outbound) {
+        let child;
+        try { [child] = await client.calls.list({ parentCallSid: callSid, status: 'in-progress', limit: 1 }); } catch { child = null; }
+        if (!child || !CALL_SID.test(String(child.sid || ''))) return fail(res, 409, 'Cet appel n’est plus en cours.');
+        lineNumber = String(child.from || '');
+        if (!(await deps.lineOfCompany(companyId, lineNumber))) return fail(res, 403, 'Cet appel n’appartient pas à votre entreprise.');
+        parentSid = String(child.sid);
+      } else {
+        parentSid = String(leg.parentCallSid || '');
+        if (!CALL_SID.test(parentSid)) return fail(res, 404, 'Appel introuvable.');
+        call = await InboundCall.findOne({ callSid: parentSid, companyId }).lean();
+        if (!call) return fail(res, 403, 'Cet appel n’appartient pas à votre entreprise.');
+        if (call.transfer?.startedAt) return fail(res, 409, 'Cet appel a déjà été transféré.');
+        lineNumber = call.phoneNumber;
+      }
 
       const tools = mergedTools(await loadTools(access.companyId));
       const now = deps.now();
@@ -105,7 +162,7 @@ export const callTransferController = {
       if (mode === 'dial') {
         number = normalizeOutboundDestination(entry.phone);
         if (!number) return fail(res, 422, `Le numéro de ${entry.name} n’est pas une destination autorisée.`, { code: 'destination_not_allowed' });
-        const creditFactor = await deps.creditFactor(access.companyId, number, call.phoneNumber);
+        const creditFactor = await deps.creditFactor(access.companyId, number, lineNumber);
         maxSeconds = maxSecondsForBalance(await deps.minutes(access.companyId), { creditFactor });
         if (!maxSeconds && creditFactor > 1) {
           const m = insufficientInternationalMessages(creditFactor);
@@ -115,8 +172,10 @@ export const callTransferController = {
       }
 
       const byName = (await loadUserName(access.userId)) || 'Accueil';
-      // Un seul transfert par appel : la prise est atomique.
-      const claim = await InboundCall.updateOne(
+      // Un seul transfert par appel : prise atomique (entrant : sur l'appel ; sortant : verrou unique sur la jambe du correspondant).
+      const claim = outbound
+        ? { modifiedCount: (await deps.lockOutbound({ companyId, callSid: parentSid, browserCallSid: callSid, lineNumber, byUserId: access.userId, byName, entryId, entryName: entry.name, mode, result: mode === 'dial' ? 'ringing' : 'message_offered', startedAt: new Date(now) })) ? 1 : 0 }
+        : await InboundCall.updateOne(
         { _id: call._id, companyId, 'transfer.startedAt': null },
         { $set: {
           status: 'answered', answeredOn: 'browser', answeredBy: voiceIdentity(access.userId),
@@ -129,21 +188,34 @@ export const callTransferController = {
       const settings = await InboundSettings.findOne({ companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch(() => null);
       const baseUrl = baseUrlOf(req);
       // Annonce dite à l'appelant : langue de la société (pays de la ligne appelée).
-      const language = languageForPhone(call.phoneNumber);
+      const language = languageForPhone(lineNumber);
       const twiml = mode === 'message'
         ? buildTransferMessageTwiml({ name: entry.name, settings, baseUrl, companyId: access.companyId, language })
         : buildTransferTwiml({
-          name: entry.name, number, extension: entry.extension, callerId: call.phoneNumber, voice: settings?.voice, maxSeconds, language,
+          name: entry.name, number, extension: entry.extension, callerId: lineNumber, voice: settings?.voice, maxSeconds, language,
           resultUrl: `${baseUrl}${TRANSFER_WEBHOOK_PATH}?s=${encodeURIComponent(signTransferState({ secret: config.twilioAuthToken, companyId: access.companyId, callSid: parentSid, entryId, userId: access.userId, now }))}`,
         });
+      // Sortant : la ligne reste tenue par la jambe du correspondant jusqu'à sa fin réelle (bail déplacé, puis libéré par son
+      // statusCallback signé), et non libérée par l'action du <Dial> du navigateur qui se termine à la redirection.
+      let leaseMoved = false;
+      if (outbound) {
+        try { leaseMoved = (await deps.moveLease(callSid, parentSid)).moved > 0; } catch (e) { console.warn('reception transfer (ligne) :', e?.message); }
+      }
+      const update = outbound
+        ? { twiml, statusCallback: `${baseUrl}${LINE_CALL_END_PATH}?t=${signLineCallEnd({ secret: config.twilioAuthToken, callSid: parentSid })}`, statusCallbackMethod: 'POST' }
+        : { twiml };
       try {
-        await client.calls(parentSid).update({ twiml });
+        await client.calls(parentSid).update(update);
       } catch (e) {
         console.error('reception transfer (Twilio):', e?.message);
-        await InboundCall.updateOne({ _id: call._id, companyId }, { $set: { transfer: { startedAt: null, byUserId: '', byName: '', entryId: '', entryName: '', mode: 'dial', result: 'ringing', endedAt: null } } }).catch(() => undefined);
+        if (outbound) {
+          await deps.unlockOutbound(parentSid).catch(() => undefined);
+          if (leaseMoved) await restoreLeaseAfterFailure(client, { browserSid: callSid, childSid: parentSid }).catch((err) => console.warn('reception transfer (ligne) :', err?.message));
+        }
+        if (call) await InboundCall.updateOne({ _id: call._id, companyId }, { $set: { transfer: { startedAt: null, byUserId: '', byName: '', entryId: '', entryName: '', mode: 'dial', result: 'ringing', endedAt: null } } }).catch(() => undefined);
         return fail(res, 502, 'Le transfert a échoué : l’appel est resté avec vous. Réessayez ou prenez un message.', { code: 'provider_failed' });
       }
-      console.log(`📞 Appel ${parentSid} transféré par ${access.userId} vers la fiche ${entryId} (${mode})`);
+      console.log(`📞 Appel ${outbound ? 'sortant ' : ''}${parentSid} transféré par ${access.userId} vers la fiche ${entryId} (${mode})`);
       res.json({ success: true, data: { mode, name: entry.name, availability, result: mode === 'dial' ? 'ringing' : 'message_offered' } });
     } catch (error) {
       console.error('reception transfer:', error.message);
@@ -183,9 +255,12 @@ export async function transferResult(req, res) {
       { $set: { 'transfer.result': result, 'transfer.endedAt': new Date(deps.now())} },
       { new: true }
     ).lean();
+    // Transfert d'un appel sortant (poste de l'agent) : résultat consigné sur son verrou.
+    let outboundRow = null;
+    if (!updated) outboundRow = await OutboundTransfer.findOneAndUpdate({ callSid, companyId, entryId: state.entryId }, { $set: { result, endedAt: new Date(deps.now()) } }, { new: true }).lean().catch(() => null);
     const settings = await InboundSettings.findOne({ companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch(() => null);
-    const language = languageForPhone(updated?.phoneNumber);
-    return xml(buildTransferResultTwiml({ dialStatus, name: updated?.transfer?.entryName || phrasesFor(language).transferFallbackName, settings, baseUrl: baseUrlOf(req), companyId: state.companyId, language }));
+    const language = languageForPhone(updated?.phoneNumber || outboundRow?.lineNumber);
+    return xml(buildTransferResultTwiml({ dialStatus, name: updated?.transfer?.entryName || outboundRow?.entryName || phrasesFor(language).transferFallbackName, settings, baseUrl: baseUrlOf(req), companyId: state.companyId, language }));
   } catch (error) {
     console.error('reception transferResult:', error.message);
     return xml('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>');
