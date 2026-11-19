@@ -8,6 +8,7 @@ import { listLinesFor } from '../services/phoneNumberList.js';
 import { callingInfoOf } from '../services/outboundDestinations.js';
 import { LINE_BUSY_CODE, LINE_BUSY_MESSAGE, LINE_CALL_END_PATH, capacityOf, hasFreeLine, signLineCallEnd, verifyLineCallEnd, lineCallsEnforced, releaseCall, staleCheckFor, takeFirstFreeLine, takeLine } from '../services/lineCalls.js';
 import { checkNumberCountry } from '../services/numberCountry.js';
+import { availabilityFor } from '../services/numberAvailability.js';
 import { mergeSearchResults } from '../services/numberSearchMerge.js';
 import { phoneLineCurrency, purchaseCurrency } from '../services/purchaseCurrency.js';
 import { checkCompanyDestination } from '../services/outboundPolicy.js';
@@ -487,6 +488,17 @@ class PhoneNumberController {
       }
       console.error('Error searching phone numbers:', error);
       res.status(500).json({ error: 'Failed to search phone numbers' });
+    }
+  }
+
+  /** GET /phone-numbers/availability?countryCode=XX[&companyId=] — { available, reason? } (Nomad Solo, avant tout paiement). */
+  async numberAvailability(req, res) {
+    try {
+      const { status, body } = await availabilityFor(req, { countryCode: req.query.countryCode, companyId: req.query.companyId });
+      res.status(status).json(body);
+    } catch (error) {
+      console.error('[telephony] disponibilité des numéros illisible:', error?.message);
+      res.status(503).json({ error: 'Number availability check failed', code: 'NUMBER_AVAILABILITY_UNAVAILABLE' });
     }
   }
 
