@@ -2,10 +2,11 @@ import express from 'express';
 import { createReachController } from '../controllers/reachController.js';
 import { phoneNumberController } from '../controllers/phoneNumberController.js';
 import { authenticate } from '../middleware/auth.js';
+import { inboundWebhookUrls } from '../services/inboundWebhook.js';
 
 const router = express.Router();
 const c = createReachController({
-  ensureWebhook: (companyId, req) => phoneNumberController.ensureInboundWebhook(companyId, `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/inbound-call`),
+  ensureWebhook: (companyId, req) => phoneNumberController.ensureInboundWebhook(companyId, inboundWebhookUrls({ req })),
 });
 
 // Titulaire seulement (contrôlé dans le contrôleur, d'après le centre et le rôle résolus par le service d'inscription).

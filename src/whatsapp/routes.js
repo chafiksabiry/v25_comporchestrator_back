@@ -5,6 +5,8 @@ import { verifyMetaSignature } from './signature.js';
 import { issueLinkCode } from './identity.js';
 import { missingConfig } from './config.js';
 import { createRateLimiter } from './rateLimit.js';
+import { isWebConversation } from './webChat.js';
+import { ADMIN_INBOX_HTML } from './adminInbox.js';
 
 const safeEqual = (a, b) => {
   const x = Buffer.from(String(a || ''));
@@ -73,6 +75,23 @@ export function createWhatsAppRouter({ agent, store, whatsapp, kb, cfg, auth = a
   router.get('/admin/status', admin, (_req, res) => {
     res.json({ enabled: cfg.enabled, missingConfig: missingConfig(cfg), store: store.kind, knowledgeChunks: kb.size, model: cfg.model });
   });
+  // Boîte de réception du support : page statique (aucune donnée) ; les données viennent des routes ci-dessous, avec la clé admin.
+  router.get('/admin/inbox', (_req, res) => {
+    if (!cfg.adminKey) return res.status(404).json({ error: 'Not found' });
+    res.set({ 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex', 'Content-Security-Policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" });
+    return res.type('html').send(ADMIN_INBOX_HTML);
+  });
+  router.get('/admin/conversations', admin, async (req, res) => {
+    const channel = ['web', 'whatsapp'].includes(String(req.query.channel)) ? String(req.query.channel) : undefined;
+    res.set('Cache-Control', 'no-store');
+    res.json({ conversations: await store.listConversations({ channel, limit: req.query.limit }) });
+  });
+  router.get('/admin/conversations/:id', admin, async (req, res) => {
+    const conv = await store.getConversation(String(req.params.id));
+    if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+    res.set('Cache-Control', 'no-store');
+    res.json({ waId: conv.waId, profileName: conv.profileName || '', language: conv.language?.language || null, linked: Boolean(conv.linkedUserId), handoff: conv.handoff || { active: false }, notes: conv.notes || [], messages: (conv.messages || []).map((m) => ({ role: m.role, text: m.text, ts: m.ts })) });
+  });
   router.get('/admin/tickets', admin, express.json(), async (req, res) => {
     res.json({ tickets: await store.listTickets({ status: req.query.status }) });
   });
@@ -82,7 +101,8 @@ export function createWhatsAppRouter({ agent, store, whatsapp, kb, cfg, auth = a
     const text = String(req.body?.text || '').trim();
     if (!text) return res.status(400).json({ error: 'text is required' });
     try {
-      const ids = await whatsapp.sendText(ticket.waId, text);
+      // Visiteur du chat du site : pas de message Meta, la réponse est lue par le navigateur dans l'historique.
+      const ids = isWebConversation(ticket.waId) ? [] : await whatsapp.sendText(ticket.waId, text);
       await store.appendMessage(ticket.waId, { role: 'human_agent', text, wamid: ids[0] || null });
       if (req.body?.resolve) {
         await store.updateTicket(req.params.id, { status: 'resolved', resolvedAt: new Date() });

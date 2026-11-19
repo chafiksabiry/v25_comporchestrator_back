@@ -42,6 +42,18 @@ Site : `VITE_API_URL_ORCHESTRATOR`, `VITE_WHATSAPP_SUPPORT_NUMBER`.
 2. Webhook : URL `https://<orchestrateur>/api/whatsapp/webhook`, jeton = `WHATSAPP_VERIFY_TOKEN`, champ `messages` abonné.
 3. Fenêtre de 24 h : l'assistant répond librement dans les 24 h suivant le dernier message de l'utilisateur ; au-delà, Meta exige un modèle (template) approuvé — non couvert ici.
 
+## Chat sur le site (sans redirection vers l'application WhatsApp)
+Même agent que sur WhatsApp (Claude, base de connaissances, langue, escalade), mais le visiteur écrit dans un panneau du site ; aucun message n'est envoyé à Meta (`src/whatsapp/webChat.js`, montée sur `/api/whatsapp/web-chat`).
+- `POST /web-chat/message` `{ sessionId, message }` -> `{ reply, handoff }` ; `GET /web-chat/:sessionId/messages[?after=ISO]` -> historique (réponses de l'équipe support comprises) ; `GET /web-chat/config`.
+- `sessionId` : identifiant aléatoire (22 à 64 caractères `A-Za-z0-9_-`) créé par le navigateur ; la conversation est stockée sous `web:<sessionId>`.
+- Mode visiteur uniquement : pas de liaison de compte, aucune donnée de compte accessible.
+- Débit : par session (celui de l'agent) et par IP (`WHATSAPP_WEB_RATE_LIMIT_PER_MINUTE` 12, `WHATSAPP_WEB_RATE_LIMIT_PER_DAY` 150) pour protéger le coût Claude.
+- Les tickets d'escalade d'un visiteur web se traitent avec les mêmes routes admin ; la réponse humaine est lue par le navigateur (aucun envoi Meta).
+- Mode `WHATSAPP_HUMAN_MODE` : le message est enregistré (202), sans appel à l'API Anthropic.
+
+## Boîte de réception du support (lecture des conversations)
+Page `GET /api/whatsapp/admin/inbox` (statique, sans donnée) : saisir la clé `WHATSAPP_ADMIN_API_KEY` (gardée en sessionStorage, envoyée en en-tête `x-admin-key`). Elle liste les conversations WhatsApp et du chat du site, avec leur historique. Routes JSON : `GET /admin/conversations[?channel=web|whatsapp&limit=]` et `GET /admin/conversations/:id`. Désactivée (404) sans `WHATSAPP_ADMIN_API_KEY`.
+
 ## Base de connaissances
 `npm run whatsapp:kb -- <dossier des dépôts v25_*>` régénère routes, permissions, messages d'erreur, énumérations et textes d'interface depuis le code ; `npm run whatsapp:kb:check` signale les rubriques dont les fichiers source ont disparu. Les rubriques rédigées portent `sources:` et `verified:` ; les zones non confirmées sont listées dans `kb/coverage-and-limits.md`.
 

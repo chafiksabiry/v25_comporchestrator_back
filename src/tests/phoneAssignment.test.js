@@ -123,6 +123,13 @@ beforeEach(() => {
   stripeService.createOneShotCheckoutSession = async (o) => { calls.push(['stripe.checkout', o]); return { id: 'cs_new', url: 'https://stripe.test/pay' }; };
   stripeService.cancelCheckoutAuthorization = async (ref) => { calls.push(['stripe.releaseAuth', ref]); };
   stripeService.refundCheckoutSession = async (ref) => { calls.push(['stripe.refund', ref]); };
+  // État Stripe simulé, cohérent avec la base : relu avant toute reprise d'un paiement autorisé / encaissé.
+  stripeService.retrieveSession = async (ref) => {
+    const statuses = Object.values(payments).filter((p) => p.providerRef === ref).map((p) => p.status);
+    if (statuses.includes('succeeded')) return { status: 'complete', payment_status: 'paid', payment_intent: { status: 'succeeded' } };
+    if (statuses.includes('authorized')) return { status: 'complete', payment_status: 'unpaid', payment_intent: { status: 'requires_capture' } };
+    return { status: 'open', payment_status: 'unpaid', payment_intent: null }; // carte pas encore approuvée
+  };
   paypalService.isConfigured = () => true;
   phoneNumberService.assertTelnyxCanOrderNumber = async () => {};
   phoneNumberService.findClaimableInventoryNumber = async () => null;

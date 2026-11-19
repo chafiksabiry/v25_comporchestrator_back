@@ -8,12 +8,14 @@ import { listLinesFor } from '../services/phoneNumberList.js';
 import { callingInfoOf } from '../services/outboundDestinations.js';
 import { LINE_BUSY_CODE, LINE_BUSY_MESSAGE, LINE_CALL_END_PATH, capacityOf, hasFreeLine, signLineCallEnd, verifyLineCallEnd, lineCallsEnforced, releaseCall, staleCheckFor, takeFirstFreeLine, takeLine } from '../services/lineCalls.js';
 import { checkNumberCountry } from '../services/numberCountry.js';
+import { mergeSearchResults } from '../services/numberSearchMerge.js';
 import { phoneLineCurrency, purchaseCurrency } from '../services/purchaseCurrency.js';
 import { checkCompanyDestination } from '../services/outboundPolicy.js';
 import { isPremiumRate, MESSAGES as DESTINATION_MESSAGES, DESTINATION_NOT_ALLOWED } from '../services/outboundDestinations.js';
 import { paypalService } from '../services/paypalService.js';
 import { stripeService } from '../services/stripeService.js';
 import { config } from '../config/env.js';
+import { applyInboundWebhook, inboundWebhookUrls, NUMBER_OWNED_BY_PRODUCTION, NUMBER_OWNED_BY_PRODUCTION_MESSAGE, maskNumber, hostOf } from '../services/inboundWebhook.js';
 import telnyx from 'telnyx';
 import mongoose from 'mongoose';
 import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
@@ -132,20 +134,152 @@ const toE164 = (value) => {
 };
 
 /**
- * A succeeded, not-yet-used line payment for this company and number.
- * The orchestrator sometimes calls /purchase without paymentId even after
- * Stripe has already marked the checkout succeeded.
+ * État RÉEL, chez Stripe ou PayPal, d'un paiement de ligne : { state: 'authorized' | 'succeeded' } s'il peut payer un achat,
+ * { state: 'failed', reason } s'il ne le peut plus (autorisation annulée, session expirée ou jamais payée, commande PayPal
+ * annulée), { state: 'unknown' } s'il est transitoire ou illisible. Lève si le prestataire ne répond pas.
+ */
+async function providerLinePaymentState(payment) {
+  if (payment.provider === 'stripe') {
+    if (!payment.providerRef) return { state: 'failed', reason: 'stripe_session_missing' };
+    const session = await stripeService.retrieveSession(payment.providerRef);
+    const pi = session?.payment_intent && typeof session.payment_intent === 'object' ? session.payment_intent : null;
+    if (pi) {
+      if (pi.status === 'succeeded') {
+        // Remboursé (même partiellement, ex. à la main dans Stripe) : PI toujours « succeeded », mais le paiement ne paie plus rien.
+        const charge = pi.latest_charge && typeof pi.latest_charge === 'object' ? pi.latest_charge : null;
+        if (charge && (charge.refunded || Number(charge.amount_refunded) > 0)) return { state: 'failed', reason: 'stripe_payment_refunded' };
+        return { state: 'succeeded' };
+      }
+      if (pi.status === 'requires_capture') return { state: 'authorized' };
+      if (pi.status === 'processing') return { state: 'unknown' };
+      return { state: 'failed', reason: `stripe_payment_intent_${pi.status || 'unknown'}` };
+    }
+    if (session?.payment_intent) return { state: 'unknown' }; // PaymentIntent non déplié : rien n'est décidé
+    if (session?.payment_status === 'paid') return { state: 'succeeded' };
+    if (session?.status === 'expired') return { state: 'failed', reason: 'stripe_session_expired' };
+    if (session?.payment_status === 'unpaid') return { state: 'failed', reason: 'stripe_session_unpaid' };
+    return { state: 'unknown' };
+  }
+  if (payment.provider === 'paypal') {
+    if (!payment.providerRef) return { state: 'failed', reason: 'paypal_order_missing' };
+    const order = await paypalService.getOrder(payment.providerRef);
+    if (order?.status === 'COMPLETED') return { state: 'succeeded' };
+    if (order?.status === 'APPROVED') return { state: 'authorized' };
+    if (!order?.status) return { state: 'unknown' };
+    return { state: 'failed', reason: `paypal_order_${String(order.status).toLowerCase()}` };
+  }
+  return { state: 'unknown' };
+}
+
+/** Le prestataire répond que la session / commande n'existe pas (404 définitif), et non une panne passagère. */
+const isProviderNotFound = (err) =>
+  err?.code === 'resource_missing' ||
+  err?.statusCode === 404 ||
+  err?.raw?.code === 'resource_missing' ||
+  err?.response?.status === 404 ||
+  err?.response?.data?.name === 'RESOURCE_NOT_FOUND';
+
+/**
+ * Un paiement 'authorized' ou 'succeeded' en base, sans ligne, n'est repris pour un achat qu'après relecture de son état chez le
+ * prestataire (incident du 19/11 : autorisation annulée à la main dans Stripe, restée 'authorized' en base, puis reprise).
+ *  - autorisé / encaissé chez le prestataire -> statut aligné, { usable: true } ;
+ *  - annulé, expiré, non payé -> paiement marqué 'failed' (failureReason explicite), { usable: false } : l'appelant redemande un paiement ;
+ *  - illisible ou transitoire -> rien n'est modifié, { usable: false, unknown: true } : l'achat est refusé sans rien commander.
+ */
+async function verifyLinePaymentForPurchase(payment) {
+  if (!payment || payment.phoneNumberRef || !['authorized', 'succeeded'].includes(payment.status)) return { usable: false };
+  let result;
+  try {
+    result = await providerLinePaymentState(payment);
+  } catch (err) {
+    if (isProviderNotFound(err)) {
+      // Session Stripe ou commande PayPal introuvable pour de bon : ce paiement ne pourra jamais servir, on redemande un paiement.
+      result = { state: 'failed', reason: `${payment.provider || 'provider'}_payment_not_found` };
+    } else {
+      console.warn(`[telephony] line payment ${payment._id} state unreadable, not reused:`, err.message);
+      return { usable: false, unknown: true };
+    }
+  }
+  if (result.state === 'failed') {
+    console.warn(`[telephony] line payment ${payment._id} no longer usable (${result.reason}): marked failed`);
+    payment.status = 'failed';
+    payment.failureReason = result.reason;
+    await payment.save();
+    return { usable: false };
+  }
+  if (result.state !== 'authorized' && result.state !== 'succeeded') return { usable: false, unknown: true };
+  if (payment.status !== result.state) {
+    payment.status = result.state;
+    await payment.save();
+  }
+  return { usable: true };
+}
+
+/**
+ * Le paiement réutilisable le plus récent de CETTE entreprise pour ce numéro ('authorized' ou 'succeeded', sans ligne), vérifié chez le
+ * prestataire. L'orchestrateur appelle parfois /purchase sans paymentId alors que le paiement est déjà autorisé.
+ * @returns {Promise<{ payment: object|null, unknown?: boolean }>}
  */
 async function findUnusedSucceededLinePayment(companyId, phoneNumber) {
-  if (!companyId || !mongoose.Types.ObjectId.isValid(companyId) || !phoneNumber) return null;
+  if (!companyId || !mongoose.Types.ObjectId.isValid(companyId) || !phoneNumber) return { payment: null };
   const numbers = [...new Set([String(phoneNumber), toE164(phoneNumber)].filter(Boolean))];
-  return PhoneNumberPayment.findOne({
+  const candidates = await PhoneNumberPayment.find({
     companyId,
     phoneNumber: { $in: numbers },
     status: { $in: ['succeeded', 'authorized'] },
     $or: [{ phoneNumberRef: { $exists: false } }, { phoneNumberRef: null }]
-  }).sort({ createdAt: -1 });
+  }, null, { sort: { createdAt: -1 }, limit: 5 });
+  let unknown = false;
+  for (const candidate of candidates || []) {
+    // Jamais le paiement d'une autre entreprise ni d'un autre numéro (le filtre ci-dessus l'exclut déjà ; double contrôle).
+    if (String(candidate.companyId) !== String(companyId) || !numbers.includes(toE164(candidate.phoneNumber))) continue;
+    const verdict = await verifyLinePaymentForPurchase(candidate);
+    if (verdict.usable) return { payment: candidate };
+    if (verdict.unknown) unknown = true;
+  }
+  return { payment: null, unknown };
 }
+
+/**
+ * Paiement d'un achat de ligne (purchase et purchase/twilio) : celui du paymentId s'il est encore utilisable, sinon le paiement
+ * réutilisable de l'entreprise pour ce numéro ; tout paiement 'authorized' / 'succeeded' est relu chez le prestataire avant d'être
+ * accepté. Un paymentId d'une AUTRE entreprise est renvoyé tel quel, sans être relu ni modifié (refusé ensuite en 403).
+ * @returns {Promise<{ payment: object|null, unknown?: boolean }>}
+ */
+async function resolveLinePaymentForPurchase(companyId, phoneNumber, paymentId) {
+  let payment = null;
+  let unknown = false;
+  if (paymentId && mongoose.Types.ObjectId.isValid(paymentId)) {
+    payment = await PhoneNumberPayment.findById(paymentId);
+  }
+  if (payment && String(payment.companyId) !== String(companyId)) return { payment };
+  if (payment && !payment.phoneNumberRef && payment.status === 'pending') {
+    try {
+      payment = await syncLinePaymentAuthorization(payment);
+    } catch (syncErr) {
+      console.warn('[telephony] could not read payment authorization:', syncErr.message);
+    }
+  }
+  if (payment && !payment.phoneNumberRef && ['authorized', 'succeeded'].includes(payment.status)) {
+    const verdict = await verifyLinePaymentForPurchase(payment);
+    if (verdict.usable) return { payment };
+    unknown = Boolean(verdict.unknown);
+    payment = null;
+  } else if (payment && !payment.phoneNumberRef && payment.status === 'pending') {
+    return { payment }; // autorisation pas encore donnée : 402 « paiement requis »
+  } else {
+    payment = null;
+  }
+  const found = await findUnusedSucceededLinePayment(companyId, phoneNumber);
+  return { payment: found.payment, unknown: unknown || Boolean(found.unknown) };
+}
+
+/** Achat refusé AVANT toute commande : l'état du paiement n'a pas pu être relu chez le prestataire. */
+const PAYMENT_STATE_UNAVAILABLE_BODY = {
+  error: 'Payment state unavailable',
+  code: 'PAYMENT_STATE_UNAVAILABLE',
+  message: "Impossible de vérifier votre paiement pour le moment : aucun numéro n'a été commandé et rien n'a été encaissé par cette tentative. Réessayez dans quelques instants."
+};
 
 async function syncLinePaymentAuthorization(payment) {
   if (!payment || payment.status === 'succeeded' || payment.status === 'authorized') return payment;
@@ -193,7 +327,21 @@ async function releaseLineAuthorization(payment, reason) {
     try {
       intent = await stripeService.cancelCheckoutAuthorization(payment.providerRef);
     } catch (err) {
-      // Autorisation non annulée : le paiement n'est PAS marqué « failed » (il reste « authorized », repris par la réconciliation).
+      // L'annulation a échoué : on relit l'état réel. Autorisation DÉJÀ annulée (ex. à la main dans Stripe) -> le paiement passe
+      // « failed », il ne doit plus jamais être repris. Sinon il n'est PAS marqué « failed » (il reste « authorized », repris par la réconciliation).
+      let state = null;
+      try {
+        state = await stripeService.getCheckoutPaymentState(payment.providerRef);
+      } catch (stateErr) {
+        console.warn('[telephony] payment state unreadable after release error:', stateErr.message);
+      }
+      if (state === 'canceled') {
+        payment.status = 'failed';
+        payment.failureReason = reason || 'number_purchase_failed';
+        await payment.save();
+        return { released: true, alreadyCanceled: true, provider: payment.provider };
+      }
+      if (state === 'captured') return { released: false, captured: true, provider: payment.provider };
       console.warn('[telephony] could not release card authorization:', err.message);
       return { released: false, provider: payment.provider };
     }
@@ -344,7 +492,7 @@ class PhoneNumberController {
 
   async searchTwilioNumbers(req, res) {
     try {
-      const { areaCode, limit, locality } = req.query;
+      const { areaCode, limit, locality, postalCode } = req.query;
       // Pays de l'entreprise, ou toute l'Europe pour une entreprise européenne (décision produit) ; le pays cherché borne aussi l'inventaire non affecté.
       const gate = await checkNumberCountry(req, req.query.companyId, { countryCode: req.query.countryCode });
       if (!gate.ok) return res.status(gate.status).json(gate.body);
@@ -367,14 +515,15 @@ class PhoneNumberController {
           countryCode,
           areaCode,
           locality,
+          postalCode,
           limit: parseInt(limit) || 50
         });
       } catch (searchErr) {
         if (!inventory.length) throw searchErr;
         console.warn('[telephony] recherche de nouveaux numéros indisponible, inventaire seul:', searchErr.message);
       }
-      const inInventory = new Set(inventory.map((n) => n.phoneNumber));
-      res.json([...inventory, ...numbers.filter((n) => !inInventory.has(n.phoneNumber))]);
+      // Stock en tête (seulement celui de la zone de la ville pour la France), puis les numéros Twilio.
+      res.json(mergeSearchResults({ inventory, numbers, countryCode, locality, postalCode }));
     } catch (error) {
       if (error.code === 'REGULATORY_BUNDLE_REQUIRED') {
         return res.status(200).json({
@@ -448,19 +597,10 @@ class PhoneNumberController {
       const linePricing = await getPhoneLinePricing();
 
       if (!isTrial && !isIncluded) {
-        if (paymentId && mongoose.Types.ObjectId.isValid(paymentId)) {
-          payment = await PhoneNumberPayment.findById(paymentId);
-        }
-        if (!payment || payment.phoneNumberRef || !['pending', 'authorized', 'succeeded'].includes(payment.status)) {
-          payment = await findUnusedSucceededLinePayment(companyId, phoneNumber);
-        }
-        if (payment && payment.status === 'pending') {
-          try {
-            payment = await syncLinePaymentAuthorization(payment);
-          } catch (syncErr) {
-            console.warn('[telephony] could not read payment authorization:', syncErr.message);
-          }
-        }
+        // Tout paiement 'authorized' / 'succeeded' est relu chez Stripe ou PayPal avant d'être accepté (annulé ou expiré -> 'failed', 402).
+        const resolved = await resolveLinePaymentForPurchase(companyId, phoneNumber, paymentId);
+        payment = resolved.payment;
+        if (!payment && resolved.unknown) return res.status(503).json(PAYMENT_STATE_UNAVAILABLE_BODY);
         if (!payment || payment.phoneNumberRef || !['authorized', 'succeeded'].includes(payment.status)) {
           return res.status(402).json({
             error: 'Payment required',
@@ -540,6 +680,7 @@ class PhoneNumberController {
             trialExpiresAt,
             ...(isMonthly ? { billingModel: BILLING_MODEL_MONTHLY } : {}),
             ...assignmentOptions(a),
+            webhookUrls: inboundWebhookUrls({ req }),
           }
         ),
       });
@@ -695,19 +836,10 @@ class PhoneNumberController {
       const linePricing = await getPhoneLinePricing();
 
       if (!isTrial && !isIncluded) {
-        if (paymentId && mongoose.Types.ObjectId.isValid(paymentId)) {
-          payment = await PhoneNumberPayment.findById(paymentId);
-        }
-        if (!payment || payment.phoneNumberRef || !['pending', 'authorized', 'succeeded'].includes(payment.status)) {
-          payment = await findUnusedSucceededLinePayment(companyId, phoneNumber);
-        }
-        if (payment && payment.status === 'pending') {
-          try {
-            payment = await syncLinePaymentAuthorization(payment);
-          } catch (syncErr) {
-            console.warn('[telephony] could not read payment authorization:', syncErr.message);
-          }
-        }
+        // Tout paiement 'authorized' / 'succeeded' est relu chez Stripe ou PayPal avant d'être accepté (annulé ou expiré -> 'failed', 402).
+        const resolved = await resolveLinePaymentForPurchase(companyId, phoneNumber, paymentId);
+        payment = resolved.payment;
+        if (!payment && resolved.unknown) return res.status(503).json(PAYMENT_STATE_UNAVAILABLE_BODY);
         if (!payment || payment.phoneNumberRef || !['authorized', 'succeeded'].includes(payment.status)) {
           return res.status(402).json({
             error: 'Payment required',
@@ -788,6 +920,7 @@ class PhoneNumberController {
             trialExpiresAt,
             ...(isMonthly ? { billingModel: BILLING_MODEL_MONTHLY } : {}),
             ...assignmentOptions(a),
+            webhookUrls: inboundWebhookUrls({ req }),
           }
         ),
       });
@@ -1069,7 +1202,7 @@ class PhoneNumberController {
    */
   async rollbackMonthlyLine(newNumber, companyId, cause) {
     try {
-      await phoneNumberService.deletePhoneNumber({ id: newNumber?._id, companyId });
+      await phoneNumberService.releaseFailedPurchase({ id: newNumber?._id, companyId, line: newNumber }); // numéro venu du stock : remis en stock ; numéro neuf : rendu à l'opérateur
       return { releaseFailed: false };
     } catch (releaseErr) {
       try {
@@ -1704,6 +1837,21 @@ class PhoneNumberController {
           message: 'Cannot recover this payment record — it is missing required fields.'
         });
       }
+      // Même règle que l'achat : le paiement est relu chez le prestataire avant d'être repris (annulé ou expiré -> 'failed', 402).
+      const verdict = await verifyLinePaymentForPurchase(payment);
+      if (!verdict.usable) {
+        if (verdict.unknown) return res.status(503).json(PAYMENT_STATE_UNAVAILABLE_BODY);
+        return res.status(402).json({
+          error: 'Payment required',
+          code: 'PAYMENT_REQUIRED',
+          moneyStatus: 'not_charged',
+          message: "Ce paiement n'est plus valable chez le prestataire : aucun numéro n'a été commandé. Relancez l'achat pour payer à nouveau."
+        });
+      }
+      if (payment.status !== 'succeeded') {
+        // Seulement autorisé chez le prestataire (jamais encaissé) : la reprise ne capture pas, elle reste réservée aux paiements encaissés.
+        return res.status(400).json({ error: 'Payment not succeeded', message: `Payment status is '${payment.status}', cannot recover.` });
+      }
 
       const paidPrice = payment.amount > 0 ? payment.amount / 100 : 0;
       const isMonthly = payment.lineBilling === BILLING_MODEL_MONTHLY;
@@ -1746,6 +1894,7 @@ class PhoneNumberController {
           paymentRef: payment._id,
           ...(isMonthly ? { billingModel: BILLING_MODEL_MONTHLY } : {}),
           ...assignmentOptions(recoverAssignment),
+          webhookUrls: inboundWebhookUrls({ req }),
         }
       );
       if (isMonthly) {
@@ -2236,7 +2385,10 @@ class PhoneNumberController {
       if (!config.twilioAccountSid || !config.twilioAuthToken) {
         return res.status(500).json({ error: 'Server Configuration', code: 'TELEPHONY_NOT_CONFIGURED', message: 'La configuration téléphonie du serveur est incomplète.' });
       }
-      const voiceUrl = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/inbound-call`;
+      const urls = inboundWebhookUrls({ req });
+      if (!urls) {
+        return res.status(500).json({ error: 'Server Configuration', code: 'TELEPHONY_NOT_CONFIGURED', message: 'La configuration téléphonie du serveur est incomplète.' });
+      }
       let sid = line.twilioId ? String(line.twilioId) : '';
       if (!sid) {
         const found = await phoneNumberService.twilioClient.incomingPhoneNumbers.list({ phoneNumber: e164, limit: 1 });
@@ -2245,8 +2397,11 @@ class PhoneNumberController {
       if (!sid) {
         return res.status(404).json({ error: 'Not Found', code: 'LINE_NOT_FOUND_AT_PROVIDER', message: "La ligne n'a pas été retrouvée chez l'opérateur." });
       }
-      await phoneNumberService.twilioClient.incomingPhoneNumbers(sid).update({ voiceUrl, voiceMethod: 'POST' });
-      await PhoneNumber.updateOne({ _id: line._id }, { $set: { 'metadata.inboundWebhook': voiceUrl } });
+      const branched = await applyInboundWebhook({ twilioClient: phoneNumberService.twilioClient, PhoneNumber, line, sid, urls, req });
+      if (branched.refused) {
+        console.warn(`🛑 Test d'appel entrant refusé sur ${maskNumber(e164)} : numéro branché sur ${hostOf(branched.from)}`);
+        return res.status(409).json({ error: 'Conflict', code: NUMBER_OWNED_BY_PRODUCTION, message: NUMBER_OWNED_BY_PRODUCTION_MESSAGE });
+      }
       const session = startInboundTestSession(e164);
       console.log(`🧪 Test d'appel entrant démarré sur ${e164} (société ${line.companyId}) jusqu'à ${new Date(session.expiresAt).toISOString()}`);
       res.json({ success: true, data: { phoneNumber: e164, status: session.status, startedAt: session.startedAt, expiresAt: session.expiresAt } });
@@ -2567,8 +2722,7 @@ class PhoneNumberController {
       }
       if (!isAvailable(userId)) console.log(`🎧 Conseiller ${userId} disponible pour l'entreprise ${companyId}`);
       markAvailable({ userId, companyId, name: req.user?.name || '' });
-      const voiceUrl = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/inbound-call`;
-      this.ensureInboundWebhook(companyId, voiceUrl).catch((e) => console.error('ensureInboundWebhook:', e.message));
+      this.ensureInboundWebhook(companyId, inboundWebhookUrls({ req })).catch((e) => console.error('ensureInboundWebhook:', e.message));
       res.json({ success: true, data: { available: true } });
     } catch (error) {
       console.error('Error in voicePresence:', error.message);
@@ -2576,13 +2730,18 @@ class PhoneNumberController {
     }
   }
 
-  /** Toute ligne Twilio de l'entreprise doit envoyer ses appels entrants au serveur. */
-  async ensureInboundWebhook(companyId, voiceUrl) {
+  /**
+   * Toute ligne Twilio de l'entreprise doit envoyer ses appels entrants à l'API de CET environnement. `urls` : résultat de
+   * inboundWebhookUrls() (une voice_url seule est acceptée). Hors production, un numéro branché sur la production n'est jamais réécrit.
+   */
+  async ensureInboundWebhook(companyId, urls) {
     if (!mongoose.Types.ObjectId.isValid(String(companyId))) return;
-    const lines = await PhoneNumber.find({ companyId, twilioId: { $exists: true, $ne: null }, 'metadata.inboundWebhook': { $ne: voiceUrl } });
+    const wanted = typeof urls === 'string' ? { voiceUrl: urls, voiceMethod: 'POST' } : urls;
+    if (!wanted?.voiceUrl) return;
+    const lines = await PhoneNumber.find({ companyId, twilioId: { $exists: true, $ne: null }, 'metadata.inboundWebhook': { $ne: wanted.voiceUrl } });
     for (const line of lines) {
-      await phoneNumberService.twilioClient.incomingPhoneNumbers(String(line.twilioId)).update({ voiceUrl, voiceMethod: 'POST' });
-      await PhoneNumber.updateOne({ _id: line._id }, { $set: { 'metadata.inboundWebhook': voiceUrl } });
+      const out = await applyInboundWebhook({ twilioClient: phoneNumberService.twilioClient, PhoneNumber, line, urls: wanted });
+      if (out.refused) console.warn(`🛑 ${maskNumber(line.phoneNumber)} branché sur ${hostOf(out.from)} : pas rebranché depuis cet environnement.`);
     }
   }
 
