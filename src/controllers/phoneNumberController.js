@@ -8,6 +8,7 @@ import { listLinesFor } from '../services/phoneNumberList.js';
 import { callingInfoOf } from '../services/outboundDestinations.js';
 import { LINE_BUSY_CODE, LINE_BUSY_MESSAGE, LINE_CALL_END_PATH, capacityOf, hasFreeLine, signLineCallEnd, verifyLineCallEnd, lineCallsEnforced, releaseCall, staleCheckFor, takeFirstFreeLine, takeLine } from '../services/lineCalls.js';
 import { checkNumberCountry } from '../services/numberCountry.js';
+import { mergeSearchResults } from '../services/numberSearchMerge.js';
 import { purchaseCurrency } from '../services/purchaseCurrency.js';
 import { checkCompanyDestination } from '../services/outboundPolicy.js';
 import { isPremiumRate, MESSAGES as DESTINATION_MESSAGES, DESTINATION_NOT_ALLOWED } from '../services/outboundDestinations.js';
@@ -344,7 +345,7 @@ class PhoneNumberController {
 
   async searchTwilioNumbers(req, res) {
     try {
-      const { areaCode, limit, locality } = req.query;
+      const { areaCode, limit, locality, postalCode } = req.query;
       // Pays de l'entreprise, ou toute l'Europe pour une entreprise européenne (décision produit) ; le pays cherché borne aussi l'inventaire non affecté.
       const gate = await checkNumberCountry(req, req.query.companyId, { countryCode: req.query.countryCode });
       if (!gate.ok) return res.status(gate.status).json(gate.body);
@@ -367,14 +368,15 @@ class PhoneNumberController {
           countryCode,
           areaCode,
           locality,
+          postalCode,
           limit: parseInt(limit) || 50
         });
       } catch (searchErr) {
         if (!inventory.length) throw searchErr;
         console.warn('[telephony] recherche de nouveaux numéros indisponible, inventaire seul:', searchErr.message);
       }
-      const inInventory = new Set(inventory.map((n) => n.phoneNumber));
-      res.json([...inventory, ...numbers.filter((n) => !inInventory.has(n.phoneNumber))]);
+      // Stock en tête (seulement celui de la zone de la ville pour la France), puis les numéros Twilio.
+      res.json(mergeSearchResults({ inventory, numbers, countryCode, locality, postalCode }));
     } catch (error) {
       if (error.code === 'REGULATORY_BUNDLE_REQUIRED') {
         return res.status(200).json({
