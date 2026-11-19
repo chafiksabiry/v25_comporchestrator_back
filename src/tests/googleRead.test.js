@@ -11,6 +11,8 @@ process.env.PUBLIC_API_BASE_URL = 'https://api.test/api';
 process.env.FRONTEND_BASE_URL = 'https://portal.test';
 process.env.GOOGLE_CLIENT_ID = 'g-id'; process.env.GOOGLE_CLIENT_SECRET = 'g-secret';
 process.env.MICROSOFT_CLIENT_ID = 'm-id'; process.env.MICROSOFT_CLIENT_SECRET = 'm-secret';
+// Lecture Gmail (scope restreint) : demandée seulement quand GOOGLE_RESTRICTED_SCOPES=true (désactivée par défaut, voir le test [1] ci-dessous).
+process.env.GOOGLE_RESTRICTED_SCOPES = 'true';
 
 const common = await import('../services/secretariatProviders/common.js');
 const { PROVIDERS } = await import('../services/secretariatProviders/index.js');
@@ -83,6 +85,10 @@ test('[1] startAuthorization Google : read:true demande gmail.readonly ; write:t
   assert.equal(new URL(S.startAuthorization({ ...base, read: true })).searchParams.get('scope'), `openid email ${SEND} ${CAL} ${READ}`);
   assert.equal(new URL(S.startAuthorization(base)).searchParams.get('scope'), `openid email ${SEND} ${CAL}`, 'sans read : envoi + agenda');
   assert.throws(() => S.startAuthorization({ ...base, write: true }), (e) => e.code === 'invalid_request' && /Gmail/.test(e.message));
+  // Sans GOOGLE_RESTRICTED_SCOPES=true : lecture refusée (scope restreint non validé par Google), envoi + agenda toujours possibles.
+  const off = { ...process.env, GOOGLE_RESTRICTED_SCOPES: '' };
+  assert.throws(() => S.startAuthorization({ ...base, read: true }, off), (e) => e.code === 'invalid_request' && /pas encore disponible/.test(e.message));
+  assert.equal(new URL(S.startAuthorization(base, off)).searchParams.get('scope'), `openid email ${SEND} ${CAL}`);
 });
 
 test('[1] POST /connections/google/start : read → 200 (gmail.readonly) ; write → 400 ; Microsoft inchangé', async () => {
