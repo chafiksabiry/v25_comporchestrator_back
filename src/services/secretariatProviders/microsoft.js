@@ -175,8 +175,9 @@ export const microsoft = {
 };
 
 /**
- * Images intégrées d'un message Outlook : liste des pièces jointes (métadonnées seulement), puis lecture une à une des pièces `isInline` de type sûr
- * et de taille annoncée sous les plafonds ; seules celles dont le `contentId` est référencé par le HTML sont gardées. Erreur de lecture : ignorée
+ * Images intégrées d'un message Outlook : liste des pièces jointes (métadonnées seulement), puis lecture une à une des pièces `isInline` de type sûr,
+ * de taille annoncée ≤ 2 Mo, et — quand la liste donne le `contentId` — référencées par le HTML. Les lectures s'arrêtent dès que le cumul des tailles
+ * annoncées des pièces lues dépasserait 5 Mo. Seules les pièces dont le `contentId` est référencé sont gardées. Erreur de lecture : ignorée
  * (l'image garde son texte alternatif ; le corps reste affiché).
  */
 async function graphInlineImages({ http, headers, id, html }) {
@@ -186,20 +187,21 @@ async function graphInlineImages({ http, headers, id, html }) {
   try { list = await call(http, { method: 'GET', url: `${base}?$select=id,contentType,size,isInline&$top=50`, headers }); } catch { list = null; }
   if (list?.status !== 200) return html;
   const candidates = (Array.isArray(list.json?.value) ? list.json.value : [])
-    .filter((a) => a?.id && a.isInline === true && safeImageType(a.contentType) && Number(a.size) > 0 && Number(a.size) <= INLINE_IMAGE_MAX * 1.5)
+    .filter((a) => a?.id && a.isInline === true && safeImageType(a.contentType) && Number(a.size) > 0 && Number(a.size) <= INLINE_IMAGE_MAX)
+    .filter((a) => typeof a.contentId !== 'string' || !a.contentId || refs.has(normCid(a.contentId)))
     .slice(0, INLINE_COUNT_MAX);
   const images = new Map();
-  let budget = 0;
+  let announced = 0;
   for (const a of candidates) {
-    if (images.size >= refs.size || budget >= INLINE_TOTAL_MAX) break;
+    if (images.size >= refs.size || announced + Number(a.size) > INLINE_TOTAL_MAX) break;
+    announced += Number(a.size);
     let r = null;
     try { r = await call(http, { method: 'GET', url: `${base}/${encodeURIComponent(a.id)}`, headers }); } catch { r = null; }
     const att = r?.status === 200 ? r.json : null;
     const cid = normCid(att?.contentId);
     if (!att || att['@odata.type'] !== '#microsoft.graph.fileAttachment' || !cid || !refs.has(cid) || images.has(cid) || typeof att.contentBytes !== 'string') continue;
     const data = Buffer.from(att.contentBytes, 'base64');
-    if (data.length > INLINE_IMAGE_MAX || budget + data.length > INLINE_TOTAL_MAX) continue;
-    budget += data.length;
+    if (data.length > INLINE_IMAGE_MAX) continue;
     images.set(cid, { type: att.contentType || a.contentType, data });
   }
   return images.size ? inlineCidImages(html, images).html : html;

@@ -35,13 +35,53 @@ export function normCid(v) {
   return s.toLowerCase();
 }
 
-const CID_SRC = /(\bsrc\s*=\s*)(["']?)\s*cid:([^"'\s>]+)\2/gi;
+/**
+ * Balayage LINÉAIRE des balises `<img …>` (aucune expression rationnelle à retour arrière sur le message entier) : pour chaque balise, l'attribut `src`
+ * (nom exact, hors `data-src` ou texte d'un autre attribut) est passé à `fn(valeur)` ; une chaîne renvoyée remplace la valeur, `null` la laisse.
+ */
+const ATTR = /\s*([^\s=>/"']+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+)))?|\s*\/|\s*["'][^"']*["']?/y;
+export function rewriteImgSrc(html, fn) {
+  const src = String(html ?? '');
+  const lower = src.toLowerCase();
+  let out = ''; let last = 0; let i = lower.indexOf('<img');
+  while (i !== -1) {
+    const after = lower.charCodeAt(i + 4);
+    if (!(after === 32 || after === 9 || after === 10 || after === 13 || after === 12 || after === 47)) { i = lower.indexOf('<img', i + 4); continue; }
+    // fin de balise : premier « > » hors guillemets
+    let j = i + 4; let quote = 0;
+    for (; j < src.length; j += 1) {
+      const c = src.charCodeAt(j);
+      if (quote) { if (c === quote) quote = 0; } else if (c === 34 || c === 39) quote = c; else if (c === 62) break;
+    }
+    if (j >= src.length) break; // balise non fermée : laissée telle quelle
+    const tag = src.slice(i, j + 1);
+    const inner = tag.slice(4, -1);
+    let pos = 0; let rebuilt = ''; let changed = false;
+    while (pos < inner.length) {
+      ATTR.lastIndex = pos;
+      const m = ATTR.exec(inner);
+      if (!m || m[0].length === 0) { rebuilt += inner.slice(pos); break; }
+      let piece = m[0];
+      if (m[1] && m[1].toLowerCase() === 'src' && (m[2] !== undefined || m[3] !== undefined || m[4] !== undefined)) {
+        const value = m[2] ?? m[3] ?? m[4];
+        const next = fn(value);
+        if (typeof next === 'string') { piece = `${piece.slice(0, piece.indexOf('=') + 1)}"${next}"`; changed = true; }
+      }
+      rebuilt += piece; pos += m[0].length;
+    }
+    if (changed) { out += `${src.slice(last, i + 4)}${rebuilt}>`; last = j + 1; }
+    i = lower.indexOf('<img', j + 1);
+  }
+  return last === 0 ? src : out + src.slice(last);
+}
 
-/** Content-ID référencés par des `src="cid:…"` du HTML, dans l'ordre d'apparition, sans doublon. */
+const cidOf = (value) => (/^\s*cid:/i.test(value) ? normCid(value) : '');
+
+/** Content-ID référencés par l'attribut `src` des balises `<img>`, dans l'ordre d'apparition, sans doublon. */
 export function cidRefs(html) {
-  const out = [];
-  String(html ?? '').replace(CID_SRC, (_m, _a, _q, cid) => { const c = normCid(cid); if (c && !out.includes(c)) out.push(c); return ''; });
-  return out;
+  const out = new Set();
+  rewriteImgSrc(html, (value) => { const c = cidOf(value); if (c) out.add(c); return null; });
+  return [...out];
 }
 
 /**
@@ -52,21 +92,24 @@ export function cidRefs(html) {
 export function inlineCidImages(html, images) {
   let total = 0; let inlined = 0;
   const done = new Map();
-  const out = String(html ?? '').replace(CID_SRC, (m, attr, _q, cid) => {
-    const key = normCid(cid);
-    if (done.has(key)) { const uri = done.get(key); if (uri) inlined += 1; return uri ? `${attr}"${uri}"` : m; }
-    const img = images?.get?.(key);
-    const type = safeImageType(img?.type);
-    let uri = '';
-    if (img && type && Buffer.isBuffer(img.data) && img.data.length > 0 && img.data.length <= INLINE_IMAGE_MAX
-      && total + img.data.length <= INLINE_TOTAL_MAX && bytesMatch(type, img.data)) {
-      total += img.data.length;
-      uri = `data:${type};base64,${img.data.toString('base64')}`;
+  const out = rewriteImgSrc(html, (value) => {
+    const key = cidOf(value);
+    if (!key) return null;
+    if (!done.has(key)) {
+      const img = images?.get?.(key);
+      const type = safeImageType(img?.type);
+      let uri = '';
+      if (img && type && Buffer.isBuffer(img.data) && img.data.length > 0 && img.data.length <= INLINE_IMAGE_MAX
+        && total + img.data.length <= INLINE_TOTAL_MAX && bytesMatch(type, img.data)) {
+        total += img.data.length;
+        uri = `data:${type};base64,${img.data.toString('base64')}`;
+      }
+      done.set(key, uri);
     }
-    done.set(key, uri);
-    if (!uri) return m;
+    const uri = done.get(key);
+    if (!uri) return null;
     inlined += 1;
-    return `${attr}"${uri}"`;
+    return uri;
   });
   return { html: out, inlined };
 }

@@ -31,6 +31,23 @@ assert.equal(bytesMatch('image/png', SVG), false, 'SVG déguisé en PNG refusé'
   assert.ok(out.includes('src="cid:ii_missing" alt="absente"'), 'référence inconnue laissée (texte alternatif)');
 }
 {
+  // seul l'attribut `src` des balises <img> est remplacé : ni data-src, ni texte brut, ni intérieur d'un autre attribut, ni autre balise
+  const imgs = new Map([['ii_a', { type: 'image/png', data: PNG }]]);
+  const html = '<p>src="cid:ii_a"</p><img data-src="cid:ii_a" alt="a"><img alt=\'x src="cid:ii_a"\' title="src=cid:ii_a"><div src="cid:ii_a"></div><imgx src="cid:ii_a"><IMG\n  SRC = "cid:ii_a" alt="ok">';
+  assert.deepEqual(cidRefs(html), ['ii_a']);
+  const { html: out, inlined } = inlineCidImages(html, imgs);
+  assert.equal(inlined, 1);
+  assert.ok(out.endsWith(`<IMG\n  SRC ="${dataUri('image/png', PNG)}" alt="ok">`), out.slice(-120));
+  assert.equal(out.slice(0, out.lastIndexOf('<IMG')), html.slice(0, html.lastIndexOf('<IMG')), 'le reste du message est inchangé');
+  assert.deepEqual(cidRefs('<img alt="x src=cid:b">'), [], 'cid: dans le texte d’un autre attribut ignoré');
+  assert.deepEqual(cidRefs('<img src="cid:a"'), [], 'balise non fermée ignorée');
+  // balayage linéaire : entrées pathologiques de 400 000 caractères traitées rapidement
+  for (const evil of ['<img'.repeat(100000), '<img src="'.repeat(40000), `<img ${'a='.repeat(200000)}`, Array.from({ length: 25000 }, (_, k) => `<img src=cid:${k}>`).join('')]) {
+    const t0 = Date.now(); inlineCidImages(evil, imgs); cidRefs(evil);
+    assert.ok(Date.now() - t0 < 200, `entrée pathologique : ${Date.now() - t0} ms`);
+  }
+}
+{
   // types refusés / octets incohérents
   const imgs = new Map([['s', { type: 'image/svg+xml', data: SVG }], ['p', { type: 'image/png', data: SVG }], ['h', { type: 'text/html', data: Buffer.from('<script>') }]]);
   const { html: out, inlined } = inlineCidImages('<img src="cid:s"><img src="cid:p"><img src="cid:h">', imgs);
@@ -113,6 +130,29 @@ assert.equal(bytesMatch('image/png', SVG), false, 'SVG déguisé en PNG refusé'
   assert.ok(out.html.includes(`src="${dataUri('image/png', PNG)}" alt="image001.png"`), 'Graph : image inline résolue par contentId');
   assert.ok(out.html.includes('src="cid:big@x" alt="grosse"'), 'Graph : image trop lourde laissée en cid:');
   assert.deepEqual(calls.filter((u) => /\/attachments\/a\d$/.test(u)).map((u) => u.slice(-2)), ['a1'], 'seules les pièces inline sûres et sous le plafond sont lues');
+
+  // budget : lectures arrêtées dès que le cumul des tailles annoncées dépasserait 5 Mo ; contentId de la liste non référencé : pièce non lue ;
+  // plafond par pièce annoncée = 2 Mo (pas de marge)
+  {
+    const seen = [];
+    const many = '<img src="cid:c1"><img src="cid:c2"><img src="cid:c3"><img src="cid:c4">';
+    const two = INLINE_IMAGE_MAX;
+    await microsoft.readBodyFull({ accessToken: 'tok', id: 'o2', http: async (req) => {
+      seen.push(req.url);
+      if (/\?\$select=body$/.test(req.url)) return { status: 200, json: { body: { contentType: 'html', content: many } } };
+      if (/\/attachments\?/.test(req.url)) return { status: 200, json: { value: [
+        { id: 'x0', contentType: 'image/png', size: 10, isInline: true, contentId: 'pas-reference' },
+        { id: 'x1', contentType: 'image/png', size: two, isInline: true },
+        { id: 'x9', contentType: 'image/png', size: two + 1, isInline: true },
+        { id: 'x2', contentType: 'image/png', size: two, isInline: true },
+        { id: 'x3', contentType: 'image/png', size: two, isInline: true },
+        { id: 'x4', contentType: 'image/png', size: 10, isInline: true },
+      ] } };
+      const k = req.url.slice(-2);
+      return { status: 200, json: { '@odata.type': '#microsoft.graph.fileAttachment', contentType: 'image/png', contentId: `c${k[1]}`, contentBytes: PNG.toString('base64') } };
+    } });
+    assert.deepEqual(seen.filter((u) => /\/attachments\/x\d$/.test(u)).map((u) => u.slice(-2)), ['x1', 'x2'], '2 Mo + 2 Mo lus, la 3e pièce (6 Mo annoncés) arrête les lectures');
+  }
 
   // message sans référence cid : aucune lecture de pièce jointe ; message texte : pas de HTML
   calls.length = 0;
