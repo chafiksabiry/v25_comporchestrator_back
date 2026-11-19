@@ -96,6 +96,8 @@ try {
     assert.ok(all.conversations.length >= 2);
     const web = await (await fetch(`${root}/conversations?channel=web`, { headers: H })).json();
     assert.ok(web.conversations.every((c) => c.waId.startsWith('web:')));
+    const siq = await (await fetch(`${root}/conversations?channel=salesiq`, { headers: H })).json();
+    assert.deepEqual(siq.conversations, [], 'le canal salesiq est accepté (vide ici)');
     const wa = await (await fetch(`${root}/conversations?channel=whatsapp`, { headers: H })).json();
     assert.equal(wa.conversations.length, 0);
     const one = await (await fetch(`${root}/conversations/${encodeURIComponent(web.conversations[0].waId)}`, { headers: H })).json();

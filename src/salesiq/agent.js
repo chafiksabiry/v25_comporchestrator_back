@@ -49,7 +49,7 @@ const signed = (text) => `${String(text).trim()}\n\n${SIGNATURE}`;
  */
 export const ackResponse = (lang = 'fr') => ({ action: 'reply', replies: [signed(MESSAGES[lang].ack)] });
 
-export function createAgent({ cfg, claude, zoho, tools, knowledge, kb = null, logger = console, now = () => Date.now() }) {
+export function createAgent({ cfg, claude, zoho, tools, knowledge, kb = null, logger = console, now = () => Date.now(), record = null }) {
   const limiter = createRateLimiter({ perMinute: cfg.rateLimitPerMinute, perDay: cfg.rateLimitPerDay });
   const staticPrompt = buildStaticPrompt({ ...knowledge, topicIndex: kb?.topicIndex?.() || '' });
   const sessions = new Map(); // clé visiteur -> { turns: [{role, content}], email, updated }
@@ -132,7 +132,10 @@ export function createAgent({ cfg, claude, zoho, tools, knowledge, kb = null, lo
     return { ...decision, text: signed(decision.text) };
   }
 
-  function remember(evt, text, decision) {
+  // `sent` : la réponse part-elle au visiteur ? (faux en mode shadow ou sans identifiant de requête : brouillon seulement)
+  function remember(evt, text, decision, sent = true) {
+    // Copie dans l'Inbox support (non bloquante : jamais d'attente, jamais d'erreur côté visiteur).
+    try { Promise.resolve(record?.({ key: keyOf(evt), text, decision, sent, language: langOf(text) })).catch(() => {}); } catch { /* sans effet sur la réponse */ }
     const s = session(keyOf(evt));
     s.turns.push({ role: 'user', content: text }, { role: 'assistant', content: decision.text });
     if (s.turns.length > cfg.historyTurns * 2) s.turns.splice(0, s.turns.length - cfg.historyTurns * 2);
@@ -204,7 +207,7 @@ export function createAgent({ cfg, claude, zoho, tools, knowledge, kb = null, lo
     if (cfg.mode === 'shadow') {
       return ack((async () => {
         const decision = finalize(await decide(evt, text), text);
-        remember(evt, text, decision);
+        remember(evt, text, decision, false);
         await writeNote(evt, decision, 'shadow');
       })());
     }
@@ -223,7 +226,7 @@ export function createAgent({ cfg, claude, zoho, tools, knowledge, kb = null, lo
       logger.warn('[salesiq] no request id in payload: cannot answer asynchronously, sending the fallback reply (draft note only)');
       return ack((async () => {
         const decision = finalize(await decide(evt, text), text);
-        remember(evt, text, decision);
+        remember(evt, text, decision, false);
         await writeNote(evt, decision, 'shadow');
       })());
     }
