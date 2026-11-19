@@ -1,4 +1,5 @@
 import { resolveAccess } from './identity.js';
+import { callingInfoOf } from '../services/outboundDestinations.js';
 
 /**
  * Outils mis à la disposition de Claude. Principes de sécurité :
@@ -29,8 +30,15 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'get_subscription_plans',
-    description: 'Get the CURRENT published HARX subscription plans (names, prices, limits) live from the platform catalogue. Use for any question about plans, prices or limits. Never quote prices from memory.',
-    input_schema: { type: 'object', properties: {}, additionalProperties: false },
+    description: 'Get the CURRENT published HARX subscription plans (names, prices, currency, included minutes/tokens/numbers, limits): exactly the catalogue shown to customers on the subscription pages, one price per offer. Use for any question about plans, prices or limits. Never quote prices from memory, from earlier messages or from the knowledge base. Pass the customer\'s country when known (prices are shown in GBP for the United Kingdom and USD for the United States when the offer has a price in that currency).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        country: { type: 'string', description: 'Customer country, ISO 3166-1 alpha-2 (e.g. FR, GB, US), when known from the conversation.' },
+        currency: { type: 'string', enum: ['eur', 'gbp', 'usd'], description: 'Only when the customer explicitly asks for a currency.' },
+      },
+      additionalProperties: false,
+    },
   },
   {
     name: 'get_my_account_overview',
@@ -62,6 +70,18 @@ export const TOOL_DEFINITIONS = [
   },
 ];
 
+/** Code pays ISO 3166-1 alpha-2 en majuscules (« UK » accepté pour GB), ou '' s'il est absent ou mal formé. */
+function normalizeIso2(value) {
+  const code = String(value ?? '').trim().toUpperCase();
+  if (code === 'UK') return 'GB';
+  return /^[A-Z]{2}$/.test(code) ? code : '';
+}
+
+/** Pays du numéro WhatsApp (waId = numéro E.164 sans « + ») ; '' pour un expéditeur sans numéro (BSUID) ou un indicatif inconnu. */
+function callingCountryOfWaId(waId) {
+  return callingInfoOf(String(waId ?? '')).countryIso || '';
+}
+
 const mask = (s) => {
   const d = String(s || '');
   return d.length > 6 ? `${d.slice(0, 3)}…${d.slice(-3)}` : d;
@@ -72,7 +92,7 @@ const mask = (s) => {
  * @param {ReturnType<import('./knowledge/index.js').loadKnowledgeBase>} deps.kb
  * @param {object} deps.store
  * @param {object} deps.cfg
- * @param {() => Promise<object[]>} deps.getPlans
+ * @param {(opts: { country: string, currency: string }) => Promise<{ plans: object[], stripeAvailable: boolean } | object[]>} deps.getPlans
  * @param {(companyId: string) => Promise<object>} deps.loadAccountOverview
  * @param {() => string} deps.registrationOrigin
  * @param {typeof fetch} [deps.fetchImpl]
@@ -95,16 +115,37 @@ export function createToolRunner(deps) {
       return { found: true, title: doc.title, verified: doc.verified, text: doc.text.slice(0, 9000) };
     },
 
-    async get_subscription_plans() {
-      const plans = await getPlans();
+    async get_subscription_plans(input, ctx) {
+      // Pays : celui que donne la conversation, sinon celui du numéro WhatsApp (+44 -> GB : prix en GBP quand l'offre en a un).
+      const country = normalizeIso2(input?.country) || callingCountryOfWaId(ctx?.waId);
+      const currency = ['eur', 'gbp', 'usd'].includes(String(input?.currency || '').toLowerCase()) ? String(input.currency).toLowerCase() : '';
+      let result = null;
+      try { result = await getPlans({ country, currency }); } catch { result = null; }
+      // `getPlans` renvoie { plans, stripeAvailable } (catalogue publié) ; un tableau seul est accepté (substitution de test).
+      const plans = Array.isArray(result) ? result : Array.isArray(result?.plans) ? result.plans : [];
+      const verified = Array.isArray(result) || result?.stripeAvailable === true;
+      if (!verified || !plans.length) {
+        return {
+          available: false,
+          note: 'The live price catalogue cannot be read right now, so prices CANNOT be confirmed. Tell the user you cannot confirm the current price at the moment and invite them to see the prices on the HARX subscription page (plan choice on harx.ai: "Choose your HARX Telephony plan" for Telephony, "Select Your Plan" for TAAS). Never quote a price from memory, from earlier messages or from the knowledge base.',
+        };
+      }
       return {
-        note: 'Live catalogue. Prices/limits may be null when not configured: say so instead of inventing. Call-center (Telephony) tiers are exposed under metadata harx_product=callcenter.',
-        plans: plans.map((p) => ({
-          name: p.name, price: p.price, currency: p.currency, description: p.description, features: p.features,
-          max_gigs: p.maxGigs ?? null, max_reps: p.maxReps ?? null, communication_minutes_included: p.communicationMinutes ?? null,
-          active_local_numbers: p.activeLocalNumbers ?? null, ai_tokens_included: p.aiTokensIncluded ?? null,
-          product: p.metadata?.harx_product || p.metadata?.get?.('harx_product') || null,
-        })),
+        available: true,
+        country: country || null,
+        note: 'Exact published catalogue (the same list customers see when subscribing): each offer has exactly ONE current price, in the currency given. Quote only these prices, never another amount for the same offer (older plans are archived and no longer sold). Telephony prices are presented as "Tarif de lancement" / launch price; no promotion code applies to Telephony offers. A value that is null is not published: say so instead of inventing.',
+        plans: plans.map((p) => {
+          const meta = p.metadata?.get ? Object.fromEntries(p.metadata) : (p.metadata || {});
+          const telephony = String(meta.harx_product || '').trim().toLowerCase().replace(/[\s_-]+/g, '') === 'callcenter';
+          return {
+            name: p.name, price: p.price ?? null, currency: p.currency ?? null, period: 'month',
+            product: telephony ? 'telephony' : 'taas', tier: p.callcenterTier ?? null,
+            ai_agent: Boolean(p.aiAgent),
+            description: p.description, features: p.features,
+            communication_minutes_included: p.communicationMinutes ?? null, ai_tokens_included: p.aiTokensIncluded ?? null,
+            active_local_numbers: p.activeLocalNumbers ?? null, max_gigs: p.maxGigs ?? null, max_reps: p.maxReps ?? null,
+          };
+        }),
       };
     },
 
@@ -214,7 +255,12 @@ export async function defaultLoadAccountOverview(companyId) {
   };
 }
 
-export async function defaultGetPlans() {
-  const { SubscriptionPlan } = await import('../models/SubscriptionPlan.js');
-  return SubscriptionPlan.find({}).lean();
+/**
+ * Catalogue PUBLIÉ (le même que GET /api/subscriptions/plans) : Marketplace (TAAS) et Téléphonie, prix Stripe actifs seulement,
+ * dans la devise du pays du client quand le prix la propose. Jamais la base locale des forfaits (elle garde les anciens forfaits
+ * dont les prix sont archivés dans Stripe). Stripe injoignable : `stripeAvailable: false`, l'outil refuse alors de donner un prix.
+ */
+export async function defaultGetPlans({ country = '', currency = '' } = {}) {
+  const { listPublishedPlans } = await import('../services/publishedPlans.js');
+  return listPublishedPlans({ product: 'all', country, currency });
 }

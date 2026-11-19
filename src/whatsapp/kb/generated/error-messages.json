@@ -9,7 +9,7 @@
    "sources": [
     "v25_comporchestrator_back/src/controllers/addressController.js"
    ],
-   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/addressController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Country code must be a 2-letter ISO code\"\n4xx/5xx - \"Telnyx API Error\"\n500 - \"Internal Server Error\"\n400 - \"Address ID is required\"\n404 - \"Address not found\""
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/addressController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Country code must be a 2-letter ISO code\"\n500 - \"Internal Server Error\"\n4xx/5xx - \"The address could not be registered for your company; please retry.\"\n4xx/5xx - \"Telnyx API Error\"\n400 - \"Address ID is required\"\n404 - \"Address not found\""
   },
   {
    "title": "Error messages - v25_comporchestrator_back - callController",
@@ -59,7 +59,7 @@
    "sources": [
     "v25_comporchestrator_back/src/controllers/documentController.js"
    ],
-   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/documentController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"No file uploaded\"\n400 - \"File size exceeds 5MB limit\"\n4xx/5xx - \"Telnyx API Error\"\n500 - \"Internal Server Error\"\n400 - \"Document ID is required\"\n404 - \"Document not found\""
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/documentController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"No file uploaded\"\n400 - \"File size exceeds 5MB limit\"\n500 - \"Internal Server Error\"\n4xx/5xx - \"The document could not be registered for your company; please retry.\"\n4xx/5xx - \"Telnyx API Error\"\n400 - \"Document ID is required\"\n404 - \"Document not found\""
   },
   {
    "title": "Error messages - v25_comporchestrator_back - escrowController",
@@ -69,7 +69,7 @@
    "sources": [
     "v25_comporchestrator_back/src/controllers/escrowController.js"
    ],
-   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/escrowController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Une décision prise par votre assistant IA cette semaine est à confirmer ou contredire.\"\n400 - \"companyId is required\"\n500 - \"Failed to fetch wallet balance\"\n500 - \"Failed to fetch wallet status\"\n500 - \"Failed to fetch transaction history\"\n400 - \"companyId and positive amount are required\"\n500 - \"Failed to process deposit\"\n400 - \"Insufficient balance\"\n500 - \"Failed to process withdrawal\"\n400 - \"companyId and positive minutes volume are required\"\n500 - \"Failed to process minutes purchase\"\n400 - \"Nombre de minutes disponibles insuffisant pour établir ce séquestre. Veuillez d'abord acheter des minutes.\"\n500 - \"Failed to establish escrow lock\"\n400 - \"contractId and companyId are required\"\n404 - \"Wallet not found\"\n404 - \"Escrow contract not found\"\n500 - \"Failed to release escrow funds\"\n500 - \"Failed to refund escrow funds\"\n500 - \"Failed to fetch gigs and enrolled representatives\"\n500 - \"Failed to fetch company calls\"\n400 - \"callId, companyId, and action are required\"\n404 - \"Call not found\"\n500 - \"Failed to process transaction approval\"\n400 - \"agentId is required\"\n500 - \"Failed to fetch rep transactions\""
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/escrowController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Une décision prise par votre assistant IA cette semaine est à confirmer ou contredire.\"\n400 - \"companyId is required\"\n500 - \"Failed to fetch wallet balance\"\n500 - \"Failed to fetch wallet status\"\n500 - \"Failed to fetch transaction history\"\n410 - \"Direct deposits are disabled: use the payment checkout.\"\n400 - \"companyId and positive amount are required\"\n400 - \"Insufficient balance\"\n500 - \"Failed to process withdrawal\"\n400 - \"companyId and positive minutes volume are required\"\n500 - \"Failed to process minutes purchase\"\n400 - \"Nombre de minutes disponibles insuffisant pour établir ce séquestre. Veuillez d'abord acheter des minutes.\"\n500 - \"Failed to establish escrow lock\"\n400 - \"contractId and companyId are required\"\n404 - \"Wallet not found\"\n404 - \"Escrow contract not found\"\n500 - \"Failed to release escrow funds\"\n500 - \"Failed to refund escrow funds\"\n500 - \"Failed to fetch gigs and enrolled representatives\"\n500 - \"Failed to fetch company calls\"\n400 - \"callId, companyId, and action are required\"\n404 - \"Call not found\"\n500 - \"Failed to process transaction approval\"\n400 - \"agentId is required\"\n500 - \"Failed to fetch rep transactions\""
   },
   {
    "title": "Error messages - v25_comporchestrator_back - escrowController",
@@ -79,7 +79,7 @@
    "sources": [
     "v25_comporchestrator_back/src/controllers/escrowController.js"
    ],
-   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/escrowController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to fetch company rep transactions\"\n400 - \"agentId, companyId and positive amount are required\"\n409 - \"Bonus already booked or invalid input\"\n500 - \"Failed to award bonus\"\n500 - \"Failed to fetch agent wallet\"\n500 - \"Failed to fetch agent withdrawals\"\n400 - \"No phone number on file for this agent\"\n500 - \"SMS verification is not configured\"\n500 - \"Failed to send verification code\"\n400 - \"agentId, positive amount, and method are required\"\n400 - \"Verification code is required\"\n400 - \"Code de vérification incorrect ou expiré.\"\n400 - \"Insufficient available balance\"\n500 - \"Failed to request withdrawal\"\n400 - \"withdrawalId and action are required\"\n404 - \"Withdrawal request not found\"\n403 - \"You do not have access to this company\"\n500 - \"Failed to process withdrawal action\"\n400 - \"Company ID is required\"\n200 - \"Reconciliation triggered\"\n500 - \"Failed to trigger reconciliation\"\n400 - \"callId is required\"\n404 - \"No call commission found for this call\"\n409 - \"Commission already cancelled\"\n410 - \"Cancellation window has expired for this call\""
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/escrowController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to fetch company rep transactions\"\n400 - \"agentId, companyId and positive amount are required\"\n409 - \"Bonus already booked or invalid input\"\n500 - \"Failed to award bonus\"\n500 - \"Failed to fetch agent wallet\"\n500 - \"Failed to fetch agent withdrawals\"\n400 - \"No phone number on file for this agent\"\n500 - \"SMS verification is not configured\"\n500 - \"Failed to send verification code\"\n400 - \"agentId, positive amount, and method are required\"\n400 - \"Verification code is required\"\n400 - \"Code de vérification incorrect ou expiré.\"\n400 - \"Insufficient available balance\"\n500 - \"Failed to request withdrawal\"\n400 - \"A valid withdrawalId and action ('approve' or 'refuse') are required\"\n404 - \"Withdrawal request not found\"\n500 - \"Failed to process withdrawal action\"\n400 - \"Company ID is required\"\n429 - \"Too many reconciliations for this company, retry shortly\"\n200 - \"Reconciliation triggered\"\n500 - \"Failed to trigger reconciliation\"\n400 - \"callId is required\"\n404 - \"No call commission found for this call\"\n409 - \"Commission already cancelled\"\n410 - \"Cancellation window has expired for this call\""
   },
   {
    "title": "Error messages - v25_comporchestrator_back - escrowController",
@@ -89,7 +89,17 @@
    "sources": [
     "v25_comporchestrator_back/src/controllers/escrowController.js"
    ],
-   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/escrowController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to cancel call commission\"\n400 - \"transactionId is required\"\n500 - \"Failed to fetch pending reviews\"\n500 - \"Failed to compute AI agreement rate\"\n500 - \"Failed to fetch AI delegation settings\"\n400 - \"companyId and a boolean enabled are required\"\n500 - \"Failed to update AI delegation settings\"\n500 - \"Failed to fetch AI audits\"\n400 - \"repTransactionId and a boolean confirm are required\"\n404 - \"Audit row not found\"\n409 - \"Audit already answered\"\n500 - \"Failed to respond to AI audit\"\n400 - \"repTransactionId and action (\"approve\"|\"refuse\") are required\"\n404 - \"Call commission not found\"\n409 - \"This commission is not awaiting review\"\n500 - \"Failed to process call commission decision\"\n500 - \"Failed to fetch Harx commissions\"\n400 - \"callId and repId are required\"\n400 - \"companyId and callId are required\""
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/escrowController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to cancel call commission\"\n400 - \"transactionId and companyId are required\"\n500 - \"Failed to fetch pending reviews\"\n500 - \"Failed to compute AI agreement rate\"\n500 - \"Failed to fetch AI delegation settings\"\n400 - \"companyId and a boolean enabled are required\"\n500 - \"Failed to update AI delegation settings\"\n500 - \"Failed to fetch AI audits\"\n400 - \"repTransactionId and a boolean confirm are required\"\n404 - \"Audit row not found\"\n409 - \"Audit already answered\"\n500 - \"Failed to respond to AI audit\"\n400 - \"repTransactionId and action (\"approve\"|\"refuse\") are required\"\n404 - \"Call commission not found\"\n409 - \"This commission is not awaiting review\"\n500 - \"Failed to process call commission decision\"\n401 - \"Authentication required\"\n500 - \"Failed to fetch Harx commissions\"\n400 - \"callId and repId are required\"\n400 - \"companyId and callId are required\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - followUpController",
+   "heading": "Messages returned by followUpController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/followUpController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/followUpController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Le lien de visio est dans le compte Google d’un collègue : il n’a pas été retiré (délégation Google suspendue). Demandez-lui de le retirer.\"\n4xx/5xx - \"Le lien de visio n’a pas pu être retiré chez le fournisseur : il est conservé. Réessayez dans un instant.\""
   },
   {
    "title": "Error messages - v25_comporchestrator_back - minutesCompanyController",
@@ -99,7 +109,7 @@
    "sources": [
     "v25_comporchestrator_back/src/controllers/minutesCompanyController.js"
    ],
-   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/minutesCompanyController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"companyId is required\"\n500 - \"Failed to fetch minutes\"\n400 - \"companyId and positive amount are required\"\n500 - \"Failed to buy minutes\"\n400 - \"companyId and callSid are required\"\n500 - \"Failed to charge call minutes\""
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/minutesCompanyController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to fetch minutes\"\n400 - \"companyId is required\"\n400 - \"companyId and positive amount are required\"\n500 - \"Failed to buy minutes\"\n400 - \"companyId and callSid are required\"\n500 - \"Failed to charge call minutes\""
   },
   {
    "title": "Error messages - v25_comporchestrator_back - paymentCheckoutController",
@@ -109,7 +119,17 @@
    "sources": [
     "v25_comporchestrator_back/src/controllers/paymentCheckoutController.js"
    ],
-   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/paymentCheckoutController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to load checkout config\"\n400 - \"Valid companyId is required\"\n400 - \"purpose must be 'wallet_deposit', 'minutes_purchase', 'tokens_purchase' or 'bundle_purchase'\"\n400 - \"provider must be 'stripe' or 'paypal'\"\n400 - \"Invalid amount, minutes or tokens quantity\"\n503 - \"PayPal not configured\"\n4xx/5xx - \"Définissez PAYPAL_CLIENT_ID et PAYPAL_CLIENT_SECRET sur le serveur.\"\n502 - \"PayPal order missing approval URL\"\n4xx/5xx - \"La commande PayPal n'a pas pu être créée.\"\n503 - \"Stripe not configured\"\n4xx/5xx - \"Définissez STRIPE_SECRET_KEY sur le serveur.\"\n502 - \"Stripe checkout creation failed\"\n503 - \"PayPal authentication failed\"\n500 - \"Failed to initialize checkout\"\n400 - \"Valid paymentId is required\"\n404 - \"Payment not found\"\n400 - \"PayPal order ID (providerRef) is required\"\n402 - \"PayPal payment not completed\"\n400 - \"Stripe session ID (providerRef) is required\"\n502 - \"Stripe session retrieval failed\"\n402 - \"Stripe payment not completed\"\n500 - \"Failed to confirm checkout\""
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/paymentCheckoutController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to load checkout config\"\n400 - \"Valid companyId is required\"\n400 - \"purpose must be 'wallet_deposit', 'minutes_purchase', 'tokens_purchase' or 'bundle_purchase'\"\n400 - \"provider must be 'stripe' or 'paypal'\"\n400 - \"Invalid amount, minutes or tokens quantity\"\n503 - \"PayPal not configured\"\n4xx/5xx - \"Définissez PAYPAL_CLIENT_ID et PAYPAL_CLIENT_SECRET sur le serveur.\"\n502 - \"PayPal order missing approval URL\"\n4xx/5xx - \"La commande PayPal n'a pas pu être créée.\"\n503 - \"Stripe not configured\"\n4xx/5xx - \"Définissez STRIPE_SECRET_KEY sur le serveur.\"\n502 - \"Stripe checkout creation failed\"\n503 - \"PayPal authentication failed\"\n500 - \"Failed to initialize checkout\"\n400 - \"Valid paymentId is required\"\n404 - \"Payment not found\"\n400 - \"PayPal order ID is missing on this payment\"\n400 - \"PayPal order does not belong to this payment\"\n402 - \"PayPal payment not completed\"\n402 - \"PayPal capture not completed\"\n409 - \"Payment held for review\"\n400 - \"Stripe session ID is missing on this payment\"\n400 - \"Stripe session does not belong to this payment\"\n502 - \"Stripe session retrieval failed\"\n402 - \"Stripe payment not completed\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - paymentCheckoutController",
+   "heading": "Messages returned by paymentCheckoutController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/paymentCheckoutController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/paymentCheckoutController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n409 - \"Stripe session does not match this payment\"\n400 - \"Unsupported payment provider\"\n500 - \"Failed to confirm checkout\""
   },
   {
    "title": "Error messages - v25_comporchestrator_back - phoneNumberController",
@@ -119,7 +139,7 @@
    "sources": [
     "v25_comporchestrator_back/src/controllers/phoneNumberController.js"
    ],
-   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/phoneNumberController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to search phone numbers\"\n400 - \"Missing required fields\"\n402 - \"Payment required\"\n4xx/5xx - \"Approuvez d'abord la carte ou PayPal. Le montant n'est encaissé qu'après l'achat du numéro.\"\n400 - \"Payment / number mismatch\"\n4xx/5xx - \"The payment was not authorized for this exact phone number.\"\n402 - \"Number purchase failed\"\n400 - \"Invalid companyId\"\n500 - \"Failed to check trial eligibility\"\n400 - \"Regulatory Bundle Required\"\n400 - \"Twilio Trial Limit Reached\"\n402 - \"Provider credit insufficient\"\n402 - \"Payment Required\"\n400 - \"phoneNumber, companyId and provider are required\"\n400 - \"provider must be either 'stripe' or 'paypal'\"\n409 - \"Number not available\"\n4xx/5xx - \"Ce numéro n’est pas disponible.\"\n4xx/5xx - \"L'achat de numéro est temporairement indisponible. Aucun paiement n'a été pris. Réessayez plus tard ou contactez le support.\"\n503 - \"PayPal not configured\"\n4xx/5xx - \"Définissez PAYPAL_CLIENT_ID et PAYPAL_CLIENT_SECRET sur le serveur.\"\n502 - \"PayPal order missing approval URL\"\n4xx/5xx - \"La commande PayPal a été créée sans URL d'approbation.\"\n503 - \"Stripe not configured\"\n4xx/5xx - \"Définissez STRIPE_SECRET_KEY sur le serveur.\"\n502 - \"Stripe checkout URL missing\""
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/phoneNumberController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Phone line price not configured\"\n4xx/5xx - \"Le prix d'une ligne supplémentaire n'est pas configuré pour votre offre : l'achat est impossible pour le moment. Aucun paiement n'a été pris. Contactez le support.\"\n500 - \"Failed to search phone numbers\"\n400 - \"Missing required fields\"\n402 - \"Payment required\"\n4xx/5xx - \"Approuvez d'abord la carte ou PayPal. Le montant n'est encaissé qu'après l'achat du numéro.\"\n400 - \"Payment / number mismatch\"\n4xx/5xx - \"The payment was not authorized for this exact phone number.\"\n403 - \"Payment / company mismatch\"\n4xx/5xx - \"Ce paiement n'appartient pas à cette entreprise.\"\n409 - \"Payment already in use\"\n4xx/5xx - \"Ce paiement est déjà utilisé pour un achat en cours ou terminé.\"\n402 - \"Number purchase failed\"\n400 - \"Invalid companyId\"\n500 - \"Failed to check trial eligibility\"\n400 - \"Regulatory Bundle Required\"\n400 - \"Twilio Trial Limit Reached\"\n402 - \"Provider credit insufficient\"\n402 - \"Payment Required\"\n4xx/5xx - \"Opération impossible.\"\n4xx/5xx - \"companyId invalide.\"\n4xx/5xx - \"La libération résilie la ligne : confirmez avec « confirm: true ».\"\n409 - \"Line payment pending verification\"\n402 - \"Line subscription unavailable\"\n400 - \"phoneNumber, companyId and provider are required\""
   },
   {
    "title": "Error messages - v25_comporchestrator_back - phoneNumberController",
@@ -129,7 +149,7 @@
    "sources": [
     "v25_comporchestrator_back/src/controllers/phoneNumberController.js"
    ],
-   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/phoneNumberController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Stripe n'a pas renvoyé d'URL de paiement.\"\n502 - \"Stripe checkout creation failed\"\n503 - \"PayPal authentication failed\"\n500 - \"Failed to initialize checkout\"\n400 - \"Valid paymentId is required\"\n404 - \"Payment not found\"\n400 - \"PayPal order ID (providerRef) is required\"\n402 - \"PayPal not approved\"\n4xx/5xx - \"Le paiement PayPal n'est pas encore approuvé. Le montant n'est encaissé qu'après l'achat du numéro.\"\n400 - \"Stripe session ID (providerRef) is required\"\n502 - \"Stripe session retrieval failed\"\n402 - \"Stripe payment not authorized\"\n500 - \"Failed to confirm checkout\"\n500 - \"Failed to load checkout config\"\n500 - \"Failed to list orphan payments\"\n400 - \"paymentId is required\"\n400 - \"Payment not succeeded\"\n400 - \"Payment missing phoneNumber or companyId\"\n4xx/5xx - \"Cannot recover this payment record — it is missing required fields.\"\n500 - \"Failed to fetch phone numbers\"\n400 - \"gigId is required\"\n500 - \"Internal Server Error\"\n4xx/5xx - \"Failed to check gig number\"\n400 - \"fromNumber and toNumber are required\"\n400 - \"Numéros invalides. Utilisez le format international (+…).\""
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/phoneNumberController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"provider must be either 'stripe' or 'paypal'\"\n409 - \"Line included\"\n4xx/5xx - \"Your first line is included in your plan: no payment is needed. Purchase the number directly, without a payment.\"\n409 - \"Number not available\"\n4xx/5xx - \"Ce numéro n’est pas disponible.\"\n4xx/5xx - \"L'achat de numéro est temporairement indisponible. Aucun paiement n'a été pris. Réessayez plus tard ou contactez le support.\"\n503 - \"PayPal not configured\"\n4xx/5xx - \"Définissez PAYPAL_CLIENT_ID et PAYPAL_CLIENT_SECRET sur le serveur.\"\n502 - \"PayPal order missing approval URL\"\n4xx/5xx - \"La commande PayPal a été créée sans URL d'approbation.\"\n503 - \"Stripe not configured\"\n4xx/5xx - \"Définissez STRIPE_SECRET_KEY sur le serveur.\"\n502 - \"Stripe checkout URL missing\"\n4xx/5xx - \"Stripe n'a pas renvoyé d'URL de paiement.\"\n502 - \"Stripe checkout creation failed\"\n503 - \"PayPal authentication failed\"\n500 - \"Failed to initialize checkout\"\n400 - \"Valid paymentId is required\"\n404 - \"Payment not found\"\n400 - \"PayPal order ID (providerRef) is required\"\n402 - \"PayPal not approved\"\n4xx/5xx - \"Le paiement PayPal n'est pas encore approuvé. Le montant n'est encaissé qu'après l'achat du numéro.\"\n400 - \"Stripe session ID (providerRef) is required\"\n502 - \"Stripe session retrieval failed\"\n402 - \"Stripe payment not authorized\""
   },
   {
    "title": "Error messages - v25_comporchestrator_back - phoneNumberController",
@@ -139,7 +159,7 @@
    "sources": [
     "v25_comporchestrator_back/src/controllers/phoneNumberController.js"
    ],
-   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/phoneNumberController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n404 - \"Ce numéro n'est pas le vôtre ou n'est plus actif.\"\n500 - \"Server Configuration\"\n4xx/5xx - \"La configuration téléphonie du serveur est incomplète.\"\n4xx/5xx - \"Failed to test call\"\n400 - \"callId is required\"\n500 - \"Failed to fetch call status\"\n500 - \"Failed to hang up\"\n400 - \"Numéro invalide. Utilisez le format international (+…).\"\n400 - \"Le test d'appel entrant n'est pas disponible pour ce type de ligne.\"\n404 - \"La ligne n'a pas été retrouvée chez l'opérateur.\"\n500 - \"Failed to start inbound test\"\n4xx/5xx - \"Impossible de préparer le test d'appel entrant : \"\n500 - \"Failed to read inbound test\"\n4xx/5xx - \"Lecture du test d'appel entrant impossible.\"\n401 - \"Authentication required\"\n500 - \"Failed to create voice token\"\n4xx/5xx - \"Téléphone du navigateur indisponible pour le moment.\"\n4xx/5xx - \"Entreprise invalide.\"\n4xx/5xx - \"Vérification de la destination impossible pour le moment.\"\n500 - \"Failed to update presence\"\n4xx/5xx - \"Disponibilité non enregistrée.\"\n400 - \"companyId invalide.\"\n500 - \"Failed to read inbound stats\"\n4xx/5xx - \"Statistiques des appels entrants indisponibles.\"\n400 - \"Invalid phone number format\""
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/phoneNumberController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to confirm checkout\"\n500 - \"Failed to load checkout config\"\n500 - \"Failed to list orphan payments\"\n400 - \"paymentId is required\"\n400 - \"Payment not succeeded\"\n400 - \"Payment missing phoneNumber or companyId\"\n4xx/5xx - \"Cannot recover this payment record — it is missing required fields.\"\n500 - \"Failed to fetch phone numbers\"\n400 - \"gigId is required\"\n500 - \"Internal Server Error\"\n4xx/5xx - \"Failed to check gig number\"\n4xx/5xx - \"Le compte de l'opérateur téléphonique est inactif ou suspendu : les appels sont impossibles tant qu'il n'est pas réactivé. Contactez le support HARX.\"\n4xx/5xx - \"Ce numéro est en attente de validation réglementaire. Vous ne pouvez pas encore l'utiliser pour des appels sortants.\"\n4xx/5xx - \"Impossible de lancer l'appel avec ce numéro. Vérifiez qu'il est actif et correctement configuré.\"\n400 - \"fromNumber and toNumber are required\"\n400 - \"Numéros invalides. Utilisez le format international (+…).\"\n404 - \"Ce numéro n'est pas le vôtre ou n'est plus actif.\"\n500 - \"Server Configuration\"\n4xx/5xx - \"La configuration téléphonie du serveur est incomplète.\"\n4xx/5xx - \"Failed to test call\"\n404 - \"Test call not found\"\n400 - \"callId is required\"\n500 - \"Failed to fetch call status\"\n500 - \"Failed to hang up\"\n400 - \"Numéro invalide. Utilisez le format international (+…).\""
   },
   {
    "title": "Error messages - v25_comporchestrator_back - phoneNumberController",
@@ -149,7 +169,17 @@
    "sources": [
     "v25_comporchestrator_back/src/controllers/phoneNumberController.js"
    ],
-   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/phoneNumberController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Phone number must be in E.164 format (e.g., +33123456789)\"\n404 - \"Phone number not found\"\n4xx/5xx - \"The specified phone number is not found in our database\"\n400 - \"Invalid number status\"\n4xx/5xx - \"Phone number must be in success status to configure voice feature\"\n4xx/5xx - \"Voice feature configured successfully\"\n404 - \"Telnyx configuration error\"\n4xx/5xx - \"Phone number not found in Telnyx system\"\n4xx/5xx - \"Telnyx API error\"\n500 - \"Internal server error\"\n4xx/5xx - \"Failed to configure voice feature\"\n400 - \"Missing required headers\"\n200 - \"Event type not handled\"\n400 - \"Invalid signature\"\n4xx/5xx - \"The webhook signature verification failed\"\n500 - \"Failed to process webhook\"\n500 - \"Failed to fetch Twilio requirements\"\n500 - \"Failed to create End User\"\n400 - \"File is required\"\n500 - \"Failed to upload document\"\n500 - \"Failed to create Bundle\"\n500 - \"Failed to assign item\"\n500 - \"Failed to submit Bundle\"\n500 - \"Failed to create Address\""
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/phoneNumberController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Le test d'appel entrant n'est pas disponible pour ce type de ligne.\"\n404 - \"La ligne n'a pas été retrouvée chez l'opérateur.\"\n500 - \"Failed to start inbound test\"\n4xx/5xx - \"Impossible de préparer le test d'appel entrant : \"\n500 - \"Failed to read inbound test\"\n4xx/5xx - \"Lecture du test d'appel entrant impossible.\"\n401 - \"Authentication required\"\n500 - \"Failed to create voice token\"\n4xx/5xx - \"Téléphone du navigateur indisponible pour le moment.\"\n4xx/5xx - \"Entreprise invalide.\"\n4xx/5xx - \"Vérification de la destination impossible pour le moment.\"\n500 - \"Failed to update presence\"\n4xx/5xx - \"Disponibilité non enregistrée.\"\n500 - \"Failed to read inbound stats\"\n4xx/5xx - \"Statistiques des appels entrants indisponibles.\"\n4xx/5xx - \"id ou phoneNumber requis.\"\n4xx/5xx - \"Ligne introuvable.\"\n400 - \"Invalid phone number format\"\n4xx/5xx - \"Phone number must be in E.164 format (e.g., +33123456789)\"\n404 - \"Phone number not found\"\n4xx/5xx - \"The specified phone number is not found in our database\"\n400 - \"Invalid number status\"\n4xx/5xx - \"Phone number must be in success status to configure voice feature\"\n4xx/5xx - \"Voice feature configured successfully\"\n404 - \"Telnyx configuration error\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - phoneNumberController",
+   "heading": "Messages returned by phoneNumberController",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/controllers/phoneNumberController.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/phoneNumberController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Phone number not found in Telnyx system\"\n4xx/5xx - \"Telnyx API error\"\n500 - \"Internal server error\"\n4xx/5xx - \"Failed to configure voice feature\"\n400 - \"Missing required headers\"\n200 - \"Event type not handled\"\n400 - \"Invalid signature\"\n4xx/5xx - \"The webhook signature verification failed\"\n500 - \"Failed to process webhook\"\n500 - \"Failed to fetch Twilio requirements\"\n404 - \"Resource not found\"\n500 - \"Failed to create End User\"\n400 - \"File is required\"\n500 - \"Failed to upload document\"\n400 - \"Contact email required\"\n500 - \"Failed to create Bundle\"\n500 - \"Failed to assign item\"\n500 - \"Failed to submit Bundle\"\n500 - \"Failed to create Address\""
   },
   {
    "title": "Error messages - v25_comporchestrator_back - portalController",
@@ -199,7 +229,7 @@
    "sources": [
     "v25_comporchestrator_back/src/controllers/subscriptionController.js"
    ],
-   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/subscriptionController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Error fetching plans from Stripe\"\n4xx/5xx - \"No subscription found\"\n500 - \"Error fetching subscription\"\n400 - \"userId, companyId, priceId and provider are required\"\n400 - \"provider must be 'stripe' or 'paypal'\"\n4xx/5xx - \"Le code promotionnel n\\u2019est disponible que pour le paiement par carte (Stripe).\"\n503 - \"Stripe not configured\"\n4xx/5xx - \"Définissez STRIPE_SECRET_KEY.\"\n404 - \"Plan not found for this priceId\"\n503 - \"PayPal not configured\"\n4xx/5xx - \"Définissez PAYPAL_* sur le serveur.\"\n502 - \"PayPal approval URL missing\"\n400 - \"Valid paymentId is required\"\n404 - \"Subscription payment not found\"\n404 - \"Plan not found\"\n400 - \"PayPal order ID required\"\n402 - \"PayPal capture failed\"\n402 - \"PayPal payment not completed\"\n400 - \"Stripe session ID required\"\n402 - \"Stripe payment not completed\"\n500 - \"Failed to confirm subscription checkout\"\n500 - \"Error creating checkout session\""
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/subscriptionController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Error fetching plans from Stripe\"\n4xx/5xx - \"No subscription found\"\n500 - \"Error fetching subscription\"\n400 - \"userId, companyId, priceId and provider are required\"\n400 - \"provider must be 'stripe' or 'paypal'\"\n404 - \"Plan not found for this priceId\"\n4xx/5xx - \"Aucun code promotionnel ne s\\u2019applique à cette offre : son prix est déjà un tarif de lancement.\"\n4xx/5xx - \"Le code promotionnel n\\u2019est disponible que pour le paiement par carte (Stripe).\"\n503 - \"Stripe not configured\"\n4xx/5xx - \"Définissez STRIPE_SECRET_KEY.\"\n503 - \"PayPal not configured\"\n4xx/5xx - \"Définissez PAYPAL_* sur le serveur.\"\n502 - \"PayPal approval URL missing\"\n400 - \"Valid paymentId is required\"\n404 - \"Subscription payment not found\"\n404 - \"Plan not found\"\n400 - \"PayPal order ID required\"\n402 - \"PayPal capture failed\"\n402 - \"PayPal payment not completed\"\n400 - \"Stripe session ID required\"\n402 - \"Stripe payment not completed\"\n500 - \"Failed to confirm subscription checkout\"\n500 - \"Error creating checkout session\""
   },
   {
    "title": "Error messages - v25_comporchestrator_back - telnyxRequirementGroupController",
@@ -209,7 +239,7 @@
    "sources": [
     "v25_comporchestrator_back/src/controllers/telnyxRequirementGroupController.js"
    ],
-   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/telnyxRequirementGroupController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Company ID and destination zone are required\"\n400 - \"Destination zone must be a 2-letter country code\"\n500 - \"Internal Server Error\"\n404 - \"No requirement group found for this company and destination\"\n400 - \"Requirements array is required and must not be empty\"\n400 - \"Each requirement must have requirementId and value\"\n4xx/5xx - \"Failed to fetch address details\"\n4xx/5xx - \"Failed to fetch document details\"\n404 - \"Requirement group not found\""
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/telnyxRequirementGroupController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n404 - \"Requirement group not found\"\n400 - \"Company ID and destination zone are required\"\n400 - \"Destination zone must be a 2-letter country code\"\n500 - \"Internal Server Error\"\n404 - \"No requirement group found for this company and destination\"\n400 - \"Requirements array is required and must not be empty\"\n400 - \"Each requirement must have requirementId and value\"\n4xx/5xx - \"Failed to fetch address details\"\n4xx/5xx - \"Failed to fetch document details\""
   },
   {
    "title": "Error messages - v25_comporchestrator_back - tokensCompanyController",
@@ -219,7 +249,7 @@
    "sources": [
     "v25_comporchestrator_back/src/controllers/tokensCompanyController.js"
    ],
-   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/tokensCompanyController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"companyId is required\"\n500 - \"Failed to fetch tokens\"\n400 - \"Invalid companyId\"\n500 - \"Failed to fetch token purchases\"\n500 - \"Failed to update AI providers\"\n400 - \"companyId and positive amount are required\"\n500 - \"Failed to buy tokens\"\n400 - \"companyId and usageId are required\"\n4xx/5xx - \"Solde de tokens AI insuffisant. Rechargez pour continuer.\"\n500 - \"Failed to charge AI tokens\"\n500 - \"Failed to check tokens\"\n500 - \"Failed to fetch token usage\"\n500 - \"Failed to aggregate token usage by gig\""
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/tokensCompanyController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n401 - \"Authentication required\"\n400 - \"companyId is required\"\n500 - \"Failed to fetch tokens\"\n400 - \"Invalid companyId\"\n500 - \"Failed to fetch token purchases\"\n500 - \"Failed to update AI providers\"\n410 - \"Token purchases are only possible through the payment checkout\"\n4xx/5xx - \"Utilisez le paiement (Stripe ou PayPal) pour acheter des jetons AI.\"\n400 - \"companyId and usageId are required\"\n4xx/5xx - \"Solde de tokens AI insuffisant. Rechargez pour continuer.\"\n500 - \"Failed to charge AI tokens\"\n500 - \"Failed to check tokens\"\n500 - \"Failed to fetch token usage\"\n500 - \"Failed to aggregate token usage by gig\""
   },
   {
    "title": "Error messages - v25_comporchestrator_back - walletCompanyController",
@@ -229,7 +259,7 @@
    "sources": [
     "v25_comporchestrator_back/src/controllers/walletCompanyController.js"
    ],
-   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/walletCompanyController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"companyId is required\"\n500 - \"Failed to fetch wallet\"\n400 - \"companyId and positive amount are required\"\n500 - \"Failed to deposit funds\"\n404 - \"Wallet not found\"\n400 - \"Insufficient balance\"\n500 - \"Failed to withdraw funds\"\n500 - \"Failed to fetch wallet entries\"\n500 - \"Failed to fetch agent withdrawals\"\n400 - \"withdrawalId and action are required\"\n404 - \"Withdrawal request not found\"\n403 - \"You do not have access to this company\"\n500 - \"Failed to process withdrawal action\""
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/controllers/walletCompanyController.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"companyId is required\"\n500 - \"Failed to fetch wallet\"\n410 - \"Deposits are only possible through the payment checkout\"\n4xx/5xx - \"Utilisez le paiement (Stripe ou PayPal) pour alimenter le portefeuille.\"\n400 - \"companyId and positive amount are required\"\n400 - \"Insufficient balance\"\n404 - \"Wallet not found\"\n500 - \"Failed to withdraw funds\"\n500 - \"Failed to fetch wallet entries\"\n500 - \"Failed to fetch agent withdrawals\"\n400 - \"A valid withdrawalId and action ('approve' or 'refuse') are required\"\n404 - \"Withdrawal request not found\"\n500 - \"Failed to process withdrawal action\""
   },
   {
    "title": "Error messages - v25_comporchestrator_back - urlGuard",
@@ -302,6 +332,26 @@
    "text": "API error / status messages returned by v25_comporchestrator_back/src/routes/internal.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Invalid companyId format\"\n500 - \"Failed to read tokens balance\"\n401 - \"Invalid service token\"\n400 - \"companyId, key and title are required\""
   },
   {
+   "title": "Error messages - v25_comporchestrator_back - tools",
+   "heading": "Messages returned by tools",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/salesiq/tools.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/salesiq/tools.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"invalid email\"\n4xx/5xx - \"CRM unavailable: do not guess, call flag_for_team\""
+  },
+  {
+   "title": "Error messages - v25_comporchestrator_back - aiLearning",
+   "heading": "Messages returned by aiLearning",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/services/aiLearning.js"
+   ],
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/services/aiLearning.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Type : faq ou instruction.\"\n4xx/5xx - \"Indiquez la question.\""
+  },
+  {
    "title": "Error messages - v25_comporchestrator_back - browserOutbound",
    "heading": "Messages returned by browserOutbound",
    "product": "platform",
@@ -309,7 +359,7 @@
    "sources": [
     "v25_comporchestrator_back/src/services/browserOutbound.js"
    ],
-   "text": "API error / status messages returned by v25_comporchestrator_back/src/services/browserOutbound.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Numéro non autorisé.\"\n4xx/5xx - \"Aucun abonnement actif.\"\n4xx/5xx - \"Aucune ligne disponible pour appeler.\"\n4xx/5xx - \"Solde de minutes insuffisant.\""
+   "text": "API error / status messages returned by v25_comporchestrator_back/src/services/browserOutbound.js (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"An error occurred.\"\n4xx/5xx - \"Une erreur est survenue.\"\n4xx/5xx - \"Se ha producido un error.\"\n4xx/5xx - \"Numéro non autorisé.\"\n4xx/5xx - \"Aucun abonnement actif.\"\n4xx/5xx - \"Aucune ligne disponible pour appeler.\"\n4xx/5xx - \"Solde de minutes insuffisant.\""
   },
   {
    "title": "Error messages - v25_comporchestrator_back - callQueues",
@@ -419,7 +469,7 @@
    "sources": [
     "v25_dash_calls_backend/src/controllers/calls.js"
    ],
-   "text": "API error / status messages returned by v25_dash_calls_backend/src/controllers/calls.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to generate token\"\n500 - \"Failed to save center call\"\n500 - \"Failed to attach recording\"\n400 - \"Call SID / externalId is required\"\n500 - \"Failed to save call details\"\n400 - \"externalId is required\"\n500 - \"Failed to finalize Telnyx call\"\n400 - \"Recording URL and User ID are required\"\n500 - \"Error fetching the recording\"\n500 - \"Failed to store call details\"\n400 - \"Transcription is required\"\n500 - \"Failed to get AI assistance\"\n500 - \"Failed to get personality analysis\"\n4xx/5xx - \"Call already transcribed\"\n4xx/5xx - \"Call already analyzed\"\n202 - \"Analysis already in progress for this call.\"\n400 - \"No transcript or recording available for analysis\"\n4xx/5xx - \"Call analysis completed\"\n500 - \"Failed to analyze call\"\n400 - \"Call analysis already completed\"\n4xx/5xx - \"Company notified\"\n500 - \"Failed to notify company\"\n400 - \"verdict must be \"up\" or \"down\"\"\n400 - \"explanation is required when disagreeing with the score\"\n400 - \"Short calls are not analyzed — calibration unavailable\""
+   "text": "API error / status messages returned by v25_dash_calls_backend/src/controllers/calls.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Failed to generate token\"\n500 - \"Failed to save center call\"\n500 - \"Failed to attach recording\"\n500 - \"Failed to record recording decision\"\n500 - \"Failed to report recording failure\"\n400 - \"Call SID / externalId is required\"\n500 - \"Failed to save call details\"\n400 - \"externalId is required\"\n500 - \"Failed to finalize Telnyx call\"\n400 - \"Recording URL and User ID are required\"\n400 - \"recordingUrl must be a Twilio recording of this account\"\n500 - \"Error fetching the recording\"\n500 - \"Failed to store call details\"\n400 - \"Transcription is required\"\n500 - \"Failed to get AI assistance\"\n500 - \"Failed to get personality analysis\"\n4xx/5xx - \"Call already transcribed\"\n4xx/5xx - \"Call already analyzed\"\n202 - \"Analysis already in progress for this call.\"\n400 - \"No transcript or recording available for analysis\"\n4xx/5xx - \"Call analysis completed\"\n500 - \"Failed to analyze call\"\n400 - \"Call analysis already completed\"\n4xx/5xx - \"Company notified\"\n500 - \"Failed to notify company\""
   },
   {
    "title": "Error messages - v25_dash_calls_backend - calls",
@@ -429,7 +479,7 @@
    "sources": [
     "v25_dash_calls_backend/src/controllers/calls.js"
    ],
-   "text": "API error / status messages returned by v25_dash_calls_backend/src/controllers/calls.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Call has no AI score to calibrate\"\n4xx/5xx - \"Calibration saved\"\n500 - \"Failed to save calibration\"\n500 - \"Failed to start recording\"\n500 - \"Failed to stop recording\"\n500 - \"Failed to get Telnyx login token\"\n400 - \"callControlId is required\"\n500 - \"Failed to start Telnyx recording\""
+   "text": "API error / status messages returned by v25_dash_calls_backend/src/controllers/calls.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"verdict must be \"up\" or \"down\"\"\n400 - \"explanation is required when disagreeing with the score\"\n400 - \"Short calls are not analyzed — calibration unavailable\"\n400 - \"Call has no AI score to calibrate\"\n4xx/5xx - \"Calibration saved\"\n500 - \"Failed to save calibration\"\n500 - \"Failed to start recording\"\n500 - \"Failed to stop recording\"\n500 - \"Failed to get Telnyx login token\"\n400 - \"callControlId is required\"\n500 - \"Failed to start Telnyx recording\""
   },
   {
    "title": "Error messages - v25_dash_calls_backend - callsAnalytics",
@@ -462,6 +512,16 @@
    "text": "API error / status messages returned by v25_dash_calls_backend/src/controllers/vertexController.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"recordingId or file_uri is required\"\n400 - \"fileUri and textToCompare are required\"\n400 - \"Audio data (base64) is required\"\n400 - \"fileUri (gs://...) is required\"\n400 - \"filePath and destinationName are required\"\n400 - \"File and destinationName are required\""
   },
   {
+   "title": "Error messages - v25_dash_calls_backend - auth",
+   "heading": "Messages returned by auth",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/middleware/auth.js"
+   ],
+   "text": "API error / status messages returned by v25_dash_calls_backend/src/middleware/auth.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n401 - \"Not authorized to access this route\"\n500 - \"Authentication is not configured\""
+  },
+  {
    "title": "Error messages - v25_dash_calls_backend - companyScope",
    "heading": "Messages returned by companyScope",
    "product": "platform",
@@ -470,6 +530,16 @@
     "v25_dash_calls_backend/src/middleware/companyScope.js"
    ],
    "text": "API error / status messages returned by v25_dash_calls_backend/src/middleware/companyScope.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Authentication is not configured\"\n401 - \"Authentication required\"\n401 - \"Authentication failed\""
+  },
+  {
+   "title": "Error messages - v25_dash_calls_backend - aiInbound",
+   "heading": "Messages returned by aiInbound",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/routes/aiInbound.js"
+   ],
+   "text": "API error / status messages returned by v25_dash_calls_backend/src/routes/aiInbound.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n401 - \"Jeton de service invalide ou expiré.\"\n503 - \"Session IA indisponible.\""
   },
   {
    "title": "Error messages - v25_dash_calls_backend - aiVoiceTools",
@@ -492,6 +562,16 @@
    "text": "API error / status messages returned by v25_dash_calls_backend/src/utils/callRecording.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Appel pas encore inscrit\"\n4xx/5xx - \"Appel d’une autre entreprise\""
   },
   {
+   "title": "Error messages - v25_dash_calls_backend - recordingStatus",
+   "heading": "Messages returned by recordingStatus",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/utils/recordingStatus.js"
+   ],
+   "text": "API error / status messages returned by v25_dash_calls_backend/src/utils/recordingStatus.js (calls (call journal, call analysis/QA, leads of the call dashboard)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Appel d’une autre entreprise\"\n4xx/5xx - \"Décision d’une autre entreprise\""
+  },
+  {
    "title": "Error messages - v25_dash_calls_backend - speechToText",
    "heading": "Messages returned by speechToText",
    "product": "platform",
@@ -509,7 +589,7 @@
    "sources": [
     "v25_dash_rep_back/src/controllers/NotificationController.js"
    ],
-   "text": "API error / status messages returned by v25_dash_rep_back/src/controllers/NotificationController.js (REP dashboard). Use to explain an error the user quotes; the file name tells which area it belongs to.\n404 - \"Notification not found\"\n400 - \"notificationKey required\""
+   "text": "API error / status messages returned by v25_dash_rep_back/src/controllers/NotificationController.js (REP dashboard). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Invalid repId\"\n404 - \"Notification not found\"\n400 - \"notificationKey required\""
   },
   {
    "title": "Error messages - v25_dash_rep_back - ProfileController",
@@ -519,7 +599,7 @@
    "sources": [
     "v25_dash_rep_back/src/controllers/ProfileController.js"
    ],
-   "text": "API error / status messages returned by v25_dash_rep_back/src/controllers/ProfileController.js (REP dashboard). Use to explain an error the user quotes; the file name tells which area it belongs to.\n404 - \"Profile not found\"\n500 - \"Internal server error\"\n400 - \"User ID is required\"\n400 - \"Profile ID is required\"\n400 - \"Name and email are required in personal info\"\n400 - \"Title, company, and start date are required for experience\"\n400 - \"Name and email cannot be empty\"\n400 - \"Title, company, and start date are required for each experience entry\"\n400 - \"Experience must be an array\"\n400 - \"Skills object is required\"\n400 - \"Language and assessment results are required\"\n400 - \"Assessment must include skill and results\"\n404 - \"Plan not found\"\n400 - \"No profile photo to compare against\"\n500 - \"Identity recheck failed\"\n500 - \"Accent recheck failed\"\n400 - \"No video file provided\"\n500 - \"Video analysis failed\"\n400 - \"languageName is required\"\n400 - \"expectedProficiency is required\"\n202 - \"Video uploaded. Analysis is running in the background.\"\n500 - \"Language video analysis failed\"\n404 - \"Analysis job not found\"\n500 - \"Could not load analysis status\""
+   "text": "API error / status messages returned by v25_dash_rep_back/src/controllers/ProfileController.js (REP dashboard). Use to explain an error the user quotes; the file name tells which area it belongs to.\n404 - \"Profile not found\"\n500 - \"Internal server error\"\n400 - \"User ID is required\"\n400 - \"Profile ID is required\"\n400 - \"Name and email are required in personal info\"\n400 - \"Title, company, and start date are required for experience\"\n400 - \"Name and email cannot be empty\"\n400 - \"Title, company, and start date are required for each experience entry\"\n400 - \"Experience must be an array\"\n400 - \"Skills object is required\"\n400 - \"Language and assessment results are required\"\n400 - \"Assessment must include skill and results\"\n404 - \"Plan not found\"\n400 - \"No profile photo to compare against\"\n500 - \"Identity recheck failed\"\n500 - \"Accent recheck failed\"\n400 - \"No video file provided\"\n500 - \"Video analysis failed\"\n500 - \"Presentation analysis failed\"\n400 - \"languageName is required\"\n400 - \"expectedProficiency is required\"\n202 - \"Video uploaded. Analysis is running in the background.\"\n500 - \"Language video analysis failed\"\n404 - \"Analysis job not found\"\n500 - \"Could not load analysis status\""
   },
   {
    "title": "Error messages - v25_dash_rep_back - auth",
@@ -529,7 +609,27 @@
    "sources": [
     "v25_dash_rep_back/src/middleware/auth.js"
    ],
-   "text": "API error / status messages returned by v25_dash_rep_back/src/middleware/auth.js (REP dashboard). Use to explain an error the user quotes; the file name tells which area it belongs to.\n401 - \"No token or identification provided\"\n403 - \"Invalid token\""
+   "text": "API error / status messages returned by v25_dash_rep_back/src/middleware/auth.js (REP dashboard). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Server authentication is not configured\"\n403 - \"Invalid token\"\n401 - \"No token provided\""
+  },
+  {
+   "title": "Error messages - v25_dash_rep_back - ownership",
+   "heading": "Messages returned by ownership",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_rep_back/src/middleware/ownership.js"
+   ],
+   "text": "API error / status messages returned by v25_dash_rep_back/src/middleware/ownership.js (REP dashboard). Use to explain an error the user quotes; the file name tells which area it belongs to.\n401 - \"A valid token is required\"\n404 - \"Profile not found\"\n403 - \"You cannot access another profile\"\n500 - \"Authorization check failed\""
+  },
+  {
+   "title": "Error messages - v25_dash_rep_back - PresentationAnalysisService",
+   "heading": "Messages returned by PresentationAnalysisService",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_rep_back/src/services/PresentationAnalysisService.js"
+   ],
+   "text": "API error / status messages returned by v25_dash_rep_back/src/services/PresentationAnalysisService.js (REP dashboard). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"A valid token is required\"\n4xx/5xx - \"Presentation analysis failed\"\n4xx/5xx - \"Profile not found\"\n4xx/5xx - \"You cannot analyze another profile\"\n4xx/5xx - \"No video file provided\"\n4xx/5xx - \"The presentation video could not be analyzed. Please try again later.\""
   },
   {
    "title": "Error messages - v25_dashboard_backend - addressController",
@@ -949,7 +1049,7 @@
    "sources": [
     "v25_matching_backend/src/controllers/gigAgentController.js"
    ],
-   "text": "API error / status messages returned by v25_matching_backend/src/controllers/gigAgentController.js (matching (REP/GIG matching, enrollment, time slots and reservations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Cannot request enrollment for this gig at this time\"\n4xx/5xx - \"Enrollment request sent successfully\"\n4xx/5xx - \"Agent gigs retrieved successfully\"\n4xx/5xx - \"Gig agents retrieved successfully\"\n4xx/5xx - \"gigId and agentId (or repId) are required\"\n4xx/5xx - \"GigAgent not found for this gig and agent\"\n4xx/5xx - \"gigId, agentId (or repId), and mode are required\"\n4xx/5xx - \"weekStart must be a valid date (Monday of week will be used)\"\n4xx/5xx - \"mode must be \"template\" or \"week\"\""
+   "text": "API error / status messages returned by v25_matching_backend/src/controllers/gigAgentController.js (matching (REP/GIG matching, enrollment, time slots and reservations)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Cannot request enrollment for this gig at this time\"\n4xx/5xx - \"Enrollment request sent successfully\"\n4xx/5xx - \"Agent gigs retrieved successfully\"\n4xx/5xx - \"No agent record found for this id; no gigs\"\n4xx/5xx - \"Gig agents retrieved successfully\"\n4xx/5xx - \"gigId and agentId (or repId) are required\"\n4xx/5xx - \"GigAgent not found for this gig and agent\"\n4xx/5xx - \"gigId, agentId (or repId), and mode are required\"\n4xx/5xx - \"weekStart must be a valid date (Monday of week will be used)\"\n4xx/5xx - \"mode must be \"template\" or \"week\"\""
   },
   {
    "title": "Error messages - v25_matching_backend - gigController",
@@ -1292,6 +1392,16 @@
    "text": "API error / status messages returned by v25_repscreationwizard_backend/src/middleware/errorHandler.js (REP profile wizard (REP profile, skills, languages, REP subscription)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Validation error\"\n409 - \"Duplicate key error\""
   },
   {
+   "title": "Error messages - v25_repscreationwizard_backend - upload",
+   "heading": "Messages returned by upload",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/middleware/upload.js"
+   ],
+   "text": "API error / status messages returned by v25_repscreationwizard_backend/src/middleware/upload.js (REP profile wizard (REP profile, skills, languages, REP subscription)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n400 - \"Le fichier envoyé n'est pas une vidéo.\"\n429 - \"Trop d'envois de vidéos en cours, réessayez dans un instant.\""
+  },
+  {
    "title": "Error messages - v25_repscreationwizard_backend - validators",
    "heading": "Messages returned by validators",
    "product": "platform",
@@ -1330,6 +1440,16 @@
     "v25_repscreationwizard_backend/src/routes/timezoneRoutes.js"
    ],
    "text": "API error / status messages returned by v25_repscreationwizard_backend/src/routes/timezoneRoutes.js (REP profile wizard (REP profile, skills, languages, REP subscription)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n500 - \"Error fetching timezones\"\n500 - \"Error fetching countries\"\n500 - \"Error fetching timezones for country\"\n404 - \"Timezone not found\"\n500 - \"Error fetching timezone\""
+  },
+  {
+   "title": "Error messages - v25_repscreationwizard_backend - testPresentationVideoUpload",
+   "heading": "Messages returned by testPresentationVideoUpload",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_repscreationwizard_backend/src/scripts/testPresentationVideoUpload.js"
+   ],
+   "text": "API error / status messages returned by v25_repscreationwizard_backend/src/scripts/testPresentationVideoUpload.js (REP profile wizard (REP profile, skills, languages, REP subscription)). Use to explain an error the user quotes; the file name tells which area it belongs to.\n4xx/5xx - \"Request Entity Too Large\"\n4xx/5xx - \"File size too large. Got 120000000. Maximum is 104857600.\"\n4xx/5xx - \"File size too large. Got 130000000. Maximum is 104857600.\"\n4xx/5xx - \"Invalid api_key abc123 secretvalue\"\n4xx/5xx - \"Internal error at https://api.cloudinary.com/v1_1/mycloud/video/upload\""
   },
   {
    "title": "Error messages - v25_searchcompanywizard_backend - companyController",

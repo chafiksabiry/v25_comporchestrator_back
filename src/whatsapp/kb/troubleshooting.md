@@ -4,8 +4,8 @@ title: Troubleshooting guide - common problems, causes and fixes
 product: platform
 audience: all
 summary: Symptom -> likely causes -> concrete steps, grounded in real HARX rules (sign-up, verification code, gig activation, limits, numbers, calls, billing).
-sources: [v25_registration_backend/src/services/authService.js, v25_comporchestrator_front/src/components/ApprovalPublishing.tsx, v25_comporchestrator_back/src/controllers/phoneNumberController.js, v25_dash_calls_backend/src/controllers/calls.js, v25_callcenter_front/docs/PARCOURS_ET_TESTS.md]
-verified: 2026-11-12
+sources: [v25_registration_backend/src/services/authService.js, v25_callcenter_front/src/domain/countries.ts, v25_comporchestrator_back/src/services/outboundDestinations.js, v25_comporchestrator_back/src/services/promotionCode.js, v25_comporchestrator_front/src/components/ApprovalPublishing.tsx, v25_comporchestrator_back/src/controllers/phoneNumberController.js, v25_dash_calls_backend/src/controllers/calls.js, v25_callcenter_front/docs/PARCOURS_ET_TESTS.md]
+verified: 2026-11-19
 ---
 # Troubleshooting
 
@@ -25,10 +25,10 @@ The activation screen lists the missing setup steps: telephony, upload contacts,
 Limits come from the plan: use get_my_account_overview to see the user's plan and quotas; the fix is to free a slot or upgrade. Nomad Solo: 1 line, 1 user, 1 active operation.
 
 ## I cannot buy a phone number
-Check: subscription active, plan line limit (Solo = 1), country supported (France numbers via Twilio; +44 needs an approved regulatory bundle), payment succeeded ("Payment required" / "Payment / number mismatch" -> payment not confirmed: retry from the same window), provider errors ("Number not available" -> pick another; "Provider credit insufficient" / "Twilio Trial Limit Reached" -> platform side: escalate).
+Check: subscription active, plan line limit (Solo = 1), company country open and company step complete (numbers are bought in the company's country: France, United Kingdom or United States; physical address of the registered office; +44 needs an approved regulatory bundle), payment succeeded ("Payment required" / "Payment / number mismatch" -> payment not confirmed: retry from the same window), provider errors ("Number not available" -> pick another; "Provider credit insufficient" / "Twilio Trial Limit Reached" -> platform side: escalate).
 
 ## Calls do not work
-- Browser phone: allow the microphone, click "Take calls", use a supported browser. Outbound refused: subscription must be active/trialing, minutes balance above zero, destination allowed (default France +33 for Solo).
+- Browser phone: allow the microphone, click "Take calls", use a supported browser. Outbound refused: subscription must be active/trialing, minutes balance above zero, destination allowed (by default the company's own country and France +33, unless the company saved its own list).
 - REP "Call blocked": enrolled? trainings complete? inside a reserved slot for that gig?
 - Balance at zero: top up minutes; AI actions need tokens.
 - Recording/analysis missing: wait and refresh; analysis needs tokens.
@@ -37,7 +37,7 @@ Check: subscription active, plan line limit (Solo = 1), country supported (Franc
 Wrong account, or the invitation is not accepted, or missing permission. Ask which email they logged in with; the owner can adjust permissions (topic roles-permissions).
 
 ## Payment or subscription problems
-past_due/unpaid -> update the payment method from the billing portal; a webhook can be late: wait a few minutes then reload; a promotion code must be typed in the Stripe payment form; double charges, refunds and disputes -> escalate.
+past_due/unpaid -> update the payment method from the billing portal; a webhook can be late: wait a few minutes then reload; a promotion code (TAAS plans only; none on Telephony offers) must be typed in the Stripe payment form; double charges, refunds and disputes -> escalate.
 
 ## Slow or blank page
 Refresh, clear cache, try another browser/private window; pages are loaded as separate apps on harx.ai so a temporary load error can occur: reload once. If persistent, ask for the exact URL, browser and time, then escalate as a possible bug.

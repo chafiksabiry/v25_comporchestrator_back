@@ -12,6 +12,46 @@
    "text": "Allowed values of fields in the AgentWithdrawal model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nmethod: 'bank', 'paypal'\nstatus: 'pending', 'completed', 'failed', 'processing'"
   },
   {
+   "title": "Data model states - AiAgentSettings.js",
+   "heading": "Allowed values in AiAgentSettings.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/AiAgentSettings.js"
+   ],
+   "text": "Allowed values of fields in the AiAgentSettings model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\npriority: 'after_humans', 'first'\nvoice: 'female', 'male'\naddressForm: 'vous', 'tu'\ntone: 'professional', 'warm', 'energetic'"
+  },
+  {
+   "title": "Data model states - AiInboundCall.js",
+   "heading": "Allowed values in AiInboundCall.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/AiInboundCall.js"
+   ],
+   "text": "Allowed values of fields in the AiInboundCall model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nstatus: 'starting', 'in_progress', 'completed', 'transferred', 'fallback', 'failed'\nspeaker: 'caller', 'agent'"
+  },
+  {
+   "title": "Data model states - AiLearnedAnswer.js",
+   "heading": "Allowed values in AiLearnedAnswer.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/AiLearnedAnswer.js"
+   ],
+   "text": "Allowed values of fields in the AiLearnedAnswer model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nkind: 'faq', 'instruction'\nsource: 'proposal', 'manual'"
+  },
+  {
+   "title": "Data model states - AiLearningProposal.js",
+   "heading": "Allowed values in AiLearningProposal.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/AiLearningProposal.js"
+   ],
+   "text": "Allowed values of fields in the AiLearningProposal model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nkind: 'unanswered', 'transfer_unknown', 'caller_correction', 'recurring'\nstatus: 'pending', 'validated', 'rejected'"
+  },
+  {
    "title": "Data model states - CallQueue.js",
    "heading": "Allowed values in CallQueue.js",
    "product": "platform",
@@ -20,6 +60,16 @@
     "v25_comporchestrator_back/src/models/CallQueue.js"
    ],
    "text": "Allowed values of fields in the CallQueue model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\ndirection: 'inbound', 'outbound'\nstrategy: 'simultaneous', 'longest_idle', 'round_robin'\nmenuKey: '1', '2', '3', '4', '5', '6', '7', '8', '9'"
+  },
+  {
+   "title": "Data model states - CallRecordingStatus.js",
+   "heading": "Allowed values in CallRecordingStatus.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/CallRecordingStatus.js"
+   ],
+   "text": "Allowed values of fields in the CallRecordingStatus model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\ndirection: 'inbound', 'outbound'\nattachStatus: 'planned', 'attached', 'technical_failure', 'not_recorded'"
   },
   {
    "title": "Data model states - CompanyAiDelegation.js",
@@ -49,7 +99,7 @@
    "sources": [
     "v25_comporchestrator_back/src/models/CompanyPayment.js"
    ],
-   "text": "Allowed values of fields in the CompanyPayment model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\npurpose: 'wallet_deposit', 'minutes_purchase', 'tokens_purchase', 'bundle_purchase', 'subscription_upgrade'\nprovider: 'stripe', 'paypal'\nstatus: 'pending', 'succeeded', 'failed', 'refunded'"
+   "text": "Allowed values of fields in the CompanyPayment model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\npurpose: 'wallet_deposit', 'minutes_purchase', 'tokens_purchase', 'bundle_purchase', 'subscription_upgrade'\nprovider: 'stripe', 'paypal'\nstatus: 'pending', 'succeeded', 'failed', 'refunded', 'review'"
   },
   {
    "title": "Data model states - Contact.js",
@@ -119,7 +169,7 @@
    "sources": [
     "v25_comporchestrator_back/src/models/InboundCall.js"
    ],
-   "text": "Allowed values of fields in the InboundCall model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nstatus: 'ringing', 'answered', 'abandoned', 'missed', 'no_agent', 'voicemail'\nroute: 'browser', 'mobile', 'voicemail'\nansweredOn: 'browser', 'mobile'\nmode: 'dial', 'message'\nresult: 'ringing', 'answered', 'no_answer', 'busy', 'failed', 'caller_hung_up', 'message_left', 'message_offered'"
+   "text": "Allowed values of fields in the InboundCall model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nstatus: 'ringing', 'answered', 'abandoned', 'missed', 'no_agent', 'voicemail'\nroute: 'browser', 'mobile', 'voicemail', 'ai_agent'\nansweredOn: 'browser', 'mobile', 'ai_agent'\nmode: 'dial', 'message'\nresult: 'ringing', 'answered', 'no_answer', 'busy', 'failed', 'caller_hung_up', 'message_left', 'message_offered'"
   },
   {
    "title": "Data model states - InboundEmail.js",
@@ -162,6 +212,26 @@
    "text": "Allowed values of fields in the MinutesCompany model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nkind: 'plan', 'recharge'"
   },
   {
+   "title": "Data model states - OAuthPending.js",
+   "heading": "Allowed values in OAuthPending.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/OAuthPending.js"
+   ],
+   "text": "Allowed values of fields in the OAuthPending model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nprovider: 'google', 'microsoft', 'zoom'"
+  },
+  {
+   "title": "Data model states - OutboundTransfer.js",
+   "heading": "Allowed values in OutboundTransfer.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/OutboundTransfer.js"
+   ],
+   "text": "Allowed values of fields in the OutboundTransfer model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nmode: 'dial', 'message'"
+  },
+  {
    "title": "Data model states - PaypalCheckout.js",
    "heading": "Allowed values in PaypalCheckout.js",
    "product": "platform",
@@ -179,7 +249,7 @@
    "sources": [
     "v25_comporchestrator_back/src/models/PhoneNumber.js"
    ],
-   "text": "Allowed values of fields in the PhoneNumber model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nprovider: 'telnyx', 'twilio'\nbillingStatus: 'n/a', 'trial', 'active', 'payment_failed', 'suspended', 'terminated'"
+   "text": "Allowed values of fields in the PhoneNumber model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nprovider: 'telnyx', 'twilio'\nbillingStatus: 'n/a', 'trial', 'pending', 'active', 'payment_failed', 'suspended', 'terminated', 'release_failed'\nassignedRole: 'management', 'agent', 'shared'\nbillingModel: 'monthly'"
   },
   {
    "title": "Data model states - PhoneNumberPayment.js",
@@ -189,7 +259,7 @@
    "sources": [
     "v25_comporchestrator_back/src/models/PhoneNumberPayment.js"
    ],
-   "text": "Allowed values of fields in the PhoneNumberPayment model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nprovider: 'stripe', 'paypal'\nstatus: 'pending', 'authorized', 'succeeded', 'failed', 'refunded'"
+   "text": "Allowed values of fields in the PhoneNumberPayment model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nprovider: 'stripe', 'paypal'\nstatus: 'pending', 'authorized', 'succeeded', 'failed', 'refunded', 'refund_pending'\nlineBilling: 'monthly'"
   },
   {
    "title": "Data model states - ReceptionDirectory.js",
@@ -200,6 +270,16 @@
     "v25_comporchestrator_back/src/models/ReceptionDirectory.js"
    ],
    "text": "Allowed values of fields in the ReceptionDirectory model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nkind: 'owner', 'manager', 'collaborator', 'service'\nsuggestedUrgency: 'normal', 'urgent'"
+  },
+  {
+   "title": "Data model states - RegulatoryAsset.js",
+   "heading": "Allowed values in RegulatoryAsset.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/RegulatoryAsset.js"
+   ],
+   "text": "Allowed values of fields in the RegulatoryAsset model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nkind: 'document', 'address'"
   },
   {
    "title": "Data model states - RepTransaction.js",
@@ -262,6 +342,16 @@
    "text": "Allowed values of fields in the TelnyxRequirementGroup model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nstatus: 'pending', 'active', 'rejected'\ntype: 'document', 'textual', 'address'\nstatus: 'pending', 'completed'"
   },
   {
+   "title": "Data model states - TwilioResourceOwner.js",
+   "heading": "Allowed values in TwilioResourceOwner.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_comporchestrator_back/src/models/TwilioResourceOwner.js"
+   ],
+   "text": "Allowed values of fields in the TwilioResourceOwner model (orchestrator (subscriptions, billing, phone numbers, reception, wallet, minutes)):\nkind: 'bundle', 'end_user', 'document', 'address'"
+  },
+  {
    "title": "Data model states - Voicemail.js",
    "heading": "Allowed values in Voicemail.js",
    "product": "platform",
@@ -299,7 +389,17 @@
    "sources": [
     "v25_dash_calls_backend/src/models/Call.js"
    ],
-   "text": "Allowed values of fields in the Call model (calls (call journal, call analysis/QA, leads of the call dashboard)):\nrole: \"member\", \"agent\"\ndirection: \"inbound\", \"outbound\", \"outbound-dial\", \"outbound-api\", \"Inbound\", \"Outbound\"\nprovider: \"twilio\", \"qalqul\", \"telnyx\"\nstatus: \"active\", \"completed\", \"missed\", \"failed\"\ncallOutcome: 'transaction', // vente conclue 'appointment', // RDV fixé 'callback_requested', // rappel demandé (callbackAt set) 'argued_interested', // argumenté, intéressé mais pas signé 'refusal', // refus catégorique 'not_interested', // pas intéressé 'already_equipped', // déjà équipé (B2C/B2B concurrent) 'voicemail', // messagerie vocale 'no_answer', // pas de réponse 'busy', // occupé 'wrong_number', // numéro invalide 'fraud', // fraude détectée 'too_short', // ≤30s, indécidable (pas d'analyse IA) 'connected_no_sale', // legacy connecté sans issue claire 'not_argumented', // >30s analysé : connecté mais non argumenté (invalide)\ncallOutcomeSource: 'ai', 'rep', 'company', 'system'\nai_call_status: 'pending', 'processing', 'scored', 'auto_refused', 'too_short', 'error'\nsuggestedDisposition: 'to_call', 'called_unreachable', 'called_voicemail', 'called_wrong_number', 'called_callback', 'called_rdv', 'not_argumented', 'argued_rdv', 'argued_declined', 'argued_done', null\nverdict: 'up', 'down', null\ncompanyValidation: 'pending', 'approved', 'rejected'\nagentValidation: 'pending', 'approved', 'rejected'"
+   "text": "Allowed values of fields in the Call model (calls (call journal, call analysis/QA, leads of the call dashboard)):\nrole: \"member\", \"agent\"\ndirection: \"inbound\", \"outbound\", \"outbound-dial\", \"outbound-api\", \"Inbound\", \"Outbound\"\nprovider: \"twilio\", \"qalqul\", \"telnyx\"\nstatus: \"active\", \"completed\", \"missed\", \"failed\"\nrecordingStatus: 'recorded', 'not_recorded', 'pending'\nrecordingReason: 'recorded_planned', 'plan_excludes', 'disabled_by_company', 'not_applicable', 'technical_failure', 'lookup_failed'\ncallOutcome: 'transaction', // vente conclue 'appointment', // RDV fixé 'callback_requested', // rappel demandé (callbackAt set) 'argued_interested', // argumenté, intéressé mais pas signé 'refusal', // refus catégorique 'not_interested', // pas intéressé 'already_equipped', // déjà équipé (B2C/B2B concurrent) 'voicemail', // messagerie vocale 'no_answer', // pas de réponse 'busy', // occupé 'wrong_number', // numéro invalide 'fraud', // fraude détectée 'too_short', // ≤30s, indécidable (pas d'analyse IA) 'connected_no_sale', // legacy connecté sans issue claire 'not_argumented', // >30s analysé : connecté mais non argumenté (invalide)\ncallOutcomeSource: 'ai', 'rep', 'company', 'system'\nai_call_status: 'pending', 'processing', 'scored', 'auto_refused', 'too_short', 'error'\nsuggestedDisposition: 'to_call', 'called_unreachable', 'called_voicemail', 'called_wrong_number', 'called_callback', 'called_rdv', 'not_argumented', 'argued_rdv', 'argued_declined', 'argued_done', null\nverdict: 'up', 'down', null\ncompanyValidation: 'pending', 'approved', 'rejected'\nagentValidation: 'pending', 'approved', 'rejected'"
+  },
+  {
+   "title": "Data model states - CallRecordingIntent.js",
+   "heading": "Allowed values in CallRecordingIntent.js",
+   "product": "platform",
+   "audience": "all",
+   "sources": [
+    "v25_dash_calls_backend/src/models/CallRecordingIntent.js"
+   ],
+   "text": "Allowed values of fields in the CallRecordingIntent model (calls (call journal, call analysis/QA, leads of the call dashboard)):\nrecordingStatus: 'recorded', 'not_recorded', 'pending'\nrecordingReason: 'recorded_planned', 'plan_excludes', 'disabled_by_company', 'not_applicable', 'technical_failure', 'lookup_failed'"
   },
   {
    "title": "Data model states - Integration.js",
