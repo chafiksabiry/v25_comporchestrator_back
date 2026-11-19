@@ -12,6 +12,7 @@ import { loadUserName } from '../services/followUpDirectory.js';
 import { loadTools, mergedTools } from '../services/secretariatTools.js';
 import { voiceIdentity } from '../services/voicePresenceService.js';
 import { normalizeOutboundDestination, maxSecondsForBalance } from '../services/browserOutbound.js';
+import { graceLimitSeconds } from '../services/minutesGrace.js';
 import { insufficientInternationalMessages, loadCallDecisions, outboundCreditFactor, recordCallDecision } from '../services/creditCoefficient.js';
 import { dialLegCall, outboundRemainderCall } from '../services/transferBilling.js';
 import { twilioRequestValid } from '../services/twilioSignature.js';
@@ -226,7 +227,8 @@ export const callTransferController = {
       const twiml = mode === 'message'
         ? buildTransferMessageTwiml({ name: entry.name, settings, baseUrl, companyId: access.companyId, language })
         : buildTransferTwiml({
-          name: entry.name, number, extension: entry.extension, callerId: lineNumber, voice: settings?.voice, maxSeconds, language,
+          // B.1 : solde couvert + 5 minutes de grâce gratuites, puis Twilio coupe la jambe transférée.
+          name: entry.name, number, extension: entry.extension, callerId: lineNumber, voice: settings?.voice, maxSeconds: graceLimitSeconds(maxSeconds), language,
           resultUrl: `${baseUrl}${TRANSFER_WEBHOOK_PATH}?s=${encodeURIComponent(signTransferState({ secret: config.twilioAuthToken, companyId: access.companyId, callSid: parentSid, entryId, userId: access.userId, to: number, factor: transferFactor, now }))}`,
         });
       // Sortant : la ligne reste tenue par la jambe du correspondant jusqu'à sa fin réelle (bail déplacé, puis libéré par son

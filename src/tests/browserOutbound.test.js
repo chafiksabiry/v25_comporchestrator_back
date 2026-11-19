@@ -59,7 +59,9 @@ assert.equal(ok.ok, true);
 assert(ok.twiml.includes('callerId="+33219122061"') && ok.twiml.includes('<Number>+33612345678</Number>'));
 // le solde plafonne la durée : minutes entières × 60 s (jamais plus que ce qui est payé), 4 h au maximum
 assert.equal(ok.maxSeconds, 600);
-assert(ok.twiml.includes('timeLimit="600"'));
+// B.1 : timeLimit du <Dial> = solde couvert + 5 minutes de grâce (filet de Twilio ; le serveur coupe aussi à l'échéance).
+assert.equal(ok.limitSeconds, 900);
+assert(ok.twiml.includes('timeLimit="900"'));
 assert.equal(decideOutboundCall({ to: '+33612345678', line, subscribed: true, minutes: 1.9 }).maxSeconds, 60, 'minute entamée = minute facturée');
 assert.equal(decideOutboundCall({ to: '+33612345678', line, subscribed: true, minutes: 100000 }).maxSeconds, 14400);
 for (const [args, msg] of [

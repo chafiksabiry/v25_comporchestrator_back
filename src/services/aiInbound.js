@@ -26,6 +26,7 @@ import { CONSENT_TEXTS } from './callRecording.js';
 import { normalizePhone, displayName } from './contacts.js';
 import { buildTransferTwiml, entryAvailability, isReachableNow, signTransferState, TRANSFER_WEBHOOK_PATH } from './callTransfer.js';
 import { normalizeOutboundDestination, maxSecondsForBalance } from './browserOutbound.js';
+import { graceLimitSeconds } from './minutesGrace.js';
 import { loadTools, mergedTools } from './secretariatTools.js';
 import { publicApiBase, publicOrigin } from './twilioSignature.js';
 
@@ -497,7 +498,7 @@ const TOOLS = {
     const settingsIn = await InboundSettings.findOne({ companyId: oid(claims.companyId) }).select(NO_BYTES).lean().catch(() => null);
     const language = String(doc.language).startsWith('en') ? 'en' : 'fr';
     const twiml = buildTransferTwiml({
-      name: entry.name, number, extension: entry.extension, callerId: doc.to, voice: settingsIn?.voice, maxSeconds, language,
+      name: entry.name, number, extension: entry.extension, callerId: doc.to, voice: settingsIn?.voice, maxSeconds: graceLimitSeconds(maxSeconds), language,
       resultUrl: `${baseUrl}${TRANSFER_WEBHOOK_PATH}?s=${encodeURIComponent(signTransferState({ secret: config.twilioAuthToken || deps.env.TWILIO_AUTH_TOKEN, companyId: claims.companyId, callSid: claims.callSid, entryId, userId: 'ai-agent', to: number, factor: creditFactor, now: deps.now() }))}`,
     });
     // État « transféré » posé AVANT la bascule Twilio : un compte rendu « appelant parti » reçu pendant le transfert ne libère pas la ligne.

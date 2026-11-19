@@ -4,6 +4,7 @@ import { ensureEnvTwimlApp } from './twimlApps.js';
 import { normalizeDestination, buildRefusalTwiml, buildCallbackTwiml } from './voicemailCallback.js';
 import { isPremiumRate } from './outboundDestinations.js';
 import { languageForPhone } from './companyLanguage.js';
+import { graceLimitSeconds } from './minutesGrace.js';
 
 /**
  * Appel SORTANT depuis le navigateur (clavier de « Mon poste » de Nomad Solo).
@@ -167,8 +168,9 @@ export function decideOutboundCall({ to, line, subscribed, minutes, recording = 
   if (!to) return { ok: false, message: 'Numéro non autorisé.', key: 'number_not_allowed' };
   if (!subscribed) return { ok: false, message: 'Aucun abonnement actif.', key: 'no_subscription' };
   if (!line) return { ok: false, message: 'Aucune ligne disponible pour appeler.', key: 'no_line' };
-  // Toute minute commencée est facturée en entier : il faut au moins une minute entière, et l'appel est coupé quand
-  // les minutes entières du solde sont écoulées, pour que le solde ne passe jamais sous zéro.
+  // Toute minute commencée est facturée en entier : il faut au moins une minute entière pour démarrer. Quand les minutes entières du
+  // solde sont écoulées, 5 minutes de grâce gratuites (B.1), puis coupure : `maxSeconds` = secondes couvertes par le solde,
+  // `limitSeconds` = couvertes + grâce (timeLimit du <Dial>, filet natif de Twilio ; le serveur coupe aussi à l'échéance enregistrée).
   const maxSeconds = maxSecondsForBalance(minutes, { creditFactor });
   if (!maxSeconds) {
     // Appel international à N crédits la minute : le solde ne couvre pas une minute internationale (message clair avec N).
@@ -176,7 +178,8 @@ export function decideOutboundCall({ to, line, subscribed, minutes, recording = 
       ? { ok: false, message: internationalInsufficientText('fr', creditFactor), key: 'insufficient_minutes_international', creditFactor }
       : { ok: false, message: 'Solde de minutes insuffisant.', key: 'insufficient_minutes' };
   }
-  return { ok: true, maxSeconds, twiml: buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds, recording, action }) };
+  const limitSeconds = graceLimitSeconds(maxSeconds);
+  return { ok: true, maxSeconds, limitSeconds, twiml: buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds: limitSeconds, recording, action }) };
 }
 
 /**
