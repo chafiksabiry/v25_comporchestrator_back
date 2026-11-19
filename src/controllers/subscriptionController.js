@@ -524,7 +524,12 @@ export const subscriptionController = {
     if (String(userId) !== String(access.userId)) return res.status(403).json({ error: 'Forbidden', code: 'forbidden' });
     try {
       // Même garde Nomad Solo que /checkout/init (route ancienne, gardée pour ne pas contourner la vérification des numéros).
-      if (callcenterTierFromMetadata(await stripeService.priceProductMetadata(priceId)) === 'nomad_solo') {
+      const priceMetadata = await stripeService.priceProductMetadata(priceId);
+      // Métadonnées du prix illisibles (panne Stripe) : on refuse plutôt que de sauter la garde Nomad Solo.
+      if (priceMetadata == null) {
+        return res.status(503).json({ error: 'Price details unavailable', code: 'AVAILABILITY_UNAVAILABLE', retryable: true });
+      }
+      if (callcenterTierFromMetadata(priceMetadata) === 'nomad_solo') {
         const eligibility = await soloCheckoutEligibility(req, companyId);
         if (!eligibility.ok) return res.status(eligibility.status).json(eligibility.body);
       }
