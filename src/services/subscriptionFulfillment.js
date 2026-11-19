@@ -37,6 +37,8 @@ export async function resolvePlanByPriceId(priceId) {
   let currency = (plan?.currency || 'eur').toUpperCase();
   /** Montants par devise (mêmes montants en EUR, USD, GBP) ; vide si Stripe n'a pas répondu. */
   let amounts = {};
+  /** Métadonnées du produit Stripe du prix (null si Stripe n'a pas répondu) : servent à refuser les codes promo des offres CLOUD et NOMAD. */
+  let productMetadata = null;
 
   if (stripeService.isConfigured()) {
     try {
@@ -46,6 +48,7 @@ export async function resolvePlanByPriceId(priceId) {
         amountCents = sp.unit_amount;
         currency = (sp.currency || 'eur').toUpperCase();
         amounts = priceAmounts(sp);
+        if (sp.product && typeof sp.product === 'object') productMetadata = sp.product.metadata || {};
       }
     } catch (err) {
       console.warn('[subscription] Could not fetch Stripe prices:', err.message);
@@ -55,7 +58,7 @@ export async function resolvePlanByPriceId(priceId) {
   if (!plan || amountCents == null) {
     return null;
   }
-  return { plan, amountCents, currency, amounts, stripePriceId: effectivePriceId };
+  return { plan, amountCents, currency, amounts, stripePriceId: effectivePriceId, productMetadata };
 }
 
 /**

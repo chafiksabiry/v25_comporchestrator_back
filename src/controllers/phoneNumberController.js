@@ -1,16 +1,21 @@
 import { phoneNumberService } from '../services/phoneNumberService.js';
 import { callerAccess, ScopeError, scopeToCompany } from '../middleware/companyScope.js';
+import { guardCompanyAccess } from '../middleware/companyGuard.js';
+import TwilioResourceOwner from '../models/TwilioResourceOwner.js';
+import { bundleFriendlyName, CONTACT_EMAIL_REQUIRED, CONTACT_EMAIL_REQUIRED_MESSAGE, resolveBundleContact } from '../services/twilioBundleContact.js';
 import { AssignmentError, LINE_NOT_ASSIGNED, LINE_NOT_ASSIGNED_MESSAGE, agentLineStatus, inboundRingFilter, enforcementSettings, lineStatusView, agentCapacity, assertAgentCanHaveLine, assertReleasable, assignAgent, assignmentFields, offerKind, oldestOf, resolvePurchaseAssignment, unassignAgent, withCenterLock } from '../services/lineAssignment.js';
 import { listLinesFor } from '../services/phoneNumberList.js';
 import { callingInfoOf } from '../services/outboundDestinations.js';
-import { LINE_BUSY_CODE, LINE_BUSY_MESSAGE, LINE_CALL_END_PATH, hasFreeLine, signLineCallEnd, verifyLineCallEnd, lineCallsEnforced, releaseCall, staleCheckFor, takeFirstFreeLine, takeLine } from '../services/lineCalls.js';
+import { LINE_BUSY_CODE, LINE_BUSY_MESSAGE, LINE_CALL_END_PATH, capacityOf, hasFreeLine, signLineCallEnd, verifyLineCallEnd, lineCallsEnforced, releaseCall, staleCheckFor, takeFirstFreeLine, takeLine } from '../services/lineCalls.js';
 import { checkNumberCountry } from '../services/numberCountry.js';
-import { purchaseCurrency } from '../services/purchaseCurrency.js';
+import { mergeSearchResults } from '../services/numberSearchMerge.js';
+import { phoneLineCurrency, purchaseCurrency } from '../services/purchaseCurrency.js';
 import { checkCompanyDestination } from '../services/outboundPolicy.js';
 import { isPremiumRate, MESSAGES as DESTINATION_MESSAGES, DESTINATION_NOT_ALLOWED } from '../services/outboundDestinations.js';
 import { paypalService } from '../services/paypalService.js';
 import { stripeService } from '../services/stripeService.js';
 import { config } from '../config/env.js';
+import { applyInboundWebhook, inboundWebhookUrls, NUMBER_OWNED_BY_PRODUCTION, NUMBER_OWNED_BY_PRODUCTION_MESSAGE, maskNumber, hostOf } from '../services/inboundWebhook.js';
 import telnyx from 'telnyx';
 import mongoose from 'mongoose';
 import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
@@ -34,10 +39,12 @@ import { notifyCompany } from '../services/companyNotificationService.js';
 import { createVoiceToken, pushCredentialFor, VOICE_TOKEN_TTL_S } from '../services/voiceTokenService.js';
 import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
+import { insufficientInternationalMessages, outboundCreditFactor, outboundCreditDecision, recordCallDecision } from '../services/creditCoefficient.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket, MINUTES_INSUFFICIENT_CODE, MINUTES_INSUFFICIENT_MESSAGE, spokenLanguage, spokenRefusal, SPOKEN_REFUSALS } from '../services/browserOutbound.js';
-import { transferResult } from './callTransferController.js';
-import { attachCallRecording, buildRecordingPlan, consentLanguageFor, consentTwiml, mapCallRecordingCallback, normalizeConsentLanguage, shouldRecordCompany, shouldRecordPlan, verifyRecordingToken } from '../services/callRecording.js';
+import { billLineCallEnd, transferResult } from './callTransferController.js';
+import { buildRecordingPlan, consentLanguageFor, consentTwiml, mapCallRecordingCallback, normalizeConsentLanguage, planForCall, verifyRecordingToken } from '../services/callRecording.js';
+import { attachRecordingTracked, firstRecordingDecision, recordDecision } from '../services/recordingStatus.js';
 import { journalForwardedCall, journalUnansweredCall } from '../services/journalCall.js';
 import ReachSettings from '../models/ReachSettings.js';
 import { decideInboundRoute, mobileTarget, shouldRingMobileAfter } from '../services/reach.js';
@@ -46,6 +53,8 @@ import { blockedCallBody } from '../services/blockedCallers.js';
 import { languageForPhone } from '../services/companyLanguage.js';
 import { getInboundTest, needsInboundTestProof, realCallProof, receiveInboundCall, startInboundTest as startInboundTestSession } from '../services/inboundTestService.js';
 import { stripeLocaleFromRequest } from '../services/stripeLocale.js';
+import { tryAiInbound, aiQueueFor, aiInboundPilotEnabled } from '../services/aiInbound.js';
+import { twilioRequestValid } from '../services/twilioSignature.js';
 
 /** Titulaire Nomad Solo (une seule personne) : l'appelant entend des messages à la première personne. Toute erreur = texte entreprise. */
 const isSoloCompany = async (companyId) => {
@@ -59,19 +68,62 @@ const isSoloCompany = async (companyId) => {
   }
 };
 
+/** Réglage société lu pour la décision d'enregistrement (lève en cas d'erreur : l'appel n'est alors pas enregistré). */
+const loadRecordingSettings = (companyId) => InboundSettings.findOne({ companyId }).select('recording').lean();
+
+/**
+ * Décision et consigne d'enregistrement d'un appel, entrant ou sortant : offre éligible ET réglage société (voir callRecording.decideRecording).
+ * `plan` null = non enregistré, aucune annonce. Le motif est consigné et signalé à dash_calls sans bloquer l'appel.
+ */
+const recordingDecisionFor = async ({ companyId, callSid, baseUrl, language, direction, loadLimits = loadCompanyPlanLimits }) => {
+  const { plan, reason } = await planForCall({ companyId, callSid, baseUrl, language, direction, loadLimits, loadSettings: loadRecordingSettings });
+  void recordDecision({ callSid, companyId, direction, reason });
+  return plan;
+};
+
 /**
  * Consigne d'enregistrement d'un appel entrant pour l'entreprise de la ligne (null = non enregistré, aucune annonce).
- * Offre non listée (voir callRecording.shouldRecordPlan), erreur de lecture ou CallSid absent : jamais d'enregistrement.
+ * Offre non éligible, réglage société désactivé, erreur de lecture ou CallSid absent : jamais d'enregistrement.
  */
 const recordingPlanFor = async ({ companyId, callSid, baseUrl, from, language = 'fr' }) => {
   if (!companyId || !callSid) return null;
-  if (!(await shouldRecordCompany(companyId, loadCompanyPlanLimits))) return null;
   // Annonce dans la langue de l'interlocuteur quand son indicatif est reconnu, sinon dans celle de la société (`language`).
+  return recordingDecisionFor({ companyId, callSid, baseUrl, language: consentLanguageFor(from, language), direction: 'inbound' });
+};
+
+/**
+ * Consigne d'enregistrement des tentatives SUIVANTES d'une sonnerie à tour de rôle : la première décision consignée de l'appel
+ * fait foi (jamais recalculée). L'annonce a été jouée (ou non) à la première tentative : enregistrer seulement si cette décision
+ * était `recorded_planned`. Pas de décision lisible (consigne absente, autre entreprise, base en panne) : non enregistré.
+ */
+const recordingPlanFromFirstDecision = async ({ companyId, callSid, baseUrl, from, language = 'fr' }) => {
+  if (!companyId || !callSid) return null;
+  if ((await firstRecordingDecision({ callSid, companyId })) !== 'recorded_planned') return null;
   return buildRecordingPlan({ record: true, companyId: String(companyId), callSid, baseUrl, language: consentLanguageFor(from, language) });
 };
 
 /** In-memory status for live test-call monitoring (popup). */
+/**
+ * Dossier réglementaire / adresse fournis à l'achat d'un numéro : un sid du CORPS n'est cru que s'il est ceux de la plateforme (configuration par pays) ou
+ * enregistré au nom de la société de l'appelant (TwilioResourceOwner, à la création via /twilio/*). Sinon 403 AVANT tout appel à Twilio ou paiement.
+ * @returns {Promise<{status:number, body:object}|null>} null si tout est autorisé.
+ */
+async function foreignRegulatorySids(companyId, { bundleSid, addressSid } = {}) {
+  const platform = new Set([config.twilioFrenchBundleSid, config.twilioGbBundleSid, config.twilioFrenchNationalBundleSid, config.twilioFrenchAddressSid, config.twilioGbAddressSid, config.twilioFrenchNationalAddressSid].filter(Boolean));
+  for (const [field, kind, sid] of [['bundleSid', 'bundle', bundleSid], ['addressSid', 'address', addressSid]]) {
+    if (sid === undefined || sid === null || sid === '') continue;
+    const value = String(sid);
+    if (platform.has(value)) continue;
+    const row = await TwilioResourceOwner.findOne({ sid: value, kind, companyId: String(companyId) }).select('_id').lean();
+    if (!row) return { status: 403, body: { error: 'Forbidden', code: 'regulatory_resource_not_owned', message: `${field} does not belong to your company` } };
+  }
+  return null;
+}
+
 const testCallSessions = new Map();
+/** Sessions des appels de test en cours (exposées pour les tests uniquement). */
+export const testCallSessionsForTests = testCallSessions;
+export const foreignRegulatorySidsForTests = foreignRegulatorySids;
 
 const toE164 = (value) => {
   let s = String(value || '').trim().replace(/[\s()-]/g, '');
@@ -82,20 +134,152 @@ const toE164 = (value) => {
 };
 
 /**
- * A succeeded, not-yet-used line payment for this company and number.
- * The orchestrator sometimes calls /purchase without paymentId even after
- * Stripe has already marked the checkout succeeded.
+ * État RÉEL, chez Stripe ou PayPal, d'un paiement de ligne : { state: 'authorized' | 'succeeded' } s'il peut payer un achat,
+ * { state: 'failed', reason } s'il ne le peut plus (autorisation annulée, session expirée ou jamais payée, commande PayPal
+ * annulée), { state: 'unknown' } s'il est transitoire ou illisible. Lève si le prestataire ne répond pas.
+ */
+async function providerLinePaymentState(payment) {
+  if (payment.provider === 'stripe') {
+    if (!payment.providerRef) return { state: 'failed', reason: 'stripe_session_missing' };
+    const session = await stripeService.retrieveSession(payment.providerRef);
+    const pi = session?.payment_intent && typeof session.payment_intent === 'object' ? session.payment_intent : null;
+    if (pi) {
+      if (pi.status === 'succeeded') {
+        // Remboursé (même partiellement, ex. à la main dans Stripe) : PI toujours « succeeded », mais le paiement ne paie plus rien.
+        const charge = pi.latest_charge && typeof pi.latest_charge === 'object' ? pi.latest_charge : null;
+        if (charge && (charge.refunded || Number(charge.amount_refunded) > 0)) return { state: 'failed', reason: 'stripe_payment_refunded' };
+        return { state: 'succeeded' };
+      }
+      if (pi.status === 'requires_capture') return { state: 'authorized' };
+      if (pi.status === 'processing') return { state: 'unknown' };
+      return { state: 'failed', reason: `stripe_payment_intent_${pi.status || 'unknown'}` };
+    }
+    if (session?.payment_intent) return { state: 'unknown' }; // PaymentIntent non déplié : rien n'est décidé
+    if (session?.payment_status === 'paid') return { state: 'succeeded' };
+    if (session?.status === 'expired') return { state: 'failed', reason: 'stripe_session_expired' };
+    if (session?.payment_status === 'unpaid') return { state: 'failed', reason: 'stripe_session_unpaid' };
+    return { state: 'unknown' };
+  }
+  if (payment.provider === 'paypal') {
+    if (!payment.providerRef) return { state: 'failed', reason: 'paypal_order_missing' };
+    const order = await paypalService.getOrder(payment.providerRef);
+    if (order?.status === 'COMPLETED') return { state: 'succeeded' };
+    if (order?.status === 'APPROVED') return { state: 'authorized' };
+    if (!order?.status) return { state: 'unknown' };
+    return { state: 'failed', reason: `paypal_order_${String(order.status).toLowerCase()}` };
+  }
+  return { state: 'unknown' };
+}
+
+/** Le prestataire répond que la session / commande n'existe pas (404 définitif), et non une panne passagère. */
+const isProviderNotFound = (err) =>
+  err?.code === 'resource_missing' ||
+  err?.statusCode === 404 ||
+  err?.raw?.code === 'resource_missing' ||
+  err?.response?.status === 404 ||
+  err?.response?.data?.name === 'RESOURCE_NOT_FOUND';
+
+/**
+ * Un paiement 'authorized' ou 'succeeded' en base, sans ligne, n'est repris pour un achat qu'après relecture de son état chez le
+ * prestataire (incident du 19/11 : autorisation annulée à la main dans Stripe, restée 'authorized' en base, puis reprise).
+ *  - autorisé / encaissé chez le prestataire -> statut aligné, { usable: true } ;
+ *  - annulé, expiré, non payé -> paiement marqué 'failed' (failureReason explicite), { usable: false } : l'appelant redemande un paiement ;
+ *  - illisible ou transitoire -> rien n'est modifié, { usable: false, unknown: true } : l'achat est refusé sans rien commander.
+ */
+async function verifyLinePaymentForPurchase(payment) {
+  if (!payment || payment.phoneNumberRef || !['authorized', 'succeeded'].includes(payment.status)) return { usable: false };
+  let result;
+  try {
+    result = await providerLinePaymentState(payment);
+  } catch (err) {
+    if (isProviderNotFound(err)) {
+      // Session Stripe ou commande PayPal introuvable pour de bon : ce paiement ne pourra jamais servir, on redemande un paiement.
+      result = { state: 'failed', reason: `${payment.provider || 'provider'}_payment_not_found` };
+    } else {
+      console.warn(`[telephony] line payment ${payment._id} state unreadable, not reused:`, err.message);
+      return { usable: false, unknown: true };
+    }
+  }
+  if (result.state === 'failed') {
+    console.warn(`[telephony] line payment ${payment._id} no longer usable (${result.reason}): marked failed`);
+    payment.status = 'failed';
+    payment.failureReason = result.reason;
+    await payment.save();
+    return { usable: false };
+  }
+  if (result.state !== 'authorized' && result.state !== 'succeeded') return { usable: false, unknown: true };
+  if (payment.status !== result.state) {
+    payment.status = result.state;
+    await payment.save();
+  }
+  return { usable: true };
+}
+
+/**
+ * Le paiement réutilisable le plus récent de CETTE entreprise pour ce numéro ('authorized' ou 'succeeded', sans ligne), vérifié chez le
+ * prestataire. L'orchestrateur appelle parfois /purchase sans paymentId alors que le paiement est déjà autorisé.
+ * @returns {Promise<{ payment: object|null, unknown?: boolean }>}
  */
 async function findUnusedSucceededLinePayment(companyId, phoneNumber) {
-  if (!companyId || !mongoose.Types.ObjectId.isValid(companyId) || !phoneNumber) return null;
+  if (!companyId || !mongoose.Types.ObjectId.isValid(companyId) || !phoneNumber) return { payment: null };
   const numbers = [...new Set([String(phoneNumber), toE164(phoneNumber)].filter(Boolean))];
-  return PhoneNumberPayment.findOne({
+  const candidates = await PhoneNumberPayment.find({
     companyId,
     phoneNumber: { $in: numbers },
     status: { $in: ['succeeded', 'authorized'] },
     $or: [{ phoneNumberRef: { $exists: false } }, { phoneNumberRef: null }]
-  }).sort({ createdAt: -1 });
+  }, null, { sort: { createdAt: -1 }, limit: 5 });
+  let unknown = false;
+  for (const candidate of candidates || []) {
+    // Jamais le paiement d'une autre entreprise ni d'un autre numéro (le filtre ci-dessus l'exclut déjà ; double contrôle).
+    if (String(candidate.companyId) !== String(companyId) || !numbers.includes(toE164(candidate.phoneNumber))) continue;
+    const verdict = await verifyLinePaymentForPurchase(candidate);
+    if (verdict.usable) return { payment: candidate };
+    if (verdict.unknown) unknown = true;
+  }
+  return { payment: null, unknown };
 }
+
+/**
+ * Paiement d'un achat de ligne (purchase et purchase/twilio) : celui du paymentId s'il est encore utilisable, sinon le paiement
+ * réutilisable de l'entreprise pour ce numéro ; tout paiement 'authorized' / 'succeeded' est relu chez le prestataire avant d'être
+ * accepté. Un paymentId d'une AUTRE entreprise est renvoyé tel quel, sans être relu ni modifié (refusé ensuite en 403).
+ * @returns {Promise<{ payment: object|null, unknown?: boolean }>}
+ */
+async function resolveLinePaymentForPurchase(companyId, phoneNumber, paymentId) {
+  let payment = null;
+  let unknown = false;
+  if (paymentId && mongoose.Types.ObjectId.isValid(paymentId)) {
+    payment = await PhoneNumberPayment.findById(paymentId);
+  }
+  if (payment && String(payment.companyId) !== String(companyId)) return { payment };
+  if (payment && !payment.phoneNumberRef && payment.status === 'pending') {
+    try {
+      payment = await syncLinePaymentAuthorization(payment);
+    } catch (syncErr) {
+      console.warn('[telephony] could not read payment authorization:', syncErr.message);
+    }
+  }
+  if (payment && !payment.phoneNumberRef && ['authorized', 'succeeded'].includes(payment.status)) {
+    const verdict = await verifyLinePaymentForPurchase(payment);
+    if (verdict.usable) return { payment };
+    unknown = Boolean(verdict.unknown);
+    payment = null;
+  } else if (payment && !payment.phoneNumberRef && payment.status === 'pending') {
+    return { payment }; // autorisation pas encore donnée : 402 « paiement requis »
+  } else {
+    payment = null;
+  }
+  const found = await findUnusedSucceededLinePayment(companyId, phoneNumber);
+  return { payment: found.payment, unknown: unknown || Boolean(found.unknown) };
+}
+
+/** Achat refusé AVANT toute commande : l'état du paiement n'a pas pu être relu chez le prestataire. */
+const PAYMENT_STATE_UNAVAILABLE_BODY = {
+  error: 'Payment state unavailable',
+  code: 'PAYMENT_STATE_UNAVAILABLE',
+  message: "Impossible de vérifier votre paiement pour le moment : aucun numéro n'a été commandé et rien n'a été encaissé par cette tentative. Réessayez dans quelques instants."
+};
 
 async function syncLinePaymentAuthorization(payment) {
   if (!payment || payment.status === 'succeeded' || payment.status === 'authorized') return payment;
@@ -143,7 +327,21 @@ async function releaseLineAuthorization(payment, reason) {
     try {
       intent = await stripeService.cancelCheckoutAuthorization(payment.providerRef);
     } catch (err) {
-      // Autorisation non annulée : le paiement n'est PAS marqué « failed » (il reste « authorized », repris par la réconciliation).
+      // L'annulation a échoué : on relit l'état réel. Autorisation DÉJÀ annulée (ex. à la main dans Stripe) -> le paiement passe
+      // « failed », il ne doit plus jamais être repris. Sinon il n'est PAS marqué « failed » (il reste « authorized », repris par la réconciliation).
+      let state = null;
+      try {
+        state = await stripeService.getCheckoutPaymentState(payment.providerRef);
+      } catch (stateErr) {
+        console.warn('[telephony] payment state unreadable after release error:', stateErr.message);
+      }
+      if (state === 'canceled') {
+        payment.status = 'failed';
+        payment.failureReason = reason || 'number_purchase_failed';
+        await payment.save();
+        return { released: true, alreadyCanceled: true, provider: payment.provider };
+      }
+      if (state === 'captured') return { released: false, captured: true, provider: payment.provider };
       console.warn('[telephony] could not release card authorization:', err.message);
       return { released: false, provider: payment.provider };
     }
@@ -294,7 +492,7 @@ class PhoneNumberController {
 
   async searchTwilioNumbers(req, res) {
     try {
-      const { areaCode, limit, locality } = req.query;
+      const { areaCode, limit, locality, postalCode } = req.query;
       // Pays de l'entreprise, ou toute l'Europe pour une entreprise européenne (décision produit) ; le pays cherché borne aussi l'inventaire non affecté.
       const gate = await checkNumberCountry(req, req.query.companyId, { countryCode: req.query.countryCode });
       if (!gate.ok) return res.status(gate.status).json(gate.body);
@@ -317,14 +515,15 @@ class PhoneNumberController {
           countryCode,
           areaCode,
           locality,
+          postalCode,
           limit: parseInt(limit) || 50
         });
       } catch (searchErr) {
         if (!inventory.length) throw searchErr;
         console.warn('[telephony] recherche de nouveaux numéros indisponible, inventaire seul:', searchErr.message);
       }
-      const inInventory = new Set(inventory.map((n) => n.phoneNumber));
-      res.json([...inventory, ...numbers.filter((n) => !inInventory.has(n.phoneNumber))]);
+      // Stock en tête (seulement celui de la zone de la ville pour la France), puis les numéros Twilio.
+      res.json(mergeSearchResults({ inventory, numbers, countryCode, locality, postalCode }));
     } catch (error) {
       if (error.code === 'REGULATORY_BUNDLE_REQUIRED') {
         return res.status(200).json({
@@ -347,6 +546,10 @@ class PhoneNumberController {
       console.log("📦 req.body:", JSON.stringify(req.body, null, 2));
 
       const { phoneNumber, provider, gigId, requirementGroupId, companyId, bundleSid, addressSid, paymentId } = req.body;
+      if (companyId && (bundleSid || addressSid)) {
+        const foreign = await foreignRegulatorySids(companyId, { bundleSid, addressSid });
+        if (foreign) return res.status(foreign.status).json(foreign.body);
+      }
 
       const missingFields = {
         phoneNumber: !phoneNumber ? 'Phone number is required' : null,
@@ -394,19 +597,10 @@ class PhoneNumberController {
       const linePricing = await getPhoneLinePricing();
 
       if (!isTrial && !isIncluded) {
-        if (paymentId && mongoose.Types.ObjectId.isValid(paymentId)) {
-          payment = await PhoneNumberPayment.findById(paymentId);
-        }
-        if (!payment || payment.phoneNumberRef || !['pending', 'authorized', 'succeeded'].includes(payment.status)) {
-          payment = await findUnusedSucceededLinePayment(companyId, phoneNumber);
-        }
-        if (payment && payment.status === 'pending') {
-          try {
-            payment = await syncLinePaymentAuthorization(payment);
-          } catch (syncErr) {
-            console.warn('[telephony] could not read payment authorization:', syncErr.message);
-          }
-        }
+        // Tout paiement 'authorized' / 'succeeded' est relu chez Stripe ou PayPal avant d'être accepté (annulé ou expiré -> 'failed', 402).
+        const resolved = await resolveLinePaymentForPurchase(companyId, phoneNumber, paymentId);
+        payment = resolved.payment;
+        if (!payment && resolved.unknown) return res.status(503).json(PAYMENT_STATE_UNAVAILABLE_BODY);
         if (!payment || payment.phoneNumberRef || !['authorized', 'succeeded'].includes(payment.status)) {
           return res.status(402).json({
             error: 'Payment required',
@@ -486,6 +680,7 @@ class PhoneNumberController {
             trialExpiresAt,
             ...(isMonthly ? { billingModel: BILLING_MODEL_MONTHLY } : {}),
             ...assignmentOptions(a),
+            webhookUrls: inboundWebhookUrls({ req }),
           }
         ),
       });
@@ -608,6 +803,10 @@ class PhoneNumberController {
 
       const { phoneNumber, gigId, companyId, bundleSid, addressSid, paymentId } = req.body;
       console.log("phoneNumber", phoneNumber);
+      if (companyId && (bundleSid || addressSid)) {
+        const foreign = await foreignRegulatorySids(companyId, { bundleSid, addressSid });
+        if (foreign) return res.status(foreign.status).json(foreign.body);
+      }
 
       // Le numéro doit être du pays de l'entreprise (ou d'Europe pour une entreprise européenne).
       const countryGate = await checkNumberCountry(req, companyId, { phoneNumber });
@@ -637,19 +836,10 @@ class PhoneNumberController {
       const linePricing = await getPhoneLinePricing();
 
       if (!isTrial && !isIncluded) {
-        if (paymentId && mongoose.Types.ObjectId.isValid(paymentId)) {
-          payment = await PhoneNumberPayment.findById(paymentId);
-        }
-        if (!payment || payment.phoneNumberRef || !['pending', 'authorized', 'succeeded'].includes(payment.status)) {
-          payment = await findUnusedSucceededLinePayment(companyId, phoneNumber);
-        }
-        if (payment && payment.status === 'pending') {
-          try {
-            payment = await syncLinePaymentAuthorization(payment);
-          } catch (syncErr) {
-            console.warn('[telephony] could not read payment authorization:', syncErr.message);
-          }
-        }
+        // Tout paiement 'authorized' / 'succeeded' est relu chez Stripe ou PayPal avant d'être accepté (annulé ou expiré -> 'failed', 402).
+        const resolved = await resolveLinePaymentForPurchase(companyId, phoneNumber, paymentId);
+        payment = resolved.payment;
+        if (!payment && resolved.unknown) return res.status(503).json(PAYMENT_STATE_UNAVAILABLE_BODY);
         if (!payment || payment.phoneNumberRef || !['authorized', 'succeeded'].includes(payment.status)) {
           return res.status(402).json({
             error: 'Payment required',
@@ -730,6 +920,7 @@ class PhoneNumberController {
             trialExpiresAt,
             ...(isMonthly ? { billingModel: BILLING_MODEL_MONTHLY } : {}),
             ...assignmentOptions(a),
+            webhookUrls: inboundWebhookUrls({ req }),
           }
         ),
       });
@@ -1011,7 +1202,7 @@ class PhoneNumberController {
    */
   async rollbackMonthlyLine(newNumber, companyId, cause) {
     try {
-      await phoneNumberService.deletePhoneNumber({ id: newNumber?._id, companyId });
+      await phoneNumberService.releaseFailedPurchase({ id: newNumber?._id, companyId, line: newNumber }); // numéro venu du stock : remis en stock ; numéro neuf : rendu à l'opérateur
       return { releaseFailed: false };
     } catch (releaseErr) {
       try {
@@ -1244,11 +1435,11 @@ class PhoneNumberController {
         }
       }
 
-      // Prix de la ligne de l'offre (premier mois payé ici, puis abonnement mensuel du même montant pour les offres Call Centre
-      // qui portent `phone_line_price_cents`) ; prix par défaut sinon.
+      // Prix de la ligne de l'offre (premier mois payé ici, puis abonnement mensuel du même montant pour toutes les offres CLOUD,
+      // Accueil compris : `phone_line_price_cents` du produit Stripe, sinon repli 14,99 €) ; prix par défaut hors CLOUD.
       const linePricing = await getPhoneLinePricing(companyId, { limits: planLimits });
       if (linePricing.unavailable) {
-        // Offre Call Centre sans prix de ligne valable : refus clair, jamais de repli silencieux sur 9,99 sans abonnement.
+        // Garde-fou conservé : getPhoneLinePricing ne renvoie plus `unavailable` (une offre CLOUD a toujours un prix de ligne).
         return res.status(409).json(PHONE_LINE_PRICE_NOT_CONFIGURED_BODY);
       }
       if (linePricing.monthly) {
@@ -1264,8 +1455,10 @@ class PhoneNumberController {
           });
         }
       }
-      // Devise du pays de l'entreprise (mêmes montants dans les trois devises), EUR si le pays n'est pas lisible.
-      const lineCurrency = await purchaseCurrency(req, companyId);
+      // Devise de la ligne (mêmes montants dans les trois devises) : celle du client Stripe de l'offre pour une ligne mensuelle,
+      // sinon celle du pays de l'entreprise (GB -> GBP, US -> USD, sinon EUR). Le premier mois ET l'abonnement mensuel
+      // (startMonthlyLineSubscription reprend payment.currency) sont dans cette devise.
+      const { currency: lineCurrency } = await phoneLineCurrency(req, companyId, { monthly: linePricing.monthly, hintCountry: req.body?.country });
 
       payment = await PhoneNumberPayment.create({
         companyId: new mongoose.Types.ObjectId(companyId),
@@ -1526,8 +1719,11 @@ class PhoneNumberController {
       // Dans ce cas l'absence de prix configuré ne bloque pas (il n'y a rien à encaisser).
       const included = await this.isFirstLineIncluded(req.query?.companyId);
       if (linePricing.unavailable && !included) return res.status(409).json(PHONE_LINE_PRICE_NOT_CONFIGURED_BODY);
-      // `?companyId=` : devise du pays de l'entreprise (mêmes montants) ; sans lui, la devise de base (EUR).
-      const currency = req.query?.companyId ? await purchaseCurrency(req, req.query.companyId) : String(linePricing.currency || 'EUR').toUpperCase();
+      // `?companyId=` : même devise que celle qui sera facturée (phoneLineCurrency, comme checkout/init) ; sans lui, la devise de base (EUR).
+      // `?country=` : pays de l'entreprise connu de l'application, utilisé seulement si le serveur n'en lit aucun.
+      const currency = req.query?.companyId
+        ? (await phoneLineCurrency(req, req.query.companyId, { monthly: linePricing.monthly, hintCountry: req.query?.country })).currency
+        : String(linePricing.currency || 'EUR').toUpperCase();
       res.json({
         success: true,
         paypal: {
@@ -1621,6 +1817,10 @@ class PhoneNumberController {
           message: `Payment status is '${payment.status}', cannot recover.`
         });
       }
+      if (bundleSid || addressSid) {
+        const foreign = await foreignRegulatorySids(payment.companyId, { bundleSid, addressSid });
+        if (foreign) return res.status(foreign.status).json(foreign.body);
+      }
       if (payment.phoneNumberRef) {
         return res.json({
           success: true,
@@ -1634,6 +1834,21 @@ class PhoneNumberController {
           error: 'Payment missing phoneNumber or companyId',
           message: 'Cannot recover this payment record — it is missing required fields.'
         });
+      }
+      // Même règle que l'achat : le paiement est relu chez le prestataire avant d'être repris (annulé ou expiré -> 'failed', 402).
+      const verdict = await verifyLinePaymentForPurchase(payment);
+      if (!verdict.usable) {
+        if (verdict.unknown) return res.status(503).json(PAYMENT_STATE_UNAVAILABLE_BODY);
+        return res.status(402).json({
+          error: 'Payment required',
+          code: 'PAYMENT_REQUIRED',
+          moneyStatus: 'not_charged',
+          message: "Ce paiement n'est plus valable chez le prestataire : aucun numéro n'a été commandé. Relancez l'achat pour payer à nouveau."
+        });
+      }
+      if (payment.status !== 'succeeded') {
+        // Seulement autorisé chez le prestataire (jamais encaissé) : la reprise ne capture pas, elle reste réservée aux paiements encaissés.
+        return res.status(400).json({ error: 'Payment not succeeded', message: `Payment status is '${payment.status}', cannot recover.` });
       }
 
       const paidPrice = payment.amount > 0 ? payment.amount / 100 : 0;
@@ -1677,6 +1892,7 @@ class PhoneNumberController {
           paymentRef: payment._id,
           ...(isMonthly ? { billingModel: BILLING_MODEL_MONTHLY } : {}),
           ...assignmentOptions(recoverAssignment),
+          webhookUrls: inboundWebhookUrls({ req }),
         }
       );
       if (isMonthly) {
@@ -1844,6 +2060,7 @@ class PhoneNumberController {
         const callId = call.sid;
         const mapped = mapTwilioCallStatus(call.status);
         upsertTestCallSession(callId, {
+          companyId: String(companyId), // propriétaire de l'appel de test : seule cette société le suit ou le raccroche
           provider: 'twilio',
           status: mapped.status,
           outcome: mapped.outcome,
@@ -1899,6 +2116,7 @@ class PhoneNumberController {
         throw Object.assign(new Error("L'appel n'a pas pu être démarré (identifiant manquant)."), { code: 'CALL_ID_MISSING' });
       }
       upsertTestCallSession(callId, {
+        companyId: String(companyId), // propriétaire de l'appel de test : seule cette société le suit ou le raccroche
         provider: 'telnyx',
         status: 'connecting',
         outcome: null,
@@ -1922,9 +2140,25 @@ class PhoneNumberController {
     }
   }
 
+  /**
+   * Un appel de test n'est suivi ou raccroché que par la société qui l'a lancé (session enregistrée au lancement). Sans session (redémarrage du serveur) ou
+   * d'une autre société : 404, SANS appel à l'opérateur (avant : tout utilisateur connecté pouvait lire l'état de n'importe quel appel du compte, ou le raccrocher).
+   */
+  async ownTestCall(req, res, callId) {
+    const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+    if (!access) return null;
+    const session = testCallSessions.get(callId);
+    if (!session || !session.companyId || String(session.companyId) !== String(access.companyId)) {
+      res.status(404).json({ error: 'Not Found', message: 'Test call not found' });
+      return null;
+    }
+    return access;
+  }
+
   async getTestCallStatus(req, res) {
     try {
       const callId = String(req.params.callId || '').trim();
+      if (callId && !(await this.ownTestCall(req, res, callId))) return;
       const provider = String(req.query.provider || req.body?.provider || '').toLowerCase();
       if (!callId) {
         return res.status(400).json({ error: 'Bad Request', message: 'callId is required' });
@@ -1997,6 +2231,7 @@ class PhoneNumberController {
   async hangupTestCall(req, res) {
     try {
       const callId = String(req.params.callId || '').trim();
+      if (callId && !(await this.ownTestCall(req, res, callId))) return;
       const provider = String(
         req.body?.provider || req.query?.provider || testCallSessions.get(callId)?.provider || ''
       ).toLowerCase();
@@ -2148,7 +2383,10 @@ class PhoneNumberController {
       if (!config.twilioAccountSid || !config.twilioAuthToken) {
         return res.status(500).json({ error: 'Server Configuration', code: 'TELEPHONY_NOT_CONFIGURED', message: 'La configuration téléphonie du serveur est incomplète.' });
       }
-      const voiceUrl = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/inbound-call`;
+      const urls = inboundWebhookUrls({ req });
+      if (!urls) {
+        return res.status(500).json({ error: 'Server Configuration', code: 'TELEPHONY_NOT_CONFIGURED', message: 'La configuration téléphonie du serveur est incomplète.' });
+      }
       let sid = line.twilioId ? String(line.twilioId) : '';
       if (!sid) {
         const found = await phoneNumberService.twilioClient.incomingPhoneNumbers.list({ phoneNumber: e164, limit: 1 });
@@ -2157,8 +2395,11 @@ class PhoneNumberController {
       if (!sid) {
         return res.status(404).json({ error: 'Not Found', code: 'LINE_NOT_FOUND_AT_PROVIDER', message: "La ligne n'a pas été retrouvée chez l'opérateur." });
       }
-      await phoneNumberService.twilioClient.incomingPhoneNumbers(sid).update({ voiceUrl, voiceMethod: 'POST' });
-      await PhoneNumber.updateOne({ _id: line._id }, { $set: { 'metadata.inboundWebhook': voiceUrl } });
+      const branched = await applyInboundWebhook({ twilioClient: phoneNumberService.twilioClient, PhoneNumber, line, sid, urls, req });
+      if (branched.refused) {
+        console.warn(`🛑 Test d'appel entrant refusé sur ${maskNumber(e164)} : numéro branché sur ${hostOf(branched.from)}`);
+        return res.status(409).json({ error: 'Conflict', code: NUMBER_OWNED_BY_PRODUCTION, message: NUMBER_OWNED_BY_PRODUCTION_MESSAGE });
+      }
       const session = startInboundTestSession(e164);
       res.json({ success: true, data: { phoneNumber: e164, status: session.status, startedAt: session.startedAt, expiresAt: session.expiresAt } });
     } catch (error) {
@@ -2340,7 +2581,7 @@ class PhoneNumberController {
         PhoneNumber.findOne({ companyId, provider: 'twilio', twilioId: { $exists: true, $ne: null }, status: 'active', billingStatus: { $ne: 'suspended' } }).sort({ createdAt: 1 }).lean(),
       ]);
       // Enregistrement selon l'offre (liste blanche) ; l'annonce est jouée à la personne appelée quand elle décroche.
-      const recording = buildRecordingPlan({ record: shouldRecordPlan(limits), companyId, callSid: String(req.body?.CallSid || ''), baseUrl: `https://${req.get('host')}`, language: consentLanguageFor(to, languageForPhone(line?.phoneNumber)) });
+      const recording = await recordingDecisionFor({ companyId, callSid: String(req.body?.CallSid || ''), baseUrl: `https://${req.get('host')}`, language: consentLanguageFor(to, languageForPhone(line?.phoneNumber)), direction: 'outbound', loadLimits: async () => limits });
       // Offres à agents : l'agent appelle depuis SA ligne, jamais depuis une autre ligne du centre ; sans ligne, refusé une fois la règle active.
       let callerLine = line;
       if (role === 'secretary' && offerKind(limits) === 'agents') {
@@ -2350,10 +2591,13 @@ class PhoneNumberController {
         if (gate.blocked || (own && !usable && gate.enforced)) return send(spokenRefusal('line_not_assigned'));
         if (usable) callerLine = own;
       }
-      let decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording });
+      // Crédits débités par minute vers cette destination (1, ou N à l'international) : plafonne la durée à solde / N.
+      let credit = await outboundCreditDecision({ companyId, limits, to, lineNumber: callerLine?.phoneNumber });
+      let creditFactor = credit.factor;
+      let decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, creditFactor });
       if (!decision.ok) {
         console.warn(`[browser-outbound] refusé pour l'entreprise ${companyId} : ${decision.message}`);
-        return send(spokenRefusal(decision.key, spokenLanguage(callerLine?.phoneNumber)));
+        return send(spokenRefusal(decision.key, spokenLanguage(callerLine?.phoneNumber), { credits: decision.creditFactor }));
       }
       // Offre Accueil, règle datée active : une ligne = un appel à la fois. L'appel prend la première ligne LIBRE du centre (sinon « ligne occupée ») ;
       // elle est libérée à la fin de la numérotation (action du <Dial>). Règle inactive ou autre offre : rien de tout cela. Toute panne : l'appel passe comme avant.
@@ -2361,17 +2605,28 @@ class PhoneNumberController {
       if (sidForLine && (await lineCallsEnforced({ companyId, limits, db: mongoose.connection.db }))) {
         try {
           const pool = await this.twilioLinesOf(companyId);
-          const taken = await takeFirstFreeLine({ lineIds: pool.map((l) => l._id), callSid: sidForLine, direction: 'outbound', isStale: staleCheckFor(phoneNumberService.twilioClient) });
+          const taken = await takeFirstFreeLine({ lineIds: pool.map((l) => l._id), callSid: sidForLine, direction: 'outbound', isStale: staleCheckFor(phoneNumberService.twilioClient), capacityFor: (id) => capacityOf(pool.find((l) => String(l._id) === String(id))) });
           if (!taken.ok) {
             console.warn(`[browser-outbound] ${LINE_BUSY_CODE} pour l'entreprise ${companyId}`);
             return send(spokenRefusal('line_busy'));
           }
           callerLine = pool.find((l) => String(l._id) === String(taken.lineId));
-          decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, action: `https://${req.get('host')}${LINE_CALL_END_PATH}?t=${signLineCallEnd({ secret: config.twilioAuthToken, callSid: sidForLine })}` });
+          // La ligne réellement prise dans la réserve peut être d'un autre pays que la première : le facteur (donc le plafond) est recalculé avec elle.
+          credit = await outboundCreditDecision({ companyId, limits, to, lineNumber: callerLine?.phoneNumber });
+          creditFactor = credit.factor;
+          decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, creditFactor, action: `https://${req.get('host')}${LINE_CALL_END_PATH}?t=${signLineCallEnd({ secret: config.twilioAuthToken, callSid: sidForLine })}` });
         } catch (error) {
           console.error('[browser-outbound] contrôle de ligne ignoré :', error?.message || error);
         }
+        if (!decision.ok) {
+          // Le solde ne couvre pas le facteur de la ligne réellement prise : on libère la ligne et on refuse (jamais d'appel sans plafond valable).
+          try { await releaseCall(sidForLine); } catch (error) { console.warn('[browser-outbound] ligne non libérée :', error?.message || error); }
+          console.warn(`[browser-outbound] refusé pour l'entreprise ${companyId} : ${decision.message}`);
+          return send(spokenRefusal(decision.key, spokenLanguage(callerLine?.phoneNumber), { credits: decision.creditFactor }));
+        }
       }
+      // Trace de la décision (ligne retenue, zone, facteur) : le débit la relit au lieu de reclasser l'appel.
+      if (credit.coefficient > 1) await recordCallDecision({ sid: String(req.body?.CallSid || ''), companyId, factor: creditFactor, zone: credit.zone, line: callerLine?.phoneNumber || '' });
       console.log(`📞 Appel sortant du navigateur (entreprise ${companyId}) vers ${to.slice(0, 6)}… depuis ${callerLine.phoneNumber}${recording ? ' (enregistré)' : ''}`);
       return send(decision.twiml);
     } catch (error) {
@@ -2400,6 +2655,26 @@ class PhoneNumberController {
       return null;
     }
     const balance = Number(minutes);
+    // Destination internationale à N crédits la minute : le solde doit couvrir au moins une minute internationale entière.
+    let creditsPerMinute = 1;
+    if (to) {
+      let planLimits = null;
+      try { planLimits = await loadCompanyPlanLimits(companyId); } catch { planLimits = null; }
+      creditsPerMinute = await outboundCreditFactor({ companyId, limits: planLimits, to });
+    }
+    if (creditsPerMinute > 1) {
+      if (Number.isFinite(balance) && Math.floor(balance) >= creditsPerMinute) return null;
+      return {
+        success: false,
+        error: MINUTES_INSUFFICIENT_CODE,
+        code: MINUTES_INSUFFICIENT_CODE,
+        country: callingInfoOf(to).countryIso,
+        zone: 'international',
+        creditsPerMinute,
+        balance: Number.isFinite(balance) ? balance : 0,
+        ...insufficientInternationalMessages(creditsPerMinute),
+      };
+    }
     if (Number.isFinite(balance) && Math.floor(balance) >= 1) return null;
     return {
       success: false,
@@ -2417,13 +2692,18 @@ class PhoneNumberController {
     return PhoneNumber.find({ companyId, provider: 'twilio', twilioId: { $exists: true, $ne: null }, status: 'active', billingStatus: { $ne: 'suspended' } }).sort({ createdAt: 1 }).lean();
   }
 
-  /** Fin d'un appel sur une ligne (action du <Dial> sortant) : libère la ligne tenue par cet appel (idempotent) ; la réponse ne change rien à l'appel. */
+  /**
+   * Fin d'un appel sur une ligne (action du <Dial> sortant, ou statusCallback de la jambe du correspondant après un transfert) : libère la
+   * ligne tenue par cet appel (idempotent) ; la réponse ne change rien à l'appel.
+   */
   async handleLineCallEnd(req, res) {
     // Jeton signé de l'URL d'action (lié au CallSid) : sans lui, rien n'est libéré (403).
     if (!verifyLineCallEnd({ secret: config.twilioAuthToken, callSid: String(req.body?.CallSid || ''), token: req.query?.t })) {
       return res.type('text/xml').status(403).send('<?xml version="1.0" encoding="UTF-8"?><Response/>');
     }
     try { await releaseCall(req.body?.CallSid); } catch (error) { console.error('line-call-end:', error?.message || error); }
+    // Jambe du correspondant d'un appel sortant transféré : le reste de l'appel après la redirection est débité (sans effet sinon).
+    await billLineCallEnd(req);
     res.type('text/xml').status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response/>');
   }
 
@@ -2439,8 +2719,7 @@ class PhoneNumberController {
       }
       if (!isAvailable(userId)) console.log(`🎧 Conseiller ${userId} disponible pour l'entreprise ${companyId}`);
       markAvailable({ userId, companyId, name: req.user?.name || '' });
-      const voiceUrl = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/inbound-call`;
-      this.ensureInboundWebhook(companyId, voiceUrl).catch((e) => console.error('ensureInboundWebhook:', e.message));
+      this.ensureInboundWebhook(companyId, inboundWebhookUrls({ req })).catch((e) => console.error('ensureInboundWebhook:', e.message));
       res.json({ success: true, data: { available: true } });
     } catch (error) {
       console.error('Error in voicePresence:', error.message);
@@ -2448,13 +2727,18 @@ class PhoneNumberController {
     }
   }
 
-  /** Toute ligne Twilio de l'entreprise doit envoyer ses appels entrants au serveur. */
-  async ensureInboundWebhook(companyId, voiceUrl) {
+  /**
+   * Toute ligne Twilio de l'entreprise doit envoyer ses appels entrants à l'API de CET environnement. `urls` : résultat de
+   * inboundWebhookUrls() (une voice_url seule est acceptée). Hors production, un numéro branché sur la production n'est jamais réécrit.
+   */
+  async ensureInboundWebhook(companyId, urls) {
     if (!mongoose.Types.ObjectId.isValid(String(companyId))) return;
-    const lines = await PhoneNumber.find({ companyId, twilioId: { $exists: true, $ne: null }, 'metadata.inboundWebhook': { $ne: voiceUrl } });
+    const wanted = typeof urls === 'string' ? { voiceUrl: urls, voiceMethod: 'POST' } : urls;
+    if (!wanted?.voiceUrl) return;
+    const lines = await PhoneNumber.find({ companyId, twilioId: { $exists: true, $ne: null }, 'metadata.inboundWebhook': { $ne: wanted.voiceUrl } });
     for (const line of lines) {
-      await phoneNumberService.twilioClient.incomingPhoneNumbers(String(line.twilioId)).update({ voiceUrl, voiceMethod: 'POST' });
-      await PhoneNumber.updateOne({ _id: line._id }, { $set: { 'metadata.inboundWebhook': voiceUrl } });
+      const out = await applyInboundWebhook({ twilioClient: phoneNumberService.twilioClient, PhoneNumber, line, urls: wanted });
+      if (out.refused) console.warn(`🛑 ${maskNumber(line.phoneNumber)} branché sur ${hostOf(out.from)} : pas rebranché depuis cet environnement.`);
     }
   }
 
@@ -2496,7 +2780,8 @@ class PhoneNumberController {
       if (line?.companyId && callSid && this.lineRuleConfigured()) {
         try {
           if (await lineCallsEnforced({ companyId: line.companyId, limits: await loadCompanyPlanLimits(line.companyId), db: mongoose.connection.db })) {
-            const taken = await takeLine({ lineId: line._id, callSid, direction: 'inbound', isStale: staleCheckFor(phoneNumberService.twilioClient) });
+            // Capacité choisie par l'entreprise (appels simultanés, 1 par défaut) : au-delà, flux classique de la règle comme avant.
+            const taken = await takeLine({ lineId: line._id, callSid, direction: 'inbound', isStale: staleCheckFor(phoneNumberService.twilioClient), capacity: capacityOf(line) });
             leaseTaken = taken.ok; lineBusy = !taken.ok && taken.reason === 'busy';
           }
         } catch (error) { console.error('[inbound] contrôle de ligne ignoré :', error?.message || error); }
@@ -2514,12 +2799,20 @@ class PhoneNumberController {
       const reach = line?.companyId ? await ReachSettings.findOne({ companyId: line.companyId }).lean().catch((e) => { console.error('ReachSettings read:', e.message); return null; }) : null;
       const route = queueRoute?.kind === 'menu' ? { first: 'browser', mobileNext: false, mobile: null } : decideInboundRoute({ identities, reach, linePhone: to });
       // Aucun conseiller à faire sonner : l'appel va au répondeur, il ne tient pas la ligne (un message laissé n'est pas un appel actif).
+      // Pilote « Téléphonie + agent IA » (recette) : l'IA se règle comme un agent (interrupteur, horaires, compétences, priorité).
+      // Elle décroche ici si elle est « en premier », ou « après les humains » quand aucun humain ne va sonner. Menu vocal : décision au
+      // retour du menu (file connue). null (tous les autres cas, ou échec du moteur / de la session) : flux classique inchangé.
+      // Capacité de la ligne épuisée : jamais l'IA.
+      if (aiInboundPilotEnabled() && line?.companyId && callSid && queueRoute?.kind !== 'menu') {
+        const aiBody = await tryAiInbound({ line, to, from, callSid, lineBusy, stage: 'call', humansAvailable: route.first !== 'voicemail', queue: queueRoute ? queueRoute.queue || null : undefined, signatureValid: () => twilioRequestValid(req) });
+        if (aiBody) return reply(aiBody);
+      }
       if (leaseTaken && route.first === 'voicemail') await releaseCall(callSid).catch((e) => console.error('[inbound] libération :', e?.message || e));
       // Chaque appel est consigné : niveau de service, abandon et attente en sont calculés (inbound-stats).
       if (line?.companyId && callSid) {
         await InboundCall.updateOne(
           { callSid },
-          { $setOnInsert: { companyId: line.companyId, gigId: line.gigId || null, phoneNumber: to, from, callSid, startedAt: new Date(), status: route.first === 'voicemail' ? 'no_agent' : 'ringing', waitSeconds: route.first === 'voicemail' ? 0 : null, route: route.first, mobileTried: route.first === 'mobile' } },
+          { $setOnInsert: { companyId: line.companyId, gigId: line.gigId || null, phoneNumber: to, from, callSid, startedAt: new Date(), ...(aiInboundPilotEnabled() && queueRoute?.queue?._id ? { queueId: String(queueRoute.queue._id) } : {}), status: route.first === 'voicemail' ? 'no_agent' : 'ringing', waitSeconds: route.first === 'voicemail' ? 0 : null, route: route.first, mobileTried: route.first === 'mobile' } },
           { upsert: true }
         ).catch((e) => console.error('InboundCall log:', e.message));
         // Aucun conseiller à faire sonner : l'appel va au répondeur et doit être au journal même sans message laissé.
@@ -2588,6 +2881,12 @@ class PhoneNumberController {
       const queueRoute = !solo && line?.companyId
         ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'menu', digits: String(req.body?.Digits || '').trim(), attempt, recording, language, allow: ringAllow })
         : null;
+      // File choisie au menu : mémorisée (compétence de l'agent IA en fin de sonnerie). Agent IA « en premier » : il décroche maintenant.
+      if (aiInboundPilotEnabled() && line?.companyId && callSid && queueRoute?.queue?._id) await InboundCall.updateOne({ callSid }, { $set: { queueId: String(queueRoute.queue._id) } }).catch(() => undefined);
+      if (aiInboundPilotEnabled() && line?.companyId && callSid && queueRoute && queueRoute.kind !== 'menu') {
+        const aiFirst = await tryAiInbound({ line, to, from, callSid, stage: 'menu', humansAvailable: queueRoute.kind === 'ring', queue: queueRoute.queue || null, signatureValid: () => twilioRequestValid(req) });
+        if (aiFirst) return reply(aiFirst);
+      }
       if (queueRoute && (queueRoute.kind === 'menu' || queueRoute.kind === 'ring')) return reply(queueRoute.body);
       // Aucune file ne couvre ce cas (ou personne d'éligible) : repli existant, sans rejouer l'accueil.
       // Personne d'éligible dans la file : les conseillers présents sonnent quand même (sinon l'appel tombait au répondeur alors qu'ils étaient en ligne).
@@ -2628,10 +2927,12 @@ class PhoneNumberController {
     try {
       const baseUrl = `https://${req.get('host')}`;
       const from = String(req.body?.From || '').trim();
-      // Tentatives suivantes : même enregistrement que la première (l'annonce n'est pas répétée). Entreprise lue dans le plan signé.
+      // Tentatives suivantes : même enregistrement que la première (l'annonce n'est pas répétée) : la PREMIÈRE décision consignée
+      // de l'appel fait foi, jamais recalculée (un réglage changé entre-temps n'enregistre pas une tentative sans annonce).
+      // Entreprise lue dans le plan signé.
       const callSid0 = String(req.body?.CallSid || '').trim();
       const planOwner = (() => { try { return readPlan(req.query?.s).companyId; } catch { return ''; } })();
-      const recording = await recordingPlanFor({ companyId: planOwner, callSid: callSid0, baseUrl, from, language: languageForPhone(toE164(req.body?.To || req.body?.Called)) });
+      const recording = await recordingPlanFromFirstDecision({ companyId: planOwner, callSid: callSid0, baseUrl, from, language: languageForPhone(toE164(req.body?.To || req.body?.Called)) });
       const step = continueQueuePlan({ token: req.query?.s, dialStatus: req.body?.DialCallStatus, baseUrl, from, recording });
       if (step.action === 'dial') return res.type('text/xml').status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response>${step.body}</Response>`);
       const callSid = String(req.body?.CallSid || '').trim();
@@ -2657,6 +2958,17 @@ class PhoneNumberController {
       const mobile = leg === 'browser' && call && !call.mobileTried ? mobileTarget(reach, call.phoneNumber) : null;
       const ringMobile = shouldRingMobileAfter({ leg, dialStatus, mobile });
       const baseUrl = `https://${req.get('host')}`;
+      // Agent IA « après les humains » : personne n'a décroché (navigateur, puis mobile) : l'IA prend l'appel avant le répondeur.
+      // La ligne reste tenue par l'appel (libérée à la fin de l'appel IA). Toute anomalie : flux classique ci-dessous.
+      if (aiInboundPilotEnabled() && call?.companyId && callSid && !answered && dialStatus !== 'canceled' && !ringMobile) {
+        const aiLine = (await PhoneNumber.findOne({ phoneNumber: call.phoneNumber }).lean().catch(() => null)) || { companyId: call.companyId, gigId: call.gigId || null };
+        const aiQueue = await aiQueueFor(call.companyId, call.queueId || null).catch(() => null);
+        const aiBody = await tryAiInbound({ line: aiLine, to: call.phoneNumber, from: call.from, callSid, stage: 'after_humans', queue: aiQueue && aiQueue.deferred ? null : aiQueue, signatureValid: () => twilioRequestValid(req) });
+        if (aiBody) {
+          await InboundCall.updateOne({ callSid }, { $set: { status: 'answered', answeredOn: 'ai_agent', answeredBy: 'ai-agent', route: 'ai_agent' } }).catch(() => undefined);
+          return reply(aiBody);
+        }
+      }
       // Fin de la sonnerie (décroché puis raccroché, non décroché, abandonné) : la ligne est libérée, sauf si le mobile du titulaire va encore sonner. Idempotent.
       if (!ringMobile && callSid && this.lineRuleConfigured()) await releaseCall(callSid).catch((e) => console.error('[inbound] libération :', e?.message || e));
       if (call) {
@@ -2721,7 +3033,7 @@ class PhoneNumberController {
         console.warn('Enregistrement d\'appel : CallSid différent du jeton, rappel ignoré');
         return res.status(200).json({ success: true, ignored: 'call_mismatch' });
       }
-      void attachCallRecording({ companyId: claims.companyId, value: mapped.value });
+      void attachRecordingTracked({ companyId: claims.companyId, value: mapped.value });
       return res.status(200).json({ success: true });
     } catch (error) {
       console.error('Error in handleTwilioCallRecording:', error.message);
@@ -3160,10 +3472,33 @@ class PhoneNumberController {
     }
   }
 
+  /** Enregistre la propriété d'une ressource Twilio créée par cette société (première inscription gagnante). */
+  async claimTwilio(access, kind, sid) {
+    if (!sid) return;
+    await TwilioResourceOwner.updateOne({ sid: String(sid) }, { $setOnInsert: { kind, sid: String(sid), companyId: String(access.companyId), userId: String(access.userId || '') } }, { upsert: true });
+  }
+
+  /** Les ressources désignées (`kind` optionnel) doivent toutes appartenir à la société de l'appelant : sinon 404 (rien n'est envoyé à Twilio). */
+  async ownTwilio(req, res, wanted) {
+    const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+    if (!access) return null;
+    for (const w of wanted) {
+      const row = w.sid ? await TwilioResourceOwner.findOne({ sid: String(w.sid), ...(w.kind ? { kind: w.kind } : {}), companyId: String(access.companyId) }).select('_id').lean() : null;
+      if (!row) {
+        res.status(404).json({ error: 'Not Found', message: 'Resource not found' });
+        return null;
+      }
+    }
+    return access;
+  }
+
   async createTwilioEndUser(req, res) {
     try {
       const { friendlyName, type, attributes } = req.body;
+      const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+      if (!access) return;
       const endUser = await phoneNumberService.createTwilioEndUser(friendlyName, type, attributes);
+      await this.claimTwilio(access, 'end_user', endUser?.sid);
       res.json(endUser);
     } catch (error) {
       res.status(500).json({ error: 'Failed to create End User', details: error.message });
@@ -3179,6 +3514,8 @@ class PhoneNumberController {
       const { friendlyName, type, attributes } = req.body;
       const parsedAttributes = typeof attributes === 'string' ? JSON.parse(attributes) : attributes;
 
+      const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+      if (!access) return;
       const document = await phoneNumberService.createTwilioDocument(
         req.file.buffer,
         req.file.mimetype,
@@ -3186,6 +3523,7 @@ class PhoneNumberController {
         type,
         parsedAttributes
       );
+      await this.claimTwilio(access, 'document', document?.sid);
       res.json(document);
     } catch (error) {
       console.error('Error in createTwilioDocument:', error);
@@ -3195,9 +3533,18 @@ class PhoneNumberController {
 
   async createTwilioBundle(req, res) {
     try {
-      // Expects friendlyName, email, regulationSid, isoCountry
-      const { friendlyName, email, regulationSid, isoCountry } = req.body;
-      const bundle = await phoneNumberService.createTwilioBundle(friendlyName, email, undefined, regulationSid, isoCountry);
+      // Seuls regulationSid, isoCountry et (facultatifs) type / endUserType viennent du navigateur. L'e-mail (destinataire des notifications
+      // d'état de Twilio) et le libellé sont décidés ici : un `email` / `friendlyName` envoyé par le client est ignoré.
+      const { regulationSid, isoCountry, type, endUserType } = req.body || {};
+      const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+      if (!access) return;
+      const contact = await resolveBundleContact(access);
+      if (!contact.email) {
+        return res.status(400).json({ error: 'Contact email required', code: CONTACT_EMAIL_REQUIRED, message: CONTACT_EMAIL_REQUIRED_MESSAGE });
+      }
+      const friendlyName = bundleFriendlyName({ isoCountry, type, endUserType, companyName: contact.companyName });
+      const bundle = await phoneNumberService.createTwilioBundle(friendlyName, contact.email, undefined, regulationSid, isoCountry);
+      await this.claimTwilio(access, 'bundle', bundle?.sid);
       res.json(bundle);
     } catch (error) {
       res.status(500).json({ error: 'Failed to create Bundle', details: error.message });
@@ -3208,6 +3555,9 @@ class PhoneNumberController {
     try {
       const { sid } = req.params;
       const { objectSid } = req.body;
+      // Le dossier ET la pièce ajoutée doivent appartenir à la société de l'appelant : sinon 404, rien n'est envoyé à Twilio.
+      const access = await this.ownTwilio(req, res, [{ kind: 'bundle', sid }, { sid: objectSid }]);
+      if (!access) return;
       const item = await phoneNumberService.assignItemToBundle(sid, objectSid);
       res.json(item);
     } catch (error) {
@@ -3218,6 +3568,8 @@ class PhoneNumberController {
   async submitTwilioBundle(req, res) {
     try {
       const { sid } = req.params;
+      const access = await this.ownTwilio(req, res, [{ kind: 'bundle', sid }]);
+      if (!access) return;
       const bundle = await phoneNumberService.submitTwilioBundle(sid);
       res.json(bundle);
     } catch (error) {
@@ -3228,6 +3580,8 @@ class PhoneNumberController {
   async createTwilioAddress(req, res) {
     try {
       const { customerName, street, city, region, postalCode, isoCountry } = req.body;
+      const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+      if (!access) return;
       const address = await phoneNumberService.createTwilioAddress(
         customerName,
         street,
@@ -3236,6 +3590,7 @@ class PhoneNumberController {
         postalCode,
         isoCountry
       );
+      await this.claimTwilio(access, 'address', address?.sid);
       res.json(address);
     } catch (error) {
       console.error('Error in createTwilioAddress:', error);

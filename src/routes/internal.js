@@ -5,6 +5,8 @@ import mongoose from 'mongoose';
 import TokensCompany from '../models/TokensCompany.js';
 import { createCallEndedHandler } from '../controllers/callEndedController.js';
 import { notifyCompany, verifyIngestToken } from '../services/companyNotificationService.js';
+import { aiInboundTool, aiInboundReport } from '../controllers/aiAgentController.js';
+import { aiInboundLearning } from '../controllers/aiLearningController.js';
 
 const router = express.Router();
 
@@ -45,5 +47,11 @@ router.post('/company-notifications', async (req, res) => {
 
 // Le service des appels signale un appel terminé (jeton de service, portée `call-ended`) : journal CRM et webhooks.
 router.post('/call-ended', createCallEndedHandler());
+
+// Pilote agent IA entrant : outils de l'IA et compte rendu de fin d'appel (dash_calls), jeton d'appel `ai-inbound-call` émis par orch.
+// L'entreprise et l'appel viennent uniquement du jeton signé : jamais de données croisées entre entreprises.
+router.post('/ai-inbound/tools/:tool', aiInboundTool);
+router.post('/ai-inbound/calls/:callSid/report', aiInboundReport);
+router.post('/ai-inbound/calls/:callSid/learning', aiInboundLearning);
 
 export const internalRoutes = router;

@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { WebSocketServer } from 'ws';
 import { callerAccess } from '../middleware/companyScope.js';
+import { agentIdsOfUser } from '../middleware/agentGuard.js';
 
 /**
  * WebSocket /escrow-updates : évènements temps réel du portefeuille (escrow_update, reconciliation_complete, rep_wallet_update,
@@ -41,7 +42,7 @@ export function tokenFromUpgrade(req) {
  * Authentifie une demande de connexion. @returns {Promise<{ok: true, access: object|null} | {ok: false, code: number, message: string}>}
  * `access` null = connexion héritée sans jeton (seulement si ESCROW_WS_AUTH_REQUIRED=false).
  */
-export async function authenticateUpgrade(req, { lookup = callerAccess, env = process.env } = {}) {
+export async function authenticateUpgrade(req, { lookup = callerAccess, env = process.env, agentIds = agentIdsOfUser } = {}) {
   const token = tokenFromUpgrade(req);
   if (!token) {
     if (!wsAuthRequired(env)) return { ok: true, access: null };
@@ -63,14 +64,25 @@ export async function authenticateUpgrade(req, { lookup = callerAccess, env = pr
     return { ok: false, code, message: code === 503 ? 'Service Unavailable' : code === 403 ? 'Forbidden' : 'Unauthorized' };
   }
   const companyIds = [a.companyId, ...(a.companyIds || [])].filter(Boolean).map(String);
-  if (a.role !== 'agent' && !a.companyId) return { ok: false, code: 403, message: 'Forbidden' };
+  // Fiches agent liées au compte : la fiche a son PROPRE `_id` (service d'inscription : `agents.insertOne({ userId, … })`), c'est lui le `repId` des évènements.
+  let ownAgentIds = [];
+  // Un agent (employé d'un centre) OU un rep freelance (sans société, que callerAccess ne marque pas « agent ») : ses fiches décident.
+  if (a.role === 'agent' || !a.companyId) {
+    try { ownAgentIds = [...(await agentIds(String(a.userId || userId)))]; } catch { ownAgentIds = []; }
+  }
+  let role = a.role;
+  if (a.role !== 'agent' && !a.companyId) {
+    if (!ownAgentIds.length) return { ok: false, code: 403, message: 'Forbidden' };
+    role = 'agent'; // rep freelance : ne reçoit que les évènements de SES fiches
+  }
   return {
     ok: true,
     access: {
       userId: String(a.userId || userId),
+      agentIds: ownAgentIds,
       companyId: a.companyId ? String(a.companyId) : null,
       companyIds: [...new Set(companyIds)],
-      role: a.role,
+      role,
       isOwner: a.isOwner === true,
       exp: typeof decoded.exp === 'number' ? decoded.exp : null,
     },
@@ -89,7 +101,7 @@ export function canReceive(access, data) {
   if (!access || !data) return false;
   const companyId = data.companyId ? String(data.companyId) : '';
   const repId = data.repId ? String(data.repId) : '';
-  if (access.role === 'agent') return !!repId && repId === access.userId;
+  if (access.role === 'agent') return !!repId && (repId === access.userId || (access.agentIds || []).includes(repId));
   return !!companyId && !!access.companyId && companyId === access.companyId;
 }
 
@@ -119,6 +131,14 @@ export function setupEscrowWebSocket(server, options = {}) {
   wss.on('connection', (ws, req) => {
     // Objet = appelant vérifié ; null = connexion héritée sans jeton (ESCROW_WS_AUTH_REQUIRED=false) ; undefined = ne reçoit rien.
     ws.escrowAccess = req.escrowAccess;
+    // Fiches agent : relues toutes les minutes (une fiche créée ou rattachée après la connexion est prise en compte sans reconnexion).
+    if (ws.escrowAccess && ws.escrowAccess.role === 'agent') {
+      const refresh = setInterval(async () => {
+        try { ws.escrowAccess = { ...ws.escrowAccess, agentIds: [...(await (options.agentIds || agentIdsOfUser)(ws.escrowAccess.userId))] }; } catch { /* on garde la liste précédente jusqu'à la prochaine lecture */ }
+      }, options.refreshMs || 60000);
+      if (refresh.unref) refresh.unref();
+      ws.on('close', () => clearInterval(refresh));
+    }
     const exp = ws.escrowAccess?.exp;
     if (exp) {
       const ms = exp * 1000 - Date.now();

@@ -2,6 +2,7 @@ import { Subscription } from '../models/Subscription.js';
 import { stripeService } from './stripeService.js';
 import { CALLCENTER_TIER_LINES, callcenterTierFromMetadata } from './callcenterTier.js';
 import { phoneLinePriceCentsFromMetadata } from './phoneLineSubscription.js';
+import { resolveInternationalCoefficient } from './creditCoefficient.js';
 
 function numberOrNull(value) {
   const n = Number(value);
@@ -14,6 +15,41 @@ function metadataObject(metadata) {
   if (metadata instanceof Map) return Object.fromEntries(metadata.entries());
   if (typeof metadata === 'object') return { ...metadata };
   return {};
+}
+
+const metaValue = (metadata, key) => {
+  const entry = Object.entries(metadata).find(([k]) => k.trim().toLowerCase() === key);
+  return entry ? String(entry[1] ?? '').trim() : '';
+};
+
+/**
+ * Formule « Secrétariat avec agent IA » : métadonnées du produit Stripe (copiées sur le forfait à son inscription) `ai_agent=true`,
+ * `ai_agent_included_minutes`, `ai_agent_overage_cents_ttc`. Absentes : pas d'agent IA par l'abonnement, valeurs par défaut du compteur.
+ */
+export function aiAgentFromMetadata(metadata) {
+  const m = metadataObject(metadata);
+  return {
+    aiAgent: ['true', '1', 'yes'].includes(metaValue(m, 'ai_agent').toLowerCase()),
+    aiAgentIncludedMinutes: metaValue(m, 'ai_agent_included_minutes') === '' ? null : numberOrNull(metaValue(m, 'ai_agent_included_minutes')),
+    aiAgentOverageCentsTtc: metaValue(m, 'ai_agent_overage_cents_ttc') === '' ? null : numberOrNull(metaValue(m, 'ai_agent_overage_cents_ttc')),
+  };
+}
+
+/**
+ * Formule agent IA de l'entreprise pour l'OUVERTURE de l'agent : abonnements au statut `active` ou `trialing` seulement (un `past_due`
+ * impayé n'ouvre pas l'agent), du plus récemment mis à jour au plus ancien ; avec plusieurs abonnements actifs, celui dont le forfait porte
+ * `ai_agent=true` l'emporte. @returns {Promise<null|{ status, aiAgent, aiAgentIncludedMinutes, aiAgentOverageCentsTtc }>}
+ */
+export async function loadAiAgentPlan(companyId) {
+  if (!companyId) return null;
+  const subscriptions = await Subscription.find({ companyId: String(companyId), status: { $in: ['active', 'trialing'] } })
+    .sort({ updatedAt: -1 })
+    .limit(10)
+    .populate('planId');
+  const rows = (subscriptions || [])
+    .filter((s) => s?.planId && typeof s.planId !== 'string')
+    .map((s) => ({ status: s.status, ...aiAgentFromMetadata(s.planId.metadata) }));
+  return rows.find((r) => r.aiAgent) || rows[0] || null;
 }
 
 /**
@@ -32,14 +68,21 @@ export async function loadCompanyPlanLimits(companyId) {
   const metadata = metadataObject(plan.metadata);
   const productEntry = Object.entries(metadata).find(([k]) => k.trim().toLowerCase() === 'harx_product');
   const fromMeta = stripeService.extractStripeProductLimits({ metadata });
+  const coefficient = resolveInternationalCoefficient({ metadata });
   return {
     planName: plan.name ? String(plan.name) : null,
+    /** Forfait local et prix Stripe du forfait : désignent le produit d'offre dans les journaux (aucune donnée client). */
+    planId: plan._id ? String(plan._id) : null,
+    stripePriceId: plan.stripePriceId ? String(plan.stripePriceId) : null,
     /** Produit du forfait (metadata `harx_product`), ex. `callcenter` ; null pour les forfaits TaaS. */
     product: productEntry ? String(productEntry[1] ?? '').trim().toLowerCase() || null : null,
     /** Palier Call Centre canonique (metadata `callcenter_tier`), null sinon. */
     callcenterTier: callcenterTierFromMetadata(metadata),
     /** Prix mensuel d'une ligne supplémentaire (metadata `phone_line_price_cents`, centimes) ; null = prix par défaut. */
     phoneLinePriceCents: phoneLinePriceCentsFromMetadata(metadata),
+    /** Crédits débités par minute internationale (métadonnée `international_minute_credits` du produit, sinon INTERNATIONAL_MINUTE_CREDITS, sinon 1). */
+    internationalCoefficient: coefficient.coefficient,
+    internationalCoefficientSource: coefficient.source,
     maxGigs: numberOrNull(fromMeta.maxGigs) ?? numberOrNull(plan.maxGigs),
     maxReps: numberOrNull(fromMeta.maxReps) ?? numberOrNull(plan.maxReps),
     communicationMinutes: numberOrNull(fromMeta.communicationMinutes) ?? numberOrNull(plan.communicationMinutes),
@@ -51,6 +94,7 @@ export async function loadCompanyPlanLimits(companyId) {
         : null),
     aiToken: fromMeta.aiToken || (plan.aiToken ? String(plan.aiToken) : null),
     aiTokensIncluded: numberOrNull(fromMeta.aiTokensIncluded) ?? numberOrNull(plan.aiTokensIncluded),
+    ...aiAgentFromMetadata(metadata),
   };
 }
 

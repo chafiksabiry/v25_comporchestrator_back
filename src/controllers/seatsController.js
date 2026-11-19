@@ -1,10 +1,12 @@
 import mongoose from 'mongoose';
 import { callerAccess, ScopeError } from '../middleware/companyScope.js';
 import { stripeService } from '../services/stripeService.js';
-import { getSeatsState, syncSeats } from '../services/seats.js';
+import { getSeatsState, syncSeats, SEATS_NOT_AVAILABLE_CODE } from '../services/seats.js';
 
 /**
  * Sièges en plus. `GET /api/subscriptions/seats` : état (titulaire et membres). `POST /api/subscriptions/seats/sync` : titulaire seulement.
+ * Sièges supplémentaires hors vente (EXTRA_SEATS_FOR_SALE) : la synchronisation répond 409 SEATS_NOT_AVAILABLE au-delà des sièges inclus et des sièges payés
+ * pour la période en cours ; une baisse prend effet au renouvellement (sans prorata ni avoir).
  * Le centre est celui de l'appelant (service d'inscription), jamais un identifiant envoyé par le navigateur.
  * Les dépendances sont injectables pour les tests.
  */
@@ -54,6 +56,10 @@ export function createSeatsHandlers(deps = {}) {
       if (!access) return;
       try {
         const data = await syncSeats({ db: getDb(), stripe: getStripe(), companyId: access.companyId });
+        if (data?.action === 'refused') {
+          // Sièges supplémentaires hors vente (décision du 18/11/2026) : refus clair, rien n'est facturé, les sièges existants restent.
+          return res.status(409).json({ success: false, code: data.code || SEATS_NOT_AVAILABLE_CODE, error: data.message, message: data.message, data });
+        }
         res.json({ success: true, data });
       } catch (error) {
         // Jamais bloquant : l'invitation a déjà eu lieu, la facturation se rattrapera à la prochaine synchronisation.

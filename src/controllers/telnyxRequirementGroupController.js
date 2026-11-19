@@ -2,6 +2,27 @@ import { telnyxRequirementGroupService } from '../services/telnyxRequirementGrou
 import { addressService } from '../services/addressService.js';
 import { documentService } from '../services/documentService.js';
 import { config } from '../config/env.js';
+import mongoose from 'mongoose';
+import { TelnyxRequirementGroup } from '../models/TelnyxRequirementGroup.js';
+import { assetIdOf, isOwnedAsset } from '../services/regulatoryAssets.js';
+import { guardCompanyAccess } from '../middleware/companyGuard.js';
+
+/**
+ * Contrôle d'accès à un groupe désigné par son identifiant (`_id` Mongo : le service lit `findById`) : l'appelant doit être rattaché à une société, et le groupe doit
+ * être celui de CETTE société (sinon 404). Renvoie { access, group } (group : exigences avec leur type) ou null si la réponse d'erreur est déjà envoyée.
+ */
+async function ownGroup(req, res, groupId) {
+  const access = await guardCompanyAccess(req, res, null, { ownCompany: true });
+  if (!access) return null;
+  const row = mongoose.Types.ObjectId.isValid(String(groupId))
+    ? await TelnyxRequirementGroup.findOne({ _id: String(groupId), companyId: String(access.companyId) }).select('requirements').lean()
+    : null;
+  if (!row) {
+    res.status(404).json({ error: 'Not Found', message: 'Requirement group not found' });
+    return null;
+  }
+  return { access, group: row };
+}
 
 export const telnyxRequirementGroupController = {
   // Créer un nouveau groupe de requirements
@@ -15,6 +36,9 @@ export const telnyxRequirementGroupController = {
           message: 'Company ID and destination zone are required'
         });
       }
+
+      // L'appelant doit appartenir à CETTE société (propriétaire ou membre) ; refus 403 avant toute écriture.
+      if (!(await guardCompanyAccess(req, res, companyId))) return;
 
       // Valider le format du code pays
       if (!/^[A-Z]{2}$/.test(destinationZone)) {
@@ -43,6 +67,7 @@ export const telnyxRequirementGroupController = {
   async getGroup(req, res) {
     try {
       const { groupId } = req.params;
+      if (!(await ownGroup(req, res, groupId))) return;
 
       const group = await telnyxRequirementGroupService.getRequirementGroup(groupId);
       res.json(group);
@@ -67,6 +92,7 @@ export const telnyxRequirementGroupController = {
   async getCompanyGroup(req, res) {
     try {
       const { companyId, destinationZone } = req.params;
+      if (!(await guardCompanyAccess(req, res, companyId))) return;
 
       const group = await telnyxRequirementGroupService.getCompanyRequirementGroup(
         companyId,
@@ -95,6 +121,8 @@ export const telnyxRequirementGroupController = {
     try {
       const { groupId } = req.params;
       const { requirements } = req.body;
+      const own = await ownGroup(req, res, groupId);
+      if (!own) return;
 
       if (!Array.isArray(requirements) || requirements.length === 0) {
         return res.status(400).json({
@@ -113,6 +141,21 @@ export const telnyxRequirementGroupController = {
           error: 'Bad Request',
           message: 'Each requirement must have requirementId and value'
         });
+      }
+
+      // Chaque exigence doit être DÉCLARÉE dans le groupe local (sinon le contrôle de pièce ci-dessous serait contournable avec un identifiant inconnu), et les pièces
+      // (documents, adresses) référencées doivent appartenir à CETTE société : on n'attache pas la pièce d'autrui à son groupe (refus avant tout appel Telnyx).
+      for (const r of requirements) {
+        const declared = (own.group.requirements || []).find((x) => x.requirementId === r.requirementId);
+        if (!declared) {
+          return res.status(400).json({ error: 'Bad Request', code: 'unknown_requirement', message: `Requirement ${r.requirementId} is not part of this group` });
+        }
+        if (declared.type === 'document' || declared.type === 'address') {
+          const assetId = assetIdOf(r.value);
+          if (!assetId || !(await isOwnedAsset(declared.type, assetId, own.access.companyId))) {
+            return res.status(403).json({ error: 'Forbidden', code: 'asset_not_owned', message: `Requirement ${r.requirementId}: the ${declared.type} does not belong to your company` });
+          }
+        }
       }
 
       const group = await telnyxRequirementGroupService.updateRequirements(
@@ -142,6 +185,7 @@ export const telnyxRequirementGroupController = {
   async checkCompanyRequirementsStatus(req, res) {
     try {
       const { companyId } = req.params;
+      if (!(await guardCompanyAccess(req, res, companyId))) return;
 
       const groups = await telnyxRequirementGroupService.getCompanyRequirementGroups(companyId);
       
@@ -211,6 +255,7 @@ export const telnyxRequirementGroupController = {
   async checkGroupStatus(req, res) {
     try {
       const { groupId } = req.params;
+      if (!(await ownGroup(req, res, groupId))) return;
 
       const group = await telnyxRequirementGroupService.getRequirementGroup(groupId);
       

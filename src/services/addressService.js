@@ -81,6 +81,12 @@ class AddressService {
     }
   }
 
+  /** Supprime une adresse chez l'opérateur (nettoyage au mieux quand la propriété n'a pas pu être enregistrée). */
+  async deleteAddress(addressId) {
+    await this.axiosInstance.delete(`/addresses/${addressId}`);
+    return { success: true };
+  }
+
   async retrieveAddress(addressId) {
     try {
       console.log(`📍 Retrieving Telnyx address: ${addressId}`);

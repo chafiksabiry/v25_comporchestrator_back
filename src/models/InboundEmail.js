@@ -18,6 +18,11 @@ const schema = new mongoose.Schema(
      */
     ownerUserId: { type: String, default: null },
     accountId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    /**
+     * Boîte de l'ENTREPRISE (ownerUserId nul) : PROPRIÉTAIRE de la connexion qui a servi à lire cet e-mail (SecretariatConnection.connectedBy).
+     * Toute requête de la vue « connexion » filtre ce champ : un e-mail sans propriétaire (ancien, partagé) n'est montré à personne.
+     */
+    connectionOwnerId: { type: String, default: null },
     provider: { type: String, enum: ['google', 'microsoft'], required: true },
     providerMessageId: { type: String, required: true, maxlength: 512 },
     fromName: { type: String, default: '', maxlength: 120 },

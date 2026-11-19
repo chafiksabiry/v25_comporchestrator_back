@@ -1,0 +1,772 @@
+{
+ "callcenter": {
+  "status": 200,
+  "body": [
+   {
+    "_id": "p_nomad",
+    "name": "Nomad Solo",
+    "priceCents": 1999,
+    "price": 19.99,
+    "currency": "eur",
+    "prices": {
+     "eur": 1999,
+     "usd": 1999,
+     "gbp": 1999
+    },
+    "currencies": [
+     "eur",
+     "usd",
+     "gbp"
+    ],
+    "stripePriceId": "price_nomad",
+    "description": "Nomad Solo description",
+    "features": [
+     "Communication minutes: 30",
+     "Active local numbers: 1",
+     "AI tokens: 1",
+     "Nomad Solo feature"
+    ],
+    "marketingFeatures": [
+     "Nomad Solo feature"
+    ],
+    "metadata": {
+     "harx_product": "callcenter",
+     "callcenter_tier": "nomad_solo",
+     "COMMUNICATION MINUTES Included": "30",
+     "AI TOKEN (Million)": "1",
+     "ACTIVE LOCAL NUMBER (Included)": "1"
+    },
+    "callcenterTier": "nomad_solo",
+    "aiAgent": false,
+    "aiAgentIncludedMinutes": null,
+    "aiAgentOverageCentsTtc": null,
+    "isPopular": false,
+    "communicationMinutes": 30,
+    "activeLocalNumbers": 1,
+    "aiToken": "1",
+    "aiTokensIncluded": 1000000
+   },
+   {
+    "_id": "p_accueil",
+    "name": "Accueil / Secrétariat",
+    "priceCents": 2999,
+    "price": 29.99,
+    "currency": "eur",
+    "prices": {
+     "eur": 2999,
+     "usd": 2999,
+     "gbp": 2999
+    },
+    "currencies": [
+     "eur",
+     "usd",
+     "gbp"
+    ],
+    "stripePriceId": "price_accueil",
+    "description": "Accueil / Secrétariat description",
+    "features": [
+     "Communication minutes: 30",
+     "Active local numbers: 1",
+     "AI tokens: 1",
+     "Accueil / Secrétariat feature"
+    ],
+    "marketingFeatures": [
+     "Accueil / Secrétariat feature"
+    ],
+    "metadata": {
+     "harx_product": "callcenter",
+     "callcenter_tier": "accueil",
+     "COMMUNICATION MINUTES Included": "30",
+     "AI TOKEN (Million)": "1",
+     "ACTIVE LOCAL NUMBER (Included)": "1"
+    },
+    "callcenterTier": "accueil",
+    "aiAgent": false,
+    "aiAgentIncludedMinutes": null,
+    "aiAgentOverageCentsTtc": null,
+    "isPopular": true,
+    "communicationMinutes": 30,
+    "activeLocalNumbers": 1,
+    "aiToken": "1",
+    "aiTokensIncluded": 1000000
+   },
+   {
+    "_id": "p_new_9",
+    "name": "Company Full Scope In & Out",
+    "priceCents": 4999,
+    "price": 49.99,
+    "currency": "eur",
+    "prices": {
+     "eur": 4999,
+     "usd": 4999,
+     "gbp": 4999
+    },
+    "currencies": [
+     "eur",
+     "usd",
+     "gbp"
+    ],
+    "stripePriceId": "price_full",
+    "description": "Company Full Scope In & Out description",
+    "features": [
+     "Communication minutes: 120",
+     "Active local numbers: 1",
+     "AI tokens: 1",
+     "Company Full Scope In & Out feature"
+    ],
+    "marketingFeatures": [
+     "Company Full Scope In & Out feature"
+    ],
+    "metadata": {
+     "harx_product": "callcenter",
+     "callcenter_tier": "full_scope",
+     "COMMUNICATION MINUTES Included": "120",
+     "AI TOKEN (Million)": "1",
+     "ACTIVE LOCAL NUMBER (Included)": "1"
+    },
+    "callcenterTier": "full_scope",
+    "aiAgent": false,
+    "aiAgentIncludedMinutes": null,
+    "aiAgentOverageCentsTtc": null,
+    "isPopular": false,
+    "communicationMinutes": 120,
+    "activeLocalNumbers": 1,
+    "aiToken": "1",
+    "aiTokensIncluded": 1000000
+   },
+   {
+    "_id": "p_multi",
+    "name": "Contact Centre Multi-clients",
+    "priceCents": 9999,
+    "price": 99.99,
+    "currency": "eur",
+    "prices": {
+     "eur": 9999
+    },
+    "currencies": [
+     "eur"
+    ],
+    "stripePriceId": "price_multi",
+    "description": "Contact Centre Multi-clients description",
+    "features": [
+     "Communication minutes: 500",
+     "Active local numbers: 1",
+     "AI tokens: 1",
+     "Contact Centre Multi-clients feature"
+    ],
+    "marketingFeatures": [
+     "Contact Centre Multi-clients feature"
+    ],
+    "metadata": {
+     "harx_product": "callcenter",
+     "callcenter_tier": "multi_clients",
+     "COMMUNICATION MINUTES Included": "500",
+     "AI TOKEN (Million)": "1",
+     "ACTIVE LOCAL NUMBER (Included)": "1"
+    },
+    "callcenterTier": "multi_clients",
+    "aiAgent": false,
+    "aiAgentIncludedMinutes": null,
+    "aiAgentOverageCentsTtc": null,
+    "isPopular": false,
+    "communicationMinutes": 500,
+    "activeLocalNumbers": 1,
+    "aiToken": "1",
+    "aiTokensIncluded": 1000000
+   }
+  ],
+  "created": [
+   "price_full"
+  ],
+  "updated": 0
+ },
+ "marketplace": {
+  "status": 200,
+  "body": [
+   {
+    "_id": "p_starter",
+    "name": "STARTER",
+    "priceCents": 4900,
+    "price": 49,
+    "currency": "eur",
+    "prices": {
+     "eur": 4900
+    },
+    "currencies": [
+     "eur"
+    ],
+    "stripePriceId": "price_starter",
+    "description": "TAAS starter",
+    "features": [
+     "Active GIGs: 3",
+     "Active REPs: 5"
+    ],
+    "marketingFeatures": [],
+    "metadata": {
+     "ACTIVE GIGS": "3",
+     "ACTIVE REPS": "5"
+    },
+    "callcenterTier": null,
+    "aiAgent": false,
+    "aiAgentIncludedMinutes": null,
+    "aiAgentOverageCentsTtc": null,
+    "isPopular": false,
+    "maxGigs": 3,
+    "maxReps": 5
+   }
+  ],
+  "created": [
+   "price_full"
+  ],
+  "updated": 0
+ },
+ "gbp": {
+  "status": 200,
+  "body": [
+   {
+    "_id": "p_nomad",
+    "name": "Nomad Solo",
+    "priceCents": 1999,
+    "price": 19.99,
+    "currency": "gbp",
+    "prices": {
+     "eur": 1999,
+     "usd": 1999,
+     "gbp": 1999
+    },
+    "currencies": [
+     "eur",
+     "usd",
+     "gbp"
+    ],
+    "stripePriceId": "price_nomad",
+    "description": "Nomad Solo description",
+    "features": [
+     "Communication minutes: 30",
+     "Active local numbers: 1",
+     "AI tokens: 1",
+     "Nomad Solo feature"
+    ],
+    "marketingFeatures": [
+     "Nomad Solo feature"
+    ],
+    "metadata": {
+     "harx_product": "callcenter",
+     "callcenter_tier": "nomad_solo",
+     "COMMUNICATION MINUTES Included": "30",
+     "AI TOKEN (Million)": "1",
+     "ACTIVE LOCAL NUMBER (Included)": "1"
+    },
+    "callcenterTier": "nomad_solo",
+    "aiAgent": false,
+    "aiAgentIncludedMinutes": null,
+    "aiAgentOverageCentsTtc": null,
+    "isPopular": false,
+    "communicationMinutes": 30,
+    "activeLocalNumbers": 1,
+    "aiToken": "1",
+    "aiTokensIncluded": 1000000
+   },
+   {
+    "_id": "p_accueil",
+    "name": "Accueil / Secrétariat",
+    "priceCents": 2999,
+    "price": 29.99,
+    "currency": "gbp",
+    "prices": {
+     "eur": 2999,
+     "usd": 2999,
+     "gbp": 2999
+    },
+    "currencies": [
+     "eur",
+     "usd",
+     "gbp"
+    ],
+    "stripePriceId": "price_accueil",
+    "description": "Accueil / Secrétariat description",
+    "features": [
+     "Communication minutes: 30",
+     "Active local numbers: 1",
+     "AI tokens: 1",
+     "Accueil / Secrétariat feature"
+    ],
+    "marketingFeatures": [
+     "Accueil / Secrétariat feature"
+    ],
+    "metadata": {
+     "harx_product": "callcenter",
+     "callcenter_tier": "accueil",
+     "COMMUNICATION MINUTES Included": "30",
+     "AI TOKEN (Million)": "1",
+     "ACTIVE LOCAL NUMBER (Included)": "1"
+    },
+    "callcenterTier": "accueil",
+    "aiAgent": false,
+    "aiAgentIncludedMinutes": null,
+    "aiAgentOverageCentsTtc": null,
+    "isPopular": true,
+    "communicationMinutes": 30,
+    "activeLocalNumbers": 1,
+    "aiToken": "1",
+    "aiTokensIncluded": 1000000
+   },
+   {
+    "_id": "p_new_9",
+    "name": "Company Full Scope In & Out",
+    "priceCents": 4999,
+    "price": 49.99,
+    "currency": "gbp",
+    "prices": {
+     "eur": 4999,
+     "usd": 4999,
+     "gbp": 4999
+    },
+    "currencies": [
+     "eur",
+     "usd",
+     "gbp"
+    ],
+    "stripePriceId": "price_full",
+    "description": "Company Full Scope In & Out description",
+    "features": [
+     "Communication minutes: 120",
+     "Active local numbers: 1",
+     "AI tokens: 1",
+     "Company Full Scope In & Out feature"
+    ],
+    "marketingFeatures": [
+     "Company Full Scope In & Out feature"
+    ],
+    "metadata": {
+     "harx_product": "callcenter",
+     "callcenter_tier": "full_scope",
+     "COMMUNICATION MINUTES Included": "120",
+     "AI TOKEN (Million)": "1",
+     "ACTIVE LOCAL NUMBER (Included)": "1"
+    },
+    "callcenterTier": "full_scope",
+    "aiAgent": false,
+    "aiAgentIncludedMinutes": null,
+    "aiAgentOverageCentsTtc": null,
+    "isPopular": false,
+    "communicationMinutes": 120,
+    "activeLocalNumbers": 1,
+    "aiToken": "1",
+    "aiTokensIncluded": 1000000
+   },
+   {
+    "_id": "p_multi",
+    "name": "Contact Centre Multi-clients",
+    "priceCents": 9999,
+    "price": 99.99,
+    "currency": "eur",
+    "prices": {
+     "eur": 9999
+    },
+    "currencies": [
+     "eur"
+    ],
+    "stripePriceId": "price_multi",
+    "description": "Contact Centre Multi-clients description",
+    "features": [
+     "Communication minutes: 500",
+     "Active local numbers: 1",
+     "AI tokens: 1",
+     "Contact Centre Multi-clients feature"
+    ],
+    "marketingFeatures": [
+     "Contact Centre Multi-clients feature"
+    ],
+    "metadata": {
+     "harx_product": "callcenter",
+     "callcenter_tier": "multi_clients",
+     "COMMUNICATION MINUTES Included": "500",
+     "AI TOKEN (Million)": "1",
+     "ACTIVE LOCAL NUMBER (Included)": "1"
+    },
+    "callcenterTier": "multi_clients",
+    "aiAgent": false,
+    "aiAgentIncludedMinutes": null,
+    "aiAgentOverageCentsTtc": null,
+    "isPopular": false,
+    "communicationMinutes": 500,
+    "activeLocalNumbers": 1,
+    "aiToken": "1",
+    "aiTokensIncluded": 1000000
+   }
+  ],
+  "created": [
+   "price_full"
+  ],
+  "updated": 0
+ },
+ "countryGB": {
+  "status": 200,
+  "body": [
+   {
+    "_id": "p_nomad",
+    "name": "Nomad Solo",
+    "priceCents": 1999,
+    "price": 19.99,
+    "currency": "gbp",
+    "prices": {
+     "eur": 1999,
+     "usd": 1999,
+     "gbp": 1999
+    },
+    "currencies": [
+     "eur",
+     "usd",
+     "gbp"
+    ],
+    "stripePriceId": "price_nomad",
+    "description": "Nomad Solo description",
+    "features": [
+     "Communication minutes: 30",
+     "Active local numbers: 1",
+     "AI tokens: 1",
+     "Nomad Solo feature"
+    ],
+    "marketingFeatures": [
+     "Nomad Solo feature"
+    ],
+    "metadata": {
+     "harx_product": "callcenter",
+     "callcenter_tier": "nomad_solo",
+     "COMMUNICATION MINUTES Included": "30",
+     "AI TOKEN (Million)": "1",
+     "ACTIVE LOCAL NUMBER (Included)": "1"
+    },
+    "callcenterTier": "nomad_solo",
+    "aiAgent": false,
+    "aiAgentIncludedMinutes": null,
+    "aiAgentOverageCentsTtc": null,
+    "isPopular": false,
+    "communicationMinutes": 30,
+    "activeLocalNumbers": 1,
+    "aiToken": "1",
+    "aiTokensIncluded": 1000000
+   },
+   {
+    "_id": "p_accueil",
+    "name": "Accueil / Secrétariat",
+    "priceCents": 2999,
+    "price": 29.99,
+    "currency": "gbp",
+    "prices": {
+     "eur": 2999,
+     "usd": 2999,
+     "gbp": 2999
+    },
+    "currencies": [
+     "eur",
+     "usd",
+     "gbp"
+    ],
+    "stripePriceId": "price_accueil",
+    "description": "Accueil / Secrétariat description",
+    "features": [
+     "Communication minutes: 30",
+     "Active local numbers: 1",
+     "AI tokens: 1",
+     "Accueil / Secrétariat feature"
+    ],
+    "marketingFeatures": [
+     "Accueil / Secrétariat feature"
+    ],
+    "metadata": {
+     "harx_product": "callcenter",
+     "callcenter_tier": "accueil",
+     "COMMUNICATION MINUTES Included": "30",
+     "AI TOKEN (Million)": "1",
+     "ACTIVE LOCAL NUMBER (Included)": "1"
+    },
+    "callcenterTier": "accueil",
+    "aiAgent": false,
+    "aiAgentIncludedMinutes": null,
+    "aiAgentOverageCentsTtc": null,
+    "isPopular": true,
+    "communicationMinutes": 30,
+    "activeLocalNumbers": 1,
+    "aiToken": "1",
+    "aiTokensIncluded": 1000000
+   },
+   {
+    "_id": "p_new_9",
+    "name": "Company Full Scope In & Out",
+    "priceCents": 4999,
+    "price": 49.99,
+    "currency": "gbp",
+    "prices": {
+     "eur": 4999,
+     "usd": 4999,
+     "gbp": 4999
+    },
+    "currencies": [
+     "eur",
+     "usd",
+     "gbp"
+    ],
+    "stripePriceId": "price_full",
+    "description": "Company Full Scope In & Out description",
+    "features": [
+     "Communication minutes: 120",
+     "Active local numbers: 1",
+     "AI tokens: 1",
+     "Company Full Scope In & Out feature"
+    ],
+    "marketingFeatures": [
+     "Company Full Scope In & Out feature"
+    ],
+    "metadata": {
+     "harx_product": "callcenter",
+     "callcenter_tier": "full_scope",
+     "COMMUNICATION MINUTES Included": "120",
+     "AI TOKEN (Million)": "1",
+     "ACTIVE LOCAL NUMBER (Included)": "1"
+    },
+    "callcenterTier": "full_scope",
+    "aiAgent": false,
+    "aiAgentIncludedMinutes": null,
+    "aiAgentOverageCentsTtc": null,
+    "isPopular": false,
+    "communicationMinutes": 120,
+    "activeLocalNumbers": 1,
+    "aiToken": "1",
+    "aiTokensIncluded": 1000000
+   },
+   {
+    "_id": "p_multi",
+    "name": "Contact Centre Multi-clients",
+    "priceCents": 9999,
+    "price": 99.99,
+    "currency": "eur",
+    "prices": {
+     "eur": 9999
+    },
+    "currencies": [
+     "eur"
+    ],
+    "stripePriceId": "price_multi",
+    "description": "Contact Centre Multi-clients description",
+    "features": [
+     "Communication minutes: 500",
+     "Active local numbers: 1",
+     "AI tokens: 1",
+     "Contact Centre Multi-clients feature"
+    ],
+    "marketingFeatures": [
+     "Contact Centre Multi-clients feature"
+    ],
+    "metadata": {
+     "harx_product": "callcenter",
+     "callcenter_tier": "multi_clients",
+     "COMMUNICATION MINUTES Included": "500",
+     "AI TOKEN (Million)": "1",
+     "ACTIVE LOCAL NUMBER (Included)": "1"
+    },
+    "callcenterTier": "multi_clients",
+    "aiAgent": false,
+    "aiAgentIncludedMinutes": null,
+    "aiAgentOverageCentsTtc": null,
+    "isPopular": false,
+    "communicationMinutes": 500,
+    "activeLocalNumbers": 1,
+    "aiToken": "1",
+    "aiTokensIncluded": 1000000
+   }
+  ],
+  "created": [
+   "price_full"
+  ],
+  "updated": 0
+ },
+ "countryUS": {
+  "status": 200,
+  "body": [
+   {
+    "_id": "p_nomad",
+    "name": "Nomad Solo",
+    "priceCents": 1999,
+    "price": 19.99,
+    "currency": "usd",
+    "prices": {
+     "eur": 1999,
+     "usd": 1999,
+     "gbp": 1999
+    },
+    "currencies": [
+     "eur",
+     "usd",
+     "gbp"
+    ],
+    "stripePriceId": "price_nomad",
+    "description": "Nomad Solo description",
+    "features": [
+     "Communication minutes: 30",
+     "Active local numbers: 1",
+     "AI tokens: 1",
+     "Nomad Solo feature"
+    ],
+    "marketingFeatures": [
+     "Nomad Solo feature"
+    ],
+    "metadata": {
+     "harx_product": "callcenter",
+     "callcenter_tier": "nomad_solo",
+     "COMMUNICATION MINUTES Included": "30",
+     "AI TOKEN (Million)": "1",
+     "ACTIVE LOCAL NUMBER (Included)": "1"
+    },
+    "callcenterTier": "nomad_solo",
+    "aiAgent": false,
+    "aiAgentIncludedMinutes": null,
+    "aiAgentOverageCentsTtc": null,
+    "isPopular": false,
+    "communicationMinutes": 30,
+    "activeLocalNumbers": 1,
+    "aiToken": "1",
+    "aiTokensIncluded": 1000000
+   },
+   {
+    "_id": "p_accueil",
+    "name": "Accueil / Secrétariat",
+    "priceCents": 2999,
+    "price": 29.99,
+    "currency": "usd",
+    "prices": {
+     "eur": 2999,
+     "usd": 2999,
+     "gbp": 2999
+    },
+    "currencies": [
+     "eur",
+     "usd",
+     "gbp"
+    ],
+    "stripePriceId": "price_accueil",
+    "description": "Accueil / Secrétariat description",
+    "features": [
+     "Communication minutes: 30",
+     "Active local numbers: 1",
+     "AI tokens: 1",
+     "Accueil / Secrétariat feature"
+    ],
+    "marketingFeatures": [
+     "Accueil / Secrétariat feature"
+    ],
+    "metadata": {
+     "harx_product": "callcenter",
+     "callcenter_tier": "accueil",
+     "COMMUNICATION MINUTES Included": "30",
+     "AI TOKEN (Million)": "1",
+     "ACTIVE LOCAL NUMBER (Included)": "1"
+    },
+    "callcenterTier": "accueil",
+    "aiAgent": false,
+    "aiAgentIncludedMinutes": null,
+    "aiAgentOverageCentsTtc": null,
+    "isPopular": true,
+    "communicationMinutes": 30,
+    "activeLocalNumbers": 1,
+    "aiToken": "1",
+    "aiTokensIncluded": 1000000
+   },
+   {
+    "_id": "p_new_9",
+    "name": "Company Full Scope In & Out",
+    "priceCents": 4999,
+    "price": 49.99,
+    "currency": "usd",
+    "prices": {
+     "eur": 4999,
+     "usd": 4999,
+     "gbp": 4999
+    },
+    "currencies": [
+     "eur",
+     "usd",
+     "gbp"
+    ],
+    "stripePriceId": "price_full",
+    "description": "Company Full Scope In & Out description",
+    "features": [
+     "Communication minutes: 120",
+     "Active local numbers: 1",
+     "AI tokens: 1",
+     "Company Full Scope In & Out feature"
+    ],
+    "marketingFeatures": [
+     "Company Full Scope In & Out feature"
+    ],
+    "metadata": {
+     "harx_product": "callcenter",
+     "callcenter_tier": "full_scope",
+     "COMMUNICATION MINUTES Included": "120",
+     "AI TOKEN (Million)": "1",
+     "ACTIVE LOCAL NUMBER (Included)": "1"
+    },
+    "callcenterTier": "full_scope",
+    "aiAgent": false,
+    "aiAgentIncludedMinutes": null,
+    "aiAgentOverageCentsTtc": null,
+    "isPopular": false,
+    "communicationMinutes": 120,
+    "activeLocalNumbers": 1,
+    "aiToken": "1",
+    "aiTokensIncluded": 1000000
+   },
+   {
+    "_id": "p_multi",
+    "name": "Contact Centre Multi-clients",
+    "priceCents": 9999,
+    "price": 99.99,
+    "currency": "eur",
+    "prices": {
+     "eur": 9999
+    },
+    "currencies": [
+     "eur"
+    ],
+    "stripePriceId": "price_multi",
+    "description": "Contact Centre Multi-clients description",
+    "features": [
+     "Communication minutes: 500",
+     "Active local numbers: 1",
+     "AI tokens: 1",
+     "Contact Centre Multi-clients feature"
+    ],
+    "marketingFeatures": [
+     "Contact Centre Multi-clients feature"
+    ],
+    "metadata": {
+     "harx_product": "callcenter",
+     "callcenter_tier": "multi_clients",
+     "COMMUNICATION MINUTES Included": "500",
+     "AI TOKEN (Million)": "1",
+     "ACTIVE LOCAL NUMBER (Included)": "1"
+    },
+    "callcenterTier": "multi_clients",
+    "aiAgent": false,
+    "aiAgentIncludedMinutes": null,
+    "aiAgentOverageCentsTtc": null,
+    "isPopular": false,
+    "communicationMinutes": 500,
+    "activeLocalNumbers": 1,
+    "aiToken": "1",
+    "aiTokensIncluded": 1000000
+   }
+  ],
+  "created": [
+   "price_full"
+  ],
+  "updated": 0
+ },
+ "down": {
+  "status": 200,
+  "body": [],
+  "created": [],
+  "updated": 0
+ }
+}

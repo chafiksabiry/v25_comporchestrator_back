@@ -43,7 +43,11 @@ export const config = {
   // Abonnement mensuel par ligne (offres Call Centre) : produit « Ligne téléphonique — Abonnement mensuel » ; à défaut,
   // déduit du prix STRIPE_PRICE_PHONE_LINE ci-dessus.
   stripeProductPhoneLine: process.env.STRIPE_PRODUCT_PHONE_LINE || '',
-  phoneLineMonthlyPriceCents: parseInt(process.env.PHONE_LINE_MONTHLY_PRICE_CENTS || '999', 10),
+  // Repli du prix mensuel d'une ligne supplémentaire des offres CLOUD quand le produit Stripe de l'offre ne porte pas
+  // `phone_line_price_cents` (décision du 18/11/2026 : 14,99 € TTC). La source normale reste la métadonnée Stripe.
+  // Nom neuf, volontairement : PHONE_LINE_MONTHLY_PRICE_CENTS existe déjà en recette (valeur héritée, probablement 999) et n'est plus
+  // lu par le code. Vide ou invalide : 1499.
+  phoneLineFallbackPriceCents: process.env.PHONE_LINE_FALLBACK_PRICE_CENTS,
   // Royaume-Uni : dossier réglementaire Twilio « United Kingdom: Local - Business » (approuvé) et son adresse. Tant que ces deux
   // variables sont vides, la recherche de numéros +44 répond « dossier requis » (rien n'est vendu sans dossier approuvé).
   // Numéros de l'inventaire Twilio à ne JAMAIS proposer à la vente (numéros propres de HARX, séparés par des virgules, format E.164).
@@ -58,16 +62,5 @@ export const config = {
   twilioPushCredentialSidIos: process.env.TWILIO_PUSH_CREDENTIAL_SID_IOS || '',
   twilioPushCredentialSidAndroid: process.env.TWILIO_PUSH_CREDENTIAL_SID_ANDROID || '',
   twilioFrenchNationalBundleSid: process.env.TWILIO_FRENCH_NATIONAL_BUNDLE_SID || 'BUe5aead3361e804e3aa18d455178dd069',
-  twilioFrenchNationalAddressSid: process.env.TWILIO_FRENCH_NATIONAL_ADDRESS_SID || 'AD5d0160ef54cf901e419ac73e873b970e',
-  twilioFrenchBusinessInfo: {
-    businessName: 'AI AGENTS & CO',
-    registrationNumber: '942597915',
-    website: 'https://aiagentsco.tech/',
-    email: 'chafik.sabiry@aiagentsco.tech',
-    street: '229 Rue Saint-Honoré',
-    city: 'Paris',
-    region: 'IDF',
-    country: 'FR',
-    postalCode: '75001'
-  }
+  twilioFrenchNationalAddressSid: process.env.TWILIO_FRENCH_NATIONAL_ADDRESS_SID || 'AD5d0160ef54cf901e419ac73e873b970e'
 };

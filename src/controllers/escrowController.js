@@ -23,6 +23,7 @@ import {
   isRepShareInRetraction,
 } from '../utils/retraction.js';
 import { clearExpiredRetractions, reverseSaleCommission } from '../services/retractionService.js';
+import { planCreditCharging } from '../services/creditCoefficient.js';
 import { guardCompanyAccess } from '../middleware/companyGuard.js';
 import { guardAgentSelf } from '../middleware/agentGuard.js';
 
@@ -957,8 +958,13 @@ export async function syncMinutesFromCalls(companyId) {
         // Les appels de test du centre ne consomment pas de minutes.
         isTest: { $ne: true }
       },
-      { projection: { sid: 1, duration: 1 } }
+      { projection: { sid: 1, duration: 1, direction: 1, to: 1, from: 1 } }
     ).toArray();
+
+    // Crédits par minute selon la zone (1 minute internationale = N crédits ; N = 1 par défaut : comportement actuel, sans lecture du pays).
+    // Trace du webhook d'abord (même zone que le plafond), sinon reclassement ; forfait ou lignes illisibles : 1 crédit la minute (comme avant, jamais de report).
+    const pending = calls.filter((c) => !alreadyCharged.has(String(c.sid || c._id || '')));
+    const charging = pending.length ? await planCreditCharging({ companyId, calls: pending }) : { factorOf: () => 1 };
 
     // Billing rule: each call is billed at the ceiling of its duration in
     // minutes (10s → 1 min, 1m02s → 2 min). We aggregate the per-call ceiling
@@ -966,13 +972,17 @@ export async function syncMinutesFromCalls(companyId) {
     let addedSeconds = 0;
     let addedMinutes = 0;
     const newKeys = [];
+    const seen = new Set();
     for (const c of calls) {
       const key = String(c.sid || c._id || '');
-      if (!key || alreadyCharged.has(key)) continue;
+      // Un même sid inscrit deux fois (écritures concurrentes sans index unique) n'est débité qu'une fois.
+      if (!key || alreadyCharged.has(key) || seen.has(key)) continue;
+      seen.add(key);
       const secs = Number(c.duration || 0);
       if (secs <= 0) continue;
       addedSeconds += secs;
-      addedMinutes += Math.ceil(secs / 60);
+      // Minute entamée arrondie à la minute supérieure, PUIS multipliée par les crédits de la zone (1 ou N).
+      addedMinutes += Math.ceil(secs / 60) * charging.factorOf(c);
       newKeys.push(key);
     }
 
@@ -2132,7 +2142,7 @@ export const escrowController = {
   getAgentTransactions: async (req, res) => {
     const { agentId } = req.params;
     if (!agentId) return res.status(400).json({ error: 'agentId is required' });
-    if (!guardAgentSelf(req, res, agentId)) return;
+    if (!(await guardAgentSelf(req, res, agentId))) return;
 
     try {
       const repId = mongoose.Types.ObjectId.isValid(agentId)
@@ -2419,7 +2429,7 @@ export const escrowController = {
   getAgentWallet: async (req, res) => {
     const { agentId } = req.params;
     if (!agentId) return res.status(400).json({ error: 'agentId is required' });
-    if (!guardAgentSelf(req, res, agentId)) return;
+    if (!(await guardAgentSelf(req, res, agentId))) return;
 
     try {
       await reconcileAgentRewards(agentId);
@@ -2434,7 +2444,7 @@ export const escrowController = {
   getAgentWithdrawals: async (req, res) => {
     const { agentId } = req.params;
     if (!agentId) return res.status(400).json({ error: 'agentId is required' });
-    if (!guardAgentSelf(req, res, agentId)) return;
+    if (!(await guardAgentSelf(req, res, agentId))) return;
 
     try {
       const withdrawals = await AgentWithdrawal.find({ agentId }).sort({ createdAt: -1 });
@@ -2451,7 +2461,7 @@ export const escrowController = {
     if (!agentId) {
       return res.status(400).json({ error: 'agentId is required' });
     }
-    if (!guardAgentSelf(req, res, agentId)) return;
+    if (!(await guardAgentSelf(req, res, agentId))) return;
 
     try {
       const db = mongoose.connection.db;
@@ -2491,7 +2501,7 @@ export const escrowController = {
     if (!agentId || !amount || amount <= 0 || !method) {
       return res.status(400).json({ error: 'agentId, positive amount, and method are required' });
     }
-    if (!guardAgentSelf(req, res, agentId)) return;
+    if (!(await guardAgentSelf(req, res, agentId))) return;
 
     const parsedAmount = parseFloat(amount);
     if (Number.isNaN(parsedAmount) || parsedAmount < MIN_WITHDRAWAL_AMOUNT) {
