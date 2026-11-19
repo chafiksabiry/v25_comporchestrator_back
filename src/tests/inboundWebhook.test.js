@@ -59,7 +59,8 @@ beforeEach(() => {
   // Base de CET environnement : documents PhoneNumber simulés.
   phoneNumberService.unassignedAmong = async (list) => list.filter((n) => !Object.values(lines).some((l) => l.phoneNumber === n.phoneNumber));
   PhoneNumber.prototype.save = async function save() { lines[String(this._id)] = this; return this; };
-  PhoneNumber.findOne = async (q = {}) => Object.values(lines).find((l) => (!q._id || String(l._id) === String(q._id)) && (!q.phoneNumber || l.phoneNumber === q.phoneNumber)) || null;
+  // Résultat attendable ET .lean() (takeOverStaleHolder, #162, lit la fiche avec .lean()).
+  PhoneNumber.findOne = (q = {}) => { const found = Object.values(lines).find((l) => (!q._id || String(l._id) === String(q._id)) && (!q.phoneNumber || l.phoneNumber === q.phoneNumber)) || null; return Object.assign(Promise.resolve(found), { lean: async () => found }); };
   PhoneNumber.updateOne = async (q, u) => { calls.push(['db.updateOne', String(q._id), u.$set]); const l = lines[String(q._id)]; if (l) for (const [k, v] of Object.entries(u.$set || {})) if (k === 'metadata.inboundWebhook') { l.metadata = { ...(l.metadata || {}), inboundWebhook: v }; } return { modifiedCount: 1 }; };
   PhoneNumber.deleteOne = async (q) => { delete lines[String(q._id)]; return { deletedCount: 1 }; };
   PhoneNumber.find = (q = {}) => {

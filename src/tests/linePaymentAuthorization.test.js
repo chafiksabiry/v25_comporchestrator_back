@@ -134,7 +134,8 @@ beforeEach(() => {
   PhoneNumber.countDocuments = async () => 1; // une ligne déjà là : la suivante est payante
   PhoneNumber.prototype.save = async function save() { calls.push(['line.save', String(this._id), this.billingStatus]); storeLine(this); return this; };
   PhoneNumber.findById = async (id) => lines[String(id)] || null;
-  PhoneNumber.findOne = async (q = {}) => Object.values(lines).find((l) => (!q._id || String(l._id) === String(q._id)) && (!q.companyId || String(l.companyId) === String(q.companyId)) && (!q.paymentRef || String(l.paymentRef) === String(q.paymentRef))) || null;
+  // Résultat attendable ET .lean() (takeOverStaleHolder, #162, lit la fiche avec .lean()).
+  PhoneNumber.findOne = (q = {}) => { const found = Object.values(lines).find((l) => (!q._id || String(l._id) === String(q._id)) && (!q.companyId || String(l.companyId) === String(q.companyId)) && (!q.paymentRef || String(l.paymentRef) === String(q.paymentRef))) || null; return Object.assign(Promise.resolve(found), { lean: async () => found }); };
   PhoneNumber.find = (q = {}) => {
     const wanted = q.phoneNumber?.$in;
     const rows = Object.values(lines).filter((l) => (!wanted || wanted.includes(l.phoneNumber))

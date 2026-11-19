@@ -8,6 +8,8 @@ process.env.TWILIO_INVENTORY_EXCLUDE = '+33218940999, +13023132631';
 const { phoneNumberService, INVENTORY_FRIENDLY_PREFIX } = await import('../services/phoneNumberService.js');
 const { PhoneNumber } = await import('../models/PhoneNumber.js');
 PhoneNumber.prototype.save = async function save() { return this; };
+// Aucune ancienne fiche à reprendre pour ces numéros (la reprise des fiches orphelines est couverte par inventoryOrphans.test.js).
+PhoneNumber.findOne = () => ({ lean: async () => null });
 
 const num = (phoneNumber, friendlyName, voice = true) => ({ sid: 'PN' + phoneNumber.slice(-6), phoneNumber, friendlyName, capabilities: { voice, sms: false, mms: false } });
 const OWNED = [
