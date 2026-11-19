@@ -1,13 +1,19 @@
 import { randomUUID } from 'node:crypto';
-import { call, ensure, eventWindow, READ_SCOPE, WRITE_SCOPE, SecretariatError, VIDEO_LINK_RE } from './common.js';
+import { call, ensure, eventWindow, READ_SCOPE, SecretariatError, VIDEO_LINK_RE } from './common.js';
 import { dialIn, plainDescription, safeVideoUrl, videoUrlIn } from './eventConnection.js';
 import { cleanSnippet, cleanSubject, htmlToText, limitBody, parseAddress, stripQuoted } from './mailText.js';
 import { DEFAULT_TIME_ZONE } from '../timeZone.js';
 import { buildMime, toBase64Url } from './mime.js';
+import { parseAddressList } from './addressList.js';
+
+/** Au-delà (octets du message MIME), envoi par le point d'upload plutôt que par le champ JSON `raw`. */
+const RAW_JSON_MAX = 900_000;
 
 /**
- * Google : Gmail (envoi), Agenda (événements), Meet (via un événement). Tous les points d'accès ci-dessous sont les points
+ * Google : Gmail (envoi + LECTURE de la boîte de réception), Agenda (événements), Meet (via un événement). Tous les points d'accès ci-dessous sont les points
  * publics standards ; AUCUN n'a été essayé avec un vrai compte (aucun identifiant n'existe encore) : tout est « À VÉRIFIER » en recette.
+ * Lecture : scope restreint gmail.readonly, OPTIONNEL (`read: true`), utilisable par la SEULE personne qui a connecté la boîte (règle du propriétaire).
+ * AUCUNE écriture de la boîte : gmail.modify n'est jamais demandé (pas de corbeille ni d'archivage Gmail : suppression / archivage dans HARX seulement).
  */
 const SCOPE_GMAIL_SEND = 'https://www.googleapis.com/auth/gmail.send';
 /** Partie HTML d'un message renvoyée à l'application (mise en page) : plafond en caractères. */
@@ -21,10 +27,8 @@ export const google = {
   scopes: ['openid', 'email', SCOPE_GMAIL_SEND, SCOPE_CALENDAR],
   /** Scopes sans lesquels la connexion est inutilisable (l'utilisateur peut en décocher à l'écran de consentement). */
   requiredScopes: [SCOPE_GMAIL_SEND, SCOPE_CALENDAR],
-  /** Lecture de la boîte de réception (e-mails entrants) : OPTIONNEL, demandé seulement avec `read: true`. */
+  /** Lecture de la boîte de réception (e-mails entrants) : OPTIONNEL, demandé seulement avec `read: true`. Aucun writeScope (gmail.modify jamais demandé). */
   readScope: READ_SCOPE.google,
-  /** Écriture (corbeille / archivage) : OPTIONNEL, demandé seulement avec `write: true`. Inclut la lecture. */
-  writeScope: WRITE_SCOPE.google,
   authorizeUrl: () => 'https://accounts.google.com/o/oauth2/v2/auth',
   tokenUrl: () => 'https://oauth2.googleapis.com/token',
   /** Paramètres propres à Google : refresh_token seulement avec access_type=offline + prompt=consent. */
@@ -45,14 +49,37 @@ export const google = {
     await call(http, { method: 'POST', url: 'https://oauth2.googleapis.com/revoke', form: { token } });
   },
 
-  /** Gmail users.messages.send : RFC 822 en base64url ; From = compte connecté. */
+  /**
+   * Gmail users.messages.send : RFC 822 ; From = compte connecté. Message court : champ JSON `raw` (base64url, comme avant). Message volumineux (pièces
+   * jointes) : point d'upload `uploadType=media` (message/rfc822, jusqu'à 35 Mo côté API ; le champ JSON `raw` est limité à quelques Mo).
+   * Réponse : en-têtes In-Reply-To / References transmis (fil conservé chez le destinataire).
+   */
   async sendMail({ http, accessToken, account, message }) {
-    const raw = toBase64Url(buildMime({
-      from: { email: account, name: message.fromName }, to: message.to, replyTo: message.replyTo, subject: message.subject,
-      text: message.text, html: message.html, attachments: message.attachments,
-    }));
-    const res = ensure(await call(http, { method: 'POST', url: 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send', headers: { Authorization: `Bearer ${accessToken}` }, body: { raw } }), 'Envoi Gmail', [200]);
+    const mime = buildMime({
+      from: { email: account, name: message.fromName }, to: message.to, cc: message.cc, replyTo: message.replyTo, subject: message.subject,
+      text: message.text, html: message.html, attachments: message.attachments, inReplyTo: message.inReplyTo, references: message.references,
+    });
+    const headers = { Authorization: `Bearer ${accessToken}` };
+    const req = Buffer.byteLength(mime, 'utf8') > RAW_JSON_MAX
+      ? { method: 'POST', url: 'https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media', headers: { ...headers, 'Content-Type': 'message/rfc822' }, body: mime, timeoutMs: 120000 }
+      : { method: 'POST', url: 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send', headers, body: { raw: toBase64Url(mime) } };
+    const res = ensure(await call(http, req), 'Envoi Gmail', [200]);
     return { id: res.json?.id || '' };
+  },
+
+  /**
+   * Destinataires d'un message reçu, lus EN DIRECT (format=metadata, en-têtes seulement ; rien n'est stocké) pour « Répondre à tous » :
+   * From, Reply-To, To, Cc, Message-ID, References, Subject.
+   */
+  async readRecipients({ http, accessToken, id }) {
+    const q = ['From', 'Reply-To', 'To', 'Cc', 'Message-ID', 'References', 'Subject'].map((h) => `metadataHeaders=${encodeURIComponent(h)}`).join('&');
+    const res = ensure(await call(http, { method: 'GET', url: `${GMAIL}/messages/${encodeURIComponent(id)}?format=metadata&${q}`, headers: { Authorization: `Bearer ${accessToken}` } }), 'Lecture d’un message Gmail', [200]);
+    const all = (name) => (res.json?.payload?.headers || []).filter((x) => String(x?.name).toLowerCase() === name).map((x) => String(x?.value || ''));
+    return {
+      from: parseAddressList(all('from').join(', ')).slice(0, 1), replyTo: parseAddressList(all('reply-to').join(', ')),
+      to: parseAddressList(all('to').join(', ')), cc: parseAddressList(all('cc').join(', ')),
+      messageId: all('message-id')[0] || '', references: all('references').join(' '), subject: cleanSubject(all('subject')[0] || ''),
+    };
   },
 
   /**
@@ -152,22 +179,6 @@ export const google = {
     const text = limitBody(stripQuoted(plain.length ? plain.join('\n') : htmlToText(html.join('\n'))));
     const htmlOut = html.join('\n').slice(0, MAX_HTML);
     return htmlOut.trim() ? { text, html: htmlOut } : { text };
-  },
-
-  /**
-   * Mise à la CORBEILLE (réversible, jamais de suppression définitive) : `users.messages.trash`. 404 (message déjà absent) = réussi. Scope gmail.modify.
-   * [À VÉRIFIER en recette avec un vrai compte.]
-   */
-  async trashMessage({ http, accessToken, id }) {
-    ensure(await call(http, { method: 'POST', url: `${GMAIL}/messages/${encodeURIComponent(id)}/trash`, headers: { Authorization: `Bearer ${accessToken}` } }), 'Mise à la corbeille Gmail', [200, 404]);
-    return { id: null };
-  },
-
-  /** Archivage = retrait du libellé INBOX (`users.messages.modify`) ; désarchivage = ajout de INBOX. 404 = réussi. L'identifiant Gmail ne change pas. */
-  async setArchived({ http, accessToken, id, archived }) {
-    const body = archived ? { removeLabelIds: ['INBOX'] } : { addLabelIds: ['INBOX'] };
-    ensure(await call(http, { method: 'POST', url: `${GMAIL}/messages/${encodeURIComponent(id)}/modify`, headers: { Authorization: `Bearer ${accessToken}` }, body }), 'Archivage Gmail', [200, 404]);
-    return { id: null };
   },
 
   /** Suppression ; 404 et 410 (déjà supprimé) comptent comme réussis. */

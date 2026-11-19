@@ -41,7 +41,11 @@ export const microsoft = {
   /** Pas de point de révocation utilisateur fiable en v2.0 : les jetons sont supprimés de notre côté (rien à appeler). */
   async revoke() {},
 
-  /** Graph POST /me/sendMail : l'expéditeur est la boîte connectée (aucun `from` imposé). Réponse attendue : 202. */
+  /**
+   * Graph POST /me/sendMail : l'expéditeur est la boîte connectée (aucun `from` imposé). Réponse attendue : 202.
+   * Pièces jointes « en ligne » seulement (3 Mo par fichier et au total, vérifié en amont par mailAttachments.js : la requête Graph est limitée à 4 Mio).
+   * En-têtes de fil (In-Reply-To / References) : Graph n'accepte que des en-têtes « x- » dans sendMail ; ils ne sont donc pas transmis (comme avant).
+   */
   async sendMail({ http, accessToken, message }) {
     const recipient = (address, name) => ({ emailAddress: { address, ...(name ? { name } : {}) } });
     const body = {
@@ -49,6 +53,7 @@ export const microsoft = {
         subject: message.subject,
         body: message.html ? { contentType: 'HTML', content: message.html } : { contentType: 'Text', content: message.text },
         toRecipients: message.to.map((a) => recipient(a)),
+        ...(message.cc?.length ? { ccRecipients: message.cc.map((a) => recipient(a)) } : {}),
         ...(message.replyTo?.email ? { replyTo: [recipient(message.replyTo.email, message.replyTo.name)] } : {}),
         ...(message.attachments?.length ? { attachments: message.attachments.map((f) => ({ '@odata.type': '#microsoft.graph.fileAttachment', name: f.name, contentType: f.contentType, contentBytes: f.contentBase64 })) } : {}),
       },
@@ -56,6 +61,14 @@ export const microsoft = {
     };
     ensure(await call(http, { method: 'POST', url: `${GRAPH}/me/sendMail`, headers: { Authorization: `Bearer ${accessToken}` }, body }), 'Envoi Outlook', [202]);
     return { id: '' };
+  },
+
+  /** Destinataires d'un message reçu, lus EN DIRECT (Graph, champs d'adresses seulement ; rien n'est stocké) pour « Répondre à tous ». */
+  async readRecipients({ http, accessToken, id }) {
+    const res = ensure(await call(http, { method: 'GET', url: `${GRAPH}/me/messages/${encodeURIComponent(id)}?$select=from,replyTo,toRecipients,ccRecipients,internetMessageId,subject`, headers: { Authorization: `Bearer ${accessToken}` } }), 'Lecture d’un message Outlook', [200]);
+    const j = res.json || {};
+    const list = (arr) => [...new Set((Array.isArray(arr) ? arr : []).map((r) => String(r?.emailAddress?.address || '').trim().toLowerCase()).filter((a) => /^[^@\s<>,;"]+@[^@\s<>,;"]+\.[^@\s<>,;"]+$/.test(a)))].slice(0, 50);
+    return { from: list(j.from ? [j.from] : []), replyTo: list(j.replyTo), to: list(j.toRecipients), cc: list(j.ccRecipients), messageId: String(j.internetMessageId || ''), references: '', subject: cleanSubject(j.subject) };
   },
 
   /** Crée (sans `id`) ou met à jour un événement ; `addMeeting` ajoute une réunion Teams. Aucun participant : aucune invitation. */

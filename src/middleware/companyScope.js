@@ -10,10 +10,12 @@ const CACHE_TTL_MS = 60 * 1000;
 const companyByUser = new Map();
 const countryByCompany = new Map();
 
+/** `code` : identifiant stable pour les clients (qui traduisent d'après lui) ; le `message` actuel n'est jamais modifié. */
 export class ScopeError extends Error {
-  constructor(status, message) {
+  constructor(status, message, code = 'SCOPE_ERROR') {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -32,13 +34,13 @@ export function registrationOrigin() {
 export async function callerAccess(req) {
   const userId = req.user && (req.user.userId || req.user.id);
   const token = req.headers.authorization?.split(' ')[1];
-  if (!userId || !token) throw new ScopeError(401, 'Authentication required');
+  if (!userId || !token) throw new ScopeError(401, 'Authentication required', 'AUTH_REQUIRED');
 
   const cached = companyByUser.get(String(userId));
   if (cached && cached.expires > Date.now()) return cached.access;
 
   const origin = registrationOrigin();
-  if (!origin) throw new ScopeError(503, 'Company lookup is not configured');
+  if (!origin) throw new ScopeError(503, 'Company lookup is not configured', 'COMPANY_LOOKUP_NOT_CONFIGURED');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), LOOKUP_TIMEOUT_MS);
   try {
@@ -46,7 +48,7 @@ export async function callerAccess(req) {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
     });
-    if (!res.ok) throw new ScopeError(503, 'Company lookup failed');
+    if (!res.ok) throw new ScopeError(503, 'Company lookup failed', 'COMPANY_LOOKUP_FAILED');
     const payload = await res.json();
     const d = payload?.data || {};
     const role = d.isAgent ? 'agent' : d.isOwner === false ? 'member' : 'owner';
@@ -58,13 +60,15 @@ export async function callerAccess(req) {
       companyId,
       companyIds,
       role,
+      /** Preuve positive du titulaire (le rôle « owner » est accordé par défaut si isOwner est absent) : à exiger pour les données financières. */
+      isOwner: !d.isAgent && d.isOwner === true,
       permissions: d.permissions && typeof d.permissions === 'object' ? d.permissions : {},
     };
     companyByUser.set(String(userId), { access, expires: Date.now() + CACHE_TTL_MS });
     return access;
   } catch (error) {
     if (error instanceof ScopeError) throw error;
-    throw new ScopeError(503, 'Company lookup failed');
+    throw new ScopeError(503, 'Company lookup failed', 'COMPANY_LOOKUP_FAILED');
   } finally {
     clearTimeout(timer);
   }
@@ -80,7 +84,7 @@ export function scopeToCompany(access, asked) {
   const wanted = asked == null || asked === '' ? '' : String(asked);
   if (!wanted || wanted === access.companyId) return access;
   const mine = new Set([access.companyId, ...(access.companyIds || [])].filter(Boolean).map(String));
-  if (!mine.has(wanted)) throw new ScopeError(403, 'Vous n’êtes pas rattaché à cette entreprise.');
+  if (!mine.has(wanted)) throw new ScopeError(403, 'Vous n’êtes pas rattaché à cette entreprise.', 'COMPANY_NOT_ALLOWED');
   return { ...access, companyId: wanted };
 }
 
@@ -125,8 +129,8 @@ export async function companyCountry(req, companyId) {
   const id = String(companyId || '');
   const userId = req.user && (req.user.userId || req.user.id);
   const token = req.headers?.authorization?.split(' ')[1];
-  if (!userId || !token) throw new ScopeError(401, 'Authentication required');
-  if (!id) throw new ScopeError(400, 'companyId is required');
+  if (!userId || !token) throw new ScopeError(401, 'Authentication required', 'AUTH_REQUIRED');
+  if (!id) throw new ScopeError(400, 'companyId is required', 'COMPANY_ID_REQUIRED');
 
   // Clé par personne ET entreprise : un autre appelant repasse toujours par le contrôle d'accès du service d'inscription.
   const key = `${userId}:${id}`;
@@ -134,7 +138,7 @@ export async function companyCountry(req, companyId) {
   if (cached && cached.expires > Date.now()) return cached.country;
 
   const origin = registrationOrigin();
-  if (!origin) throw new ScopeError(503, 'Company country lookup is not configured');
+  if (!origin) throw new ScopeError(503, 'Company country lookup is not configured', 'COMPANY_COUNTRY_LOOKUP_NOT_CONFIGURED');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), LOOKUP_TIMEOUT_MS);
   try {
@@ -142,18 +146,18 @@ export async function companyCountry(req, companyId) {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
     });
-    if (!res.ok) throw new ScopeError(503, 'Company country lookup failed');
+    if (!res.ok) throw new ScopeError(503, 'Company country lookup failed', 'COMPANY_COUNTRY_LOOKUP_FAILED');
     const payload = await res.json();
     const company = payload?.data?.company;
     if (!payload || payload.success === false || !company || typeof company !== 'object') {
-      throw new ScopeError(503, 'Company country lookup failed');
+      throw new ScopeError(503, 'Company country lookup failed', 'COMPANY_COUNTRY_LOOKUP_FAILED');
     }
     const country = normalizeCountryCode(company.profile?.country) || DEFAULT_COMPANY_COUNTRY;
     countryByCompany.set(key, { country, expires: Date.now() + CACHE_TTL_MS });
     return country;
   } catch (error) {
     if (error instanceof ScopeError) throw error;
-    throw new ScopeError(503, 'Company country lookup failed');
+    throw new ScopeError(503, 'Company country lookup failed', 'COMPANY_COUNTRY_LOOKUP_FAILED');
   } finally {
     clearTimeout(timer);
   }

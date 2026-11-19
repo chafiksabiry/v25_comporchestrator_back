@@ -43,7 +43,7 @@ assert.ok(buildInboundTwiml({ ...common, settings: otherVoice, identities: ['cc-
 // Pas de conseiller, répondeur activé par défaut : invitation par défaut + Record complet
 const noAgent = buildInboundTwiml({ ...common, settings: null, identities: [] });
 assert.ok(noAgent.includes(DEFAULT_VOICEMAIL_PROMPT.replace("'", '&apos;')));
-assert.ok(noAgent.endsWith('<Record maxLength="120" timeout="5" playBeep="true" trim="trim-silence" action="https://orch.test/api/phone-numbers/webhooks/twilio/voicemail-done" method="POST" recordingStatusCallback="https://orch.test/api/phone-numbers/webhooks/twilio/voicemail-recording" recordingStatusCallbackEvent="completed" recordingStatusCallbackMethod="POST"/>'));
+assert.ok(noAgent.endsWith('<Record maxLength="600" timeout="5" playBeep="true" trim="trim-silence" action="https://orch.test/api/phone-numbers/webhooks/twilio/voicemail-done" method="POST" recordingStatusCallback="https://orch.test/api/phone-numbers/webhooks/twilio/voicemail-recording" recordingStatusCallbackEvent="completed" recordingStatusCallbackMethod="POST"/>'));
 assert.ok(!noAgent.includes('<Dial'));
 
 // Invitation du répondeur : audio validé, texte personnalisé

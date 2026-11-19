@@ -9,7 +9,11 @@ import { phrasesFor } from './companyLanguage.js';
  * Le navigateur n'envoie jamais de numéro : seulement l'identifiant d'une fiche de l'annuaire de la société ; le numéro
  * composé est celui de la fiche, relu côté serveur.
  */
-export const TRANSFER_STATE_TTL_MS = 60 * 60 * 1000;
+/**
+ * Validité du jeton de l'action du <Dial> : elle est appelée à la FIN de la jambe transférée, qui peut durer jusqu'au plafond d'un appel
+ * (MAX_CALL_SECONDS = 4 h). 5 h couvre sonnerie + plafond : au-delà d'1 h, l'ancien délai faisait rejeter le résultat (et donc le débit).
+ */
+export const TRANSFER_STATE_TTL_MS = 5 * 60 * 60 * 1000;
 export const TRANSFER_RING_SECONDS = 25;
 export const TRANSFER_WEBHOOK_PATH = '/api/phone-numbers/webhooks/twilio/transfer-result';
 export const CALL_SID = /^CA[0-9a-fA-F]{32}$/;
@@ -34,16 +38,17 @@ export function clockIn(timeZone, now = Date.now()) {
 export function entryAvailability(entry, absences, now = Date.now(), timeZone = DEFAULT_TIME_ZONE) {
   const clock = clockIn(timeZone, now);
   const absence = absenceOf(absences, entry.userId || '', clock.day);
-  if (absence) return { state: 'absent', label: `${entry.name} est absent·e jusqu’au ${absence.until.split('-').reverse().join('/')}.` };
+  // `label` (français) est inchangé. Champs additifs pour les clients qui traduisent : `labelEn` (anglais), `params` (valeurs brutes) et, quand `state` ne suffit pas, `reason`.
+  if (absence) return { state: 'absent', label: `${entry.name} est absent·e jusqu’au ${absence.until.split('-').reverse().join('/')}.`, labelEn: `${entry.name} is away until ${absence.until}.`, params: { name: entry.name, until: absence.until } };
   const hours = entry.hours || [];
-  if (!hours.length) return { state: 'unknown', label: 'Horaires non précisés.' };
+  if (!hours.length) return { state: 'unknown', label: 'Horaires non précisés.', labelEn: 'Hours not specified.', params: {} };
   const slots = hours.filter((h) => h.day === clock.weekday).sort((a, b) => a.start.localeCompare(b.start));
-  if (!slots.length) return { state: 'off', label: 'Pas de présence prévue aujourd’hui.' };
+  if (!slots.length) return { state: 'off', reason: 'no_slot_today', label: 'Pas de présence prévue aujourd’hui.', labelEn: 'No presence scheduled today.', params: {} };
   const current = slots.find((s) => s.start <= clock.time && clock.time < s.end);
-  if (current) return { state: 'available', label: `Disponible jusqu’à ${hhmm(current.end)}.` };
+  if (current) return { state: 'available', label: `Disponible jusqu’à ${hhmm(current.end)}.`, labelEn: `Available until ${current.end}.`, params: { until: current.end } };
   const next = slots.find((s) => s.start > clock.time);
-  if (next) return { state: 'later', label: `Pas encore là : disponible à partir de ${hhmm(next.start)}.` };
-  return { state: 'off', label: 'Plus disponible aujourd’hui.' };
+  if (next) return { state: 'later', label: `Pas encore là : disponible à partir de ${hhmm(next.start)}.`, labelEn: `Not here yet: available from ${next.start}.`, params: { from: next.start } };
+  return { state: 'off', reason: 'past_hours', label: 'Plus disponible aujourd’hui.', labelEn: 'No longer available today.', params: {} };
 }
 
 /** On peut lui passer l'appel maintenant : présente, ou sans horaires précisés. Les plages futures ou passées ne comptent pas (hors horaires). */
@@ -53,12 +58,17 @@ export const isReachableNow = (availability) => availability.state === 'availabl
 const b64 = (s) => Buffer.from(s, 'utf8').toString('base64url');
 const sign = (secret, body) => crypto.createHmac('sha256', String(secret)).update(`transfer.${body}`).digest('hex');
 
-export function signTransferState({ secret, companyId, callSid, entryId, userId, now = Date.now() }) {
-  const body = b64(JSON.stringify({ c: String(companyId), s: String(callSid), e: String(entryId), u: String(userId), x: now + TRANSFER_STATE_TTL_MS }));
+/**
+ * `to` (numéro composé, relu dans l'annuaire) et `factor` (crédits par minute retenus pour le plafond) sont facultatifs : ils servent au
+ * débit de la jambe transférée (même destination et même coefficient que le plafond). Un jeton sans eux reste valide.
+ */
+export function signTransferState({ secret, companyId, callSid, entryId, userId, to = '', factor = 0, now = Date.now() }) {
+  const extra = { ...(to ? { n: String(to) } : {}), ...(Number(factor) >= 1 ? { f: Number(factor) } : {}) };
+  const body = b64(JSON.stringify({ c: String(companyId), s: String(callSid), e: String(entryId), u: String(userId), ...extra, x: now + TRANSFER_STATE_TTL_MS }));
   return `${body}.${sign(secret, body)}`;
 }
 
-/** @returns {{companyId: string, callSid: string, entryId: string, userId: string}|null} null si le jeton est altéré ou périmé */
+/** @returns {{companyId: string, callSid: string, entryId: string, userId: string, to?: string, factor?: number}|null} null si le jeton est altéré ou périmé */
 export function verifyTransferState({ secret, token, now = Date.now() }) {
   const [body, sig] = String(token ?? '').split('.');
   if (!secret || !body || !sig) return null;
@@ -68,7 +78,7 @@ export function verifyTransferState({ secret, token, now = Date.now() }) {
   try {
     const p = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
     if (!Number.isFinite(p.x) || p.x < now) return null;
-    return { companyId: p.c, callSid: p.s, entryId: p.e, userId: p.u };
+    return { companyId: p.c, callSid: p.s, entryId: p.e, userId: p.u, ...(p.n ? { to: String(p.n) } : {}), ...(Number(p.f) >= 1 ? { factor: Number(p.f) } : {}) };
   } catch {
     return null;
   }
@@ -119,6 +129,12 @@ export const RESULT_LABEL = {
   caller_hung_up: 'L’appelant a raccroché', message_left: 'Message laissé', message_offered: 'Message proposé directement',
 };
 
+/** Libellés anglais des résultats (champ additif `resultLabelEn`) ; les clients traduisent d'après `result`. */
+export const RESULT_LABEL_EN = {
+  ringing: 'In progress', answered: 'Transferred', no_answer: 'No answer, message offered', busy: 'Busy, message offered', failed: 'Failed, message offered',
+  caller_hung_up: 'The caller hung up', message_left: 'Message left', message_offered: 'Message offered directly',
+};
+
 /** Entrée de journal affichée (jamais le numéro de la fiche). */
 export function toTransferLog(call) {
   const t = call.transfer || {};
@@ -126,5 +142,6 @@ export function toTransferLog(call) {
     callId: String(call._id), callSid: call.callSid, from: call.from || '', at: t.startedAt || null,
     byUserId: t.byUserId || '', byName: t.byName || '', toEntryId: t.entryId || '', toName: t.entryName || '',
     mode: t.mode || 'dial', result: t.result || 'ringing', resultLabel: RESULT_LABEL[t.result] || RESULT_LABEL.ringing,
+    resultLabelEn: RESULT_LABEL_EN[t.result] || RESULT_LABEL_EN.ringing,
   };
 }

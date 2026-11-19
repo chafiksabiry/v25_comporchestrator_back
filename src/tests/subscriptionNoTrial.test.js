@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { stripeService, __setStripeClientForTests } from '../services/stripeService.js';
 
-// Plus d'essai sans carte : la carte est demandée dès la souscription.
+// Pas d'essai : carte demandée dès qu'il y a un montant à payer ; code promo à 100 % -> pas de carte (if_required).
 const bodies = [];
 __setStripeClientForTests({
   checkout: { sessions: { create: async (body) => { bodies.push(body); return { id: 'cs_fake' }; } } },
@@ -15,7 +15,7 @@ await stripeService.createEmbeddedSubscriptionSession('u1', 'price_1');
 assert.equal(bodies.length, 4);
 for (const b of bodies) {
   assert.equal(b.mode, 'subscription');
-  assert.equal(b.payment_method_collection, 'always');
+  assert.equal(b.payment_method_collection, 'if_required');
   assert.ok(!('trial_period_days' in b.subscription_data), 'pas de trial_period_days');
   assert.ok(!('trial_end' in b.subscription_data));
   assert.equal(b.subscription_data.metadata.userId, 'u1');

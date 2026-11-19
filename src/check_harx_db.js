@@ -2,10 +2,7 @@ import mongoose from 'mongoose';
 
 async function run() {
   const uri = process.env.MONGODB_URI;
-  if (!uri) {
-    console.error('MONGODB_URI environment variable is required (set it in your shell, never in the code).');
-    process.exit(1);
-  }
+  if (!uri) throw new Error('MONGODB_URI is required (no credentials are stored in the repository)');
   await mongoose.connect(uri);
   const db = mongoose.connection.db;
 

@@ -1,11 +1,14 @@
+import { stripeLocaleFromRequest } from '../services/stripeLocale.js';
 import { findCompanyStripeCustomerId } from '../services/billingCustomer.js';
 import mongoose from 'mongoose';
+import { guardCompanyAccess } from '../middleware/companyGuard.js';
 import CompanyPayment from '../models/CompanyPayment.js';
 import { paypalService } from '../services/paypalService.js';
 import { stripeService } from '../services/stripeService.js';
-import { bundleBalances, fulfillBundlePurchase, fulfillMinutesPurchase, fulfillTokensPurchase, fulfillWalletDeposit } from '../services/paymentFulfillment.js';
+import { fulfillCompanyPaymentOnce } from '../services/paymentFulfillment.js';
 import { bundleAmountCents, bundleLabel, parseBundleQuantities } from '../services/bundlePurchase.js';
 import { config } from '../config/env.js';
+import { paypalCaptureId, paypalCaptureNotCompleted, paypalOrderMismatch, stripeSessionMismatch } from '../services/paymentVerification.js';
 import { FALLBACK_PURCHASE_CURRENCY, formatAmountLabel, purchaseCurrency } from '../services/purchaseCurrency.js';
 import {
   computeMinutesPurchaseCents,
@@ -90,53 +93,6 @@ async function computeAmountCents(purpose, { amountEuros, minutes, tokens }) {
   return null;
 }
 
-async function fulfillPayment(payment) {
-  if (payment.fulfilledAt) {
-    if (payment.purpose === 'wallet_deposit') {
-      const wallet = await import('../models/WalletCompany.js').then((m) =>
-        m.default.findOne({ companyId: payment.companyId })
-      );
-      return { purpose: payment.purpose, data: { balance: wallet?.balance ?? 0 } };
-    }
-    if (payment.purpose === 'bundle_purchase') {
-      return { purpose: payment.purpose, data: await bundleBalances(payment.companyId) };
-    }
-    if (payment.purpose === 'tokens_purchase') {
-      const toks = await import('../models/TokensCompany.js').then((m) =>
-        m.default.findOne({ companyId: payment.companyId })
-      );
-      return {
-        purpose: payment.purpose,
-        data: { tokens: toks?.tokens ?? 0, purchasedTokens: toks?.purchasedTokens ?? 0 }
-      };
-    }
-    const mins = await import('../models/MinutesCompany.js').then((m) =>
-      m.default.findOne({ companyId: payment.companyId })
-    );
-    return {
-      purpose: payment.purpose,
-      data: { minutes: mins?.minutes ?? 0, purchasedMinutes: mins?.purchasedMinutes ?? 0 }
-    };
-  }
-
-  let result;
-  if (payment.purpose === 'wallet_deposit') {
-    result = await fulfillWalletDeposit(payment);
-  } else if (payment.purpose === 'minutes_purchase') {
-    result = await fulfillMinutesPurchase(payment);
-  } else if (payment.purpose === 'tokens_purchase') {
-    result = await fulfillTokensPurchase(payment);
-  } else if (payment.purpose === 'bundle_purchase') {
-    result = await fulfillBundlePurchase(payment);
-  } else {
-    throw new Error(`Unknown payment purpose: ${payment.purpose}`);
-  }
-
-  payment.fulfilledAt = new Date();
-  await payment.save();
-  return { purpose: payment.purpose, data: result };
-}
-
 export const paymentCheckoutController = {
   async getConfig(req, res) {
     try {
@@ -176,6 +132,8 @@ export const paymentCheckoutController = {
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) {
         return res.status(400).json({ error: 'Valid companyId is required' });
       }
+      // On ne déclenche un paiement que pour SA société (propriétaire) : 403 avant toute création de paiement ou de session chez Stripe/PayPal.
+      if (!(await guardCompanyAccess(req, res, companyId, { ownerOnly: true }))) return;
       if (!['wallet_deposit', 'minutes_purchase', 'tokens_purchase', 'bundle_purchase'].includes(purpose)) {
         return res.status(400).json({
           error: "purpose must be 'wallet_deposit', 'minutes_purchase', 'tokens_purchase' or 'bundle_purchase'"
@@ -300,6 +258,7 @@ export const paymentCheckoutController = {
             cancelUrl,
             clientReferenceId: payment._id,
             customerId: await findCompanyStripeCustomerId(companyId),
+            locale: stripeLocaleFromRequest(req),
             metadata: { purpose, companyId: String(companyId) }
           });
 
@@ -360,18 +319,26 @@ export const paymentCheckoutController = {
         return res.status(404).json({ error: 'Payment not found' });
       }
 
+      // Route anonyme : la réponse ne porte jamais le document paiement (société, référence, lien) ni de solde.
+      const done = () => res.status(200).json({ success: true, status: payment.status, purpose: payment.purpose });
+
       if (payment.status === 'succeeded') {
-        const fulfillment = await fulfillPayment(payment);
-        return res.status(200).json({ success: true, payment, fulfillment });
+        await fulfillCompanyPaymentOnce(payment);
+        return done();
       }
-      if (payment.status === 'failed' || payment.status === 'refunded') {
+      if (payment.status === 'failed' || payment.status === 'refunded' || payment.status === 'review') {
         return res.status(409).json({ error: `Payment is already ${payment.status}` });
       }
 
       if (payment.provider === 'paypal') {
-        const orderId = providerRef || payment.providerRef;
+        // La commande est celle créée pour CE paiement : jamais un identifiant imposé par le client (capturer la commande d'un autre).
+        const orderId = payment.providerRef;
         if (!orderId) {
-          return res.status(400).json({ error: 'PayPal order ID (providerRef) is required' });
+          return res.status(400).json({ error: 'PayPal order ID is missing on this payment' });
+        }
+        if (providerRef && providerRef !== orderId) {
+          console.warn(`[payments/checkout/confirm] commande PayPal étrangère refusée pour le paiement ${payment._id}`);
+          return res.status(400).json({ error: 'PayPal order does not belong to this payment' });
         }
 
         let capture;
@@ -397,13 +364,35 @@ export const paymentCheckoutController = {
           });
         }
 
+        // Capture non terminée (ex. paiement en attente) : rien n'est crédité, le paiement reste « pending » pour une confirmation ultérieure.
+        if (paypalCaptureNotCompleted(capture)) {
+          return res.status(402).json({ error: 'PayPal capture not completed' });
+        }
+        // L'argent EST capturé ici : un contrôle en échec ne doit pas le laisser sans trace. Statut dédié « review » (plus de recapture, plus de
+        // crédit), alerte explicite avec la commande et la capture ; à traiter à la main (voir la PR : remboursement).
+        const orderMismatch = paypalOrderMismatch(capture, payment);
+        if (orderMismatch) {
+          const captureId = paypalCaptureId(capture);
+          console.error(`[ALERT][payments] PayPal CAPTURED but NOT credited, manual review needed: payment=${payment._id} order=${orderId} capture=${captureId} reason=${orderMismatch}`);
+          payment.status = 'review';
+          payment.failureReason = orderMismatch;
+          payment.meta = { ...(payment.meta || {}), review: { captureId, orderId, reason: orderMismatch, at: new Date().toISOString() } };
+          await payment.save();
+          return res.status(409).json({ error: 'Payment held for review' });
+        }
+
         payment.status = 'succeeded';
         payment.providerRef = orderId;
         await payment.save();
       } else if (payment.provider === 'stripe') {
-        const sessionId = providerRef || payment.providerRef;
+        // La session est celle créée pour CE paiement : jamais un identifiant imposé par le client (payer peu, créditer beaucoup).
+        const sessionId = payment.providerRef;
         if (!sessionId) {
-          return res.status(400).json({ error: 'Stripe session ID (providerRef) is required' });
+          return res.status(400).json({ error: 'Stripe session ID is missing on this payment' });
+        }
+        if (providerRef && providerRef !== sessionId) {
+          console.warn(`[payments/checkout/confirm] session Stripe étrangère refusée pour le paiement ${payment._id}`);
+          return res.status(400).json({ error: 'Stripe session does not belong to this payment' });
         }
 
         let session;
@@ -419,27 +408,32 @@ export const paymentCheckoutController = {
           });
         }
 
-        if (session.payment_status !== 'paid' && session.status !== 'complete') {
+        if (session.payment_status !== 'paid') {
           return res.status(402).json({
             error: 'Stripe payment not completed',
             message: `Session status: ${session.payment_status || session.status}`
           });
+        }
+        // Même paiement, même montant, même devise : sinon rien n'est crédité.
+        const sessionMismatch = stripeSessionMismatch(session, payment);
+        if (sessionMismatch) {
+          console.warn(`[payments/checkout/confirm] session Stripe refusée pour le paiement ${payment._id} : ${sessionMismatch}`);
+          return res.status(409).json({ error: 'Stripe session does not match this payment' });
         }
 
         payment.status = 'succeeded';
         payment.providerRef = session.id;
         await payment.save();
       } else {
-        payment.status = 'succeeded';
-        if (providerRef) payment.providerRef = providerRef;
-        await payment.save();
+        // Fournisseur inconnu : jamais marqué réussi sans vérification.
+        return res.status(400).json({ error: 'Unsupported payment provider' });
       }
 
-      const fulfillment = await fulfillPayment(payment);
-      res.json({ success: true, payment, fulfillment });
+      await fulfillCompanyPaymentOnce(payment);
+      return done();
     } catch (error) {
       console.error('[payments/checkout/confirm]', error);
-      res.status(500).json({ error: 'Failed to confirm checkout', message: error.message });
+      res.status(500).json({ error: 'Failed to confirm checkout' });
     }
   }
 };

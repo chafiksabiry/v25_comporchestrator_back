@@ -108,9 +108,9 @@ assert.match(F.validateCreate({ model: 'message_taken' }, { userId: 'o' }).error
 const sent = []; const logs = [];
 const deps = (over = {}) => ({
   loadEmailIdentity: async () => ({ provider: 'google' }),
-  resolveMailbox: async () => ({ provider: 'google', account: 'accueil@cabinet.fr' }),
+  resolveUserMailbox: async () => ({ kind: 'connection', provider: 'google', account: 'accueil@cabinet.fr' }), // la boîte de CELLE QUI A PRIS LE MESSAGE
   loadUserProfile: async () => ({ name: 'Mme Martin', email: 'martin@cabinet.fr' }),
-  sendViaConnection: async (c, p, msg) => { sent.push({ c, p, msg }); },
+  sendViaMailbox: async (c, mailbox, msg) => { sent.push({ c, p: mailbox.provider, msg }); },
   countRecent: async () => 0, log: async (r) => { logs.push(r); },
   ...over,
 });
@@ -122,15 +122,15 @@ assert.equal(logs[0].status, 'sent'); assert.equal(logs[0].template, 'message_ta
 sent.length = 0;
 assert.equal(await notifyByMail({ ...args, entry: { ...args.entry, email: 'direct@cabinet.fr' } }), 'sent'); assert.deepEqual(sent[0].msg.to, ['direct@cabinet.fr'], 'adresse de la fiche prioritaire');
 sent.length = 0;
-setNotifyDeps(deps({ resolveMailbox: async () => ({ error: 'not_connected', provider: null }) }));
+setNotifyDeps(deps({ resolveUserMailbox: async () => ({ error: 'not_connected', provider: null }) }));
 assert.equal(await notifyByMail(args), 'not_connected'); assert.equal(sent.length, 0, 'sans messagerie : rien ne part (jamais depuis HARX)');
-setNotifyDeps(deps({ resolveMailbox: async () => ({ error: 'needs_reauth', provider: 'google' }) }));
+setNotifyDeps(deps({ resolveUserMailbox: async () => ({ error: 'needs_reauth', provider: 'google' }) }));
 assert.equal(await notifyByMail(args), 'needs_reauth');
 setNotifyDeps(deps({ loadUserProfile: async () => ({ name: '', email: '' }) }));
 assert.equal(await notifyByMail(args), 'no_recipient');
 setNotifyDeps(deps({ countRecent: async () => 9999 }));
 assert.equal(await notifyByMail(args), 'limit');
-setNotifyDeps(deps({ sendViaConnection: async () => { throw new Error('boum'); } }));
+setNotifyDeps(deps({ sendViaMailbox: async () => { throw new Error('boum'); } }));
 assert.equal(await notifyByMail(args), 'failed', 'un échec du fournisseur ne lève jamais');
 assert.equal(logs.at(-1).status, 'failed');
 setNotifyDeps(deps({ loadEmailIdentity: async () => { throw new Error('base'); } }));
@@ -230,7 +230,7 @@ assert.deepEqual(r.body.data.notified, { inApp: true, email: 'sent', assigned: t
 assert.deepEqual(sent[0].msg.to, ['lea@cabinet.fr']);
 assert.equal(store[0].seenAt, null, 'nouveau pour la personne visée');
 // sans messagerie connectée : alerte dans l'application seulement, sans erreur
-sent.length = 0; setNotifyDeps(deps({ resolveMailbox: async () => ({ error: 'not_connected', provider: null }) }));
+sent.length = 0; setNotifyDeps(deps({ resolveUserMailbox: async () => ({ error: 'not_connected', provider: null }) }));
 r = await call(ctl.takeMessage, { user: 'sec1', body: { ...msg, urgency: 'normal', callbackBefore: undefined, callId: '64b0000000000000000000ca', callerPhone: '' } });
 assert.equal(r.code, 201); assert.deepEqual(r.body.data.notified, { inApp: true, email: 'not_connected', assigned: true }); assert.equal(sent.length, 0);
 assert.equal(r.body.data.item.contactPhone, '+33699999999', 'numéro repris de l’appel d’origine'); assert.equal(r.body.data.item.origin.type, 'call');

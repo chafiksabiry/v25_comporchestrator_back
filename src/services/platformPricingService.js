@@ -1,4 +1,6 @@
 import mongoose from 'mongoose';
+import { loadCompanyPlanLimits } from './planLimits.js';
+import { cloudPhoneLinePrice } from './phoneLineSubscription.js';
 
 const DEFAULT_MINUTE_PACKS = [
   { minutes: 150, priceCents: 1000, label: 'Standard' },
@@ -126,10 +128,31 @@ export async function computeTokensPurchaseCents(tokens) {
   return Math.max(1, Math.round(qty * pricing.tokensCustomRateCents));
 }
 
-export async function getPhoneLinePricing() {
+/**
+ * Prix d'une ligne. Sans `companyId`, pour TaaS et autres : prix par défaut (PHONE_LINE_SETUP_FEE_CENTS, 999), inchangé.
+ * Offre CLOUD (Call Centre, toutes les offres, Accueil / Secrétariat compris : décision du 18/11/2026) : prix `phone_line_price_cents`
+ * du produit Stripe de l'offre, sinon repli 14,99 € (`cloudPhoneLinePrice`) ; premier mois payé à l'achat, puis abonnement mensuel
+ * du même montant (`monthly: true`). `unavailable` reste dans la réponse pour les appelants existants : il vaut toujours false,
+ * une offre CLOUD a toujours un prix de ligne. `priceSource` : 'stripe_metadata', 'default' (repli CLOUD) ou 'platform' (hors CLOUD).
+ * `opts.limits` : forfait déjà chargé par l'appelant (évite une seconde lecture). Ne lève jamais à cause du forfait.
+ */
+export async function getPhoneLinePricing(companyId, { limits } = {}) {
   const pricing = await getPlatformPricing();
+  let planLimits = limits;
+  if (planLimits === undefined && companyId && mongoose.Types.ObjectId.isValid(String(companyId))) {
+    try {
+      planLimits = await loadCompanyPlanLimits(companyId);
+    } catch (error) {
+      console.warn('[platformPricing] plan limits unreadable, default line price:', error.message);
+      planLimits = null;
+    }
+  }
+  const cloud = planLimits?.product === 'callcenter' ? cloudPhoneLinePrice(planLimits) : null;
   return {
-    setupFeeCents: pricing.phoneLineSetupFeeCents,
+    setupFeeCents: cloud ? cloud.cents : pricing.phoneLineSetupFeeCents,
+    monthly: Boolean(cloud),
+    unavailable: false,
+    priceSource: cloud ? cloud.source : 'platform',
     currency: pricing.phoneLineCurrency,
     trialDays: pricing.phoneLineTrialDays,
     trialDurationMs: pricing.phoneLineTrialDays * 24 * 60 * 60 * 1000,

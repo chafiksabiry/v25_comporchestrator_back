@@ -17,6 +17,8 @@ delete process.env.SECRETARIAT_RETURN_URL;
 process.env.GOOGLE_CLIENT_ID = 'g-id'; process.env.GOOGLE_CLIENT_SECRET = 'g-secret';
 process.env.MICROSOFT_CLIENT_ID = 'm-id'; process.env.MICROSOFT_CLIENT_SECRET = 'm-secret';
 process.env.ZOOM_CLIENT_ID = 'z-id'; process.env.ZOOM_CLIENT_SECRET = 'z-secret';
+// Ce fichier teste le mécanisme de délégation lui-même (Google compris) : délégation Google RÉACTIVÉE ici. Suspension (par défaut) : googleDelegation.test.js.
+process.env.GOOGLE_DELEGATION_ENABLED = '1';
 for (const k of ['GOOGLE_REDIRECT_URI', 'MICROSOFT_REDIRECT_URI', 'ZOOM_REDIRECT_URI', 'MICROSOFT_TENANT_ID']) delete process.env[k];
 process.env.BREVO_API_KEY = 'cle-de-test';
 process.env.BREVO_SENDER_EMAIL = 'noreply@harx.ai';
@@ -324,7 +326,7 @@ try {
   r = await req('GET', '/', { user: 'sophie', root: `${origin}/emails` });
   assert.equal(r.status, 200); assert.ok(r.body.data.items.every((i) => i.by.id === 'sophie')); assert.ok(r.body.data.items.length >= 2);
   r = await req('GET', '/', { user: 'paul', root: `${origin}/emails` }); assert.deepEqual(r.body.data.items, []);
-  r = await req('GET', '/', { user: 'owner1', root: `${origin}/emails` }); assert.ok(r.body.data.items.some((i) => i.by.id === 'owner1') && r.body.data.items.some((i) => i.by.id === 'sophie'));
+  r = await req('GET', '/', { user: 'owner1', root: `${origin}/emails` }); assert.ok(r.body.data.items.some((i) => i.by.id === 'owner1' && i.to.length > 0), 'le titulaire voit SES envois en détail'); assert.ok(r.body.data.items.some((i) => i.masked === true && i.to.length === 0 && i.subject === '' && i.by.name === '' && i.from === null), 'les envois de Sophie ne sont que des totaux');
   r = await req('GET', '/config', { user: 'sophie', root: `${origin}/emails` }); assert.equal(r.body.data.configured, true); assert.equal(r.body.data.provider, null);
   r = await req('GET', '/config', { user: 'paul', root: `${origin}/emails` }); assert.equal(r.status, 200);
 
@@ -459,9 +461,9 @@ try {
     reset(); oauthOk(email, access, refresh);
     return cb(provider, { code: 'c', state: stateFrom(S.startAuthorization({ companyId: extra.companyId || C1, userId: user, provider, returnTo: 'profile', shared: { personal: true, ownerName: '' } })) });
   };
-  // démarrage : secrétaire seulement, pour elle-même (identité = session), retour = profil uniquement
+  // démarrage : tout membre avec accès au module, pour lui-même (identité = session), retour = profil uniquement
   reset();
-  for (const [user, status] of [['owner1', 403], ['member1', 403], ['memberNoCalls', 403], ['otherAgent', 403]]) assert.equal((await req('POST', `/accounts/${C1}/mine/google/start`, { user })).status, status, `démarrage refusé à ${user}`);
+  for (const [user, status] of [['owner1', 200], ['member1', 200], ['memberNoCalls', 403], ['otherAgent', 403]]) assert.equal((await req('POST', `/accounts/${C1}/mine/google/start`, { user })).status, status, `démarrage : tout membre avec accès au module connecte SA messagerie (${user})`);
   assert.equal((await req('POST', `/accounts/${C1}/mine/google/start`)).status, 401);
   assert.equal((await req('POST', `/accounts/${C2}/mine/google/start`, { user: 'sophie' })).status, 403, 'pas pour une autre société');
   assert.equal((await req('POST', `/accounts/${C1}/mine/zoom/start`, { user: 'sophie' })).status, 400);
@@ -470,6 +472,7 @@ try {
   assert.equal(r.status, 200, 'la route « mine » n’est pas capturée par /:provider/start'); assert.match(r.body.data.url, /^https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth\?/);
   assert.equal(new URL(r.body.data.url).searchParams.get('scope'), 'openid email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.events'); assert.ok(!/readonly/.test(r.body.data.url), 'aucune lecture de boîte');
   const stP = S.readState(stateFrom(r.body.data.url), 'google');
+  assert.equal(stP.pend, true); delete stP.pend;
   assert.deepEqual(stP, { companyId: C1, userId: 'sophie', provider: 'google', returnTo: 'profile', shared: { label: 'Ma messagerie', ownerName: 'Sophie Martin', send: true, calendar: true, personal: true } }, 'identité tirée de la session, jamais du corps');
   r = await req('POST', `/accounts/${C1}/mine/microsoft/start`, { user: 'sophie', body: { returnTo: 'profile' } }); assert.equal(r.status, 200);
   const forgeP = (shared) => jwt.sign({ purpose: 'secretariat-oauth', companyId: C1, userId: 'sophie', provider: 'google', returnTo: 'profile', shared }, process.env.JWT_SECRET, { expiresIn: 600 });
@@ -523,7 +526,7 @@ try {
   assert.equal((await req('POST', `/accounts/${C1}/${sophieAcc._id}/reconnect`, { user: 'owner1' })).status, 404);
   assert.equal((await req('DELETE', `/accounts/${C1}/${sophieAcc._id}`, { user: 'owner1' })).status, 404); assert.ok(accounts.includes(sophieAcc));
   assert.equal((await req('PATCH', `/accounts/${C1}/${sophieAcc._id}`, { user: 'sophie', body: { label: 'x' } })).status, 403, 'une secrétaire ne modifie pas via la route de gestion');
-  assert.equal((await req('DELETE', `/accounts/${C1}/mine/${sophieAcc._id}`, { user: 'owner1' })).status, 403, 'route « mine » : secrétaire seulement');
+  assert.equal((await req('DELETE', `/accounts/${C1}/mine/${sophieAcc._id}`, { user: 'owner1' })).status, 404, 'route « mine » : propriétaire de la messagerie seulement (le titulaire n’est pas Sophie : introuvable)');
   assert.equal((await req('DELETE', `/accounts/${C1}/mine/${sophieAcc._id}`, { user: 'paul' })).status, 404, 'une autre secrétaire ne déconnecte pas la sienne'); assert.ok(accounts.includes(sophieAcc));
   assert.equal((await req('DELETE', `/accounts/${C1}/mine/${equipe._id}`, { user: 'sophie' })).status, 404, 'compte partagé : pas via « mine »'); assert.ok(accounts.includes(equipe));
   assert.equal((await req('DELETE', `/accounts/${C1}/mine/xx`, { user: 'sophie' })).status, 404);

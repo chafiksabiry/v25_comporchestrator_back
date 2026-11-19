@@ -1,10 +1,11 @@
 import mongoose from 'mongoose';
 import { callcenterTierFromMetadata } from './callcenterTier.js';
+import { subscriptionPeriod } from './subscriptionPeriod.js';
 
 /**
- * Sièges en plus : Full Scope et Multi-clients incluent 1 siège (le titulaire). Accueil / Secrétariat compte les SECRÉTAIRES
- * seulement (ni le titulaire ni les responsables) et en inclut 2 pour la ligne comprise ; au-delà, chaque secrétaire est facturée.
- * Pour les autres offres : 1 siège inclus (le titulaire). Un siège = une personne rattachée au centre
+ * Sièges en plus : Full Scope et Multi-clients incluent 2 sièges (le titulaire et un responsable, décision du 18/11/2026).
+ * Accueil / Secrétariat compte les SECRÉTAIRES seulement (ni le titulaire ni les responsables) et en inclut 2 pour la ligne comprise ;
+ * au-delà, chaque secrétaire est facturée. Pour les autres offres : 1 siège inclus (le titulaire). Un siège = une personne rattachée au centre
  * (membres et agents, invités ou actifs, titulaire compris). Au-delà du premier, chaque siège est facturé chaque mois
  * (Accueil, Full Scope, Multi-clients) ; Nomad Solo n'en accepte aucun. Le code de lancement ne s'applique pas aux sièges.
  *
@@ -15,14 +16,35 @@ import { callcenterTierFromMetadata } from './callcenterTier.js';
 
 export const SEAT_PRODUCT = 'callcenter_seat';
 export const INCLUDED_SEATS = 1;
-/** Offre Accueil / Secrétariat : deux secrétaires comprises pour une ligne. */
-export const INCLUDED_SEATS_BY_TIER = { accueil: 2 };
+/**
+ * Accueil / Secrétariat : deux secrétaires comprises pour une ligne. Full Scope et Multi-clients : deux sièges compris, le titulaire
+ * et un responsable (décision du 18/11/2026).
+ */
+export const INCLUDED_SEATS_BY_TIER = { accueil: 2, full_scope: 2, multi_clients: 2 };
 export const SECRETARIES_ONLY_TIERS = ['accueil'];
 export const includedSeatsFor = (tier) => INCLUDED_SEATS_BY_TIER[tier] ?? INCLUDED_SEATS;
 export const SEAT_TIERS = ['accueil', 'full_scope', 'multi_clients'];
 export const ENTITLED_STATUSES = ['active', 'trialing'];
 export const NOT_CONFIGURED_MESSAGE =
   "Facturation des sièges non configurée : aucun siège en plus n'est facturé pour le moment.";
+
+/**
+ * Décision du fondateur du 18/11/2026 (arbitrage 9) : les sièges supplémentaires n'ont pas de prix décidé, ils ne sont donc plus vendus.
+ * Tant que ce drapeau vaut false : aucun siège en plus n'est créé ni augmenté dans Stripe, leur prix n'est jamais renvoyé, et la
+ * synchronisation répond SEATS_NOT_AVAILABLE. Les sièges déjà facturés restent tels quels (seule une baisse est appliquée).
+ * Décision du 18/11/2026 : un centre déjà facturé pour des sièges en plus peut remplacer des personnes dans la limite des places déjà
+ * payées (places = sièges inclus + sièges déjà facturés), sans aucune hausse de facturation.
+ * Décision du 18/11/2026 (« le client paie ce siège, il doit pouvoir l'utiliser ») : retirer une personne ne réduit pas les places
+ * de la période déjà payée. La quantité Stripe est baissée sans prorata ni avoir (proration_behavior 'none') : rien n'est
+ * remboursé ni facturé maintenant, le renouvellement facture la nouvelle quantité. La quantité payée pour la période est mémorisée
+ * dans les métadonnées de l'abonnement Stripe (PAID_QTY_KEY, PAID_END_KEY) ; un remplaçant invité dans la période reprend une place
+ * payée, sans facture (remontée de la quantité, toujours sans prorata, jamais au-delà de la quantité payée).
+ */
+export const PAID_QTY_KEY = 'harx_seat_paid_quantity';
+export const PAID_END_KEY = 'harx_seat_paid_period_end';
+export const EXTRA_SEATS_FOR_SALE = false;
+export const SEATS_NOT_AVAILABLE_CODE = 'SEATS_NOT_AVAILABLE';
+export const SEATS_NOT_AVAILABLE_MESSAGE = "Les sièges supplémentaires ne sont pas disponibles pour le moment.";
 
 const PRICE_CACHE_MS = 5 * 60 * 1000;
 let priceCache = null;
@@ -67,12 +89,15 @@ function oid(value) {
 }
 
 /**
- * Sièges occupés par le centre : titulaire + membres (rattachements et invitations en attente) + agents (comptes du centre
- * et invitations en attente ou acceptées). Une même personne ne compte qu'une fois. Mêmes règles que les listes
+ * Sièges occupés par le centre. Une même personne ne compte qu'une fois. Mêmes règles que les listes
  * `GET /api/company-members` et `GET /api/call-center/agents` du service d'inscription.
+ * - `secretariesOnly` (Accueil / Secrétariat) : les secrétaires seules (agents : comptes du centre et invitations en attente ou acceptées) ;
+ * - `membersOnly` (Full Scope, Multi-clients) : titulaire + membres (rattachements et invitations en attente) ; les agents sont
+ *   facturés par leur ligne, ils n'occupent jamais un siège ;
+ * - sinon : tout le monde (titulaire, membres et agents).
  * @param {{ collection: (name: string) => any }} db
  */
-export async function countSeatsUsed(db, companyId, { secretariesOnly = false } = {}) {
+export async function countSeatsUsed(db, companyId, { secretariesOnly = false, membersOnly = false } = {}) {
   const company = oid(companyId);
   const companyDoc = await db.collection('companies').findOne({ _id: company });
   const ownerId = companyDoc?.userId ? String(companyDoc.userId) : null;
@@ -92,13 +117,16 @@ export async function countSeatsUsed(db, companyId, { secretariesOnly = false } 
     for (const m of memberships) if (!isOwner(m.userId)) add(m.userId, m.email);
   }
 
-  const agentUsers = await db.collection('users').find({ employerCompanyId: company, typeUser: 'rep' }).toArray();
-  for (const u of agentUsers) if (!isOwner(u._id)) add(u._id, u.email);
+  if (!membersOnly) {
+    const agentUsers = await db.collection('users').find({ employerCompanyId: company, typeUser: 'rep' }).toArray();
+    for (const u of agentUsers) if (!isOwner(u._id)) add(u._id, u.email);
+  }
 
   const invitations = await db.collection('agentinvitations').find({ companyId: company }).toArray();
   for (const i of invitations) {
     const status = String(i.status || '');
     if (secretariesOnly && i.kind === 'member') continue;
+    if (membersOnly && i.kind !== 'member') continue;
     const open = i.kind === 'member' ? status === 'pending' : status === 'pending' || status === 'accepted';
     if (open && !isOwner(i.userId)) add(i.userId, i.email);
   }
@@ -149,6 +177,25 @@ export async function loadSeatPrices(stripe, { now = Date.now() } = {}) {
   return prices;
 }
 
+/** Fin de la période en cours de l'abonnement Stripe, en secondes (chaîne), ou null si inconnue. */
+function periodEndKey(stripeSubscription) {
+  const end = subscriptionPeriod(stripeSubscription).end;
+  return end ? String(Math.floor(end.getTime() / 1000)) : null;
+}
+
+/**
+ * Sièges en plus payés pour la période en cours : la quantité Stripe actuelle, ou la quantité mémorisée pour cette même période si elle
+ * est plus grande (personne retirée en cours de période). Une mémoire d'une autre période (renouvellement passé) est ignorée.
+ */
+export function paidSeatsForPeriod(stripeSubscription, item) {
+  const current = item ? item.quantity || 0 : 0;
+  const end = periodEndKey(stripeSubscription);
+  const meta = metadataEntries(stripeSubscription?.metadata);
+  const recorded = Math.floor(Number(meta[PAID_QTY_KEY]));
+  if (!end || String(meta[PAID_END_KEY] ?? '') !== end || !Number.isFinite(recorded)) return current;
+  return Math.max(current, recorded);
+}
+
 function seatItemOf(stripeSubscription, seatPrice) {
   const items = stripeSubscription?.items?.data || [];
   return (
@@ -195,9 +242,26 @@ function notApplicable(reason, used, tier, message) {
 /**
  * État des sièges d'un centre. Ne lève jamais d'erreur Stripe : sans configuration, `configured` vaut false.
  */
-export async function getSeatsState({ db, stripe, companyId }) {
+export async function getSeatsState({ db, stripe, companyId, forSale = EXTRA_SEATS_FOR_SALE }) {
+  const state = await readSeatsState({ db, stripe, companyId });
+  if (forSale) return { ...state, forSale: true, canAddSeat: state.applicable && state.tier !== 'nomad_solo' };
+  // Sièges en plus hors vente : prix masqué, une personne de plus seulement dans les places déjà payées (sièges inclus + sièges déjà facturés).
+  return {
+    ...state,
+    forSale: false,
+    canAddSeat: state.used < state.included + (state.billedQuantity || 0),
+    unitPrice: null,
+    unitAmount: null,
+    monthlyTotal: null,
+    ...(state.applicable ? { message: SEATS_NOT_AVAILABLE_MESSAGE } : {}),
+  };
+}
+
+async function readSeatsState({ db, stripe, companyId }) {
   const { subscription, tier } = await loadSeatContext(db, companyId);
-  const used = await countSeatsUsed(db, companyId, { secretariesOnly: SECRETARIES_ONLY_TIERS.includes(tier) });
+  // Accueil : les secrétaires ; autres offres : titulaire et membres (les agents de Full Scope / Multi-clients sont facturés par ligne).
+  const secretariesOnly = SECRETARIES_ONLY_TIERS.includes(tier);
+  const used = await countSeatsUsed(db, companyId, { secretariesOnly, membersOnly: !secretariesOnly });
   if (!subscription || !tier) {
     return notApplicable('no_subscription', used, tier, "Aucun abonnement Call Centre actif ou en essai : pas de siège à facturer.");
   }
@@ -206,6 +270,7 @@ export async function getSeatsState({ db, stripe, companyId }) {
   }
   let price = null;
   let billedQuantity = null;
+  let renewalQuantity = null;
   let discountMayApplyToSeats = false;
   if (stripe) {
     try {
@@ -213,7 +278,9 @@ export async function getSeatsState({ db, stripe, companyId }) {
       if (price && subscription.stripeSubscriptionId) {
         const sub = await stripe.subscriptions.retrieve(subscription.stripeSubscriptionId);
         const item = seatItemOf(sub, price);
-        billedQuantity = item ? item.quantity || 0 : 0;
+        // Places payées pour la période (une personne retirée en cours de période garde sa place jusqu'au renouvellement).
+        billedQuantity = paidSeatsForPeriod(sub, item);
+        renewalQuantity = item ? item.quantity || 0 : 0;
         discountMayApplyToSeats = Boolean(sub?.discount || (sub?.discounts || []).length);
       }
     } catch (err) {
@@ -224,7 +291,7 @@ export async function getSeatsState({ db, stripe, companyId }) {
   if (!price) {
     return { applicable: true, configured: false, reason: 'not_configured', message: NOT_CONFIGURED_MESSAGE, ...base(used, tier, null), billedQuantity: 0 };
   }
-  return { applicable: true, configured: true, reason: null, message: null, ...base(used, tier, price), billedQuantity, discountMayApplyToSeats };
+  return { applicable: true, configured: true, reason: null, message: null, ...base(used, tier, price), billedQuantity, renewalQuantity, discountMayApplyToSeats };
 }
 
 const locks = new Map();
@@ -239,13 +306,19 @@ function withLock(key, fn) {
 }
 
 /**
- * Aligne la quantité de la ligne « siège en plus » de l'abonnement Stripe sur max(0, sièges − sièges inclus), avec proration.
- * Idempotent : la quantité cible est comparée à celle de Stripe, sans écriture si elle est déjà bonne.
+ * Aligne la quantité de la ligne « siège en plus » de l'abonnement Stripe sur max(0, sièges − sièges inclus).
+ * Baisse : sans prorata ni avoir, effective au renouvellement ; la quantité payée pour la période est mémorisée (places conservées).
+ * Remontée dans la quantité payée pour la période (remplaçant) : sans prorata, donc sans facture. Au-delà (sièges en vente
+ * seulement) : avec proration. Idempotent : sans écriture si la quantité Stripe est déjà la bonne.
  * @returns {Promise<object>} état des sièges + `action` : 'created' | 'updated' | 'removed' | 'unchanged' | 'skipped'
  */
-export function syncSeats({ db, stripe, companyId }) {
+export function syncSeats({ db, stripe, companyId, forSale = EXTRA_SEATS_FOR_SALE }) {
   return withLock(String(companyId), async () => {
-    const state = await getSeatsState({ db, stripe, companyId });
+    const state = await getSeatsState({ db, stripe, companyId, forSale });
+    // Sièges en plus hors vente : une personne au-delà des sièges inclus et des sièges déjà facturés n'est jamais facturée, la demande est refusée.
+    if (!forSale && state.applicable && state.extra > (state.billedQuantity || 0)) {
+      return { ...state, action: 'refused', code: SEATS_NOT_AVAILABLE_CODE, message: SEATS_NOT_AVAILABLE_MESSAGE };
+    }
     if (!state.applicable || !state.configured) return { ...state, action: 'skipped' };
 
     const { subscription } = await loadSeatContext(db, companyId);
@@ -257,24 +330,42 @@ export function syncSeats({ db, stripe, companyId }) {
     const item = seatItemOf(stripeSub, price);
     const target = state.extra;
     const current = item ? item.quantity || 0 : 0;
+    const paid = paidSeatsForPeriod(stripeSub, item);
+
+    // Filet de sécurité (lecture Stripe entre-temps) : hors vente, jamais au-delà des places payées pour la période.
+    if (!forSale && target > paid) {
+      return { ...state, billedQuantity: paid, renewalQuantity: current, action: 'refused', code: SEATS_NOT_AVAILABLE_CODE, message: SEATS_NOT_AVAILABLE_MESSAGE };
+    }
+
+    // Baisse : la période déjà payée garde ses places (mémorisées), aucun avoir, la nouvelle quantité est facturée au renouvellement.
+    // Remontée jusqu'à la quantité payée : aucune facture. Au-delà (sièges en vente seulement) : proration habituelle.
+    const proration = target <= paid ? 'none' : 'create_prorations';
+    if (target < current) {
+      const end = periodEndKey(stripeSub);
+      if (end) {
+        await stripe.subscriptions.update(subscription.stripeSubscriptionId, {
+          metadata: { [PAID_QTY_KEY]: String(Math.max(paid, current)), [PAID_END_KEY]: end },
+        });
+      }
+    }
 
     let action = 'unchanged';
     if (item && target === 0) {
-      await stripe.subscriptionItems.del(item.id, { proration_behavior: 'create_prorations' });
+      await stripe.subscriptionItems.del(item.id, { proration_behavior: 'none' });
       action = 'removed';
     } else if (item && current !== target) {
-      await stripe.subscriptionItems.update(item.id, { quantity: target, proration_behavior: 'create_prorations' });
+      await stripe.subscriptionItems.update(item.id, { quantity: target, proration_behavior: proration });
       action = 'updated';
     } else if (!item && target > 0) {
       await stripe.subscriptionItems.create({
         subscription: subscription.stripeSubscriptionId,
         price: price.priceId,
         quantity: target,
-        proration_behavior: 'create_prorations',
+        proration_behavior: proration,
         metadata: { harx_product: SEAT_PRODUCT, company_id: String(companyId) },
       });
       action = 'created';
     }
-    return { ...state, billedQuantity: target, action };
+    return { ...state, billedQuantity: Math.max(paid, target), renewalQuantity: target, action };
   });
 }

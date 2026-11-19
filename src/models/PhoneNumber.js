@@ -115,14 +115,63 @@ const phoneNumberSchema = new mongoose.Schema({
   //                       provisioned but is given up to 1 month to recover
   //   'terminated'      — still unpaid after 1 month, number released before
   //                       what would have been the next billing cycle
+  // Abonnement mensuel par ligne : 'pending' = acheté mais premier mois pas encore encaissé (repris ou libéré par la
+  // réconciliation au-delà de 15 min) ; 'release_failed' = libération du numéro impossible, à reprendre.
   billingStatus: {
     type: String,
-    enum: ['n/a', 'trial', 'active', 'payment_failed', 'suspended', 'terminated'],
+    enum: ['n/a', 'trial', 'pending', 'active', 'payment_failed', 'suspended', 'terminated', 'release_failed'],
     default: 'n/a'
   },
   stripeSubscriptionId: {
     type: String,
     sparse: true
+  },
+  // Affectation des lignes (offres Call Centre). Absent sur les lignes historiques : le rôle est alors DÉDUIT à la lecture
+  // (services/lineAssignment.js, effectiveRole), sans migration en base.
+  //  'management' : ligne incluse du titulaire (jamais affectable) ; 'agent' : ligne d'UN agent (agentId null = libre, réaffectable) ;
+  //  'shared' : ligne partagée de l'offre Accueil (une secrétaire à la fois, jamais affectée à une personne).
+  assignedRole: {
+    type: String,
+    enum: ['management', 'agent', 'shared'],
+    default: undefined
+  },
+  // Appel actif sur la ligne (offre Accueil, règle datée active) : { callSid, direction, startedAt, expiresAt }. Absent = ligne libre.
+  // Écrit UNIQUEMENT par services/lineCalls.js (prise atomique, libération idempotente, expiration de sécurité).
+  activeCall: {
+    type: mongoose.Schema.Types.Mixed,
+    default: undefined
+  },
+  // Appels simultanés choisis par l'entreprise (titulaire seulement) : 1 = « une ligne = un appel » (défaut, comportement d'avant). Chaque appel
+  // au-delà du premier est une ligne supplémentaire facturée (décidée à l'avance par ce choix). Emplacements des appels 2 à 10 : activeCall2…10,
+  // écrits UNIQUEMENT par services/lineCalls.js, comme activeCall.
+  maxConcurrentCalls: { type: Number, min: 1, max: 10, default: undefined },
+  ...Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`activeCall${i + 2}`, { type: mongoose.Schema.Types.Mixed, default: undefined }])),
+  // Identifiant (chaîne) de l'agent titulaire de la ligne ; null = ligne libre. Un agent n'a qu'UNE ligne par centre (index unique ci-dessous).
+  assignedAgentId: {
+    type: String,
+    default: null
+  },
+  assignedAt: {
+    type: Date,
+    default: null
+  },
+  // Abonnement mensuel par ligne (offres Call Centre) : 'monthly' pour les lignes achetées avec un abonnement Stripe propre
+  // (stripeSubscriptionId). Absent sur toutes les lignes historiques, qui ne sont jamais touchées par ce mécanisme.
+  billingModel: {
+    type: String,
+    enum: ['monthly'],
+    default: undefined
+  },
+  // Posé quand NOUS résilions l'abonnement de la ligne (suppression, fin de grâce) : le webhook Stripe qui suit
+  // n'y voit pas un impayé.
+  subscriptionCanceledAt: {
+    type: Date,
+    default: null
+  },
+  // Verrou court de la réconciliation (reconcilePendingMonthlyLines) : un seul passage à la fois sur cette ligne.
+  reconcileClaimedAt: {
+    type: Date,
+    default: null
   },
   paymentFailedAt: {
     type: Date,
@@ -156,7 +205,13 @@ phoneNumberSchema.pre('save', function (next) {
 // Index pour la recherche rapide par gig et company
 phoneNumberSchema.index({ gigId: 1, companyId: 1 });
 
+// Un agent n'a qu'une seule ligne par centre (garde-fou en base ; la règle est aussi vérifiée sous verrou par services/lineAssignment.js).
+phoneNumberSchema.index({ companyId: 1, assignedAgentId: 1 }, { unique: true, partialFilterExpression: { assignedAgentId: { $type: 'string' } } });
+
 // Index pour la recherche par orderId
 phoneNumberSchema.index({ orderId: 1 });
+
+// Libération par appel (services/lineCalls.js) : recherche par callSid sans parcourir toute la collection.
+phoneNumberSchema.index({ 'activeCall.callSid': 1 }, { sparse: true });
 
 export const PhoneNumber = mongoose.model('PhoneNumber', phoneNumberSchema);

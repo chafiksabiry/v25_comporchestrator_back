@@ -93,8 +93,9 @@ export function buildPlanBody({ plan, companyId, settings, baseUrl, from, result
 
 // ---------------------------------------------------------------- données
 
-async function loadContext(companyId, inbound, queue, defaultQueue) {
-  const online = availableIdentities(companyId);
+async function loadContext(companyId, inbound, queue, defaultQueue, allow = null) {
+  // `allow` : restriction par ligne (offres à agents, voir lineAssignment.inboundRingFilter) ; null = aucun filtre.
+  const online = allow ? availableIdentities(companyId).filter(allow) : availableIdentities(companyId);
   const staff = await StaffRouting.find({ companyId }).lean();
   const profiles = new Map(staff.map((d) => [voiceIdentity(d.userId), d]));
   const sequential = [queue, defaultQueue].some((q) => q && q.strategy === 'longest_idle');
@@ -108,9 +109,9 @@ async function loadContext(companyId, inbound, queue, defaultQueue) {
 }
 
 /** Plan de sonnerie pour une file choisie (curseur « round_robin » avancé de façon atomique). */
-async function planFor({ companyId, inbound, queue, settings }) {
+async function planFor({ companyId, inbound, queue, settings, allow = null }) {
   const defaultQueue = defaultQueueOf(inbound);
-  const { online, profiles, lastEnd } = await loadContext(companyId, inbound, queue, defaultQueue);
+  const { online, profiles, lastEnd } = await loadContext(companyId, inbound, queue, defaultQueue, allow);
   let cursor = queue.rrCursor || 0;
   if (queue.strategy === 'round_robin' && eligibleIdentities(queue, online, profiles).length) {
     const before = await CallQueue.findOneAndUpdate({ _id: queue._id, companyId }, { $inc: { rrCursor: 1 } }, { new: false }).lean();
@@ -125,7 +126,7 @@ async function planFor({ companyId, inbound, queue, settings }) {
  * @returns {Promise<null|{kind:'menu',body:string}|{kind:'ring',body:string,firstIds:string[],queue:object}|{kind:'none',queue:object}>}
  *   null = aucune file (ou erreur) : comportement existant inchangé.
  */
-export async function resolveQueueRoute({ companyId, settings, baseUrl, from = '', stage = 'call', digits = '', attempt = 1, recording = null, language = 'fr' } = {}) {
+export async function resolveQueueRoute({ companyId, settings, baseUrl, from = '', stage = 'call', digits = '', attempt = 1, recording = null, language = 'fr', allow = null } = {}) {
   try {
     if (!companyId) return null;
     const rows = await CallQueue.find({ companyId }).lean();
@@ -142,7 +143,7 @@ export async function resolveQueueRoute({ companyId, settings, baseUrl, from = '
     } else {
       queue = defaultQueueOf(inbound);
     }
-    const plan = await planFor({ companyId, inbound, queue, settings });
+    const plan = await planFor({ companyId, inbound, queue, settings, allow });
     if (!plan.length) return { kind: 'none', queue };
     const resultUrl = `${baseUrl}${WEBHOOK_PATH}/inbound-dial-result`;
     const body = buildPlanBody({ plan, companyId, settings, baseUrl, from, resultUrl, recording, language });

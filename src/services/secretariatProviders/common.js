@@ -4,17 +4,26 @@ export const isProviderId = (v) => typeof v === 'string' && PROVIDER_IDS.include
 export const PROVIDER_LABEL = { google: 'Google', microsoft: 'Microsoft 365', zoom: 'Zoom' };
 
 /**
+ * Message du refus de GÉRER une boîte Gmail (corbeille / archivage répercutés dans Gmail) : gmail.modify n'est jamais demandé. La LECTURE (gmail.readonly)
+ * et l'envoi (gmail.send) sont disponibles, pour la seule personne qui a connecté la boîte.
+ */
+export const GOOGLE_MAILBOX_WRITE_UNAVAILABLE = 'La gestion des e-mails Gmail dans la messagerie (corbeille, archivage) n’est pas disponible : pour Google, HARX lit et envoie les e-mails, la suppression et l’archivage restent dans HARX.';
+
+/**
  * Scope de LECTURE de la boîte de réception (e-mails entrants), OPTIONNEL : demandé seulement avec `{ read: true }` au démarrage de la connexion,
  * jamais exigé (`requiredScopes` inchangés : une connexion d'envoi seul continue de fonctionner). Zoom : aucun.
+ * GOOGLE : gmail.readonly (scope restreint) de nouveau demandé avec `{ read: true }` ; la boîte n'est lisible QUE par la personne qui l'a connectée
+ * (règle du propriétaire, services/mailOwnership.js). gmail.modify seul n'est PAS compté comme lecture (jamais demandé).
  */
 export const READ_SCOPE = { google: 'https://www.googleapis.com/auth/gmail.readonly', microsoft: 'Mail.Read' };
 const normScope = (s) => String(s).trim().toLowerCase().replace(/^https:\/\/graph\.microsoft\.com\//, '');
 /** Le scope de lecture est-il présent parmi les scopes obtenus ? (Microsoft peut renvoyer « Mail.Read » ou l'URI Graph complète.) */
 /**
  * Scope d'ÉCRITURE de la boîte (mise à la corbeille / archivage répercutés dans la messagerie), OPTIONNEL et SÉPARÉ : demandé seulement avec `{ write: true }`.
- * Il inclut la lecture (gmail.modify, Mail.ReadWrite) : sa présence suffit donc aussi à `hasReadScope`. Google : scope restreint (vérification Google requise).
+ * Il inclut la lecture (Mail.ReadWrite) : sa présence suffit donc aussi à `hasReadScope`. GOOGLE : aucun scope d'écriture (gmail.modify n'est jamais
+ * demandé ; `hasWriteScope('google', …)` est toujours faux) : suppression / archivage d'un e-mail Gmail = dans HARX seulement.
  */
-export const WRITE_SCOPE = { google: 'https://www.googleapis.com/auth/gmail.modify', microsoft: 'Mail.ReadWrite' };
+export const WRITE_SCOPE = { microsoft: 'Mail.ReadWrite' };
 const hasScope = (scopes, wanted) => Array.isArray(scopes) && scopes.some((s) => normScope(s) === normScope(wanted));
 export const hasWriteScope = (provider, scopes) => Boolean(WRITE_SCOPE[provider]) && hasScope(scopes, WRITE_SCOPE[provider]);
 export const hasReadScope = (provider, scopes) => Boolean(READ_SCOPE[provider]) && (hasScope(scopes, READ_SCOPE[provider]) || hasWriteScope(provider, scopes));

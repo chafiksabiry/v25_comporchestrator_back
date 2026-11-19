@@ -3,6 +3,8 @@ import { config } from './src/config/env.js';
 import express from 'express';
 import http from 'http';
 import { setupEscrowWebSocket } from './src/websocket/escrowUpdates.js';
+import { corsMiddleware, parseAllowedOrigins } from './src/middleware/cors.js';
+import { demoBodyQueryAlias, idParam, demoAliasEnabled } from './src/middleware/demoAlias.js';
 import mongoose from 'mongoose';
 import { requirementRoutes } from './src/routes/requirement.js';
 import { addressRoutes } from './src/routes/address.js';
@@ -14,11 +16,13 @@ import { escrowRoutes } from './src/routes/escrow.js';
 import { walletCompanyRoutes } from './src/routes/walletCompany.js';
 import { minutesCompanyRoutes } from './src/routes/minutesCompany.js';
 import { tokensCompanyRoutes } from './src/routes/tokensCompany.js';
+import { billingRoutes } from './src/routes/billing.js';
 import { paymentCheckoutRoutes } from './src/routes/paymentCheckout.js';
 import { inboundSettingsRoutes } from './src/routes/inboundSettings.js';
 import { voicemailRoutes } from './src/routes/voicemails.js';
 import { followUpRoutes } from './src/routes/followUps.js';
 import { contactRoutes } from './src/routes/contacts.js';
+import { noteRoutes } from './src/routes/notes.js';
 import { emailRoutes } from './src/routes/emails.js';
 import { receptionRoutes } from './src/routes/reception.js';
 import { secretariatToolsRoutes } from './src/routes/secretariatTools.js';
@@ -28,6 +32,9 @@ import { integrationsRoutes } from './src/routes/integrations.js';
 import { publicApiRoutes } from './src/routes/publicApi.js';
 import { startIntegrationsWorker } from './src/integrations/runtime.js';
 import { internalRoutes } from './src/routes/internal.js';
+import { aiAgentRoutes } from './src/routes/aiAgent.js';
+import { lineCapacityRoutes } from './src/routes/lineCapacity.js';
+import { purgeExpiredBenchRecordings, migrateAiAgentSettings } from './src/services/aiInbound.js';
 import { companyNotificationRoutes } from './src/routes/companyNotifications.js';
 import { createWhatsAppModule } from './src/whatsapp/index.js';
 import { createSalesIqModule } from './src/salesiq/index.js';
@@ -35,7 +42,9 @@ import { startMessageReminders } from './src/services/messageReminders.js';
 import { scanLowResources } from './src/services/companyNotificationService.js';
 import { clearExpiredRetractions } from './src/services/retractionService.js';
 import { resolveExpiredPendingReviews, flagWeeklyAiAudits } from './src/controllers/escrowController.js';
-import { billExpiredTrialLines, terminateSuspendedLines } from './src/services/phoneLineBillingService.js';
+import { billExpiredTrialLines, reconcilePendingMonthlyLines, terminateSuspendedLines } from './src/services/phoneLineBillingService.js';
+import { syncPlanMetadataFromStripe } from './src/services/planMetadataSync.js';
+import { applyMailOwnership } from './src/services/mailOwnershipMigration.js';
 
 const app = express();
 
@@ -48,23 +57,18 @@ mongoose.connect(config.mongodbUri, {
   useUnifiedTopology: true,
 }).then(() => {
   console.log('✅ Connected to MongoDB');
+  // Une boîte mail connectée n'est utilisable que par la personne qui l'a connectée : anciennes connexions sans propriétaire marquées (inutilisables jusqu'à reconnexion), e-mails stockés partagés purgés (idempotent, journalisé sans donnée personnelle).
+  applyMailOwnership();
+  // Pilote agent IA : réglages d'avant (niveau / déclencheurs) → horaires + priorité (idempotent).
+  migrateAiAgentSettings().catch((e) => console.error('[ai-inbound] migration des réglages :', e?.message || e));
 }).catch((error) => {
   console.error('❌ MongoDB connection error:', error);
   process.exit(1); // Exit if we can't connect to database
 });
 
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, x-user-id, x-agent-id, X-Api-Key');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Expose-Headers', 'Content-Disposition');
-
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
-  next();
-});
+// CORS : liste blanche CORS_ALLOWED_ORIGINS (voir src/middleware/cors.js) ; absente = comportement historique.
+app.use(corsMiddleware());
+if (!parseAllowedOrigins()) console.warn('[security] CORS_ALLOWED_ORIGINS absent : toute origine est acceptée avec credentials (comportement historique)');
 
 // HARX SalesIQ Support Agent : webhook Zobot -> Claude -> réponse en temps réel (voir docs/SALESIQ_SUPPORT_AGENT.md).
 // Monté AVANT le contrôle de connexion MongoDB et avant express.json() : il n'utilise pas la base et lit le corps brut.
@@ -97,38 +101,12 @@ app.use((req, res, next) => {
 });
 app.use(express.urlencoded({ extended: true }));
 
-// Map and Validate companyId / agentId parameters to prevent Mongoose CastErrors
-app.use((req, res, next) => {
-  if (req.body && req.body.companyId === 'demo_company_id') {
-    req.body.companyId = '6a0bfd35d605ccca8b51e13b';
-  }
-  if (req.query && req.query.companyId === 'demo_company_id') {
-    req.query.companyId = '6a0bfd35d605ccca8b51e13b';
-  }
-  next();
-});
-
-app.param('companyId', (req, res, next, value) => {
-  if (value === 'demo_company_id') {
-    req.params.companyId = '6a0bfd35d605ccca8b51e13b';
-    return next();
-  }
-  if (!mongoose.Types.ObjectId.isValid(value)) {
-    return res.status(400).json({ error: 'Invalid companyId format' });
-  }
-  next();
-});
-
-app.param('agentId', (req, res, next, value) => {
-  if (value === 'demo_company_id') {
-    req.params.agentId = '6a0bfd35d605ccca8b51e13b';
-    return next();
-  }
-  if (!mongoose.Types.ObjectId.isValid(value)) {
-    return res.status(400).json({ error: 'Invalid agentId format' });
-  }
-  next();
-});
+// Map and Validate companyId / agentId parameters to prevent Mongoose CastErrors (alias de démonstration : voir src/middleware/demoAlias.js ;
+// désactivé par défaut, réactivable avec DEMO_COMPANY_ID_ENABLED=true).
+app.use(demoBodyQueryAlias());
+app.param('companyId', idParam('companyId'));
+app.param('agentId', idParam('agentId'));
+if (demoAliasEnabled()) console.warn('[security] alias « demo_company_id » ACTIVÉ par DEMO_COMPANY_ID_ENABLED=true (donne accès à une société réelle sur les routes non protégées)');
 
 // Routes API
 app.use('/api/requirements', requirementRoutes);
@@ -141,14 +119,18 @@ app.use('/api/escrow', escrowRoutes);
 app.use('/api/wallet-company', walletCompanyRoutes);
 app.use('/api/minutes-company', minutesCompanyRoutes);
 app.use('/api/tokens-company', tokensCompanyRoutes);
+app.use('/api/billing', billingRoutes);
 app.use('/api/payments/checkout', paymentCheckoutRoutes);
 app.use('/api/internal', internalRoutes);
+app.use('/api/ai-agent', aiAgentRoutes);
+app.use('/api/line-capacity', lineCapacityRoutes);
 app.use('/api/integrations', integrationsRoutes);
 app.use('/api/public/v1', publicApiRoutes);
 app.use('/api/inbound-settings', inboundSettingsRoutes);
 app.use('/api/voicemails', voicemailRoutes);
 app.use('/api/follow-ups', followUpRoutes);
 app.use('/api/contacts', contactRoutes);
+app.use('/api/notes', noteRoutes);
 app.use('/api/emails', emailRoutes);
 app.use('/api/reception', receptionRoutes);
 app.use('/api/secretariat', secretariatToolsRoutes);
@@ -226,6 +208,21 @@ setInterval(() => {
     console.warn('[phone-line-termination-cron]', err.message);
   });
 }, RETRACTION_CRON_MS);
+
+// Abonnement mensuel par ligne : reprend ou libère les lignes restées « pending » (crash entre commande du numéro et capture)
+// et retente les libérations en échec.
+setInterval(() => {
+  reconcilePendingMonthlyLines().catch((err) => {
+    console.warn('[phone-line-reconcile-cron]', err.message);
+  });
+}, 10 * 60 * 1000);
+
+// Métadonnées des produits Stripe (dont phone_line_price_cents) -> forfaits : au démarrage puis toutes les 6 h, en plus du
+// webhook product.updated, pour qu'un webhook manqué ne laisse pas un prix de ligne périmé.
+setTimeout(() => { syncPlanMetadataFromStripe(); }, 30 * 1000);
+setInterval(() => { syncPlanMetadataFromStripe(); }, 6 * 60 * 60 * 1000);
+// Pilote agent IA : purge planifiée des enregistrements du banc d'écoute arrivés à échéance (CNIL, 6 mois au plus).
+setInterval(() => { purgeExpiredBenchRecordings().catch((e) => console.error('[ai-inbound] purge planifiée :', e?.message || e)); }, 6 * 60 * 60 * 1000);
 
 // Warn companies whose wallet / minutes / tokens run short (the first check runs a minute after boot).
 const runLowResourceScan = () =>

@@ -1,6 +1,7 @@
 import Stripe from 'stripe';
 import { config } from '../config/env.js';
-import { resolvePromotionCodeId, withPromotion } from './promotionCode.js';
+import { promotionCodesAllowed, resolvePromotionCodeId, withPromotion } from './promotionCode.js';
+import { resolveStripeLocale } from './stripeLocale.js';
 
 let stripeOverride = null;
 /** Réservé aux tests : injecte un faux client Stripe (null pour revenir au vrai). */
@@ -38,6 +39,7 @@ function getSharedClient() {
  * @param {string} opts.cancelUrl     Where Stripe redirects on cancel.
  * @param {string} opts.clientReferenceId  Our internal CompanyPayment id (used to reconcile).
  * @param {object} [opts.metadata]
+ * @param {string} [opts.locale]  Langue de l'interface (voir stripeLocale.js) ; anglais par défaut.
  */
 async function createOneShotCheckoutSession({
   amountCents,
@@ -49,7 +51,8 @@ async function createOneShotCheckoutSession({
   metadata = {},
   captureMethod = 'automatic',
   customerId = null,
-  invoiceDescription = null
+  invoiceDescription = null,
+  locale = null
 }) {
   const manual = captureMethod === 'manual';
   // Facture téléchargeable pour les achats ponctuels. Non activée en capture manuelle (autorisation puis capture
@@ -65,6 +68,7 @@ async function createOneShotCheckoutSession({
   };
   return getStripe().checkout.sessions.create({
     mode: 'payment',
+    locale: resolveStripeLocale(locale),
     ...(customerId ? { customer: customerId } : {}),
     ...invoiceCreation,
     payment_method_types: ['card'],
@@ -96,6 +100,50 @@ function paymentIntentFromSession(session) {
   return pi;
 }
 
+/** Paramètres Stripe de l'abonnement d'une ligne (voir createPhoneLineSubscription). Fonction pure, testée sans Stripe. */
+function buildPhoneLineSubscriptionParams({ customerId, productId, amountCents, currency, firstCycleAt, metadata = {} }) {
+  return {
+    customer: customerId,
+    items: [{
+      price_data: {
+        currency: String(currency || 'eur').toLowerCase(),
+        product: productId,
+        unit_amount: amountCents,
+        recurring: { interval: 'month' },
+      },
+    }],
+    trial_end: Math.floor(new Date(firstCycleAt).getTime() / 1000),
+    proration_behavior: 'none',
+    trial_settings: { end_behavior: { missing_payment_method: 'cancel' } },
+    collection_method: 'charge_automatically',
+    payment_behavior: 'error_if_incomplete',
+    metadata,
+  };
+}
+
+let phoneLineProductIdCache = null;
+
+/** Produit Stripe de la ligne : STRIPE_PRODUCT_PHONE_LINE, sinon le produit du prix STRIPE_PRICE_PHONE_LINE existant. */
+async function resolvePhoneLineProductId() {
+  if (config.stripeProductPhoneLine) return config.stripeProductPhoneLine;
+  if (phoneLineProductIdCache) return phoneLineProductIdCache;
+  const priceId = config.stripePricePhoneLine;
+  if (!priceId || priceId === 'price_phone_line_placeholder') {
+    const err = new Error('Produit Stripe de la ligne introuvable : définissez STRIPE_PRODUCT_PHONE_LINE ou STRIPE_PRICE_PHONE_LINE.');
+    err.code = 'STRIPE_PHONE_LINE_PRODUCT_MISSING';
+    throw err;
+  }
+  const price = await getStripe().prices.retrieve(priceId);
+  const productId = typeof price.product === 'string' ? price.product : price.product?.id;
+  if (!productId) {
+    const err = new Error(`Le prix Stripe ${priceId} n'a pas de produit.`);
+    err.code = 'STRIPE_PHONE_LINE_PRODUCT_MISSING';
+    throw err;
+  }
+  phoneLineProductIdCache = productId;
+  return productId;
+}
+
 async function captureCheckoutSession(sessionId) {
   const session = await retrieveSession(sessionId);
   const pi = paymentIntentFromSession(session);
@@ -114,6 +162,21 @@ async function captureCheckoutSession(sessionId) {
     throw err;
   }
   return getStripe().paymentIntents.capture(intent.id);
+}
+
+/**
+ * État réel d'un paiement Checkout : 'captured' (encaissé), 'refunded' (encaissé puis remboursé), 'authorized' (autorisé, pas
+ * encaissé), 'canceled', ou 'unknown'. `payment_status = paid` seul ne suffit pas : il reste vrai après un remboursement.
+ */
+async function getCheckoutPaymentState(sessionId) {
+  const session = await getStripe().checkout.sessions.retrieve(sessionId, { expand: ['payment_intent.latest_charge'] });
+  const pi = session?.payment_intent;
+  if (!pi || typeof pi !== 'object') return session?.payment_status === 'paid' ? 'captured' : 'unknown';
+  const charge = pi.latest_charge && typeof pi.latest_charge === 'object' ? pi.latest_charge : null;
+  if (pi.status === 'succeeded') return charge && (charge.refunded || Number(charge.amount_refunded) > 0) ? 'refunded' : 'captured';
+  if (pi.status === 'requires_capture') return 'authorized';
+  if (pi.status === 'canceled') return 'canceled';
+  return 'unknown';
 }
 
 async function cancelCheckoutAuthorization(sessionId) {
@@ -476,15 +539,14 @@ async function resolveSubscriptionPriceId({ priceId, planName }) {
 
 export const stripeService = {
   isConfigured,
-  /** Client Stripe partagé pour les lectures publiques mises en cache (offres de lancement) ; null si Stripe n'est pas configuré. */
-  sharedClient: getSharedClient,
   getSharedClient,
   createOneShotCheckoutSession,
   retrieveSession,
   captureCheckoutSession,
   cancelCheckoutAuthorization,
+  getCheckoutPaymentState,
   refundCheckoutSession,
-  createCheckoutSession: async (userId, priceId, successUrl, cancelUrl, metadata = {}, promotionCodeId = null, currency = null) => {
+  createCheckoutSession: async (userId, priceId, successUrl, cancelUrl, metadata = {}, promotionCodeId = null, currency = null, { locale = null, allowPromotionCodes = true } = {}) => {
     try {
       const session = await getStripe().checkout.sessions.create(withPromotion({
         payment_method_types: ['card'],
@@ -497,8 +559,10 @@ export const stripeService = {
         mode: 'subscription',
         // Prix multi-devises : la devise choisie (mêmes montants en EUR, USD, GBP).
         ...(currency ? { currency: String(currency).toLowerCase() } : {}),
-        // Plus d'essai sans carte : la carte est demandée dès la souscription.
-        payment_method_collection: 'always',
+        locale: resolveStripeLocale(locale),
+        // Pas d'essai : la carte est demandée dès qu'il y a un montant à payer. Code promo à 100 % (total du jour à 0) :
+        // aucune carte demandée ; Stripe la réclamera à la première facture payante (fin du code).
+        payment_method_collection: 'if_required',
         success_url: successUrl,
         cancel_url: cancelUrl,
         redirect_on_completion: 'always',
@@ -513,7 +577,7 @@ export const stripeService = {
             ...metadata
           },
         },
-      }, promotionCodeId));
+      }, promotionCodeId, { allowPromotionCodes }));
       return session;
     } catch (error) {
       console.error('Error creating Stripe checkout session:', error);
@@ -525,22 +589,38 @@ export const stripeService = {
    * Create an EMBEDDED Stripe Checkout Session (UI rendered inside HARX as a modal).
    * No redirect: the front uses onComplete + confirm endpoint.
    */
-  createEmbeddedSubscriptionSession: async (userId, priceId, metadata = {}, promotionCodeId = null, currency = null) => {
+  createEmbeddedSubscriptionSession: async (userId, priceId, metadata = {}, promotionCodeId = null, currency = null, { locale = null, allowPromotionCodes = true } = {}) => {
     return getStripe().checkout.sessions.create(withPromotion({
       ui_mode: 'embedded_page',
       mode: 'subscription',
       payment_method_types: ['card'],
       line_items: [{ price: priceId, quantity: 1 }],
       ...(currency ? { currency: String(currency).toLowerCase() } : {}),
-      // Plus d'essai sans carte : la carte est demandée dès la souscription.
-      payment_method_collection: 'always',
+      locale: resolveStripeLocale(locale),
+      // Pas d'essai : carte demandée dès qu'il y a un montant à payer ; code promo à 100 % -> pas de carte (voir createCheckoutSession).
+      payment_method_collection: 'if_required',
       redirect_on_completion: 'never',
       client_reference_id: userId.toString(),
       metadata: { userId: userId.toString(), ...metadata },
       subscription_data: {
         metadata: { userId: userId.toString(), ...metadata },
       },
-    }, promotionCodeId));
+    }, promotionCodeId, { allowPromotionCodes }));
+  },
+
+  /**
+   * Le prix accepte-t-il un code promotionnel ? Lit le produit du prix : non pour une offre CLOUD ou NOMAD (`harx_product=callcenter`).
+   * Prix illisible : non (par prudence ; la création de la session échouera de toute façon sur un prix inconnu).
+   */
+  priceAllowsPromotionCodes: async (priceId) => {
+    try {
+      const price = await getStripe().prices.retrieve(String(priceId), { expand: ['product'] });
+      const product = price?.product;
+      return promotionCodesAllowed(product && typeof product === 'object' ? product.metadata : null);
+    } catch (err) {
+      console.warn('[subscription] priceAllowsPromotionCodes:', err?.message);
+      return false;
+    }
   },
 
   /** Résout un code promotionnel d'abonnement en id Stripe (null si aucun code) ; lève `invalid_promotion_code`. */
@@ -665,6 +745,35 @@ export const stripeService = {
       payment_behavior: 'error_if_incomplete',
       metadata,
     });
+  },
+
+  /**
+   * Abonnement mensuel d'UNE ligne (offres Call Centre) : prix EN LIGNE (price_data) sur le produit existant « Ligne
+   * téléphonique — Abonnement mensuel » (aucun prix Stripe à créer), montant et devise fixés à l'achat, premier cycle
+   * décalé à `firstCycleAt` (le 1er mois est déjà payé à l'achat) sans prorata. `error_if_incomplete` : Stripe lève si
+   * le client ne peut pas être débité plus tard ; la clé d'idempotence évite tout doublon en cas de nouvel essai.
+   */
+  createPhoneLineSubscription: async ({ customerId, amountCents, currency, firstCycleAt, metadata = {}, idempotencyKey }) => {
+    const productId = await resolvePhoneLineProductId();
+    return getStripe().subscriptions.create(
+      buildPhoneLineSubscriptionParams({ customerId, productId, amountCents, currency, firstCycleAt, metadata }),
+      idempotencyKey ? { idempotencyKey } : undefined
+    );
+  },
+
+  buildPhoneLineSubscriptionParams,
+
+  /** Abonnements de ligne portant metadata.phoneNumberId = lineId (retrouver un orphelin dont l'id n'a pas été enregistré). */
+  findPhoneLineSubscriptionIds: async (lineId) => {
+    const safe = String(lineId).replace(/[^a-zA-Z0-9]/g, '');
+    // La recherche Stripe n'accepte pas de mélanger AND et OR : filtre sur la métadonnée, statuts triés ici.
+    const res = await getStripe().subscriptions.search({ query: `metadata['phoneNumberId']:'${safe}'`, limit: 10 });
+    return (res?.data || []).filter((x) => ['active', 'trialing', 'past_due', 'unpaid', 'incomplete'].includes(x.status)).map((x) => x.id);
+  },
+
+  /** Résilie l'abonnement d'une ligne tout de suite. `prorate` / `invoiceNow` false : ni prorata ni facture finale. */
+  cancelPhoneLineSubscription: async (subscriptionId, { prorate = false, invoiceNow = false } = {}) => {
+    return getStripe().subscriptions.cancel(subscriptionId, { prorate, invoice_now: invoiceNow });
   },
 
   getStripeMode,
