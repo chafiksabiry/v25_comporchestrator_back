@@ -268,6 +268,29 @@ test('état Stripe illisible -> 503, rien de commandé, paiement inchangé (jama
   assert.ok(!names().includes('twilio.create') && !names().includes('line.save'));
 });
 
+test('paiement remboursé à la main dans Stripe (PI succeeded, charge remboursée) -> failed, 402, rien de commandé', async () => {
+  paymentDoc({ status: 'succeeded' });
+  sessions.cs_1 = { id: 'cs_1', status: 'complete', payment_status: 'paid', payment_intent: { id: 'pi_1', status: 'succeeded', latest_charge: { id: 'ch_1', refunded: true, amount_refunded: 1499 } } };
+  const res = mockRes();
+  await phoneNumberController.purchaseTwilioNumber(buy(), res);
+  assert.equal(res.statusCode, 402, JSON.stringify(res.body));
+  assert.equal(payments[PAY_ID].status, 'failed');
+  assert.equal(payments[PAY_ID].failureReason, 'stripe_payment_refunded');
+  assert.ok(!names().includes('twilio.create') && !names().includes('line.save'));
+});
+
+test('session Stripe introuvable pour de bon (404 resource_missing) -> failed, 402 (plus de 503 à chaque essai)', async () => {
+  paymentDoc();
+  const gone = new Error('No such checkout.session'); gone.statusCode = 404; gone.code = 'resource_missing';
+  sessions.cs_1 = gone;
+  const res = mockRes();
+  await phoneNumberController.purchaseTwilioNumber(buy(), res);
+  assert.equal(res.statusCode, 402, JSON.stringify(res.body));
+  assert.equal(payments[PAY_ID].status, 'failed');
+  assert.equal(payments[PAY_ID].failureReason, 'stripe_payment_not_found');
+  assert.ok(!names().includes('twilio.create'));
+});
+
 test('recover : paiement encaissé en base mais annulé chez Stripe -> failed, 402, aucun numéro commandé', async () => {
   paymentDoc({ status: 'succeeded' });
   sessions.cs_1 = canceledSession();
