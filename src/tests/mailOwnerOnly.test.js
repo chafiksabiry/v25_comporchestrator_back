@@ -615,15 +615,15 @@ try {
   inbox.push({ _id: 'perso', companyId: C1, ownerUserId: 'sec', accountId: PA_SEC, providerMessageId: 'c', provider: 'microsoft' });
   const lines = [];
   const res1 = await Mig.applyMailOwnership({ log: (l) => lines.push(l) });
-  assert.equal(res1.connectionsOwnerless, 1); assert.equal(res1.sharedAccountsOwnerless, 1); assert.equal(res1.legacyInboxPurged, 1); assert.equal(res1.secretariesSettingReset, 1);
+  assert.equal(res1.connectionsOwnerless, 1); assert.equal(res1.sharedAccountsOwnerless, 1); assert.equal(res1.legacyInboxHidden, 1); assert.equal(res1.secretariesSettingReset, 1);
   assert.equal(conns.find((c) => c.provider === 'microsoft').ownerless, true, 'ligne sans connectedBy marquée « sans propriétaire »'); assert.equal(conns.find((c) => c.provider === 'microsoft').connectedBy, '', 'jamais rattachée au hasard');
   assert.notEqual(conns.find((c) => c.provider === 'google').ownerless, true, 'ligne avec propriétaire intacte'); assert.equal(conns.find((c) => c.provider === 'google').connectedBy, 'owner1');
   assert.equal(accounts.find((a) => a._id === SA1).ownerless, true); assert.notEqual(accounts.find((a) => a._id === SA2).ownerless, true);
-  assert.deepEqual(inbox.map((d) => d._id).sort(), ['new', 'perso'], 'anciens e-mails de société sans propriétaire purgés ; les autres conservés');
+  assert.deepEqual(inbox.map((d) => d._id).sort(), ['new', 'old', 'perso'], 'aucune suppression au démarrage : les anciens e-mails sans propriétaire sont conservés (masqués)');
   assert.equal(toolsDocs[0].inbound.secretaries, false);
   assert.equal(lines.length, 1); const logLine = JSON.parse(lines[0]); assert.equal(logLine.event, 'mail_ownership_applied'); assert.ok(!/@|acme|owner1|mgrA|C1|64b0/.test(lines[0]), 'journal sans PII (ni adresse, ni identifiant, ni société)');
   const res2 = await Mig.applyMailOwnership({ log: (l) => lines.push(l) });
-  assert.equal(res2.connectionsOwnerless, 0); assert.equal(res2.sharedAccountsOwnerless, 0); assert.equal(res2.legacyInboxPurged, 0); assert.equal(res2.secretariesSettingReset, 0, 'idempotente');
+  assert.equal(res2.connectionsOwnerless, 0); assert.equal(res2.sharedAccountsOwnerless, 0); assert.equal(res2.legacyInboxHidden, 1); assert.equal(res2.secretariesSettingReset, 0, 'idempotente');
   // après migration, la connexion orpheline est inutilisable
   await assert.rejects(S.withConnection(C1, 'microsoft', async () => 'x', { ownerId: 'owner1' }), (e) => e.code === 'not_connected');
 
