@@ -26,13 +26,24 @@ export function isEuropeCountry(code) {
 }
 
 /**
- * Une entreprise du pays `companyCountry` peut-elle chercher / acheter un numéro du pays `numberCountry` ?
- * Oui si c'est le même pays, ou si les deux sont dans la zone Europe. Pays vide ou inconnu : non (jamais d'égalité de deux vides).
+ * Pays dont un abonné Nomad Solo peut prendre un numéro sur présentation d'une pièce d'identité délivrée par ce pays (passeport,
+ * titre de séjour ou carte d'identité), même s'il réside ailleurs (décision du 19/11). HARX achète ces numéros sous son propre
+ * dossier réglementaire de plateforme : aucune démarche Twilio par abonné.
  */
-export function numberCountryAllowed(companyCountry, numberCountry) {
+export const IDENTITY_NUMBER_COUNTRIES = Object.freeze(['FR', 'GB', 'US']);
+
+/**
+ * Une entreprise du pays `companyCountry` peut-elle chercher / acheter un numéro du pays `numberCountry` ?
+ * Oui si c'est le même pays, ou si les deux sont dans la zone Europe, ou (Nomad Solo) si le numéro est du pays de la pièce
+ * d'identité déclarée et enregistrée (`identityCountry`) et que ce pays est la France, le Royaume-Uni ou les États-Unis.
+ * Pays vide ou inconnu : non (jamais d'égalité de deux vides).
+ */
+export function numberCountryAllowed(companyCountry, numberCountry, { identityCountry } = {}) {
   const company = iso(companyCountry);
   const number = iso(numberCountry);
   if (!company || !number) return false;
   if (company === number) return true;
-  return EUROPE_ZONE.has(company) && EUROPE_ZONE.has(number);
+  if (EUROPE_ZONE.has(company) && EUROPE_ZONE.has(number)) return true;
+  const id = iso(identityCountry);
+  return Boolean(id) && id === number && IDENTITY_NUMBER_COUNTRIES.includes(id);
 }

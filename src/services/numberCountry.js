@@ -1,4 +1,4 @@
-import { companyCountry, normalizeCountryCode, ScopeError } from '../middleware/companyScope.js';
+import { companyNumberProfile, DEFAULT_COMPANY_COUNTRY, normalizeCountryCode, ScopeError } from '../middleware/companyScope.js';
 import { countryOfE164 } from '../utils/e164Country.js';
 import { isEuropeCountry, numberCountryAllowed } from '../utils/europeZone.js';
 
@@ -19,8 +19,12 @@ export const COUNTRY_NOT_ALLOWED = 'COUNTRY_NOT_ALLOWED';
  */
 export async function checkNumberCountry(req, companyId, { countryCode, phoneNumber } = {}) {
   let allowed;
+  let identityCountry = '';
   try {
-    allowed = await companyCountry(req, companyId);
+    const scope = await companyNumberProfile(req, companyId);
+    allowed = scope.country || DEFAULT_COMPANY_COUNTRY;
+    // Pays de la pièce d'identité : seulement celui enregistré côté serveur (jamais une valeur de la requête).
+    identityCountry = scope.identityCountry || '';
   } catch (error) {
     if (error instanceof ScopeError) return { ok: false, status: error.status, body: { error: error.message } };
     return { ok: false, status: 503, body: { error: 'Company country lookup failed' } };
@@ -38,12 +42,12 @@ export async function checkNumberCountry(req, companyId, { countryCode, phoneNum
   let country = allowed;
   if (countryCode !== undefined && countryCode !== null && String(countryCode).trim() !== '') {
     const asked = normalizeCountryCode(countryCode);
-    if (!numberCountryAllowed(allowed, asked)) return refuse(`pays demandé ${asked}`);
+    if (!numberCountryAllowed(allowed, asked, { identityCountry })) return refuse(`pays demandé ${asked}`);
     country = asked;
   }
   if (phoneNumber !== undefined && phoneNumber !== null && String(phoneNumber).trim() !== '') {
     const of = countryOfE164(phoneNumber);
-    if (!numberCountryAllowed(allowed, of)) return refuse(`ce numéro est ${of ? `du pays ${of}` : 'd’un pays inconnu'}`);
+    if (!numberCountryAllowed(allowed, of, { identityCountry })) return refuse(`ce numéro est ${of ? `du pays ${of}` : 'd’un pays inconnu'}`);
   }
-  return { ok: true, country, companyCountry: allowed };
+  return { ok: true, country, companyCountry: allowed, ...(identityCountry ? { identityCountry } : {}) };
 }

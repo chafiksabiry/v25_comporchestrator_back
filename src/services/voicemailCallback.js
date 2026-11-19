@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { xmlEscape } from './inboundFlow.js';
+import { ensureEnvTwimlApp } from './twimlApps.js';
 
 /**
  * Rappel d'une personne qui a laissé un message : appel sortant depuis le navigateur, limité au numéro de ce message
@@ -65,17 +66,10 @@ export const buildRefusalTwiml = (message, { language = 'fr-FR', voice = 'Polly.
   wrap(`<Say language="${language}" voice="${voice}">${xmlEscape(message)}</Say><Hangup/>`);
 
 /**
- * Application TwiML qui reçoit les appels sortants du navigateur pour les rappels : retrouvée par son nom, créée si elle
- * n'existe pas, et pointée sur le webhook de ce serveur. TWILIO_CALLBACK_TWIML_APP_SID force une application existante.
+ * Application TwiML qui reçoit les appels sortants du navigateur pour les rappels, propre à CET environnement (voir twimlApps.js) :
+ * nommée « harx-callcentre-callback (recette|production) », pointée sur le webhook de cet environnement.
+ * TWILIO_CALLBACK_TWIML_APP_SID force une application existante (utilisée telle quelle, jamais modifiée).
  */
-let cachedAppSid = null;
-export async function ensureCallbackApp(client, voiceUrl) {
-  if (process.env.TWILIO_CALLBACK_TWIML_APP_SID) return process.env.TWILIO_CALLBACK_TWIML_APP_SID;
-  if (cachedAppSid) return cachedAppSid;
-  const [existing] = await client.applications.list({ friendlyName: CALLBACK_APP_NAME, limit: 1 });
-  let app = existing;
-  if (!app) app = await client.applications.create({ friendlyName: CALLBACK_APP_NAME, voiceUrl, voiceMethod: 'POST' });
-  else if (app.voiceUrl !== voiceUrl) app = await client.applications(app.sid).update({ voiceUrl, voiceMethod: 'POST' });
-  cachedAppSid = app.sid;
-  return cachedAppSid;
+export function ensureCallbackApp(client, { req, env = process.env } = {}) {
+  return ensureEnvTwimlApp(client, { baseName: CALLBACK_APP_NAME, path: CALLBACK_WEBHOOK_PATH, pinnedSid: env.TWILIO_CALLBACK_TWIML_APP_SID, env, req });
 }
