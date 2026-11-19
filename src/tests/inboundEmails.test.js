@@ -270,6 +270,19 @@ try {
   // HTML seul -> texte ; 20 000 caractères max
   on('GET', /graph\.microsoft\.com\/v1\.0\/me\/messages\/g1\?/, () => ({ status: 200, json: { body: { contentType: 'html', content: `<p>${'a'.repeat(30000)}</p>` } } }));
   assert.equal((await req('GET', `/inbound-emails/${C1}/${mid}/body`, { user: 'owner1' })).body.data.text.length, 20000);
+  // Partie HTML d'origine (Gmail, format=full) : renvoyée en plus du texte (mise en page), plafonnée ; absente quand le message n'a que du texte brut.
+  // Testée directement sur le fournisseur Google (la boîte de ce scénario est Microsoft, qui ne renvoie que le texte).
+  {
+    const { google: G } = await import('../services/secretariatProviders/google.js');
+    const b64 = (t) => Buffer.from(t).toString('base64url');
+    const gmail = (payload) => async () => ({ status: 200, json: { payload }, headers: {} });
+    let out = await G.readBodyFull({ http: gmail({ mimeType: 'multipart/alternative', parts: [{ mimeType: 'text/plain', body: { data: b64('Bonjour en texte') } }, { mimeType: 'text/html', body: { data: b64('<table><tr><td style="color:red">Bonjour en HTML</td></tr></table>') } }] }), accessToken: 't', id: 'g1' });
+    assert.equal(out.text, 'Bonjour en texte'); assert.equal(out.html, '<table><tr><td style="color:red">Bonjour en HTML</td></tr></table>', 'HTML d’origine renvoyé');
+    out = await G.readBodyFull({ http: gmail({ mimeType: 'text/html', body: { data: b64(`<p>${'b'.repeat(500000)}</p>`) } }), accessToken: 't', id: 'g1' });
+    assert.equal(out.html.length, 400000, 'HTML plafonné à 400 000 caractères');
+    out = await G.readBodyFull({ http: gmail({ mimeType: 'text/plain', body: { data: b64('Texte seul') } }), accessToken: 't', id: 'g1' });
+    assert.deepEqual(out, { text: 'Texte seul' }, 'pas de HTML quand le message n’en a pas');
+  }
   // panne fournisseur -> 502
   on('GET', /graph\.microsoft\.com\/v1\.0\/me\/messages\/g1\?/, () => ({ status: 503, json: null }));
   r = await req('GET', `/inbound-emails/${C1}/${mid}/body`, { user: 'owner1' }); assert.equal(r.status, 502); assert.equal(r.body.code, 'provider_error');

@@ -16,6 +16,8 @@ const RAW_JSON_MAX = 900_000;
  * AUCUNE écriture de la boîte : gmail.modify n'est jamais demandé (pas de corbeille ni d'archivage Gmail : suppression / archivage dans HARX seulement).
  */
 const SCOPE_GMAIL_SEND = 'https://www.googleapis.com/auth/gmail.send';
+/** Partie HTML d'un message renvoyée à l'application (mise en page) : plafond en caractères. */
+const MAX_HTML = 400_000;
 const SCOPE_CALENDAR = 'https://www.googleapis.com/auth/calendar.events';
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const CAL = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
@@ -153,7 +155,15 @@ export const google = {
   },
 
   /** Corps d'un message lu EN DIRECT (format=full) : texte brut de préférence, sinon HTML nettoyé en texte ; citations retirées, 20 000 caractères max. Jamais stocké. */
-  async readBody({ http, accessToken, id }) {
+  async readBody(args) {
+    return (await google.readBodyFull(args)).text;
+  },
+
+  /**
+   * Même lecture, avec en plus la partie HTML d'origine (mise en page et design du message, 400 000 caractères max) : l'application l'affiche dans un cadre
+   * isolé (sans script, images distantes bloquées tant que l'utilisateur ne les demande pas). Jamais stocké.
+   */
+  async readBodyFull({ http, accessToken, id }) {
     const res = ensure(await call(http, { method: 'GET', url: `${GMAIL}/messages/${encodeURIComponent(id)}?format=full`, headers: { Authorization: `Bearer ${accessToken}` } }), 'Lecture d’un message Gmail', [200]);
     const plain = []; const html = [];
     const walk = (part, depth = 0) => {
@@ -166,7 +176,9 @@ export const google = {
       for (const p of Array.isArray(part.parts) ? part.parts : []) walk(p, depth + 1);
     };
     walk(res.json?.payload);
-    return limitBody(stripQuoted(plain.length ? plain.join('\n') : htmlToText(html.join('\n'))));
+    const text = limitBody(stripQuoted(plain.length ? plain.join('\n') : htmlToText(html.join('\n'))));
+    const htmlOut = html.join('\n').slice(0, MAX_HTML);
+    return htmlOut.trim() ? { text, html: htmlOut } : { text };
   },
 
   /** Suppression ; 404 et 410 (déjà supprimé) comptent comme réussis. */
