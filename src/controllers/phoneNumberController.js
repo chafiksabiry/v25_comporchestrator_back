@@ -143,7 +143,12 @@ async function providerLinePaymentState(payment) {
     const session = await stripeService.retrieveSession(payment.providerRef);
     const pi = session?.payment_intent && typeof session.payment_intent === 'object' ? session.payment_intent : null;
     if (pi) {
-      if (pi.status === 'succeeded') return { state: 'succeeded' };
+      if (pi.status === 'succeeded') {
+        // Remboursé (même partiellement, ex. à la main dans Stripe) : PI toujours « succeeded », mais le paiement ne paie plus rien.
+        const charge = pi.latest_charge && typeof pi.latest_charge === 'object' ? pi.latest_charge : null;
+        if (charge && (charge.refunded || Number(charge.amount_refunded) > 0)) return { state: 'failed', reason: 'stripe_payment_refunded' };
+        return { state: 'succeeded' };
+      }
       if (pi.status === 'requires_capture') return { state: 'authorized' };
       if (pi.status === 'processing') return { state: 'unknown' };
       return { state: 'failed', reason: `stripe_payment_intent_${pi.status || 'unknown'}` };
@@ -165,6 +170,14 @@ async function providerLinePaymentState(payment) {
   return { state: 'unknown' };
 }
 
+/** Le prestataire répond que la session / commande n'existe pas (404 définitif), et non une panne passagère. */
+const isProviderNotFound = (err) =>
+  err?.code === 'resource_missing' ||
+  err?.statusCode === 404 ||
+  err?.raw?.code === 'resource_missing' ||
+  err?.response?.status === 404 ||
+  err?.response?.data?.name === 'RESOURCE_NOT_FOUND';
+
 /**
  * Un paiement 'authorized' ou 'succeeded' en base, sans ligne, n'est repris pour un achat qu'après relecture de son état chez le
  * prestataire (incident du 19/11 : autorisation annulée à la main dans Stripe, restée 'authorized' en base, puis reprise).
@@ -178,8 +191,13 @@ async function verifyLinePaymentForPurchase(payment) {
   try {
     result = await providerLinePaymentState(payment);
   } catch (err) {
-    console.warn(`[telephony] line payment ${payment._id} state unreadable, not reused:`, err.message);
-    return { usable: false, unknown: true };
+    if (isProviderNotFound(err)) {
+      // Session Stripe ou commande PayPal introuvable pour de bon : ce paiement ne pourra jamais servir, on redemande un paiement.
+      result = { state: 'failed', reason: `${payment.provider || 'provider'}_payment_not_found` };
+    } else {
+      console.warn(`[telephony] line payment ${payment._id} state unreadable, not reused:`, err.message);
+      return { usable: false, unknown: true };
+    }
   }
   if (result.state === 'failed') {
     console.warn(`[telephony] line payment ${payment._id} no longer usable (${result.reason}): marked failed`);
