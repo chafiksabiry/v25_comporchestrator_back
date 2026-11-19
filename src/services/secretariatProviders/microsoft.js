@@ -1,6 +1,7 @@
 import { dialIn, plainDescription, safeVideoUrl, videoUrlIn } from './eventConnection.js';
 import { call, ensure, eventWindow, hasReadScope, hasWriteScope, READ_SCOPE, WRITE_SCOPE, SecretariatError, VIDEO_LINK_RE } from './common.js';
 import { cleanSnippet, cleanSubject, htmlToText, limitBody, stripQuoted } from './mailText.js';
+import { cidRefs, inlineCidImages, INLINE_COUNT_MAX, INLINE_IMAGE_MAX, INLINE_TOTAL_MAX, normCid, safeImageType } from './inlineImages.js';
 
 /**
  * Microsoft 365 : Outlook (envoi), Calendrier (événements), Teams (via un événement). Points d'accès Graph v1.0 publics ;
@@ -12,6 +13,8 @@ import { cleanSnippet, cleanSubject, htmlToText, limitBody, stripQuoted } from '
  * n'est pas garantie. Contrepartie : un événement apparaît dans le calendrier du compte même si l'agenda HARX n'est pas Microsoft.
  */
 const GRAPH = 'https://graph.microsoft.com/v1.0';
+/** Partie HTML d'un message renvoyée à l'application (mise en page) : plafond en caractères (comme Gmail). */
+const MAX_HTML = 400_000;
 const SCOPES = ['offline_access', 'openid', 'email', 'User.Read', 'Mail.Send', 'Calendars.ReadWrite', 'OnlineMeetings.ReadWrite'];
 // MICROSOFT_TENANT_ID : GUID, domaine ou common|organizations|consumers. Tout autre caractère est refusé (pas d'injection dans l'URL).
 export const tenantOf = (env) => String(env.MICROSOFT_TENANT_ID || '').trim() || 'common';
@@ -133,6 +136,24 @@ export const microsoft = {
   },
 
   /**
+   * Lecture pour AFFICHAGE : corps d'origine (HTML quand le message en a, 400 000 caractères max) + texte (HTML nettoyé, citations retirées, 20 000 max).
+   * Images INTÉGRÉES (`<img src="cid:…">`) : pièces jointes `isInline` lues via /messages/{id}/attachments puis remplacées par des `data:` (voir
+   * inlineImages.js). `inlineImages: false` : aucune pièce jointe lue. Jamais stocké. [À VÉRIFIER en recette avec un vrai compte.]
+   */
+  async readBodyFull({ http, accessToken, id, inlineImages = true }) {
+    const headers = { Authorization: `Bearer ${accessToken}` };
+    const res = ensure(await call(http, { method: 'GET', url: `${GRAPH}/me/messages/${encodeURIComponent(id)}?$select=body`, headers }), 'Lecture d’un message Outlook', [200]);
+    const body = res.json?.body || {};
+    const content = String(body.content || '');
+    if (String(body.contentType).toLowerCase() !== 'html') return { text: limitBody(stripQuoted(content)) };
+    const text = limitBody(stripQuoted(htmlToText(content)));
+    let html = content.slice(0, MAX_HTML);
+    if (!html.trim()) return { text };
+    if (inlineImages && cidRefs(html).length) html = await graphInlineImages({ http, headers, id, html });
+    return { text, html };
+  },
+
+  /**
    * Déplace un message vers un dossier bien connu (`/me/messages/{id}/move`). Graph donne au message déplacé un NOUVEL identifiant : il est renvoyé
    * (`id`) pour que l'appelant mette à jour sa référence. 404 (message déjà absent) = réussi, `id: null`. [À VÉRIFIER en recette avec un vrai compte.]
    */
@@ -152,6 +173,37 @@ export const microsoft = {
     ensure(await call(http, { method: 'DELETE', url: `${GRAPH}/me/events/${encodeURIComponent(id)}`, headers: { Authorization: `Bearer ${accessToken}` } }), 'Suppression Outlook', [200, 204, 404]);
   },
 };
+
+/**
+ * Images intégrées d'un message Outlook : liste des pièces jointes (métadonnées seulement), puis lecture une à une des pièces `isInline` de type sûr
+ * et de taille annoncée sous les plafonds ; seules celles dont le `contentId` est référencé par le HTML sont gardées. Erreur de lecture : ignorée
+ * (l'image garde son texte alternatif ; le corps reste affiché).
+ */
+async function graphInlineImages({ http, headers, id, html }) {
+  const refs = new Set(cidRefs(html));
+  const base = `${GRAPH}/me/messages/${encodeURIComponent(id)}/attachments`;
+  let list = null;
+  try { list = await call(http, { method: 'GET', url: `${base}?$select=id,contentType,size,isInline&$top=50`, headers }); } catch { list = null; }
+  if (list?.status !== 200) return html;
+  const candidates = (Array.isArray(list.json?.value) ? list.json.value : [])
+    .filter((a) => a?.id && a.isInline === true && safeImageType(a.contentType) && Number(a.size) > 0 && Number(a.size) <= INLINE_IMAGE_MAX * 1.5)
+    .slice(0, INLINE_COUNT_MAX);
+  const images = new Map();
+  let budget = 0;
+  for (const a of candidates) {
+    if (images.size >= refs.size || budget >= INLINE_TOTAL_MAX) break;
+    let r = null;
+    try { r = await call(http, { method: 'GET', url: `${base}/${encodeURIComponent(a.id)}`, headers }); } catch { r = null; }
+    const att = r?.status === 200 ? r.json : null;
+    const cid = normCid(att?.contentId);
+    if (!att || att['@odata.type'] !== '#microsoft.graph.fileAttachment' || !cid || !refs.has(cid) || images.has(cid) || typeof att.contentBytes !== 'string') continue;
+    const data = Buffer.from(att.contentBytes, 'base64');
+    if (data.length > INLINE_IMAGE_MAX || budget + data.length > INLINE_TOTAL_MAX) continue;
+    budget += data.length;
+    images.set(cid, { type: att.contentType || a.contentType, data });
+  }
+  return images.size ? inlineCidImages(html, images).html : html;
+}
 
 /** Pour rejoindre : lien Teams (sinon un lien de visio du lieu / de l'aperçu), numéro d'appel et code de conférence, aperçu du texte. */
 function connection(e) {
