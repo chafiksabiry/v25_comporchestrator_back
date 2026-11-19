@@ -722,6 +722,17 @@ export const stripeService = {
    * PAY-19: does this Stripe customer have a payment method Stripe can charge
    * off-session (default on the customer, or at least one card on file)?
    */
+  /**
+   * Devise FIXÉE d'un client Stripe (en minuscules), ou null : Stripe la fixe au premier abonnement ou à la première facture,
+   * et refuse ensuite tout abonnement dans une autre devise sur ce client. Client supprimé ou sans devise : null.
+   */
+  getCustomerCurrency: async (customerId) => {
+    if (!customerId) return null;
+    const customer = await getStripe().customers.retrieve(customerId);
+    if (!customer || customer.deleted) return null;
+    return customer.currency ? String(customer.currency).toLowerCase() : null;
+  },
+
   hasUsablePaymentMethod: async (customerId) => {
     if (!customerId) return false;
     const stripe = getStripe();
