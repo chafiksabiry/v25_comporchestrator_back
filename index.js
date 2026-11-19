@@ -39,6 +39,7 @@ import { purgeExpiredBenchRecordings, migrateAiAgentSettings } from './src/servi
 import { companyNotificationRoutes } from './src/routes/companyNotifications.js';
 import { createWhatsAppModule } from './src/whatsapp/index.js';
 import { createSalesIqModule } from './src/salesiq/index.js';
+import { createInboxRecorder } from './src/salesiq/inboxRecorder.js';
 import { startMessageReminders } from './src/services/messageReminders.js';
 import { purgePhoneContactsAfterCancel } from './src/services/contactsRetention.js';
 import { removeTombstoneExpiry } from './src/models/ContactTombstone.js';
@@ -94,7 +95,11 @@ if (!parseAllowedOrigins()) console.warn('[security] CORS_ALLOWED_ORIGINS absent
 
 // HARX SalesIQ Support Agent : webhook Zobot -> Claude -> réponse en temps réel (voir docs/SALESIQ_SUPPORT_AGENT.md).
 // Monté AVANT le contrôle de connexion MongoDB et avant express.json() : il n'utilise pas la base et lit le corps brut.
-app.use('/api/salesiq', createSalesIqModule().router);
+// Le module WhatsApp (et son store enveloppé : temps réel de l'Inbox) est créé ici, avant SalesIQ, qui y copie ses échanges (non bloquant,
+// SALESIQ_INBOX_RECORD=0 pour désactiver) ; ses routes restent montées plus bas, après express.json().
+const whatsappModule = createWhatsAppModule();
+const salesIqRecorder = createInboxRecorder(whatsappModule.store, { enabled: !/^(0|false|no|off)$/i.test(String(process.env.SALESIQ_INBOX_RECORD ?? '1')) });
+app.use('/api/salesiq', createSalesIqModule({ record: salesIqRecorder }).router);
 
 // Database connection health check middleware
 app.use((req, res, next) => {
@@ -165,7 +170,6 @@ app.use('/admin/identity', identityAdminRoutes);
 app.use('/api/trial-call', trialCallRoutes);
 
 // HARX WhatsApp AI Assistant : webhook Meta + liaison de compte + administration du support (voir docs/WHATSAPP_AI_ASSISTANT.md).
-const whatsappModule = createWhatsAppModule();
 app.use('/api/whatsapp', whatsappModule.router);
 
 // Health check to verify deployment

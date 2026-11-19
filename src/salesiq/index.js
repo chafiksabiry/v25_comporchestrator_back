@@ -20,7 +20,7 @@ export function createSalesIqModule(overrides = {}) {
   const claude = overrides.claude || createClaudeClient({ cfg });
   const kb = overrides.kb || createVisitorKb({ topics: cfg.kbTopics.length ? cfg.kbTopics : DEFAULT_KB_TOPICS });
   const tools = overrides.tools || createToolRunner({ zoho, kb, logger });
-  const agent = createAgent({ cfg, claude, zoho, tools, knowledge, kb, logger });
+  const agent = createAgent({ cfg, claude, zoho, tools, knowledge, kb, logger, record: overrides.record || null });
   const router = createSalesIqRouter({ agent, cfg, logger });
   const missing = missingConfig(cfg);
   logger.log?.(`[salesiq] support agent ready (mode ${cfg.mode}, model ${cfg.model}, ${kb.size} knowledge chunks)${missing.length ? `, missing config: ${missing.join(', ')}` : ''}`);
