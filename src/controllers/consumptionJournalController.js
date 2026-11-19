@@ -41,7 +41,7 @@ const defaultLoaders = {
       CompanyPayment.find({ companyId: oid, status: 'succeeded', purpose: { $in: ['minutes_purchase', 'bundle_purchase'] } }).sort({ fulfilledAt: -1 }).limit(max + 1).lean(),
       mongoose.connection.db.collection('calls').find(
         { $or: [{ companyId: oid }, { companyId: String(oid) }], duration: { $gt: 0 }, isTest: { $ne: true } },
-        { projection: { sid: 1, duration: 1, direction: 1, from: 1, to: 1, startTime: 1, createdAt: 1, endTime: 1, isTest: 1 } },
+        { projection: { sid: 1, duration: 1, direction: 1, from: 1, to: 1, startTime: 1, createdAt: 1, endTime: 1, isTest: 1, source: 1, 'handledBy.name': 1, 'transfer.leg': 1 } },
       ).sort({ startTime: -1 }).limit(max + 1).toArray(),
     ]);
     const p = cap(payments, max, (x) => x.fulfilledAt || x.updatedAt || x.createdAt);
