@@ -109,6 +109,17 @@ try {
     const forged = { Authorization: `Bearer ${jwt.sign({ userId: 'u3', typeUser: 'admin' }, 'other-secret')}` };
     assert.equal((await fetch(`${root}/conversations`, { headers: forged })).status, 401);
     assert.equal((await fetch(`${root}/conversations`, { headers: { Authorization: 'Bearer garbage' } })).status, 401);
+    // Suppression : clé ou jeton admin requis ; la conversation et ses tickets disparaissent
+    const victim = web.conversations[0].waId;
+    assert.equal((await fetch(`${root}/conversations/${encodeURIComponent(victim)}`, { method: 'DELETE' })).status, 401);
+    assert.equal((await fetch(`${root}/conversations/${encodeURIComponent(victim)}`, { method: 'DELETE', headers: asCompany })).status, 401);
+    assert.ok((await store.getConversation(victim)), 'still there after refused deletes');
+    const del = await fetch(`${root}/conversations/${encodeURIComponent(victim)}`, { method: 'DELETE', headers: asAdmin });
+    assert.equal(del.status, 200);
+    assert.equal(await store.getConversation(victim), null);
+    assert.equal((await store.listTickets({})).filter((t) => t.waId === victim).length, 0, 'tickets of the deleted conversation are deleted too');
+    assert.equal((await fetch(`${root}/conversations/${encodeURIComponent(victim)}`, { method: 'DELETE', headers: H })).status, 404);
+    assert.equal((await fetch(`${root}/conversations/${encodeURIComponent(victim)}`, { headers: H })).status, 404);
     const page = await fetch(`${root}/inbox`);
     assert.equal(page.status, 200);
     const html = await page.text();

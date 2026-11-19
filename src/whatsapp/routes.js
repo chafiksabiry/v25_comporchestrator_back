@@ -102,6 +102,19 @@ export function createWhatsAppRouter({ agent, store, whatsapp, kb, cfg, auth = a
     res.set('Cache-Control', 'no-store');
     res.json({ waId: conv.waId, profileName: conv.profileName || '', language: conv.language?.language || null, linked: Boolean(conv.linkedUserId), handoff: conv.handoff || { active: false }, notes: conv.notes || [], messages: (conv.messages || []).map((m) => ({ role: m.role, text: m.text, ts: m.ts })) });
   });
+  // Suppression définitive d'une conversation et de ses tickets (demande d'effacement, nettoyage des essais). Réservée aux admins.
+  router.delete('/admin/conversations/:id', admin, async (req, res) => {
+    try {
+      const id = String(req.params.id);
+      const deleted = await store.deleteConversation(id);
+      if (!deleted) return res.status(404).json({ error: 'Conversation not found' });
+      logger.log?.(`[whatsapp] admin deleted a conversation (${isWebConversation(id) ? 'web' : 'whatsapp'})`);
+      return res.json({ deleted: true });
+    } catch (e) {
+      logger.error('[whatsapp] delete conversation failed:', e.message);
+      return res.status(500).json({ error: 'Could not delete the conversation' });
+    }
+  });
   router.get('/admin/tickets', admin, express.json(), async (req, res) => {
     res.json({ tickets: await store.listTickets({ status: req.query.status }) });
   });
