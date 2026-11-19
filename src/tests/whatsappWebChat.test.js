@@ -85,6 +85,28 @@ try {
     assert.equal(status, 429);
   }
 
+  // 6 bis. Boîte de réception admin : clé obligatoire, liste par canal, détail, page statique sans donnée
+  {
+    const root = `http://127.0.0.1:${server.address().port}/api/whatsapp/admin`;
+    const H = { 'x-admin-key': 'ADMIN' };
+    assert.equal((await fetch(`${root}/conversations`)).status, 401);
+    assert.equal((await fetch(`${root}/conversations`, { headers: { 'x-admin-key': 'nope' } })).status, 401);
+    const all = await (await fetch(`${root}/conversations`, { headers: H })).json();
+    assert.ok(all.conversations.length >= 2);
+    const web = await (await fetch(`${root}/conversations?channel=web`, { headers: H })).json();
+    assert.ok(web.conversations.every((c) => c.waId.startsWith('web:')));
+    const wa = await (await fetch(`${root}/conversations?channel=whatsapp`, { headers: H })).json();
+    assert.equal(wa.conversations.length, 0);
+    const one = await (await fetch(`${root}/conversations/${encodeURIComponent(web.conversations[0].waId)}`, { headers: H })).json();
+    assert.ok(one.messages.length >= 2);
+    assert.equal((await fetch(`${root}/conversations/web:unknownunknownunknown00`, { headers: H })).status, 404);
+    const page = await fetch(`${root}/inbox`);
+    assert.equal(page.status, 200);
+    const html = await page.text();
+    assert.ok(html.includes('x-admin-key') && !html.includes('ADMIN'), 'page is static and never embeds the key');
+    assert.match(page.headers.get('content-security-policy') || '', /default-src 'none'/);
+  }
+
   // 7. Module désactivé : 404
   {
     const off = createWhatsAppModule({ cfg: { ...cfg, enabled: false }, store: createMemoryStore(), claude, kb: loadKnowledgeBase(), logger: quiet, getPlans: async () => [], registrationOrigin: () => '' });
