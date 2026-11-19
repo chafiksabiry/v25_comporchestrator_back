@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
 import express from 'express';
 import { authenticate } from '../middleware/auth.js';
 import { verifyMetaSignature } from './signature.js';
@@ -67,7 +68,16 @@ export function createWhatsAppRouter({ agent, store, whatsapp, kb, cfg, auth = a
   });
 
   // 5) Administration (équipe support) : clé d'API dédiée, désactivée si non configurée
+  // Accès : (1) connexion admin du tableau de bord HARX (JWT émis par le service d'inscription, typeUser 'admin'),
+  // (2) sinon la clé d'API dédiée (x-admin-key). Désactivé (404) si aucune des deux n'est possible.
+  const isDashboardAdmin = (req) => {
+    const token = req.get('authorization')?.split(' ')[1];
+    const secret = cfg.jwtSecret || process.env.JWT_SECRET;
+    if (!token || !secret) return false;
+    try { return jwt.verify(token, secret)?.typeUser === 'admin'; } catch { return false; }
+  };
   const admin = (req, res, next) => {
+    if (isDashboardAdmin(req)) return next();
     if (!cfg.adminKey) return res.status(404).json({ error: 'Not found' });
     if (!safeEqual(req.get('x-admin-key'), cfg.adminKey)) return res.status(401).json({ error: 'Unauthorized' });
     return next();

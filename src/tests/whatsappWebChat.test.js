@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import express from 'express';
+import jwt from 'jsonwebtoken';
 import { getWhatsAppConfig } from '../whatsapp/config.js';
 import { createWhatsAppModule } from '../whatsapp/index.js';
 import { createMemoryStore } from '../whatsapp/store/memoryStore.js';
@@ -12,7 +13,7 @@ const notified = [];
 const cfg = getWhatsAppConfig({
   WHATSAPP_GRAPH_BASE_URL: graph.url, WHATSAPP_PHONE_NUMBER_ID: 'PNID123', WHATSAPP_ACCESS_TOKEN: 'TOKEN',
   WHATSAPP_VERIFY_TOKEN: 'VERIFY', WHATSAPP_APP_SECRET: 'SECRET', WHATSAPP_ADMIN_API_KEY: 'ADMIN',
-  ANTHROPIC_API_KEY: 'unused', WHATSAPP_WEB_RATE_LIMIT_PER_MINUTE: '6',
+  ANTHROPIC_API_KEY: 'unused', WHATSAPP_WEB_RATE_LIMIT_PER_MINUTE: '6', JWT_SECRET: 'jwt-secret-for-test',
 });
 const store = createMemoryStore();
 const claude = createScriptedClaude();
@@ -100,6 +101,14 @@ try {
     const one = await (await fetch(`${root}/conversations/${encodeURIComponent(web.conversations[0].waId)}`, { headers: H })).json();
     assert.ok(one.messages.length >= 2);
     assert.equal((await fetch(`${root}/conversations/web:unknownunknownunknown00`, { headers: H })).status, 404);
+    // Connexion admin du tableau de bord (JWT typeUser admin) : accès sans clé ; autres jetons refusés
+    const asAdmin = { Authorization: `Bearer ${jwt.sign({ userId: 'u1', typeUser: 'admin' }, 'jwt-secret-for-test')}` };
+    assert.equal((await fetch(`${root}/conversations`, { headers: asAdmin })).status, 200);
+    const asCompany = { Authorization: `Bearer ${jwt.sign({ userId: 'u2', typeUser: 'company' }, 'jwt-secret-for-test')}` };
+    assert.equal((await fetch(`${root}/conversations`, { headers: asCompany })).status, 401);
+    const forged = { Authorization: `Bearer ${jwt.sign({ userId: 'u3', typeUser: 'admin' }, 'other-secret')}` };
+    assert.equal((await fetch(`${root}/conversations`, { headers: forged })).status, 401);
+    assert.equal((await fetch(`${root}/conversations`, { headers: { Authorization: 'Bearer garbage' } })).status, 401);
     const page = await fetch(`${root}/inbox`);
     assert.equal(page.status, 200);
     const html = await page.text();
