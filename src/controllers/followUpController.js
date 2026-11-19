@@ -188,7 +188,9 @@ export const followUpController = {
     try {
       const access = await context(req, res);
       if (!access) return;
-      if (!canManage(access)) return fail(res, 403, NOT_ALLOWED);
+      // La secrétaire (agent) répond sur la ligne commune : elle voit aussi ses appels manqués (« Pour moi » de Mon espace), toujours ceux
+      // de la société sur laquelle elle travaille (choisie parmi ses emplois par `context`).
+      if (!canManage(access) && access.role !== 'agent') return fail(res, 403, NOT_ALLOWED);
       const companyId = new mongoose.Types.ObjectId(access.companyId);
       const rows = await InboundCall.find({ companyId, status: { $in: MISSED_STATUSES }, startedAt: { $gte: new Date(Date.now() - 30 * 86400000) } })
         .sort({ startedAt: -1 }).limit(50).select('from phoneNumber startedAt status').lean();
@@ -205,8 +207,11 @@ export const followUpController = {
     try {
       const access = await context(req, res);
       if (!access) return;
-      // Titulaire et responsables créent tout ; une secrétaire réserve seulement des rendez-vous (pour elle ou une personne de l'annuaire).
-      if (!canManage(access) && !(access.role === 'agent' && req.body?.model === 'appointment')) return fail(res, 403, NOT_ALLOWED);
+      // Titulaire et responsables créent tout. Une secrétaire (agent) crée aussi des rappels, des rendez-vous et des demandes / tâches, pour
+      // elle ou une personne de l'annuaire, et TOUJOURS pour la société sur laquelle elle travaille : `context` a vérifié la société
+      // demandée parmi ses emplois (403 sinon), l'élément y est enregistré, l'origine (message, appel manqué) y est cherchée.
+      // Elle ne réassigne pas un élément existant (`transfer` reste réservé au titulaire et aux membres).
+      if (!canManage(access) && access.role !== 'agent') return fail(res, 403, NOT_ALLOWED);
       const checked = validateCreate(req.body, access);
       if (checked.error) return fail(res, 400, checked.error);
       const v = checked.value;
