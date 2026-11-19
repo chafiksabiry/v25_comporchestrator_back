@@ -44,6 +44,9 @@ export function getWhatsAppConfig(env = process.env) {
     maxInboundChars: int(env.WHATSAPP_MAX_INBOUND_CHARS, 2000),
     rateLimitPerMinute: int(env.WHATSAPP_RATE_LIMIT_PER_MINUTE, 10),
     rateLimitPerDay: int(env.WHATSAPP_RATE_LIMIT_PER_DAY, 200),
+    /** Chat sur le site : limites par adresse IP (en plus de celles par session). */
+    webRateLimitPerMinute: int(env.WHATSAPP_WEB_RATE_LIMIT_PER_MINUTE, 12),
+    webRateLimitPerDay: int(env.WHATSAPP_WEB_RATE_LIMIT_PER_DAY, 150),
     /** Durée de validité d'un code de liaison de compte (minutes). */
     linkTtlMinutes: int(env.WHATSAPP_LINK_TTL_MINUTES, 30),
     // --- Escalade ---
