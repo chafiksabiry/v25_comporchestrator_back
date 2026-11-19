@@ -15,6 +15,10 @@ const router = express.Router();
 // Search available phone numbers (Telnyx) — `companyId` required: only the company's country (or Europe, for a European company) can be searched
 router.get('/search', ...guard(companyFrom('companyId')), phoneNumberController.searchNumbers.bind(phoneNumberController));
 
+// Numbers available in a country? (Nomad Solo, checked before any payment.) Login required; with `companyId`, the caller must belong
+// to that company and the country must be allowed to it (else reason `not_allowed`). Answer cached per country (1 h).
+router.get('/availability', ...guard(companyFromIfPresent), phoneNumberController.numberAvailability.bind(phoneNumberController));
+
 // Search available Twilio phone numbers
 router.get('/search/twilio', ...guard(companyFrom('companyId')), phoneNumberController.searchTwilioNumbers.bind(phoneNumberController));
 
