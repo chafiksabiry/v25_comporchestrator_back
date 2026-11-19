@@ -33,6 +33,8 @@ const schema = new mongoose.Schema(
       mode: { type: String, enum: ['dial', 'message'], default: 'dial' },
       result: { type: String, enum: ['ringing', 'answered', 'no_answer', 'busy', 'failed', 'caller_hung_up', 'message_left', 'message_offered'], default: 'ringing' },
       endedAt: { type: Date, default: null },
+      /** Jambe <Dial> vers la fiche, consignée au passage « en cours » -> résultat final (une seule fois : c'est elle qui est facturée). */
+      dialCallSid: { type: String, default: '' },
     },
   },
   { timestamps: true, collection: 'inbound_calls' }

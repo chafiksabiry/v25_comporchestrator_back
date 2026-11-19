@@ -98,7 +98,7 @@ const legs = {
 const updates = [];
 let failUpdate = false;
 const client = { calls: (sid) => ({ fetch: async () => { if (!legs[sid]) throw new Error('404'); return legs[sid]; }, update: async (p) => { if (failUpdate) throw new Error('twilio down'); updates.push({ sid, ...p }); return {}; } }) };
-setTransferDeps({ twilio: async () => client, minutes: async () => 30, creditFactor: async () => 1, now: () => NOW });
+setTransferDeps({ twilio: async () => client, minutes: async () => 30, creditFactor: async () => 1, now: () => NOW, signatureValid: () => true });
 
 let calls = [];
 const resetCalls = () => { calls = [
@@ -198,6 +198,14 @@ assert.match(await hook({ s: state }, { CallSid: `CA${'8'.repeat(32)}`, DialCall
 const noAnswer = await hook({ s: state }, { CallSid: SID_PARENT, DialCallStatus: 'no-answer' });
 assert.match(noAnswer, /Mme Martin ne peut pas vous répondre/); assert.match(noAnswer, /<Record /);
 assert.equal(calls[0].transfer.result, 'no_answer'); assert.ok(calls[0].transfer.endedAt);
+// rejeu après le résultat final : rien ne change (passage « en cours » -> résultat final une seule fois)
+assert.match(await hook({ s: state }, { CallSid: SID_PARENT, DialCallStatus: 'completed', DialCallDuration: '42' }), /<Hangup\/>/);
+assert.equal(calls[0].transfer.result, 'no_answer', 'résultat final non réécrit par un rejeu');
+// requête non signée par Twilio : rien n'est consigné (réponse servie quand même)
+calls[0].transfer.result = 'ringing'; setTransferDeps({ signatureValid: () => false });
+assert.match(await hook({ s: state }, { CallSid: SID_PARENT, DialCallStatus: 'no-answer' }), /<Record /);
+assert.equal(calls[0].transfer.result, 'ringing', 'non signé : rien consigné');
+setTransferDeps({ signatureValid: () => true });
 assert.match(await hook({ s: state }, { CallSid: SID_PARENT, DialCallStatus: 'completed', DialCallDuration: '42' }), /<Hangup\/>/);
 assert.equal(calls[0].transfer.result, 'answered');
 
@@ -240,7 +248,8 @@ PhoneNumber.exists = async (f) => { existsFilters.push(f); return f.status === '
 const locks = new Map(); const leaseMoves = [];
 OutboundTransfer.create = async (doc) => { if (locks.has(doc.callSid)) { const e = new Error('dup'); e.code = 11000; throw e; } locks.set(doc.callSid, { ...doc }); return doc; };
 OutboundTransfer.deleteOne = async (f) => { locks.delete(f.callSid); return {}; };
-OutboundTransfer.findOneAndUpdate = (f, upd) => { const row = locks.get(f.callSid); if (row && row.entryId === f.entryId) Object.assign(row, upd.$set); return lean(row ? { ...row } : null); };
+OutboundTransfer.findOneAndUpdate = (f, upd) => { const row = locks.get(f.callSid); const ok = row && row.entryId === f.entryId && (f.result === undefined || row.result === f.result); if (ok) Object.assign(row, upd.$set); return lean(ok ? { ...row } : null); };
+OutboundTransfer.findOne = (f) => { const row = locks.get(f.callSid); return lean(row && (f.entryId === undefined || row.entryId === f.entryId) ? { ...row } : null); };
 const { transferDeps } = await import('../controllers/callTransferController.js');
 const realMoveLease = transferDeps.moveLease;
 const released = [];

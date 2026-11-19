@@ -19,7 +19,9 @@ const { PhoneNumber } = await import('../models/PhoneNumber.js');
 const { Subscription } = await import('../models/Subscription.js');
 const { syncMinutesFromCalls } = await import('../controllers/escrowController.js');
 const { clearCoefficientCache } = await import('../services/creditCoefficient.js');
-const { transferResult, billOutboundTransferRemainder, setTransferDeps } = await import('../controllers/callTransferController.js');
+const { transferResult, billOutboundTransferRemainder, setTransferDeps, transferDeps } = await import('../controllers/callTransferController.js');
+const realSignatureValid = transferDeps.signatureValid;
+const { default: OutboundTransfer } = await import('../models/OutboundTransfer.js');
 const { phoneNumberController: pc } = await import('../controllers/phoneNumberController.js');
 const { signLineCallEnd } = await import('../services/lineCalls.js');
 
@@ -67,10 +69,17 @@ beforeEach(() => {
   Subscription.findOne = () => ({ populate: async () => null });
   InboundSettings.findOne = () => lean({ voicemailEnabled: true, voice: 'nova' });
   inbound = { _id: 'k1', companyId: C1, callSid: CALLER, phoneNumber: LINE, transfer: { startedAt: new Date(NOW - 120000), entryId: 'e1', entryName: 'Mme Martin', result: 'ringing' } };
-  InboundCall.findOneAndUpdate = (f) => lean(() => (f.callSid === inbound.callSid && f['transfer.entryId'] === inbound.transfer.entryId ? inbound : null));
+  const setPath = (o, k, v) => { const p = k.split('.'); const last = p.pop(); p.reduce((a, q) => (a[q] = a[q] || {}), o)[last] = v; };
+  const inboundHit = (f) => f.callSid === inbound.callSid && f['transfer.entryId'] === inbound.transfer.entryId && (f['transfer.result'] === undefined || inbound.transfer.result === f['transfer.result']);
+  InboundCall.findOneAndUpdate = (f, u) => { const hit = inboundHit(f); if (hit) for (const [k, v] of Object.entries(u.$set)) setPath(inbound, k, v); return lean(() => (hit ? inbound : null)); };
+  InboundCall.findOne = (f) => lean(() => (inboundHit(f) ? inbound : null));
   outboundRows = new Map();
+  const outHit = (f) => { const r = outboundRows.get(f.callSid); return r && r.entryId === f.entryId && (f.result === undefined || r.result === f.result) ? r : null; };
+  OutboundTransfer.findOneAndUpdate = (f, u) => { const r = outHit(f); if (r) Object.assign(r, u.$set); return lean(() => r); };
+  OutboundTransfer.findOne = (f) => lean(() => outHit(f));
   setTransferDeps({
     now: () => NOW,
+    signatureValid: () => true,
     creditFactor: async (_c, to) => (process.env.INTERNATIONAL_MINUTE_CREDITS && String(to).startsWith('+44') ? Number(process.env.INTERNATIONAL_MINUTE_CREDITS) : 1),
     findOutboundTransfer: async (callSid) => clone(outboundRows.get(callSid) || null),
     directory: async () => ({ entries: [{ _id: 'e1', name: 'Mme Martin', phone: ENTRY_FR }] }),
@@ -169,7 +178,7 @@ test('jeton émis avant cette version (sans numéro) : numéro relu sur la fiche
 // --- transfert SORTANT : reste du correspondant sans recouvrement + jambe vers la fiche -----------------------------------------
 test('sortant : reste de la jambe du correspondant débité SANS la part déjà débitée avec la jambe navigateur', async () => {
   const startedAt = new Date(NOW - 200000); // transfert 200 s avant la fin de la jambe du correspondant
-  outboundRows.set(PROSPECT_LEG, { callSid: PROSPECT_LEG, companyId: C1, browserCallSid: BROWSER_OUT, lineNumber: LINE, entryId: 'e1', entryName: 'Mme Martin', startedAt });
+  outboundRows.set(PROSPECT_LEG, { callSid: PROSPECT_LEG, companyId: C1, browserCallSid: BROWSER_OUT, lineNumber: LINE, entryId: 'e1', entryName: 'Mme Martin', result: 'ringing', startedAt });
   // Jambe navigateur enregistrée par le portail : 5 min de conversation avant le transfert.
   CALLS.push({ sid: BROWSER_OUT, companyId: C1, direction: 'outbound', from: LINE, to: PROSPECT, duration: 300, source: 'center_portal' });
   const end = { CallSid: PROSPECT_LEG, CallStatus: 'completed', CallDuration: '505', To: PROSPECT, From: LINE };
@@ -192,9 +201,9 @@ test('sortant : jeton absent ou faux -> rien (ni libération ni débit)', async 
 });
 
 test('sortant : action du <Dial> de la jambe navigateur (pas de transfert enregistré) -> rien ; correspondant non joint -> rien', async () => {
-  assert.equal(await billOutboundTransferRemainder({ CallSid: BROWSER_OUT, CallStatus: 'completed', DialCallDuration: '60' }), false);
+  assert.equal(await billOutboundTransferRemainder({ CallSid: BROWSER_OUT, CallStatus: 'completed', DialCallDuration: '60' }, { signed: true }), false);
   outboundRows.set(PROSPECT_LEG, { callSid: PROSPECT_LEG, companyId: C1, browserCallSid: BROWSER_OUT, lineNumber: LINE, startedAt: new Date(NOW - 60000) });
-  assert.equal(await billOutboundTransferRemainder({ CallSid: PROSPECT_LEG, CallStatus: 'no-answer', CallDuration: '0' }), false);
+  assert.equal(await billOutboundTransferRemainder({ CallSid: PROSPECT_LEG, CallStatus: 'no-answer', CallDuration: '0' }, { signed: true }), false);
   assert.equal(CALLS.length, 0);
 });
 
@@ -202,7 +211,7 @@ test('sortant international : la décision de crédit de la jambe navigateur est
   process.env.INTERNATIONAL_MINUTE_CREDITS = '3';
   decisions.set(BROWSER_OUT, { factor: 3, zone: 'international' });
   outboundRows.set(PROSPECT_LEG, { callSid: PROSPECT_LEG, companyId: C1, browserCallSid: BROWSER_OUT, lineNumber: LINE, startedAt: new Date(NOW - 59000) });
-  assert.equal(await billOutboundTransferRemainder({ CallSid: PROSPECT_LEG, CallStatus: 'completed', CallDuration: '400', To: ENTRY_GB }), true);
+  assert.equal(await billOutboundTransferRemainder({ CallSid: PROSPECT_LEG, CallStatus: 'completed', CallDuration: '400', To: ENTRY_GB }, { signed: true }), true);
   assert.deepEqual(decisions.get(PROSPECT_LEG), { factor: 3, zone: 'international' });
   await syncMinutesFromCalls(C1);
   assert.equal(W.minutes, 100 - 1 * 3);
@@ -222,12 +231,12 @@ test('affichage : handledBy « Transfert vers <fiche> » (+ utilisateur qui a tr
   assert.equal(CALLS[0].handledBy.name, 'Transfert vers Mme Martin'); assert.equal(String(CALLS[0].handledBy.userId), U); assert.equal(CALLS[0].handledBy.role, 'member');
   assert.deepEqual(CALLS[0].transfer, { leg: 'dial', entryName: 'Mme Martin', byUserId: U, byName: 'Léa' });
   // agent IA : pas d'identifiant utilisateur, libellé quand même ; nom de fiche relu dans l'annuaire s'il manque
-  CALLS.length = 0; inbound.transfer = { entryId: 'e1', byUserId: 'ai-agent', byName: 'Agent IA' };
+  CALLS.length = 0; inbound.transfer = { entryId: 'e1', byUserId: 'ai-agent', byName: 'Agent IA', result: 'ringing' };
   await hook({ s: stateFor(CALLER, { to: ENTRY_FR, factor: 1, userId: 'ai-agent' }) }, { CallSid: CALLER, DialCallSid: DIAL, DialCallStatus: 'completed', DialCallDuration: '30' });
   assert.equal(CALLS[0].handledBy.name, 'Transfert vers Mme Martin'); assert.equal(CALLS[0].handledBy.userId, undefined);
   // reste sortant
   outboundRows.set(PROSPECT_LEG, { callSid: PROSPECT_LEG, companyId: C1, browserCallSid: BROWSER_OUT, lineNumber: LINE, entryName: 'M. Roux', byUserId: U, byName: 'Léa', startedAt: new Date(NOW - 60000) });
-  await billOutboundTransferRemainder({ CallSid: PROSPECT_LEG, CallStatus: 'completed', CallDuration: '90', To: PROSPECT });
+  await billOutboundTransferRemainder({ CallSid: PROSPECT_LEG, CallStatus: 'completed', CallDuration: '90', To: PROSPECT }, { signed: true });
   const rem = CALLS.find((c) => c.sid === PROSPECT_LEG);
   assert.equal(rem.handledBy.name, 'Transfert vers M. Roux'); assert.equal(rem.transfer.leg, 'remainder');
   // journal de consommation (orchestrateur) : libellé additif sur la ligne
@@ -238,4 +247,50 @@ test('affichage : handledBy « Transfert vers <fiche> » (+ utilisateur qui a tr
   assert.equal(line.reference.label, 'Transfert vers M. Roux'); assert.equal(line.reference.transferLeg, 'remainder'); assert.equal(line.quantity, -1);
   const plain = buildMinutesRows({ wallet: { chargedCallSids: ['X'] }, payments: [], calls: [{ sid: 'X', duration: 30, direction: 'outbound', to: ENTRY_FR }] }).rows.find((r) => r.reference?.callSid === 'X');
   assert.ok(!('label' in plain.reference), 'appel ordinaire inchangé');
+});
+
+// --- relecture : rejeu du jeton, signature Twilio, plafonds -------------------------------------------------------------------------
+test('rejeu du jeton avec des DialCallSid inventés : 4 rejeux -> une seule ligne (la jambe consignée au passage)', async () => {
+  const s = stateFor(CALLER, { to: ENTRY_FR, factor: 1 });
+  await hook({ s }, { CallSid: CALLER, DialCallSid: DIAL, DialCallStatus: 'completed', DialCallDuration: '60' });
+  for (const c of ['6', '7', '8', '9']) await hook({ s }, { CallSid: CALLER, DialCallSid: sid(c), DialCallStatus: 'completed', DialCallDuration: '14000' });
+  assert.equal(CALLS.length, 1); assert.equal(CALLS[0].sid, DIAL); assert.equal(inbound.transfer.dialCallSid, DIAL);
+  // nouvel essai de Twilio avec la même jambe : toujours une seule ligne
+  await hook({ s }, { CallSid: CALLER, DialCallSid: DIAL, DialCallStatus: 'completed', DialCallDuration: '60' });
+  assert.equal(CALLS.length, 1);
+  await syncMinutesFromCalls(C1);
+  assert.equal(W.minutes, 99);
+});
+
+test('sans signature Twilio valide : ni résultat ni facturation (jambe <Dial> et reste du correspondant)', async () => {
+  setTransferDeps({ signatureValid: () => false });
+  await hook({ s: stateFor(CALLER, { to: ENTRY_FR, factor: 1 }) }, { CallSid: CALLER, DialCallSid: DIAL, DialCallStatus: 'completed', DialCallDuration: '60' });
+  assert.equal(inbound.transfer.result, 'ringing'); assert.equal(CALLS.length, 0);
+  outboundRows.set(PROSPECT_LEG, { callSid: PROSPECT_LEG, companyId: C1, browserCallSid: BROWSER_OUT, lineNumber: LINE, startedAt: new Date(NOW - 60000) });
+  const res = { type() { return this; }, status() { return this; }, send() {} };
+  await pc.handleLineCallEnd({ query: { t: signLineCallEnd({ secret: 'tok', callSid: PROSPECT_LEG }) }, body: { CallSid: PROSPECT_LEG, CallStatus: 'completed', CallDuration: '1' } }, res);
+  assert.equal(CALLS.length, 0, 'une requête forgée ne fige pas la jambe à 1 s');
+  assert.equal(await billOutboundTransferRemainder({ CallSid: PROSPECT_LEG, CallStatus: 'completed', CallDuration: '60' }), false, 'non signé par défaut');
+});
+
+test('signature Twilio réelle : URL publique ou hôte reçu ; fausse signature refusée', async () => {
+  const twilio = (await import('twilio')).default;
+  const body = { CallSid: CALLER, DialCallSid: DIAL };
+  const path = '/api/phone-numbers/webhooks/twilio/transfer-result?s=abc';
+  const sig = twilio.getExpectedTwilioSignature('tok', `https://orch.test${path}`, body);
+  const req = (signature, host = 'orch.test') => ({ originalUrl: path, body, headers: { 'x-twilio-signature': signature }, get: (h) => (h.toLowerCase() === 'host' ? host : h.toLowerCase() === 'x-twilio-signature' ? signature : undefined) });
+  assert.equal(realSignatureValid(req(sig)), true, 'hôte reçu');
+  assert.equal(realSignatureValid(req('faux')), false);
+  assert.equal(realSignatureValid(req(sig, 'autre.test')), false, 'autre hôte');
+  const { twilioRequestValid } = await import('../services/twilioSignature.js');
+  assert.equal(twilioRequestValid(req(sig), { authToken: 'tok', env: {} }), false, 'sans option : comportement des autres webhooks inchangé');
+});
+
+test('plafonds : durée à 4 h (MAX_CALL_SECONDS), fin de jambe jamais dans le futur', async () => {
+  const d = B.dialLegCall({ body: { DialCallSid: DIAL, DialCallStatus: 'completed', DialCallDuration: '999999' }, companyId: C1, parentCallSid: CALLER, now: NOW });
+  assert.equal(d.duration, 14400);
+  assert.equal(B.legEndOf({ Timestamp: 'Fri, 18 Nov 2033 10:00:00 +0000' }, NOW), NOW);
+  const row = { callSid: PROSPECT_LEG, companyId: C1, browserCallSid: BROWSER_OUT, lineNumber: LINE, startedAt: new Date(NOW - 10 * 3600 * 1000) };
+  const r = B.outboundRemainderCall({ body: { CallSid: PROSPECT_LEG, CallStatus: 'completed', CallDuration: '999999', Timestamp: 'Fri, 18 Nov 2033 10:00:00 +0000' }, row, now: NOW });
+  assert.equal(r.duration, 14400); assert.equal(r.endTime.getTime(), NOW);
 });

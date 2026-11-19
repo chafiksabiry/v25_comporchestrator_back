@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { CALL_SID } from './callTransfer.js';
+import { MAX_CALL_SECONDS } from './browserOutbound.js';
 
 /**
  * Facturation des appels TRANSFÉRÉS (décision du propriétaire, 18/11/2026) : après un transfert, la suite de l'appel est débitée des
@@ -13,6 +14,11 @@ import { CALL_SID } from './callTransfer.js';
  * Entrant : la jambe de l'appelant n'est pas débitée (un appel entrant n'est débité que par la jambe qui l'a pris), ni avant ni après le
  * transfert ; seule la jambe sortante vers la fiche l'est. Aucun double compte : chaque sid n'est inscrit qu'une fois (upsert
  * $setOnInsert) et débité une fois (chargedCallSids).
+ *
+ * ACCEPTÉ (décision 9A du propriétaire) : chaque jambe est arrondie séparément à la minute entamée, et un petit recouvrement (≈ 1 s) est
+ * possible entre la fin de la jambe navigateur (enregistrée par le portail à sa déconnexion) et le début du transfert (`startedAt`, posé
+ * juste avant la redirection). En sortant sans réponse de la fiche, le reste du correspondant (annonce, sonnerie, message) est facturé.
+ * Toute durée est plafonnée à MAX_CALL_SECONDS (4 h, plafond d'un appel).
  */
 export const TRANSFER_SOURCE = 'transfer';
 
@@ -33,7 +39,7 @@ export function transferDisplay({ entryName = '', byUserId = '', byName = '', le
 
 const secondsOf = (v) => {
   const n = Math.round(Number(v));
-  return Number.isFinite(n) && n > 0 ? n : 0;
+  return Number.isFinite(n) && n > 0 ? Math.min(n, MAX_CALL_SECONDS) : 0;
 };
 
 /** Document `calls` de la jambe <Dial> vers la fiche, ou null s'il n'y a rien à débiter (pas décroché, durée nulle, sid illisible). */
@@ -52,10 +58,10 @@ export function dialLegCall({ body = {}, companyId, parentCallSid, from = '', to
   };
 }
 
-/** Fin de la jambe d'après le rappel de statut (Timestamp RFC 2822 de Twilio), sinon l'heure de réception. */
+/** Fin de la jambe d'après le rappel de statut (Timestamp RFC 2822 de Twilio), jamais dans le futur ; sinon l'heure de réception. */
 export function legEndOf(body = {}, now = Date.now()) {
   const t = Date.parse(String(body.Timestamp || ''));
-  return Number.isFinite(t) ? t : now;
+  return Number.isFinite(t) ? Math.min(t, now) : now;
 }
 
 /**

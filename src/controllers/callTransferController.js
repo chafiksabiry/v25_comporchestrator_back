@@ -14,6 +14,7 @@ import { voiceIdentity } from '../services/voicePresenceService.js';
 import { normalizeOutboundDestination, maxSecondsForBalance } from '../services/browserOutbound.js';
 import { insufficientInternationalMessages, loadCallDecisions, outboundCreditFactor, recordCallDecision } from '../services/creditCoefficient.js';
 import { dialLegCall, outboundRemainderCall } from '../services/transferBilling.js';
+import { twilioRequestValid } from '../services/twilioSignature.js';
 import { languageForPhone, phrasesFor } from '../services/companyLanguage.js';
 import {
   buildTransferMessageTwiml, buildTransferResultTwiml, buildTransferTwiml, CALL_SID, entryAvailability, isReachableNow, resultOfDial,
@@ -72,6 +73,8 @@ const deps = {
   recordDecision: (d) => recordCallDecision(d),
   decisions: (sids) => loadCallDecisions(sids),
   findOutboundTransfer: (callSid) => OutboundTransfer.findOne({ callSid }).lean(),
+  /** Requête signée par Twilio (X-Twilio-Signature), URL publique ou hôte reçu. */
+  signatureValid: (req) => twilioRequestValid(req, { requestHost: true }),
   directory: (companyId) => ReceptionDirectory.findOne({ companyId }).lean(),
 };
 export const setTransferDeps = (over) => Object.assign(deps, over);
@@ -281,16 +284,35 @@ export async function transferResult(req, res) {
     const dialStatus = String(req.body?.DialCallStatus || '').toLowerCase();
     const result = resultOfDial(dialStatus);
     const companyId = oid(state.companyId);
-    const updated = await InboundCall.findOneAndUpdate(
-      { callSid, companyId, 'transfer.entryId': state.entryId },
-      { $set: { 'transfer.result': result, 'transfer.endedAt': new Date(deps.now())} },
-      { new: true }
-    ).lean();
-    // Transfert d'un appel sortant (poste de l'agent) : résultat consigné sur son verrou.
-    let outboundRow = null;
-    if (!updated) outboundRow = await OutboundTransfer.findOneAndUpdate({ callSid, companyId, entryId: state.entryId }, { $set: { result, endedAt: new Date(deps.now()) } }, { new: true }).lean().catch(() => null);
+    const dialSid = CALL_SID.test(String(req.body?.DialCallSid || '')) ? String(req.body.DialCallSid) : '';
+    // Le jeton `s` lie la requête à l'appel ; la signature Twilio prouve qu'elle vient de Twilio. Sans signature valide : aucune écriture
+    // (ni résultat ni facturation), la réponse TwiML reste servie pour ne pas bloquer l'appelant.
+    const signed = deps.signatureValid(req);
+    let updated = null; let outboundRow = null;
+    if (signed) {
+      // Passage atomique « en cours » -> résultat final, une seule fois par transfert ; le DialCallSid reçu à ce moment est consigné.
+      const at = new Date(deps.now());
+      updated = await InboundCall.findOneAndUpdate(
+        { callSid, companyId, 'transfer.entryId': state.entryId, 'transfer.result': 'ringing' },
+        { $set: { 'transfer.result': result, 'transfer.endedAt': at, 'transfer.dialCallSid': dialSid } },
+        { new: true }
+      ).lean();
+      // Transfert d'un appel sortant (poste de l'agent) : résultat consigné sur son verrou.
+      if (!updated) outboundRow = await OutboundTransfer.findOneAndUpdate({ callSid, companyId, entryId: state.entryId, result: 'ringing' }, { $set: { result, endedAt: at, dialCallSid: dialSid } }, { new: true }).lean().catch(() => null);
+    } else {
+      console.warn('reception transferResult : signature Twilio absente ou invalide, rien n’est consigné ni facturé');
+    }
+    // Déjà passé (rejeu, ou nouvel essai de Twilio) ou requête non signée : lecture seule.
+    if (!updated && !outboundRow) {
+      updated = await InboundCall.findOne({ callSid, companyId, 'transfer.entryId': state.entryId }).lean();
+      if (!updated) outboundRow = await OutboundTransfer.findOne({ callSid, companyId, entryId: state.entryId }).lean().catch(() => null);
+    }
     const t = updated?.transfer || outboundRow || {};
-    await billDialLeg({ req, state, companyId, line: updated?.phoneNumber || outboundRow?.lineNumber || '', display: { entryName: t.entryName, byUserId: t.byUserId, byName: t.byName } });
+    // Facturée seulement si c'est LA jambe consignée au passage (un DialCallSid inventé ou rejoué sous un autre sid n'inscrit rien ; un nouvel
+    // essai de Twilio avec le même sid est sans effet de plus : inscription idempotente).
+    if (signed && dialSid && t.dialCallSid === dialSid) {
+      await billDialLeg({ req, state, companyId, line: updated?.phoneNumber || outboundRow?.lineNumber || '', display: { entryName: t.entryName, byUserId: t.byUserId, byName: t.byName } });
+    }
     const settings = await InboundSettings.findOne({ companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch(() => null);
     const language = languageForPhone(updated?.phoneNumber || outboundRow?.lineNumber);
     return xml(buildTransferResultTwiml({ dialStatus, name: updated?.transfer?.entryName || outboundRow?.entryName || phrasesFor(language).transferFallbackName, settings, baseUrl: baseUrlOf(req), companyId: state.companyId, language }));
@@ -331,8 +353,11 @@ async function billDialLeg({ req, state, companyId, line, display = {} }) {
  * le reste de la jambe APRÈS la redirection est inscrit dans `calls` (la part d'avant est déjà débitée avec la jambe navigateur).
  * La décision de crédit de la jambe navigateur (même destination) est reprise. Jamais bloquant ; idempotent (rappels rejoués).
  */
-export async function billOutboundTransferRemainder(body = {}) {
+export async function billOutboundTransferRemainder(body = {}, { signed = false } = {}) {
   try {
+    // Seule une fin de jambe signée par Twilio est inscrite : une requête forgée ne peut pas « geler » la jambe à une durée choisie
+    // (l'inscription est définitive : $setOnInsert).
+    if (!signed) return false;
     const callSid = String(body.CallSid || '');
     if (!CALL_SID.test(callSid)) return false;
     const row = await deps.findOutboundTransfer(callSid);
@@ -346,4 +371,9 @@ export async function billOutboundTransferRemainder(body = {}) {
     console.error('transfert sortant (débit du reste):', error?.message || error);
     return false;
   }
+}
+
+/** Webhook line-call-end : débit du reste de la jambe du correspondant d'un transfert sortant, si la requête est signée par Twilio. */
+export async function billLineCallEnd(req) {
+  return billOutboundTransferRemainder(req?.body || {}, { signed: deps.signatureValid(req) });
 }

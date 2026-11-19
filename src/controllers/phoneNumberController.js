@@ -40,7 +40,7 @@ import { syncMinutesFromCalls } from './escrowController.js';
 import { insufficientInternationalMessages, outboundCreditFactor, outboundCreditDecision, recordCallDecision } from '../services/creditCoefficient.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket, MINUTES_INSUFFICIENT_CODE, MINUTES_INSUFFICIENT_MESSAGE, spokenLanguage, spokenRefusal, SPOKEN_REFUSALS } from '../services/browserOutbound.js';
-import { billOutboundTransferRemainder, transferResult } from './callTransferController.js';
+import { billLineCallEnd, transferResult } from './callTransferController.js';
 import { buildRecordingPlan, consentLanguageFor, consentTwiml, mapCallRecordingCallback, normalizeConsentLanguage, planForCall, verifyRecordingToken } from '../services/callRecording.js';
 import { attachRecordingTracked, firstRecordingDecision, recordDecision } from '../services/recordingStatus.js';
 import { journalForwardedCall, journalUnansweredCall } from '../services/journalCall.js';
@@ -2543,7 +2543,7 @@ class PhoneNumberController {
     }
     try { await releaseCall(req.body?.CallSid); } catch (error) { console.error('line-call-end:', error?.message || error); }
     // Jambe du correspondant d'un appel sortant transféré : le reste de l'appel après la redirection est débité (sans effet sinon).
-    await billOutboundTransferRemainder(req.body || {});
+    await billLineCallEnd(req);
     res.type('text/xml').status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response/>');
   }
 
