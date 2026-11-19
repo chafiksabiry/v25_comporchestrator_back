@@ -118,6 +118,18 @@ found = await phoneNumberService.searchTwilioNumbers({ countryCode: 'FR', locali
 assert.deepEqual(found, []);
 assert.equal(calls.length, 2);
 
+// Filet : Twilio refuse la recherche par préfixe (400) : les numéros 04 trouvés par ville sont gardés, pas d'erreur
+{
+  calls = [];
+  const byCity = [fr(4, 1), fr(4, 2)];
+  phoneNumberService.twilioClient = {
+    availablePhoneNumbers: () => ({ local: { list: async (opts) => { calls.push(opts); if (opts.contains) { const e = new Error('Invalid Contains'); e.status = 400; throw e; } return byCity; } } }),
+  };
+  found = await phoneNumberService.searchTwilioNumbers({ countryCode: 'FR', locality: 'Montpellier', limit: 50 });
+  assert.equal(calls.length, 2);
+  assert.deepEqual(found.map((n) => n.phoneNumber), byCity.map((n) => n.phoneNumber));
+}
+
 // Paris : la recherche par ville suffit (au moins 12 numéros de la zone), un seul appel
 setTwilio('FR', [Array.from({ length: 30 }, (_, i) => fr(1, i))]);
 found = await phoneNumberService.searchTwilioNumbers({ countryCode: 'FR', locality: 'Paris', limit: 50 });

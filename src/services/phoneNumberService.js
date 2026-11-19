@@ -265,8 +265,14 @@ class PhoneNumberService {
         const inZone = numbers.filter((n) => zoneOfFrenchNumber(n.phoneNumber) === zone);
         if (inZone.length < MIN_ZONE_RESULTS) {
           const prefix = frenchZonePrefix(zone);
-          const byPrefix = await listWithTimeout(buildPrefixSearchOptions({ pageSize, prefix }));
-          console.log(`✅ Found ${byPrefix.length} numbers for ${countryCode} with prefix ${prefix}`);
+          // Filet : si Twilio refuse ou dépasse le délai sur la recherche par préfixe, on garde ce que la recherche par ville a trouvé.
+          let byPrefix = [];
+          try {
+            byPrefix = await listWithTimeout(buildPrefixSearchOptions({ pageSize, prefix }));
+            console.log(`✅ Found ${byPrefix.length} numbers for ${countryCode} with prefix ${prefix}`);
+          } catch (prefixErr) {
+            console.warn(`[telephony] recherche par préfixe ${prefix} indisponible, résultats par ville conservés :`, prefixErr?.message || prefixErr);
+          }
           const seen = new Set(inZone.map((n) => n.phoneNumber));
           for (const n of byPrefix) {
             if (zoneOfFrenchNumber(n.phoneNumber) === zone && !seen.has(n.phoneNumber)) {
