@@ -13,6 +13,17 @@ import mongoose from 'mongoose';
 /** Nom convivial donné par la plateforme aux numéros qu'elle achète : sert à reconnaître l'inventaire proposable. */
 export const INVENTORY_FRIENDLY_PREFIX = 'Gig Number:';
 
+/** Réglages voix d'un numéro de l'inventaire relevés à sa prise, rétablis s'il est remis en stock (voir returnToInventory). */
+const INVENTORY_STOCK_FIELDS = ['friendlyName', 'voiceUrl', 'voiceMethod', 'voiceFallbackUrl', 'voiceApplicationSid', 'statusCallback'];
+
+const inventoryStockSnapshot = (n) => {
+  const snap = { sid: n?.sid || null, claimedAt: new Date().toISOString() };
+  for (const field of INVENTORY_STOCK_FIELDS) {
+    if (n && field in n) snap[field] = n[field] ?? '';
+  }
+  return snap;
+};
+
 class PhoneNumberService {
   constructor() {
     if (!config.telnyxApiKey) {
@@ -653,6 +664,7 @@ class PhoneNumberService {
     console.log(`🛒 Attempting to purchase number: ${phoneNumber} for gig: ${gigId}`);
 
     let purchasedNumber;
+    let inventorySnapshot = null; // réglages « stock » du numéro pris dans l'inventaire, pour l'y remettre si l'achat échoue
     try {
       // Numéro déjà dans l'inventaire Twilio : on le prend sans le racheter ; s'il est possédé mais pas proposable (déjà détenu par une entreprise,
       // sans voix ou exclu par la configuration), on refuse plutôt que de tenter un achat qui échouerait.
@@ -697,6 +709,7 @@ class PhoneNumberService {
       try {
         if (inventory?.claimable) {
           purchasedNumber = inventory.number;
+          inventorySnapshot = inventoryStockSnapshot(inventory.number);
           console.log(`📦 Numéro pris dans l'inventaire Twilio : ${phoneNumber}`);
         } else {
           purchasedNumber = await this.twilioClient.incomingPhoneNumbers.create(purchaseOptions);
@@ -794,7 +807,9 @@ class PhoneNumberService {
       ...(assignedRole ? { assignedRole, assignedAgentId: assignedAgentId || null, assignedAt: assignedAt || null } : {}),
       metadata: {
         type: type, // Save the original type (local, national, mobile)
-        ...(isTrial ? { trial: { granted: true, expiresAt: trialExpiresAt } } : {})
+        ...(isTrial ? { trial: { granted: true, expiresAt: trialExpiresAt } } : {}),
+        // Numéro venu de l'inventaire HARX (pas commandé neuf) : un achat qui échoue le REMET EN STOCK (returnToInventory), il n'est pas rendu à Twilio.
+        ...(inventorySnapshot ? { inventory: inventorySnapshot } : {})
       }
     };
 
@@ -851,6 +866,87 @@ class PhoneNumberService {
     doc.gigId = gigId;
     await doc.save();
     return doc;
+  }
+
+  /**
+   * Défait une ligne dont l'ACHAT a échoué (rollback, réconciliation d'une ligne jamais activée, nouvelle tentative d'une libération
+   * en échec) : un numéro pris dans l'inventaire HARX est remis en stock (returnToInventory) ; un numéro commandé neuf pendant
+   * l'achat est rendu à l'opérateur (deletePhoneNumber), comme avant. La résiliation par le client n'utilise PAS ce chemin.
+   */
+  async releaseFailedPurchase({ id, companyId, line } = {}) {
+    // `line` : le document déjà chargé par l'appelant (évite une relecture) ; sinon la ligne est relue.
+    const doc = line && String(line._id) === String(id) ? line
+      : id && mongoose.Types.ObjectId.isValid(String(id)) ? await PhoneNumber.findOne({ _id: id, ...(companyId ? { companyId } : {}) }) : null;
+    if (doc?.metadata?.inventory) return this.returnToInventory({ id, companyId });
+    return this.deletePhoneNumber({ id, companyId });
+  }
+
+  /**
+   * Remet en stock un numéro pris dans l'inventaire Twilio de HARX pour un achat qui a échoué. AUCUN remove() chez Twilio :
+   *  - les réglages voix (webhook, application, nom) relevés au moment de la prise sont rétablis s'ils ont changé ;
+   *  - l'abonnement mensuel éventuel de la ligne est résilié (idempotent) ;
+   *  - le document PhoneNumber créé pour la société est supprimé : le numéro redevient proposable (listClaimableInventory).
+   * Échec chez Twilio ou Stripe : lève (code LINE_RELEASE_FAILED / LINE_SUBSCRIPTION_CANCEL_FAILED), la ligne reste pour une nouvelle tentative.
+   */
+  async returnToInventory({ id, companyId } = {}) {
+    if (!id || !mongoose.Types.ObjectId.isValid(String(id))) {
+      const err = new Error('id is required');
+      err.status = 400;
+      throw err;
+    }
+    if (companyId && !mongoose.Types.ObjectId.isValid(String(companyId))) {
+      const err = new Error('Invalid companyId');
+      err.status = 400;
+      throw err;
+    }
+    const doc = await PhoneNumber.findOne({ _id: id, ...(companyId ? { companyId } : {}) });
+    if (!doc) {
+      const err = new Error('Phone number not found');
+      err.status = 404;
+      throw err;
+    }
+    const e164 = String(doc.phoneNumber || '').trim();
+    const stock = doc.metadata?.inventory || {};
+    const sid = String(stock.sid || doc.twilioId || '');
+    if (sid && this.twilioClient) {
+      try {
+        const current = await this.twilioClient.incomingPhoneNumbers(sid).fetch();
+        const restore = {};
+        for (const field of INVENTORY_STOCK_FIELDS) {
+          if (!(field in stock)) continue;
+          const wanted = stock[field] ?? '';
+          if ((current?.[field] ?? '') !== wanted) restore[field] = wanted;
+        }
+        if (Object.keys(restore).length) {
+          await this.twilioClient.incomingPhoneNumbers(sid).update(restore);
+          console.log(`📦 Réglages « stock » rétablis pour ${e164} : ${Object.keys(restore).join(', ')}`);
+        }
+      } catch (twilioErr) {
+        const status = Number(twilioErr?.status || twilioErr?.statusCode || 0);
+        const msg = String(twilioErr?.message || twilioErr || '');
+        if (status === 404 || /not\s*found|does not exist|no longer exists/i.test(msg)) {
+          console.warn(`⚠️ ${e164} n'est plus dans le compte Twilio : seule la ligne HARX est supprimée (${msg})`);
+        } else {
+          const err = new Error(`Échec de la remise en stock chez twilio: ${msg}`);
+          err.status = status >= 400 ? status : 502;
+          err.code = 'LINE_RELEASE_FAILED';
+          err.cause = twilioErr;
+          throw err;
+        }
+      }
+    }
+    try {
+      await cancelLineSubscription(doc);
+    } catch (stripeErr) {
+      const err = new Error(`Échec de la résiliation de l'abonnement de la ligne: ${stripeErr.message}`);
+      err.status = 502;
+      err.code = 'LINE_SUBSCRIPTION_CANCEL_FAILED';
+      err.cause = stripeErr;
+      throw err;
+    }
+    await PhoneNumber.deleteOne({ _id: doc._id });
+    console.log(`📦 Numéro remis dans l'inventaire Twilio (achat échoué) : ${e164}`);
+    return { message: 'Phone number returned to inventory', phoneNumber: e164, provider: 'twilio', returnedToInventory: true };
   }
 
   /**
