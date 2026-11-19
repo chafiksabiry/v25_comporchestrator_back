@@ -326,6 +326,18 @@ try {
   assert.equal(providerCalls().at(-1).headers.Prefer, undefined);
   r = await req('GET', `/inbound-emails/${C1}/${oid1}/body?purpose=ai`, { user: 'owner1' });
   assert.equal(r.status, 200); assert.equal(r.body.data.text, `${BODY_SECRET}\n\nMerci`); assert.equal(r.body.data.html, undefined); assert.match(providerCalls().at(-1).headers.Prefer, /text/);
+  // texte seul (réponse / citation) : comme l'IA, aucune partie HTML ni image lue
+  r = await req('GET', `/inbound-emails/${C1}/${oid1}/body?purpose=text`, { user: 'owner1' });
+  assert.equal(r.status, 200); assert.equal(r.body.data.html, undefined); assert.match(providerCalls().at(-1).headers.Prefer, /text/);
+  // `purpose` normalisé : une seule chaîne connue ; tableau (paramètre répété), objet ou valeur inconnue -> 400, sans appel au fournisseur
+  {
+    const before = providerCalls().length;
+    for (const q of ['purpose=ai&purpose=ai', 'purpose[]=ai', 'purpose[x]=ai', 'purpose=autre', 'purpose=']) {
+      r = await req('GET', `/inbound-emails/${C1}/${oid1}/body?${q}`, { user: 'owner1' });
+      assert.equal(r.status, 400, q); assert.equal(r.body.code, 'invalid_request', q);
+    }
+    assert.equal(providerCalls().length, before, 'aucun appel au fournisseur pour un usage invalide');
+  }
 
   // ---------- 10. purge : désactivation et déconnexion
   reset(); enable(); putConnection(C1, 'microsoft', { scopes: READ_M }); graphStd();
