@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { xmlEscape } from './inboundFlow.js';
+import { ensureEnvTwimlApp } from './twimlApps.js';
 import { normalizeDestination, buildRefusalTwiml, buildCallbackTwiml } from './voicemailCallback.js';
 import { isPremiumRate } from './outboundDestinations.js';
 import { languageForPhone } from './companyLanguage.js';
@@ -195,17 +196,10 @@ export const refusal = buildRefusalTwiml;
 export { xmlEscape };
 
 /**
- * Application TwiML des appels sortants du navigateur : retrouvée par son nom, créée si elle n'existe pas, pointée sur
- * le webhook de ce serveur. TWILIO_OUTBOUND_TWIML_APP_SID force une application existante.
+ * Application TwiML des appels sortants du navigateur, propre à CET environnement (voir twimlApps.js) : nommée
+ * « harx-callcentre-outbound (recette|production) », pointée sur le webhook de cet environnement. TWILIO_OUTBOUND_TWIML_APP_SID
+ * force une application existante (utilisée telle quelle, jamais modifiée).
  */
-let cachedAppSid = null;
-export async function ensureOutboundApp(client, voiceUrl) {
-  if (process.env.TWILIO_OUTBOUND_TWIML_APP_SID) return process.env.TWILIO_OUTBOUND_TWIML_APP_SID;
-  if (cachedAppSid) return cachedAppSid;
-  const [existing] = await client.applications.list({ friendlyName: OUTBOUND_APP_NAME, limit: 1 });
-  let app = existing;
-  if (!app) app = await client.applications.create({ friendlyName: OUTBOUND_APP_NAME, voiceUrl, voiceMethod: 'POST' });
-  else if (app.voiceUrl !== voiceUrl) app = await client.applications(app.sid).update({ voiceUrl, voiceMethod: 'POST' });
-  cachedAppSid = app.sid;
-  return cachedAppSid;
+export function ensureOutboundApp(client, { req, env = process.env } = {}) {
+  return ensureEnvTwimlApp(client, { baseName: OUTBOUND_APP_NAME, path: OUTBOUND_WEBHOOK_PATH, pinnedSid: env.TWILIO_OUTBOUND_TWIML_APP_SID, env, req });
 }
