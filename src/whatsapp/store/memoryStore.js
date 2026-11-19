@@ -58,6 +58,13 @@ export function createMemoryStore() {
       const c = conversations.get(waId);
       if (c) { c.linkedUserId = null; c.linkedAt = null; }
     },
+    async listConversations({ channel, limit = 50 } = {}) {
+      return [...conversations.values()]
+        .filter((c) => (channel === 'web' ? c.waId.startsWith('web:') : channel === 'whatsapp' ? !c.waId.startsWith('web:') : true))
+        .map((c) => ({ waId: c.waId, profileName: c.profileName || '', language: c.language?.language || null, linked: Boolean(c.linkedUserId), handoff: Boolean(c.handoff?.active), updatedAt: c.messages.at(-1)?.ts || c.createdAt, messageCount: c.messages.length, last: c.messages.length ? { role: c.messages.at(-1).role, text: c.messages.at(-1).text, ts: c.messages.at(-1).ts } : null }))
+        .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+        .slice(0, Math.min(Math.max(Number(limit) || 50, 1), 100));
+    },
     async createTicket(t) {
       const id = crypto.randomBytes(6).toString('hex');
       const doc = { id, status: 'open', createdAt: new Date(), ...t };

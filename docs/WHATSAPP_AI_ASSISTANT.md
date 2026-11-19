@@ -51,6 +51,9 @@ Même agent que sur WhatsApp (Claude, base de connaissances, langue, escalade), 
 - Les tickets d'escalade d'un visiteur web se traitent avec les mêmes routes admin ; la réponse humaine est lue par le navigateur (aucun envoi Meta).
 - Mode `WHATSAPP_HUMAN_MODE` : le message est enregistré (202), sans appel à l'API Anthropic.
 
+## Boîte de réception du support (lecture des conversations)
+Page `GET /api/whatsapp/admin/inbox` (statique, sans donnée) : saisir la clé `WHATSAPP_ADMIN_API_KEY` (gardée en sessionStorage, envoyée en en-tête `x-admin-key`). Elle liste les conversations WhatsApp et du chat du site, avec leur historique. Routes JSON : `GET /admin/conversations[?channel=web|whatsapp&limit=]` et `GET /admin/conversations/:id`. Désactivée (404) sans `WHATSAPP_ADMIN_API_KEY`.
+
 ## Base de connaissances
 `npm run whatsapp:kb -- <dossier des dépôts v25_*>` régénère routes, permissions, messages d'erreur, énumérations et textes d'interface depuis le code ; `npm run whatsapp:kb:check` signale les rubriques dont les fichiers source ont disparu. Les rubriques rédigées portent `sources:` et `verified:` ; les zones non confirmées sont listées dans `kb/coverage-and-limits.md`.
 
