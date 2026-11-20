@@ -31,12 +31,12 @@ const storedProfile = (over = {}) => ({ name: 'Ada', siren: '', representativeEm
 const saved = { log: console.log, warn: console.warn, error: console.error };
 const orig = { ...stripeService };
 const origPhone = { ...phoneNumberService };
-let calls; let profile; let stock; let twilioDown; let registrationDown; let lookups;
+let calls; let profile; let stock; let twilioDown; let inventoryDown; let registrationDown; let lookups;
 beforeEach(() => {
   console.log = () => {}; console.warn = () => {}; console.error = () => {};
   clearCompanyCache(); clearAvailabilityCache();
   calls = { sessions: 0, payments: 0, twilio: [] }; lookups = 0;
-  profile = storedProfile({ country: 'MA' }); stock = {}; twilioDown = false; registrationDown = false;
+  profile = storedProfile({ country: 'MA' }); stock = {}; twilioDown = false; inventoryDown = false; registrationDown = false;
   const products = { price_nomad: NOMAD, price_cloud: CLOUD };
   stripeService.isConfigured = () => true;
   stripeService.resolveSubscriptionPriceId = async ({ priceId }) => priceId;
@@ -47,7 +47,7 @@ beforeEach(() => {
   stripeService.createCheckoutSession = async () => { calls.sessions += 1; return { id: 'cs', url: 'https://checkout' }; };
   SubscriptionPlan.findOne = async ({ stripePriceId }) => ({ _id: `plan_${stripePriceId}`, name: 'Plan', price: 29.99, currency: 'eur', stripePriceId, metadata: products[stripePriceId] });
   CompanyPayment.create = async (doc) => { calls.payments += 1; return { _id: 'pay_1', ...doc, save: async () => {} }; };
-  phoneNumberService.listClaimableInventory = async ({ countryCode }) => { calls.twilio.push(`inv:${countryCode}`); if (twilioDown) throw new Error('down'); return []; };
+  phoneNumberService.listClaimableInventory = async ({ countryCode }) => { calls.twilio.push(`inv:${countryCode}`); if (twilioDown || inventoryDown) throw new Error('down'); return []; };
   phoneNumberService.searchTwilioNumbers = async ({ countryCode }) => {
     calls.twilio.push(`search:${countryCode}`);
     if (twilioDown) { const e = new Error('Twilio 503'); e.status = 503; throw e; }
@@ -164,6 +164,17 @@ for (const [path, body, okCode] of [['/checkout/init', INIT, 201], ['/checkout',
     assert.equal(r.body.code, AVAILABILITY_UNAVAILABLE);
     assert.equal(r.body.retryable, true);
     assert.equal(calls.payments + calls.sessions, 0);
+  });
+
+  test(`${path} Nomad Solo : inventaire Twilio illisible et recherche vide -> 503 ${AVAILABILITY_UNAVAILABLE} réessayable, jamais 409, rien en cache`, async () => {
+    inventoryDown = true;
+    const r = await post(path, body());
+    assert.equal(r.code, 503, JSON.stringify(r.body));
+    assert.deepEqual([r.body.code, r.body.retryable], [AVAILABILITY_UNAVAILABLE, true]);
+    assert.equal(calls.payments + calls.sessions, 0);
+    // Inventaire revenu, numéros en stock : rien n'était mis en cache, le paiement s'ouvre.
+    inventoryDown = false; stock = { MA: true }; clearCompanyCache();
+    assert.equal((await post(path, body())).code, okCode);
   });
 
   test(`${path} autre offre (CLOUD) : aucune vérification des numéros`, async () => {

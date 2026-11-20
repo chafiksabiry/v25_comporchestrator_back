@@ -37,10 +37,12 @@ export async function countryAvailability(countryCode, { service = phoneNumberSe
 
   let value;
   let inventory = [];
+  let inventoryError = null;
   try {
     inventory = await service.listClaimableInventory({ countryCode: cc, limit: 1 });
   } catch (err) {
     console.warn('[telephony] disponibilité : inventaire Twilio indisponible:', err?.message);
+    inventoryError = err;
   }
   if (inventory.length) {
     value = { available: true };
@@ -53,6 +55,13 @@ export async function countryAvailability(countryCode, { service = phoneNumberSe
       else if (isNotServed(err)) value = { available: false, reason: 'no_inventory' };
       else throw err;
     }
+  }
+  // Inventaire illisible : des numéros déjà possédés peuvent exister. Seul un « disponible » trouvé par la recherche est sûr ;
+  // sinon c'est une panne (réessayable, jamais mise en cache), pas « aucun numéro ».
+  if (inventoryError && !value.available) {
+    const err = new Error(`Twilio inventory lookup failed: ${inventoryError?.message || 'unknown error'}`);
+    err.code = 'INVENTORY_LOOKUP_FAILED';
+    throw err;
   }
   cache.set(cc, { value, expires: now() + (value.available ? AVAILABLE_TTL_MS : UNAVAILABLE_TTL_MS) });
   return value;
