@@ -18,7 +18,7 @@ const { SubscriptionPlan } = await import('../models/SubscriptionPlan.js');
 const { default: CompanyPayment } = await import('../models/CompanyPayment.js');
 const { clearCompanyCache } = await import('../middleware/companyScope.js');
 const { phoneNumberService } = await import('../services/phoneNumberService.js');
-const { clearAvailabilityCache, soloCheckoutEligibility, NO_NUMBERS_IN_COUNTRY, RESIDENCE_COUNTRY_REQUIRED, AVAILABILITY_UNAVAILABLE } = await import('../services/numberAvailability.js');
+const { clearAvailabilityCache, countryAvailability, soloCheckoutEligibility, NO_NUMBERS_IN_COUNTRY, RESIDENCE_COUNTRY_REQUIRED, AVAILABILITY_UNAVAILABLE } = await import('../services/numberAvailability.js');
 
 const C1 = '64b0000000000000000000c1';
 const NOMAD = { harx_product: 'callcenter', callcenter_tier: 'nomad_solo' };
@@ -139,6 +139,29 @@ for (const [path, body, okCode] of [['/checkout/init', INIT, 201], ['/checkout',
     clearCompanyCache(); clearAvailabilityCache(); twilioDown = false; registrationDown = true;
     r = await post(path, body());
     assert.equal(r.code, 503);
+    assert.equal(r.body.retryable, true);
+    assert.equal(calls.payments + calls.sessions, 0);
+  });
+
+  test(`${path} Nomad Solo : stock épuisé alors que le cache d'affichage dit « disponible » -> 409, aucun paiement`, async () => {
+    // L'écran a vu des numéros au Maroc (réponse mise en cache pour l'affichage)...
+    stock = { MA: true };
+    assert.deepEqual(await countryAvailability('MA'), { available: true });
+    // ...puis le stock s'épuise : la garde relit sans cache et refuse.
+    stock = {};
+    const r = await post(path, body());
+    assert.equal(r.code, 409, JSON.stringify(r.body));
+    assert.equal(r.body.code, NO_NUMBERS_IN_COUNTRY);
+    assert.equal(calls.payments + calls.sessions, 0);
+  });
+
+  test(`${path} Nomad Solo : panne de l'opérateur alors que le cache dit « disponible » -> 503 ${AVAILABILITY_UNAVAILABLE}`, async () => {
+    stock = { MA: true };
+    await countryAvailability('MA');
+    twilioDown = true;
+    const r = await post(path, body());
+    assert.equal(r.code, 503, JSON.stringify(r.body));
+    assert.equal(r.body.code, AVAILABILITY_UNAVAILABLE);
     assert.equal(r.body.retryable, true);
     assert.equal(calls.payments + calls.sessions, 0);
   });
