@@ -240,6 +240,21 @@ export function withDialTimeLimit(xml, seconds) {
   return String(xml).replace(/<Dial\b([^>]*)>/g, (m, attrs) => (/\btimeLimit=/.test(attrs) ? m : `<Dial${attrs} timeLimit="${Math.min(n, GRACE_MAX_CALL_SECONDS)}">`));
 }
 
+/**
+ * Toutes les échéances qui répondent à `filter`, par lots de `limit` (tri `sort`), jusqu'au bout : un lot déjà traité est exclu du suivant
+ * (`_id` hors de ceux vus), donc ni des échéances en échec répété ni des appels en grâce n'empêchent jamais les autres d'être traités.
+ * Garde-fou : `maxBatches` lots par passage.
+ */
+async function eachBatch(Model, filter, sort, limit, fn, maxBatches = 40) {
+  const seen = [];
+  for (let b = 0; b < maxBatches; b += 1) {
+    const rows = await Model.find(seen.length ? { ...filter, _id: { $nin: seen } } : filter).sort(sort).limit(limit).lean();
+    if (!rows?.length) return;
+    for (const row of rows) { seen.push(row._id); await fn(row); }
+    if (rows.length < limit) return;
+  }
+}
+
 /** État et durée d'un appel chez Twilio (client existant), borné à 3 s ; null si illisible. */
 async function twilioCallOf(client, callSid) {
   if (!client) return null;
@@ -255,8 +270,13 @@ async function twilioCallOf(client, callSid) {
  */
 export async function extendGraceCalls({ Model = CallGraceDeadline, Wallet = MinutesCompany, client = null, now = Date.now(), limit = 50 } = {}) {
   const out = { extended: 0, exhausted: 0, finished: 0 };
-  const due = await Model.find({ status: 'scheduled', reservationStatus: { $in: ['held', 'none'] }, extensible: true, graceStartsAt: { $lte: new Date(now + EXTEND_LEAD_MS) }, deadline: { $gt: new Date(now) } }).sort({ graceStartsAt: 1 }).limit(limit).lean();
-  for (const row of due || []) {
+  const base = { status: 'scheduled', reservationStatus: { $in: ['held', 'none'] }, extensible: true, deadline: { $gt: new Date(now) } };
+  // D'abord les appels PAYÉS en fin de tranche (pas encore en grâce), puis ceux déjà en grâce ; chaque groupe jusqu'au bout (par lots).
+  const groups = [
+    { ...base, graceStartsAt: { $gt: new Date(now), $lte: new Date(now + EXTEND_LEAD_MS) } },
+    { ...base, graceStartsAt: { $lte: new Date(now) } },
+  ];
+  const handle = async (row) => {
     const graceStart = new Date(row.graceStartsAt).getTime();
     // Avant la grâce seulement (une fois par tranche) : un appel fini chez Twilio dont le compte rendu s'est perdu est clôturé ici.
     if (graceStart > now) {
@@ -264,12 +284,12 @@ export async function extendGraceCalls({ Model = CallGraceDeadline, Wallet = Min
       if (call && FINISHED.has(String(call.status || ''))) {
         await endGraceCall(row.callSid, { durationSeconds: Number(call.duration) || 0, Model, Wallet });
         out.finished += 1;
-        continue;
+        return;
       }
     }
     const factor = Number(row.creditFactor) > 1 ? Number(row.creditFactor) : 1;
     const { amount } = await reserveCredits({ companyId: row.companyId, need: (TRANCHE_SECONDS / 60) * factor, creditFactor: factor, Wallet });
-    if (amount <= 0) { out.exhausted += 1; continue; }
+    if (amount <= 0) { out.exhausted += 1; return; }
     const add = Math.floor(amount / factor) * 60 * 1000;
     const used = Math.min(GRACE_SECONDS, (Number(row.graceUsedSeconds) || 0) + Math.max(0, Math.round((now - graceStart) / 1000)));
     const graceStartsAt = new Date(Math.max(graceStart, now) + add);
@@ -280,7 +300,8 @@ export async function extendGraceCalls({ Model = CallGraceDeadline, Wallet = Min
       { new: true }
     );
     if (done) out.extended += 1; else await unreserveCredits({ companyId: row.companyId, amount, Wallet });
-  }
+  };
+  for (const filter of groups) await eachBatch(Model, filter, { graceStartsAt: 1 }, limit, handle);
   return out;
 }
 
@@ -432,28 +453,27 @@ export async function sweepGraceDeadlines({ Model = CallGraceDeadline, Wallet = 
   try { Object.assign(result, await extendGraceCalls({ Model, Wallet, client, now, limit })); } catch (error) { log.warn?.('[minutes-grace] prolongation en échec :', error?.message || error); }
   // Filet : réservation encore tenue plus de 2 min après la coupure (compte rendu de fin perdu, serveur redémarré) : DÉBIT d'abord
   // (durée lue chez Twilio, sinon le temps couvert réservé), puis réserve rendue.
-  const orphans = await Model.find({ reservationStatus: 'held', deadline: { $lte: new Date(now - ORPHAN_RELEASE_MS) } }).sort({ deadline: 1 }).limit(limit).lean();
-  for (const row of orphans || []) {
+  await eachBatch(Model, { reservationStatus: 'held', deadline: { $lte: new Date(now - ORPHAN_RELEASE_MS) } }, { deadline: 1 }, limit, async (row) => {
     try {
       const call = await twilioCallOf(client, row.callSid);
       const known = call && FINISHED.has(String(call.status || '')) && Number.isFinite(Number(call.duration));
       if (await endGraceCall(row.callSid, { durationSeconds: known ? Number(call.duration) : row.coveredSeconds || 0, Model, Wallet })) result.released += 1;
     } catch (error) { log.warn?.('[minutes-grace] réservation orpheline non rendue :', error?.message || error); }
-  }
+  });
   if (!client) return result;
   const at = new Date(now);
   const staleBefore = new Date(now - STALE_CLAIM_MS);
-  const due = await Model.find({
+  await eachBatch(Model, {
     deadline: { $lte: at },
     $or: [{ status: 'scheduled' }, { status: 'hanging', claimedAt: { $lte: staleBefore } }],
-  }).sort({ deadline: 1 }).limit(limit).lean();
-  for (const row of due) {
+  }, { deadline: 1 }, limit, async (row) => {
+    // Prise conditionnée à l'échéance LUE : une prolongation concurrente (autre instance) qui l'a repoussée gagne, l'appel n'est pas coupé.
     const claimed = await Model.findOneAndUpdate(
-      { _id: row._id, status: row.status, ...(row.status === 'hanging' ? { claimedAt: row.claimedAt } : {}) },
+      { _id: row._id, status: row.status, deadline: new Date(row.deadline), ...(row.status === 'hanging' ? { claimedAt: row.claimedAt } : {}) },
       { $set: { status: 'hanging', claimedAt: at }, $inc: { attempts: 1 } },
       { new: true }
     );
-    if (!claimed) continue; // prise par une autre instance
+    if (!claimed) return; // prise par une autre instance, ou échéance repoussée entre-temps
     try {
       await client.calls(claimed.callSid).update({ status: 'completed' });
       await Model.updateOne({ _id: claimed._id }, { $set: { status: 'hung_up', hungUpAt: at, lastError: '' } });
@@ -463,14 +483,14 @@ export async function sweepGraceDeadlines({ Model = CallGraceDeadline, Wallet = 
       if (callAlreadyOver(error)) {
         await Model.updateOne({ _id: claimed._id }, { $set: { status: 'ended', lastError: '' } });
         result.ended += 1;
-        continue;
+        return;
       }
       const giveUp = (claimed.attempts || 1) >= MAX_HANGUP_ATTEMPTS;
       await Model.updateOne({ _id: claimed._id }, { $set: { status: giveUp ? 'failed' : 'scheduled', claimedAt: null, lastError: String(error?.message || error).slice(0, 300) } });
       if (giveUp) result.failed += 1; else result.retried += 1;
       log.warn?.(`[minutes-grace] coupure en échec (${claimed.attempts} essai(s)) :`, error?.message || error);
     }
-  }
+  });
   return result;
 }
 
