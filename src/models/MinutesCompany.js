@@ -37,6 +37,11 @@ const minutesCompanySchema = new mongoose.Schema({
     type: [String],
     default: []
   },
+  /** B.1 : crédits réservés par les appels en cours (réservation atomique au démarrage, rendue à la fin / au débit). Disponible = minutes − réserve. */
+  reservedCredits: {
+    type: Number,
+    default: 0
+  },
   /** B.1 : crédits NON facturés (grâce de 5 minutes, ou appels simultanés au-delà du solde) : trace seulement, jamais débitée. */
   graceWaivedMinutes: {
     type: Number,

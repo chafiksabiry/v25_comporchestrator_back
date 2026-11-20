@@ -9,7 +9,8 @@ import { createVoiceToken } from '../services/voiceTokenService.js';
 import { voiceIdentity } from '../services/voicePresenceService.js';
 import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
-import { committedCreditsWithin, coveredSecondsFor, graceLimitSeconds, scheduleGraceDeadline } from '../services/minutesGrace.js';
+import { graceLimitSeconds, startGraceCall } from '../services/minutesGrace.js';
+import { LINE_CALL_END_PATH, signLineCallEnd } from '../services/lineCalls.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { isPremiumRate, MESSAGES as DESTINATION_MESSAGES } from '../services/outboundDestinations.js';
 import { freshMinutesBalance, maxSecondsForBalance, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, spokenLanguage, spokenRefusal } from '../services/browserOutbound.js';
@@ -182,17 +183,19 @@ export const voicemailController = {
       const maxSeconds = maxSecondsForBalance(minutes, { creditFactor });
       // Refus international : même texte que sur tous les canaux, dans la langue de la ligne appelante (en / fr / es).
       if (!maxSeconds) return send(creditFactor > 1 ? spokenRefusal('insufficient_minutes_international', spokenLanguage(line.phoneNumber), { credits: creditFactor }) : buildRefusalTwiml('Solde de minutes insuffisant.'));
-      // B.1 : 5 minutes de grâce gratuites une fois le solde couvert écoulé, puis coupure (timeLimit + échéance enregistrée, coupée par le serveur).
-      // Couvert = solde moins les crédits réservés par les appels en cours de l'entreprise (0 : grâce dès le début).
-      const dbUp = mongoose.connection.readyState === 1;
-      const committed = dbUp ? await committedCreditsWithin({ companyId: String(vm.companyId), client: phoneNumberService.twilioClient }, 1000) : 0;
-      const covered = Math.min(coveredSecondsFor({ balance: minutes, committed, creditFactor }), maxSeconds);
-      if (dbUp) try {
-        await scheduleGraceDeadline({ callSid: req.body?.CallSid, companyId: String(vm.companyId), path: 'voicemail_callback', coveredSeconds: covered, creditFactor });
-      } catch (graceErr) {
-        console.error('[minutes-grace] échéance du rappel non enregistrée :', graceErr?.message || graceErr);
+      // B.1 : réservation atomique de la part du solde de ce rappel (les appels en cours ont déjà la leur), échéance de coupure (couvertes +
+      // 5 minutes de grâce) coupée par le serveur ; timeLimit = couvertes + 5 min. Fin du rappel (action du <Dial>) : réservation rendue.
+      const callSid = String(req.body?.CallSid || '').trim();
+      let covered = maxSeconds;
+      if (mongoose.connection.readyState === 1 && callSid) {
+        try {
+          covered = (await startGraceCall({ callSid, companyId: String(vm.companyId), path: 'voicemail_callback', creditFactor, maxCoveredSeconds: maxSeconds })).coveredSeconds;
+        } catch (graceErr) {
+          console.error('[minutes-grace] échéance du rappel non enregistrée :', graceErr?.message || graceErr);
+        }
       }
-      return send(buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds: graceLimitSeconds(covered) }));
+      const action = callSid ? `https://${req.get('host')}${LINE_CALL_END_PATH}?t=${signLineCallEnd({ secret: config.twilioAuthToken, callSid })}` : null;
+      return send(buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds: graceLimitSeconds(covered), action }));
     } catch (error) {
       console.error('[voicemail] callbackVoice failed:', error.message);
       return send(buildRefusalTwiml('Une erreur est survenue.'));

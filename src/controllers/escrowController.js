@@ -26,7 +26,7 @@ import { clearExpiredRetractions, reverseSaleCommission } from '../services/retr
 import { planCreditCharging } from '../services/creditCoefficient.js';
 import { guardCompanyAccess } from '../middleware/companyGuard.js';
 import { guardAgentSelf } from '../middleware/agentGuard.js';
-import { debitMinutesClamped } from '../services/minutesGrace.js';
+import { debitMinutesClamped, releaseForChargedKeys } from '../services/minutesGrace.js';
 
 const OWNER_ONLY = { ownerOnly: true };
 const OWN_COMPANY_OWNER = { ownerOnly: true, ownCompany: true };
@@ -907,6 +907,8 @@ export async function chargeCallMinutes(companyId, call) {
   // B.1 : débit atomique et idempotent (chargedCallSids), borné par le solde : jamais sous zéro, la grâce n'est pas facturée.
   const durationMinutes = Math.ceil(durationSeconds / 60);
   const done = await debitMinutesClamped({ companyId, keys: [callKey], cost: durationMinutes, seconds: durationSeconds });
+  // B.1 : la réservation de l'appel est rendue au moment de son débit (idempotent).
+  if (done?.wallet) await releaseForChargedKeys([callKey]);
   return Boolean(done?.wallet);
 }
 
@@ -970,7 +972,9 @@ export async function syncMinutesFromCalls(companyId) {
     if (newKeys.length === 0) return;
     // Garde atomique : si une lecture concurrente a déjà inscrit l'un de ces appels, on ne débite pas deux fois
     // (les appels restants seront repris à la lecture suivante). B.1 : débit borné par le solde (jamais sous zéro, grâce gratuite).
-    await debitMinutesClamped({ companyId, keys: newKeys, cost: addedMinutes, seconds: addedSeconds, batch: true });
+    const done = await debitMinutesClamped({ companyId, keys: newKeys, cost: addedMinutes, seconds: addedSeconds, batch: true });
+    // B.1 : les réservations des appels débités sont rendues au moment du débit (idempotent).
+    if (done?.wallet) await releaseForChargedKeys(newKeys);
   } catch (err) {
     console.error('[syncMinutesFromCalls] error:', err.message);
   }
