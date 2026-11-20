@@ -763,3 +763,38 @@ test('prise de coupure : une prolongation entre la lecture et la prise gagne, l\
   assert.equal([...DL.rows.values()].find((x) => x.callSid === sid('q')).status, 'scheduled');
 });
 
+
+// ---------------------------------------------------------------- robustesse du passage : erreur par appel, ordre et rythme
+
+test('prolongation : un appel qui lève une erreur à chaque passage ne bloque pas les suivants', async () => {
+  const t0 = Date.parse('2026-11-20T16:00:00Z');
+  W.minutes = 0; W.reservedCredits = 0;
+  // Appel en erreur, trié en premier (grâce la plus ancienne) : sa société lève à chaque lecture du portefeuille.
+  await DL.updateOne({ callSid: sid('r') }, { $setOnInsert: { callSid: sid('r'), companyId: C2, path: 'inbound', startedAt: new Date(t0 - MIN), creditFactor: 1, coveredSeconds: 0, reservedCredits: 0, reservationStatus: 'none', extensible: true, status: 'scheduled', graceStartsAt: new Date(t0 - MIN), deadline: new Date(t0 + 4 * MIN) } }, { upsert: true });
+  await G.startGraceCall({ callSid: sid('s'), companyId: C1, path: 'inbound', now: t0 }); // rien de libre : grâce
+  W.minutes = 10;
+  const realFindOne = MinutesCompany.findOne;
+  MinutesCompany.findOne = (f) => { if (String(f?.companyId) === C2) throw new Error('lecture impossible'); return realFindOne(f); };
+  for (const dt of [10_000, 20_000]) {
+    const r = await G.sweepGraceDeadlines({ client: twilio, now: t0 + dt });
+    assert.ok(r.errors >= 1, 'l\'erreur est comptée, pas propagée');
+  }
+  assert.equal([...DL.rows.values()].find((x) => x.callSid === sid('s')).coveredSeconds, 600, 'l\'appel suivant est prolongé malgré tout');
+});
+
+test('rythme : lectures Twilio lentes => les coupures dues passent quand même dans le même passage, lectures 5 par 5', async () => {
+  const t0 = Date.parse('2026-11-20T17:00:00Z');
+  W.minutes = 100; W.reservedCredits = 0;
+  await G.scheduleGraceDeadline({ callSid: sid('t'), companyId: C1, path: 'inbound', coveredSeconds: 0, now: t0 - 6 * MIN }, { Model: DL }); // coupure due
+  for (let i = 0; i < 10; i += 1) await G.startGraceCall({ callSid: `CA${String(i + 100).padStart(32, '0')}`, companyId: C1, path: 'outbound_browser', now: t0 - 9 * MIN - 30_000 }); // fin de tranche
+  W.minutes = 300; // du solde libre pour une tranche de plus chacun
+  const slow = fakeTwilio();
+  let inFlight = 0; let peak = 0;
+  slow.calls = ((orig) => (id) => ({ ...orig(id), fetch: async () => { inFlight += 1; peak = Math.max(peak, inFlight); await new Promise((res) => setTimeout(res, 300)); inFlight -= 1; return { sid: id, status: 'in-progress' }; } }))(slow.calls);
+  const started = Date.now();
+  const r = await G.sweepGraceDeadlines({ client: slow, now: t0 });
+  assert.equal(r.hungUp, 1); assert.equal(slow.hangups[0].callSid, sid('t'));
+  assert.equal(r.extended, 10);
+  assert.equal(peak, 5, 'lectures Twilio 5 à la fois');
+  assert.ok(Date.now() - started < 1500, `${Date.now() - started} ms (une à une : 3 s)`);
+});
