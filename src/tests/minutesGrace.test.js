@@ -58,12 +58,16 @@ function memoryDeadlines() {
   let n = 0;
   const matches = (row, f) => Object.entries(f).every(([k, v]) => {
     if (k === '$or') return v.some((x) => matches(row, x));
-    if (k === '_id') return row._id === v;
+    if (k === '_id') return v && typeof v === 'object' && '$nin' in v ? !v.$nin.includes(row._id) : row._id === v;
     if (k === 'childSids') return (row.childSids || []).includes(v);
     if (v && typeof v === 'object' && !(v instanceof Date)) {
-      if ('$lte' in v) return row[k] != null && new Date(row[k]).getTime() <= new Date(v.$lte).getTime();
-      if ('$gt' in v) return row[k] != null && new Date(row[k]).getTime() > new Date(v.$gt).getTime();
-      if ('$in' in v) return v.$in.includes(row[k]);
+      const t = row[k] == null ? null : new Date(row[k]).getTime();
+      return Object.entries(v).every(([op, x]) => {
+        if (op === '$lte') return t != null && t <= new Date(x).getTime();
+        if (op === '$gt') return t != null && t > new Date(x).getTime();
+        if (op === '$in') return x.includes(row[k]);
+        return false;
+      });
     }
     if (v instanceof Date) return row[k] instanceof Date && row[k].getTime() === v.getTime();
     return String(row[k]) === String(v);
@@ -85,7 +89,18 @@ function memoryDeadlines() {
       if (u.$setOnInsert && !u.$set && !u.$inc && !u.$addToSet) return { modifiedCount: 0 };
       apply(row, u); return { modifiedCount: 1 };
     },
-    find(f) { const out = [...rows.values()].filter((r) => matches(r, f)).sort((a, b) => a.deadline - b.deadline); return lean(out.map(clone)); },
+    // Tri et limite appliqués comme en base (le balayeur pagine par lots).
+    find(f) {
+      let out = [...rows.values()].filter((r) => matches(r, f));
+      const q = {
+        sort(spec) { const [[key, dir]] = Object.entries(spec || { deadline: 1 }); out = out.sort((a, b) => (new Date(a[key]) - new Date(b[key])) * dir); return q; },
+        limit(n) { out = out.slice(0, n); return q; },
+        select() { return q; },
+        lean: async () => out.map(clone),
+        then(res, rej) { return Promise.resolve(out.map(clone)).then(res, rej); },
+      };
+      return q;
+    },
     findOne(f) { const r = [...rows.values()].find((x) => matches(x, f)); return lean(clone(r) || null); },
     async findOneAndUpdate(f, u) { const r = [...rows.values()].find((x) => matches(x, f)); if (!r) return null; apply(r, u); return clone(r); },
   };
@@ -712,5 +727,39 @@ test('entrant transféré : débit total = durée secrétaire + durée transfér
   await G.sweepGraceDeadlines({ client: null, now: Date.now() + 60 * MIN });
   await syncMinutesFromCalls(C1);
   assert.equal(W.minutes, 22);
+});
+
+// ---------------------------------------------------------------- relecture avant production : famine du balayeur, prise de coupure
+
+test('famine : 60 appels en grâce sans solde + 1 appel payé en fin de tranche => l\'appel payé est prolongé', async () => {
+  const t0 = Date.parse('2026-11-20T14:00:00Z');
+  W.minutes = 0; W.reservedCredits = 0;
+  for (let i = 0; i < 60; i += 1) await G.startGraceCall({ callSid: `CA${String(i).padStart(32, '0')}`, companyId: C1, path: 'inbound', now: t0 }); // rien de libre : grâce
+  W.minutes = 30;
+  await G.startGraceCall({ callSid: sid('p'), companyId: C1, path: 'outbound_browser', now: t0 - 9 * MIN }); // tranche de 10 min qui finit à t0 + 1 min
+  W.minutes = 20; // le solde libre restant ne suffit qu'à une tranche
+  const paid = () => [...DL.rows.values()].find((x) => x.callSid === sid('p'));
+  const r = await G.sweepGraceDeadlines({ client: twilio, now: t0 + 30_000 });
+  assert.equal(paid().coveredSeconds, 1200, 'prolongé en premier, malgré 60 appels en grâce triés avant lui');
+  assert.ok(r.extended >= 1);
+});
+
+test('prise de coupure : une prolongation entre la lecture et la prise gagne, l\'appel n\'est pas coupé', async () => {
+  const t0 = Date.parse('2026-11-20T15:00:00Z');
+  await G.scheduleGraceDeadline({ callSid: sid('q'), companyId: C1, path: 'inbound', coveredSeconds: 60, now: t0 }, { Model: DL }); // coupure à t0 + 6 min
+  const orig = DL.findOneAndUpdate;
+  let raced = false;
+  CallGraceDeadline.findOneAndUpdate = async (f, u, o) => {
+    if (!raced && u?.$set?.status === 'hanging') { // une autre instance prolonge l'appel juste avant notre prise
+      raced = true;
+      const row = [...DL.rows.values()].find((x) => x.callSid === sid('q'));
+      row.deadline = new Date(row.deadline.getTime() + 10 * MIN); row.graceStartsAt = new Date(row.graceStartsAt.getTime() + 10 * MIN);
+    }
+    return orig(f, u, o);
+  };
+  const r = await G.sweepGraceDeadlines({ client: twilio, now: t0 + 6 * MIN });
+  assert.equal(raced, true);
+  assert.equal(r.hungUp, 0); assert.equal(twilio.hangups.length, 0);
+  assert.equal([...DL.rows.values()].find((x) => x.callSid === sid('q')).status, 'scheduled');
 });
 
