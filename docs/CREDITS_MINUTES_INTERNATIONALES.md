@@ -35,7 +35,7 @@ Ordre de lecture : **métadonnée Stripe `international_minute_credits` du produ
 | Pré-contrôle (jeton, vérification de destination) | 402 `MINUTES_INSUFFICIENT_FOR_DESTINATION` avec `creditsPerMinute` et message « Insufficient balance for an international call: 1 minute = N credits. » (+ `messageFr`) si le solde ne couvre pas une minute internationale |
 | Rappel de messagerie vocale, transfert d'appel | durée maximale = solde / N ; refus clair avec N |
 
-Refus parlé du webhook (en/fr/es) : « Solde insuffisant pour un appel international : 1 minute = N crédits. » Un appel qui traverse le solde reste possible (solde négatif toléré comme aujourd'hui).
+Refus parlé du webhook (en/fr/es) : « Solde insuffisant pour un appel international : 1 minute = N crédits. » **B.1** : un appel qui traverse le solde dispose de 5 minutes de grâce gratuites puis est coupé ; le solde ne passe plus sous zéro (débit borné, voir `src/services/minutesGrace.js`).
 
 **Un seul point de résolution du coefficient** (`coefficientOf`, `creditCoefficient.js`) pour le débit, `charge-call`, le webhook, le pré-contrôle, le rappel, le transfert et la lecture Facturation : forfait (métadonnée → environnement → 1), et **sans forfait lisible (`limits` null) : l'environnement, sinon 1**.
 
@@ -43,7 +43,7 @@ Refus parlé du webhook (en/fr/es) : « Solde insuffisant pour un appel internat
 
 **Messages d'insuffisance identiques en en / fr / es sur tous les canaux** (un seul texte par langue, `SPOKEN_REFUSALS.*.insufficient_minutes_international`) : refus parlé du webhook et du rappel (langue de la ligne), pré-contrôle (`message`, `messageFr`, `messageEs`), transfert (`message` en français, `messageEn`, `messageEs`), décision d'appel.
 
-**Dépassement possible** : le solde peut passer sous zéro de quelques crédits (jusqu'à N − 1 par appel, davantage si plusieurs appels internationaux partent simultanément avec le même solde, ou si un appel est compté après coup) ; comme aujourd'hui pour le solde en minutes, aucun blocage rétroactif.
+**Plus de dépassement (B.1)** : le débit est borné par le solde (jamais sous zéro) ; la part non couverte (grâce de 5 minutes, arrondi, appels simultanés) est consignée dans `graceWaivedMinutes` et n'est jamais facturée.
 
 ## Lecture pour l'écran Facturation
 

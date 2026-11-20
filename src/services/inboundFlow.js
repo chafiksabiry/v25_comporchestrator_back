@@ -64,17 +64,20 @@ export const ringTimeoutOf = (settings) => normalize(settings).ringTimeoutSecond
 export const wrapResponse = (body) => `<?xml version="1.0" encoding="UTF-8"?><Response>${body}</Response>`;
 
 /** Sonnerie du mobile du titulaire : le numéro de la ligne est l'identifiant d'appelant (l'action revient avec leg=mobile). */
-export function buildMobileDialTwiml({ number, ringSeconds = 25, callerId = '', resultUrl }) {
+export function buildMobileDialTwiml({ number, ringSeconds = 25, callerId = '', resultUrl, timeLimit = 0 }) {
   const caller = String(callerId).replace(/[^+\d]/g, '');
   const callerAttr = caller ? ` callerId="${caller}"` : '';
-  return `<Dial timeout="${ringSeconds}" answerOnBridge="true" action="${xmlEscape(`${resultUrl}?leg=mobile`)}" method="POST"${callerAttr}><Number>${xmlEscape(number)}</Number></Dial>`;
+  return `<Dial timeout="${ringSeconds}" answerOnBridge="true" action="${xmlEscape(`${resultUrl}?leg=mobile`)}" method="POST"${callerAttr}${limitAttr(timeLimit)}><Number>${xmlEscape(number)}</Number></Dial>`;
 }
 
 /**
  * TwiML (corps de <Response>) d'un appel entrant réel.
  * `mobile` ({ number, ringSeconds }, voir reach.mobileTarget) + `linePhone` : sans navigateur présent, le mobile sonne avant le répondeur.
  */
-export function buildInboundTwiml({ settings, baseUrl, companyId, identities = [], from = '', resultUrl, voicemailUrls, mobile = null, linePhone = '', solo = false, withGreeting = true, recording = null, language = 'fr' } = {}) {
+/** B.1 : attribut timeLimit d'un <Dial> entrant (secondes couvertes + grâce) ; absent si 0 ou illisible (comportement d'avant). */
+const limitAttr = (timeLimit) => (Number.isFinite(Number(timeLimit)) && Number(timeLimit) > 0 ? ` timeLimit="${Math.floor(Number(timeLimit))}"` : '');
+
+export function buildInboundTwiml({ settings, baseUrl, companyId, identities = [], from = '', resultUrl, voicemailUrls, mobile = null, linePhone = '', solo = false, withGreeting = true, recording = null, language = 'fr', timeLimit = 0 } = {}) {
   const s = normalize(settings);
   const hello = withGreeting ? greeting(s, baseUrl, companyId, language) : '';
   if (identities.length) {
@@ -83,9 +86,9 @@ export function buildInboundTwiml({ settings, baseUrl, companyId, identities = [
     // Appel enregistré (`recording`, voir callRecording.js) : annonce à l'appelant avant la sonnerie, puis <Dial record>.
     const announce = recording ? recording.say : '';
     const record = recording ? recording.attrs : '';
-    return `${hello}${announce}<Dial timeout="${s.ringTimeoutSeconds}" answerOnBridge="true" action="${xmlEscape(resultUrl)}" method="POST" callerId="${callerId}"${record}>${clients}</Dial>`;
+    return `${hello}${announce}<Dial timeout="${s.ringTimeoutSeconds}" answerOnBridge="true" action="${xmlEscape(resultUrl)}" method="POST" callerId="${callerId}"${limitAttr(timeLimit)}${record}>${clients}</Dial>`;
   }
-  if (mobile) return `${hello}${buildMobileDialTwiml({ ...mobile, callerId: linePhone, resultUrl })}`;
+  if (mobile) return `${hello}${buildMobileDialTwiml({ ...mobile, callerId: linePhone, resultUrl, timeLimit })}`;
   if (s.voicemailEnabled) return `${hello}${voicemailRecord(s, baseUrl, companyId, voicemailUrls, solo, language)}`;
   const p = PHRASES[normalizeCompanyLanguage(language)];
   return `${hello}${say(solo ? p.soloNoAgent : p.noAgent, 'nova', language)}<Hangup/>`;

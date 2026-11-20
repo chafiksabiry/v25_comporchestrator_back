@@ -44,6 +44,7 @@ import { billExpiredTrialLines, reconcilePendingMonthlyLines, terminateSuspended
 import { syncPlanMetadataFromStripe } from './src/services/planMetadataSync.js';
 import { retryFailedAnalyses } from './src/services/voicemailAnalysis.js';
 import { applyMailOwnership } from './src/services/mailOwnershipMigration.js';
+import { startGraceSweeper } from './src/services/minutesGrace.js';
 
 const app = express();
 
@@ -220,6 +221,12 @@ setTimeout(() => { syncPlanMetadataFromStripe(); }, 30 * 1000);
 setInterval(() => { syncPlanMetadataFromStripe(); }, 6 * 60 * 60 * 1000);
 // Pilote agent IA : purge planifiée des enregistrements du banc d'écoute arrivés à échéance (CNIL, 6 mois au plus).
 setInterval(() => { purgeExpiredBenchRecordings().catch((e) => console.error('[ai-inbound] purge planifiée :', e?.message || e)); }, 6 * 60 * 60 * 1000);
+
+// B.1 : coupure des appels arrivés au bout de leurs 5 minutes de grâce (échéances en base : un redémarrage n'en perd aucune).
+startGraceSweeper({
+  getClient: async () => (await import('./src/services/phoneNumberService.js')).phoneNumberService.twilioClient,
+  isReady: () => mongoose.connection.readyState === 1,
+});
 
 // Messages du répondeur dont l'analyse IA a échoué pour une cause transitoire (délai dépassé, réseau, 5xx) : reprise différée, 3 reprises au plus.
 setInterval(() => {

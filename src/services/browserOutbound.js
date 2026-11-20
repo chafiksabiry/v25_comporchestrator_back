@@ -4,6 +4,7 @@ import { ensureEnvTwimlApp } from './twimlApps.js';
 import { normalizeDestination, buildRefusalTwiml, buildCallbackTwiml } from './voicemailCallback.js';
 import { isPremiumRate } from './outboundDestinations.js';
 import { languageForPhone } from './companyLanguage.js';
+import { graceLimitSeconds } from './minutesGrace.js';
 
 /**
  * Appel SORTANT depuis le navigateur (clavier de « Mon poste » de Nomad Solo).
@@ -163,12 +164,13 @@ export function spokenRefusal(key, language = 'en', params = {}) {
  * Décision de numérotation, sans accès réseau : renvoie la consigne TwiML à donner à Twilio.
  * `line` est la ligne Twilio de l'entreprise utilisée comme numéro appelant ; `minutes` le solde de minutes.
  */
-export function decideOutboundCall({ to, line, subscribed, minutes, recording = null, action = null, creditFactor = 1 }) {
+export function decideOutboundCall({ to, line, subscribed, minutes, recording = null, action = null, creditFactor = 1, coveredSeconds = null }) {
   if (!to) return { ok: false, message: 'Numéro non autorisé.', key: 'number_not_allowed' };
   if (!subscribed) return { ok: false, message: 'Aucun abonnement actif.', key: 'no_subscription' };
   if (!line) return { ok: false, message: 'Aucune ligne disponible pour appeler.', key: 'no_line' };
-  // Toute minute commencée est facturée en entier : il faut au moins une minute entière, et l'appel est coupé quand
-  // les minutes entières du solde sont écoulées, pour que le solde ne passe jamais sous zéro.
+  // Toute minute commencée est facturée en entier : il faut au moins une minute entière pour démarrer. Quand les minutes entières du
+  // solde sont écoulées, 5 minutes de grâce gratuites (B.1), puis coupure : `maxSeconds` = secondes couvertes par le solde,
+  // `limitSeconds` = couvertes + grâce (timeLimit du <Dial>, filet natif de Twilio ; le serveur coupe aussi à l'échéance enregistrée).
   const maxSeconds = maxSecondsForBalance(minutes, { creditFactor });
   if (!maxSeconds) {
     // Appel international à N crédits la minute : le solde ne couvre pas une minute internationale (message clair avec N).
@@ -176,7 +178,11 @@ export function decideOutboundCall({ to, line, subscribed, minutes, recording = 
       ? { ok: false, message: internationalInsufficientText('fr', creditFactor), key: 'insufficient_minutes_international', creditFactor }
       : { ok: false, message: 'Solde de minutes insuffisant.', key: 'insufficient_minutes' };
   }
-  return { ok: true, maxSeconds, twiml: buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds, recording, action }) };
+  // B.1 : `coveredSeconds` = part du solde RÉSERVÉE pour cet appel (startGraceCall) ; 0 : tout est déjà réservé par les appels en cours,
+  // il démarre directement dans ses 5 minutes de grâce. Le démarrage, lui, ne dépend que du solde (refus à zéro). Absent : solde entier.
+  const covered = coveredSeconds == null ? maxSeconds : Math.max(0, Math.min(Math.floor(Number(coveredSeconds) || 0), maxSeconds));
+  const limitSeconds = graceLimitSeconds(covered);
+  return { ok: true, maxSeconds: covered, limitSeconds, twiml: buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds: limitSeconds, recording, action }) };
 }
 
 /**

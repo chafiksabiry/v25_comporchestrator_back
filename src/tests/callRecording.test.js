@@ -99,7 +99,7 @@ const rec = decideOutboundCall({ to: '+33612345678', line, subscribed: true, min
 assert.equal(rec.ok, true);
 assert.match(rec.twiml, /<Dial [^>]*record="record-from-answer-dual"[^>]*recordingStatusCallback="[^"]*call-recording\?t=/);
 assert.match(rec.twiml, /<Number url="https:\/\/orch\.test\/api\/phone-numbers\/webhooks\/twilio\/call-announce\?l=en" method="POST">\+33612345678<\/Number>/, "annonce jouée à l'appelé avant la mise en relation");
-assert.match(rec.twiml, /timeLimit="600"/, 'la limite de durée reste appliquée');
+assert.match(rec.twiml, /timeLimit="900"/, 'la limite de durée reste appliquée (B.1 : couvert + 5 min de grâce)');
 assert.equal(decideOutboundCall({ to: '+33612345678', line, subscribed: true, minutes: 0, recording: plan }).ok, false, 'refus inchangé : pas de solde');
 
 // ---------------------------------------------------------------- TwiML entrant

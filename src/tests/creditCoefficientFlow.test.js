@@ -112,10 +112,10 @@ test('coefficient invalide : 1 + avertissement', async () => {
   }
 });
 
-test('appel traversant le solde : 61 s international à 4 = 8 crédits, solde négatif autorisé comme aujourd\'hui', async () => {
+test('appel traversant le solde : 61 s international à 4 = 8 crédits ; B.1 : le solde s\'arrête à 0, les 3 crédits de grâce ne sont pas facturés', async () => {
   process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(5); CALLS = [callDoc('INT', 61, { to: GB })];
   await syncMinutesFromCalls(C1);
-  assert.equal(N.minutes, -3);
+  assert.equal(N.minutes, 0); assert.equal(N.graceWaivedMinutes, 3);
 });
 
 test('entreprise sans ligne : pays inconnu => 1 crédit par minute (comportement historique) + avertissement', async () => {
@@ -212,7 +212,8 @@ const webhook = (to) => {
   return hit('handleBrowserOutbound', { To: to, From: `client:${identity}`, CompanyId: C1, Ticket: BO.signOutboundTicket({ secret: process.env.TWILIO_AUTH_TOKEN, companyId: C1, identity }), CallSid: 'CA1' });
 };
 const said = (xml) => (String(xml).match(/<Say[^>]*>([^<]*)<\/Say>/) || [])[1];
-const timeLimit = (xml) => Number((String(xml).match(/timeLimit="(\d+)"/) || [])[1]);
+// B.1 : le timeLimit du <Dial> ajoute 5 minutes de grâce aux secondes couvertes ; on compare ici les secondes COUVERTES.
+const timeLimit = (xml) => Number((String(xml).match(/timeLimit="(\d+)"/) || [])[1]) - 300;
 
 test('webhook, coefficient 4 : durée = solde / 4 pour l\'international, solde entier pour le national et l\'UE', async () => {
   process.env.INTERNATIONAL_MINUTE_CREDITS = '4';
