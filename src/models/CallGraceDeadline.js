@@ -30,6 +30,8 @@ const callGraceDeadlineSchema = new mongoose.Schema({
   reservationStatus: { type: String, enum: ['pending', 'held', 'released', 'none'], default: 'none' },
   /** Le balayeur peut encore réserver une tranche de plus (faux : plus de solde libre à la dernière tentative, la grâce suit). */
   extensible: { type: Boolean, default: false },
+  /** Secondes de grâce déjà passées (un appel peut sortir de la grâce quand du solde se libère) : 5 min gratuites au plus par appel. */
+  graceUsedSeconds: { type: Number, default: 0 },
   releasedAt: { type: Date, default: null },
   /** Jambes enfants vues (appel entrant décroché dans le navigateur) : le portail ne connaît que la sienne. */
   childSids: { type: [String], default: [] },

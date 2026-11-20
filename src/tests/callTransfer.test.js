@@ -175,12 +175,17 @@ assert.equal(r.code, 502); assert.equal(calls[0].transfer.startedAt, null);
 failUpdate = false;
 
 // transfert réussi vers la fiche (numéro relu en base)
+const graceEnds = [];
+setTransferDeps({ endGrace: async (sid, opts) => { graceEnds.push({ sid, opts }); } });
 r = await call(ctl.transfer, { body: { callSid: SID_CHILD, entryId: E_ONE, to: '+33100000000', phone: '+33100000000' } });
 assert.equal(r.code, 200, JSON.stringify(r.body)); assert.equal(r.body.data.result, 'ringing'); assert.equal(r.body.data.name, 'Mme Martin');
 assert.equal(updates.length, 1); assert.equal(updates[0].sid, SID_PARENT, 'la jambe de l’appelant est mise à jour, pas celle du navigateur');
 assert.match(updates[0].twiml, /Je vous passe Mme Martin/); assert.match(updates[0].twiml, /\+33612345678/); assert.ok(!updates[0].twiml.includes('+33100000000'), 'jamais un numéro envoyé par le navigateur');
 // solde 30 min, jambe navigateur en cours depuis 4 min 52 s (5 minutes entamées, pas encore enregistrée) : 25 min disponibles
-assert.match(updates[0].twiml, /timeLimit="1800"/); // B.1 : 1500 s couvertes + 300 s de grâce assert.match(updates[0].twiml, /callerId="\+33140000000"/);
+assert.match(updates[0].twiml, /timeLimit="1800"/); // B.1 : 1500 s couvertes + 300 s de grâce
+assert.match(updates[0].twiml, /callerId="\+33140000000"/);
+// B.1 : la partie secrétaire est débitée et clôturée au transfert (durée écoulée de la jambe navigateur), clés parent + jambe navigateur
+assert.deepEqual(graceEnds, [{ sid: SID_PARENT, opts: { durationSeconds: 292, keys: [SID_CHILD] } }]);
 assert.match(updates[0].twiml, /transfer-result\?s=/);
 { const s0 = new URL(updates[0].twiml.match(/action="([^"]+)"/)[1].replace(/&amp;/g, '&')).searchParams.get('s'); const v = T.verifyTransferState({ secret: 'tok', token: s0, now: NOW }); assert.equal(v.to, '+33612345678', 'numéro composé signé pour le débit'); assert.equal(v.factor, 1); }
 const t0 = calls[0].transfer;

@@ -379,7 +379,7 @@ test('3 appels sortants simultanés sur 10 min de solde : la somme des coupures 
   const rows = [...DL.rows.values()];
   assert.equal(rows.length, 3);
   assert.deepEqual(rows.map((x) => x.coveredSeconds), [600, 0, 0], 'le premier réserve tout le solde, les suivants démarrent en grâce');
-  assert.deepEqual(limits, [900, 300, 300], 'timeLimit = couvertes + 5 min');
+  assert.deepEqual(limits, [900, 900, 900], 'timeLimit = filet large (solde total + 5 min) ; le serveur coupe précisément');
   const total = rows.reduce((n, x) => n + spoken(x), 0);
   assert.ok(total <= 600 + 3 * 300, `total ${total} s`);
 });
@@ -405,7 +405,9 @@ test('refus seulement à solde nul : solde > 0 entièrement réservé => l\'appe
   W.minutes = 2;
   await outbound(sid('9'));
   const xml = await outbound(sid('a'));
-  assert.match(xml, /<Dial/); assert.equal(timeLimit(xml), 300);
+  assert.match(xml, /<Dial/); assert.equal(timeLimit(xml), 420, 'filet large : solde total (2 min) + 5 min');
+  const row = [...DL.rows.values()].find((x) => x.callSid === sid('a'));
+  assert.equal(row.coveredSeconds, 0); assert.equal(row.deadline.getTime() - row.startedAt.getTime(), 300_000, 'grâce dès le début (rien de libre)');
   W.minutes = 0;
   assert.doesNotMatch(await outbound(sid('b')), /<Dial/);
 });
@@ -559,7 +561,7 @@ test('100 min de solde : l\'agent 1 décroche, l\'agent 2 appelle 30 s après : 
   const xml = await outbound(sid('2'));
   const row = [...DL.rows.values()].find((x) => x.callSid === sid('2'));
   assert.equal(row.coveredSeconds, 600); assert.equal(row.graceStartsAt.getTime() - row.startedAt.getTime(), 600_000);
-  assert.equal(timeLimit(xml), 90 * 60 + 300, 'filet large : solde libre au démarrage (90 min) + 5 min');
+  assert.equal(timeLimit(xml), 100 * 60 + 300, 'filet large : solde total (100 min) + 5 min');
   assert.equal(W.reservedCredits, 20);
 });
 
@@ -568,7 +570,7 @@ test('Nomad Solo, 10 min : 4 appels entrants successifs de 12 min sans portail =
   await inbound(sid('3'));
   const row = [...DL.rows.values()][0]; const t0 = row.startedAt.getTime();
   await G.sweepGraceDeadlines({ client: twilio, now: t0 + 541_000 }); // 60 s avant la fin de la tranche : rien de libre
-  assert.equal(DL.rows.get(row._id).extensible, false);
+  assert.equal(DL.rows.get(row._id).coveredSeconds, 600, 'rien de libre : pas de tranche de plus');
   assert.equal(twilio.hangups.length, 0);
   // Fin réelle à 12 min (compte rendu signé de fin de sonnerie) : débit borné au solde, puis réserve rendue.
   await G.endGraceCall(sid('3'), { durationSeconds: 720 });
@@ -590,7 +592,7 @@ test('appel long : prolongé tranche par tranche par le balayeur tant que du sol
   r = await G.sweepGraceDeadlines({ client: twilio, now: t0 + 19 * MIN + 1000 });
   assert.equal(r.extended, 1); assert.equal(row().coveredSeconds, 1500, 'dernière tranche partielle (5 min)');
   r = await G.sweepGraceDeadlines({ client: twilio, now: t0 + 24 * MIN + 1000 });
-  assert.equal(r.exhausted, 1); assert.equal(row().extensible, false);
+  assert.equal(r.exhausted, 1); assert.equal(row().extensible, true, 'nouvel essai à chaque passage');
   assert.equal(row().graceStartsAt.getTime(), t0 + 25 * MIN); assert.equal(row().deadline.getTime(), t0 + 30 * MIN);
   r = await G.sweepGraceDeadlines({ client: twilio, now: t0 + 30 * MIN });
   assert.equal(r.hungUp, 1); assert.deepEqual(twilio.hangups, [{ callSid: sid('7'), status: 'completed' }]);
@@ -642,5 +644,73 @@ test('startGrace qui pend : le webhook répond en moins de 3 s, sans échéance,
   assert.match(await inbound(sid('d')), /<Dial [^>]*timeLimit="900"/);
   assert.ok(Date.now() - t0 < 3000);
   assert.equal(DL.rows.size, 0); assert.equal(W.reservedCredits || 0, 0);
+});
+
+// ---------------------------------------------------------------- 4e revue : manque momentané de solde libre
+
+test('8 min de solde : A réserve 8, B démarre sans rien de libre (grâce), A raccroche à 30 s => B est prolongé, pas coupé à 5 min', async () => {
+  W.minutes = 8; const t0 = Date.parse('2026-11-20T11:00:00Z');
+  await G.startGraceCall({ callSid: sid('1'), companyId: C1, path: 'inbound', now: t0 });
+  await G.startGraceCall({ callSid: sid('2'), companyId: C1, path: 'outbound_browser', now: t0 });
+  const b = () => [...DL.rows.values()].find((x) => x.callSid === sid('2'));
+  assert.equal(b().coveredSeconds, 0); assert.equal(b().deadline.getTime(), t0 + 5 * MIN);
+  let r = await G.sweepGraceDeadlines({ client: twilio, now: t0 + 20_000 });
+  assert.equal(r.exhausted >= 1, true, 'rien de libre : nouvel essai plus tard');
+  await G.endGraceCall(sid('1'), { durationSeconds: 30 }); // A raccroche : 1 min débitée, 8 rendues
+  assert.equal(W.minutes, 7); assert.equal(W.reservedCredits, 0);
+  r = await G.sweepGraceDeadlines({ client: twilio, now: t0 + 40_000 });
+  assert.equal(r.extended, 1);
+  assert.equal(b().coveredSeconds, 420); assert.equal(W.reservedCredits, 7);
+  assert.equal(b().graceStartsAt.getTime(), t0 + 40_000 + 7 * MIN, 'sort de la grâce : couvert à partir de maintenant');
+  assert.equal(b().deadline.getTime() - b().graceStartsAt.getTime(), 260_000, 'grâce restante : 5 min − 40 s déjà passées');
+  r = await G.sweepGraceDeadlines({ client: twilio, now: t0 + 5 * MIN });
+  assert.equal(r.hungUp, 0); assert.equal(twilio.hangups.length, 0, 'pas coupé à 5 min');
+});
+
+test('en cours de prolongation : A à 9 min sans solde libre, B raccroche => A est prolongé', async () => {
+  W.minutes = 20; const t0 = Date.parse('2026-11-20T12:00:00Z');
+  await G.startGraceCall({ callSid: sid('3'), companyId: C1, path: 'outbound_browser', now: t0 });
+  await G.startGraceCall({ callSid: sid('4'), companyId: C1, path: 'inbound', now: t0 + MIN });
+  const a = () => [...DL.rows.values()].find((x) => x.callSid === sid('3'));
+  let r = await G.sweepGraceDeadlines({ client: twilio, now: t0 + 9 * MIN + 1000 });
+  assert.equal(a().coveredSeconds, 600, 'rien de libre à 9 min');
+  await G.endGraceCall(sid('4'), { durationSeconds: 30 }); // B raccroche : 1 min débitée, 10 rendues
+  r = await G.sweepGraceDeadlines({ client: twilio, now: t0 + 9 * MIN + 11_000 });
+  assert.equal(r.extended, 1); assert.equal(a().coveredSeconds, 600 + 540, 'tranche suivante = le libre (9 min)');
+  assert.equal(a().graceStartsAt.getTime(), t0 + 19 * MIN);
+});
+
+test('réserve trop basse : remontée seulement si l\'écart persiste deux passages ; trop haute : baissée tout de suite', async () => {
+  W.minutes = 20;
+  await G.startGraceCall({ callSid: sid('5'), companyId: C1, path: 'inbound' }); // tient 10
+  W.reservedCredits = 4;
+  await G.reconcileReserves({});
+  assert.equal(W.reservedCredits, 4, 'premier passage : on attend');
+  await G.reconcileReserves({});
+  assert.equal(W.reservedCredits, 10, 'écart persistant : remontée');
+  W.reservedCredits = 15;
+  await G.reconcileReserves({});
+  assert.equal(W.reservedCredits, 10);
+});
+
+test('entrant transféré : débit total = durée secrétaire + durée transférée, une seule fois chacune (jamais sous la clé du parent)', async () => {
+  W.minutes = 30; W.chargedCallSids = [];
+  const P = sid('6'); const C = sid('7'); const D = sid('8');
+  await G.startGraceCall({ callSid: P, companyId: C1, path: 'inbound' });
+  // Transfert après 2 min 05 de conversation avec la secrétaire (clôture faite par le contrôleur de transfert).
+  await G.endGraceCall(P, { durationSeconds: 125, keys: [C] });
+  assert.equal(W.minutes, 27); assert.equal(W.reservedCredits, 0);
+  // Jambe navigateur enregistrée par le portail (sid C), jambe transférée (sid D, 4 min 10), journal du parent (sid P) : seul D est débité.
+  CALLS = [
+    { sid: C, duration: 126, companyId: C1, direction: 'inbound', from: CALLER, to: LINE },
+    { sid: D, duration: 250, companyId: C1, direction: 'outbound', to: '+33612345678', from: LINE, source: 'transfer' },
+    { sid: P, duration: 400, companyId: C1, direction: 'inbound', from: CALLER, to: LINE },
+  ];
+  await syncMinutesFromCalls(C1);
+  assert.equal(W.minutes, 30 - 3 - 5, 'secrétaire 3 min + transfert 5 min');
+  // Le balayeur ne débite plus rien sous la clé du parent (échéance clôturée).
+  await G.sweepGraceDeadlines({ client: null, now: Date.now() + 60 * MIN });
+  await syncMinutesFromCalls(C1);
+  assert.equal(W.minutes, 22);
 });
 

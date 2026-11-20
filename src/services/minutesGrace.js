@@ -217,7 +217,7 @@ export async function startGraceCall({ callSid, companyId, path, creditFactor = 
   const coveredSeconds = Math.floor(amount / factor) * 60;
   const plan = planGrace({ coveredSeconds, now });
   await Model.updateOne({ callSid: sid, reservationStatus: 'pending' }, { $set: {
-    reservationStatus: amount > 0 ? 'held' : 'none', reservedCredits: amount, coveredSeconds, extensible: amount > 0,
+    reservationStatus: amount > 0 ? 'held' : 'none', reservedCredits: amount, coveredSeconds, extensible: true,
     graceStartsAt: plan.graceStartsAt, deadline: plan.deadline, expiresAt: new Date(plan.deadline.getTime() + RETENTION_MS),
   } });
   const availableSeconds = Math.floor(available / factor) * 60;
@@ -247,43 +247,53 @@ async function twilioCallOf(client, callSid) {
 }
 
 /**
- * Prolongation : ~60 s avant la fin de la tranche d'un appel EN COURS, une tranche de plus est réservée si du solde est libre (grâce et
- * coupure repoussées d'autant). Rien de libre : l'appel n'est plus prolongé, sa grâce de 5 min commence à la fin de la tranche. Un appel
- * déjà terminé chez Twilio (compte rendu perdu) est débité de sa durée puis sa réserve est rendue.
+ * Prolongation, à chaque passage du balayeur, de tout appel EN COURS (`scheduled`) dont la tranche finit dans ~60 s ou qui est déjà en
+ * grâce : une tranche de plus est réservée si du solde est libre (même momentanément manquant auparavant), la grâce et la coupure sont
+ * repoussées et l'appel SORT de la grâce. La grâce déjà passée est décomptée (`graceUsedSeconds`) : 5 min gratuites au plus par appel,
+ * en une ou plusieurs fois. Rien de libre : rien ne change, nouvel essai au passage suivant. Un appel déjà terminé chez Twilio (compte
+ * rendu perdu, vu avant sa grâce) est débité de sa durée puis sa réserve est rendue.
  */
 export async function extendGraceCalls({ Model = CallGraceDeadline, Wallet = MinutesCompany, client = null, now = Date.now(), limit = 50 } = {}) {
   const out = { extended: 0, exhausted: 0, finished: 0 };
-  const due = await Model.find({ status: 'scheduled', reservationStatus: 'held', extensible: true, graceStartsAt: { $lte: new Date(now + EXTEND_LEAD_MS) } }).sort({ graceStartsAt: 1 }).limit(limit).lean();
+  const due = await Model.find({ status: 'scheduled', reservationStatus: { $in: ['held', 'none'] }, extensible: true, graceStartsAt: { $lte: new Date(now + EXTEND_LEAD_MS) }, deadline: { $gt: new Date(now) } }).sort({ graceStartsAt: 1 }).limit(limit).lean();
   for (const row of due || []) {
-    const call = await twilioCallOf(client, row.callSid);
-    if (call && FINISHED.has(String(call.status || ''))) {
-      await endGraceCall(row.callSid, { durationSeconds: Number(call.duration) || 0, Model, Wallet });
-      out.finished += 1;
-      continue;
+    const graceStart = new Date(row.graceStartsAt).getTime();
+    // Avant la grâce seulement (une fois par tranche) : un appel fini chez Twilio dont le compte rendu s'est perdu est clôturé ici.
+    if (graceStart > now) {
+      const call = await twilioCallOf(client, row.callSid);
+      if (call && FINISHED.has(String(call.status || ''))) {
+        await endGraceCall(row.callSid, { durationSeconds: Number(call.duration) || 0, Model, Wallet });
+        out.finished += 1;
+        continue;
+      }
     }
     const factor = Number(row.creditFactor) > 1 ? Number(row.creditFactor) : 1;
     const { amount } = await reserveCredits({ companyId: row.companyId, need: (TRANCHE_SECONDS / 60) * factor, creditFactor: factor, Wallet });
-    if (amount > 0) {
-      const add = Math.floor(amount / factor) * 60 * 1000;
-      const graceStartsAt = new Date(new Date(row.graceStartsAt).getTime() + add);
-      const deadline = new Date(new Date(row.deadline).getTime() + add);
-      const done = await Model.findOneAndUpdate(
-        { _id: row._id, status: 'scheduled', reservationStatus: 'held', graceStartsAt: new Date(row.graceStartsAt) },
-        { $inc: { reservedCredits: amount, coveredSeconds: add / 1000 }, $set: { graceStartsAt, deadline, expiresAt: new Date(deadline.getTime() + RETENTION_MS) } },
-        { new: true }
-      );
-      if (done) out.extended += 1; else await unreserveCredits({ companyId: row.companyId, amount, Wallet });
-    } else {
-      await Model.updateOne({ _id: row._id, extensible: true }, { $set: { extensible: false } });
-      out.exhausted += 1;
-    }
+    if (amount <= 0) { out.exhausted += 1; continue; }
+    const add = Math.floor(amount / factor) * 60 * 1000;
+    const used = Math.min(GRACE_SECONDS, (Number(row.graceUsedSeconds) || 0) + Math.max(0, Math.round((now - graceStart) / 1000)));
+    const graceStartsAt = new Date(Math.max(graceStart, now) + add);
+    const deadline = new Date(graceStartsAt.getTime() + Math.max(0, GRACE_SECONDS - used) * 1000);
+    const done = await Model.findOneAndUpdate(
+      { _id: row._id, status: 'scheduled', graceStartsAt: new Date(row.graceStartsAt) },
+      { $inc: { reservedCredits: amount, coveredSeconds: add / 1000 }, $set: { reservationStatus: 'held', graceUsedSeconds: used, graceStartsAt, deadline, expiresAt: new Date(deadline.getTime() + RETENTION_MS) } },
+      { new: true }
+    );
+    if (done) out.extended += 1; else await unreserveCredits({ companyId: row.companyId, amount, Wallet });
   }
   return out;
 }
 
-/** Réserve auto-réparatrice : reservedCredits = somme des échéances `held` de l'entreprise (crash entre deux écritures, course). */
+/**
+ * Réserve auto-réparatrice (crash entre deux écritures, course). Ordre : portefeuilles d'abord, échéances ensuite (une réservation qui se
+ * termine entre les deux lectures n'apparaît jamais deux fois). Réserve PLUS GRANDE que la somme des échéances `held` : baissée tout de
+ * suite (compare-and-set sur la valeur lue). Plus PETITE : remontée seulement si l'écart persiste deux passages de suite (jamais sur une
+ * lecture prise au milieu d'une réservation). Démarrage `pending` récent : l'entreprise attend.
+ */
+const lowStreak = new Map();
 export async function reconcileReserves({ Model = CallGraceDeadline, Wallet = MinutesCompany, now = Date.now(), limit = 200 } = {}) {
   let fixed = 0;
+  const wallets = await Wallet.find({ reservedCredits: { $gt: 0 } }).select('companyId reservedCredits').limit(limit).lean();
   const held = await Model.find({ reservationStatus: { $in: ['held', 'pending'] } }).limit(5000).lean();
   const byCompany = new Map();
   for (const r of held || []) {
@@ -293,7 +303,6 @@ export async function reconcileReserves({ Model = CallGraceDeadline, Wallet = Mi
     if (r.reservationStatus === 'pending' && now - new Date(r.startedAt).getTime() < PENDING_GRACE_MS) e.pending = true;
     byCompany.set(k, e);
   }
-  const wallets = await Wallet.find({ reservedCredits: { $gt: 0 } }).select('companyId reservedCredits').limit(limit).lean();
   const ids = new Set([...(wallets || []).map((w) => String(w.companyId)), ...byCompany.keys()]);
   for (const companyId of ids) {
     const e = byCompany.get(companyId) || { sum: 0, pending: false };
@@ -301,9 +310,15 @@ export async function reconcileReserves({ Model = CallGraceDeadline, Wallet = Mi
     const w = (wallets || []).find((x) => String(x.companyId) === companyId) || await Wallet.findOne({ companyId });
     if (!w) continue;
     const cur = Math.max(0, Number(w.reservedCredits) || 0);
-    if (cur === e.sum) continue;
+    if (cur === e.sum) { lowStreak.delete(companyId); continue; }
+    if (cur < e.sum) {
+      // Réserve trop basse : seulement si le même écart a été vu au passage précédent.
+      const seen = lowStreak.get(companyId);
+      lowStreak.set(companyId, e.sum);
+      if (seen !== e.sum) continue;
+    }
     const done = await Wallet.findOneAndUpdate({ companyId: w.companyId, reservedCredits: reservedIs(Number(w.reservedCredits) || 0) }, { $set: { reservedCredits: e.sum } }, { new: true });
-    if (done) { fixed += 1; console.warn(`[minutes-grace] réserve recalculée pour l'entreprise ${companyId} : ${cur} → ${e.sum}`); }
+    if (done) { fixed += 1; lowStreak.delete(companyId); console.warn(`[minutes-grace] réserve recalculée pour l'entreprise ${companyId} : ${cur} → ${e.sum}`); }
   }
   return fixed;
 }

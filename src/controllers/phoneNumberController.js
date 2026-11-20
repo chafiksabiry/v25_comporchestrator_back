@@ -2648,10 +2648,10 @@ class PhoneNumberController {
       }
       // Trace de la décision (ligne retenue, zone, facteur) : le débit la relit au lieu de reclasser l'appel.
       if (credit.coefficient > 1) await recordCallDecision({ sid: String(req.body?.CallSid || ''), companyId, factor: creditFactor, zone: credit.zone, line: callerLine?.phoneNumber || '' });
-      // B.1 : échéance + réservation atomique d'une tranche (10 min) du solde libre ; le balayeur prolonge tranche par tranche tant que du
-      // solde est libre, puis 5 min de grâce et coupure à l'heure. timeLimit du <Dial> : filet large = solde libre au démarrage + 5 min.
-      const grace = await this.startGrace({ callSid: req.body?.CallSid, companyId, path: 'outbound_browser', creditFactor });
-      if (grace) decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, creditFactor, action: decisionAction, coveredSeconds: grace.availableSeconds });
+      // B.1 : échéance + réservation atomique d'une tranche (10 min) du solde libre ; le balayeur prolonge tranche par tranche dès que du
+      // solde est libre (même après un manque momentané), sinon 5 min de grâce et coupure à l'heure. timeLimit du <Dial> : filet large =
+      // solde TOTAL (maxSecondsForBalance) + 5 min, 4 h au plus ; c'est le serveur qui coupe précisément.
+      await this.startGrace({ callSid: req.body?.CallSid, companyId, path: 'outbound_browser', creditFactor });
       console.log(`📞 Appel sortant du navigateur (entreprise ${companyId}) vers ${to.slice(0, 6)}… depuis ${callerLine.phoneNumber}${recording ? ' (enregistré)' : ''}`);
       return send(decision.twiml);
     } catch (error) {
@@ -2937,10 +2937,10 @@ class PhoneNumberController {
       // B.1 : l'appel peut être pris (navigateur, file, mobile) : réservation atomique de sa part du solde (4 h au plus, les appels en cours
       // ont déjà la leur) et coupure à l'échéance (couvertes + 5 minutes de grâce). Rien de libre : grâce dès le début.
       const canRing = line?.companyId && callSid && route.first !== 'voicemail' && minutesState && !noMinutes;
-      const grace = canRing ? await this.startGrace({ callSid, companyId: line.companyId, path: 'inbound', creditFactor: 1 }) : null;
-      // Filet large de Twilio sur chaque <Dial> de l'appel (navigateurs, file, mobile) : solde libre au démarrage + 5 min (4 h au plus) ;
-      // c'est le balayeur qui coupe à l'heure. Échéance non posée : solde lu + 5 min.
-      const graceLimit = grace ? graceLimitSeconds(grace.availableSeconds) : canRing ? graceLimitSeconds(maxSecondsForBalance(minutesState.minutes)) : 0;
+      if (canRing) await this.startGrace({ callSid, companyId: line.companyId, path: 'inbound', creditFactor: 1 });
+      // Filet large de Twilio sur chaque <Dial> de l'appel (navigateurs, file, mobile) : solde TOTAL + 5 min (4 h au plus) ; c'est le
+      // balayeur qui coupe précisément (et prolonge l'appel dès que du solde se libère).
+      const graceLimit = canRing ? graceLimitSeconds(maxSecondsForBalance(minutesState.minutes)) : 0;
       const where = queueRoute?.kind === 'menu' ? "file d'attente : menu vocal" : route.first === 'browser' ? `sonnerie chez ${identities.length} conseiller(s)${route.mobileNext ? ', puis le mobile du titulaire' : ''}` : route.first === 'mobile' ? "aucun navigateur présent : sonnerie du mobile du titulaire" : `aucun conseiller disponible pour l'entreprise de la ligne ${line?.companyId ?? '(ligne inconnue)'} ; présents : ${JSON.stringify(presenceSummary())}`;
       console.log(`📞 Appel entrant sur ${to} depuis ${from} : ${where}`);
       // Aucun navigateur présent : le titulaire est prévenu par notification (elle réveille, elle ne décroche pas l'appel).
