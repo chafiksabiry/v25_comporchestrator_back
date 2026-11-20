@@ -54,51 +54,53 @@ export function setGraceDbReady(fn) { dbReadyImpl = fn; }
 /** Filtre « reservedCredits vaut r » (champ absent = 0). */
 const reservedIs = (r) => (r > 0 ? r : { $in: [0, null] });
 
+/** Tranche réservée à la fois (au démarrage, puis à chaque prolongation par le balayeur). */
+export const TRANCHE_SECONDS = 10 * 60;
+/** Le balayeur prolonge un appel environ 60 s avant la fin de sa tranche. */
+export const EXTEND_LEAD_MS = 60_000;
+/** Délai après la coupure au-delà duquel le balayeur débite puis rend une réservation encore tenue (compte rendu perdu, redémarrage). */
+export const ORPHAN_RELEASE_MS = 2 * 60_000;
+/** Une échéance `pending` plus jeune que ce délai : un démarrage est en cours, le recalcul de la réserve attend. */
+const PENDING_GRACE_MS = 30_000;
+const FINISHED = new Set(['completed', 'canceled', 'failed', 'busy', 'no-answer']);
+
 /**
- * RÉSERVATION ATOMIQUE du solde au démarrage d'un appel : `min(solde − reservedCredits, need)` arrondi aux crédits par minute, par un
- * findOneAndUpdate conditionnel (solde et réserve lus font partie du filtre : deux démarrages simultanés ne réservent jamais la même part).
- * @returns {Promise<number>} crédits réservés (0 : plus rien de libre, l'appel démarre directement en grâce)
+ * RÉSERVATION ATOMIQUE d'une tranche du solde : `min(solde − reservedCredits, need)` arrondi aux crédits par minute, par un findOneAndUpdate
+ * conditionnel (solde et réserve lus font partie du filtre : deux démarrages simultanés ne réservent jamais la même part).
+ * @returns {Promise<{ amount: number, available: number }>} crédits réservés et crédits libres AVANT la réservation
  */
 export async function reserveCredits({ companyId, need, creditFactor = 1, Wallet = MinutesCompany, attempts = 8 }) {
   const factor = Number(creditFactor) > 1 ? Number(creditFactor) : 1;
   const wanted = Math.max(0, Math.floor(Number(need) || 0));
-  if (!companyId || !wanted) return 0;
+  let available = 0;
+  if (!companyId) return { amount: 0, available };
   for (let i = 0; i < attempts; i += 1) {
     const wallet = await Wallet.findOne({ companyId });
-    if (!wallet) return 0;
+    if (!wallet) return { amount: 0, available: 0 };
     const reserved = Math.max(0, Number(wallet.reservedCredits) || 0);
-    const available = Math.max(0, Math.floor(Number(wallet.minutes) || 0) - reserved);
+    available = Math.max(0, Math.floor(Number(wallet.minutes) || 0) - reserved);
     const amount = Math.floor(Math.min(available, wanted) / factor) * factor;
-    if (amount <= 0) return 0;
+    if (amount <= 0) return { amount: 0, available };
     const updated = await Wallet.findOneAndUpdate(
       { companyId, minutes: wallet.minutes, reservedCredits: reservedIs(Number(wallet.reservedCredits) || 0) },
       { $inc: { reservedCredits: amount } },
       { new: true }
     );
-    if (updated) return amount;
+    if (updated) return { amount, available };
   }
-  return 0; // contention persistante : prudence, l'appel démarre en grâce (jamais de réserve inventée)
+  return { amount: 0, available }; // contention persistante : prudence (jamais de réserve inventée)
 }
 
-/** Rend `amount` crédits à la réserve de l'entreprise, sans jamais la faire passer sous zéro (compare-and-set). */
-export async function unreserveCredits({ companyId, amount, Wallet = MinutesCompany, attempts = 8 }) {
+/** Rend `amount` crédits : `$inc` négatif si la réserve les contient, sinon remise à 0 (jamais négative ; le recalcul corrige le reste). */
+export async function unreserveCredits({ companyId, amount, Wallet = MinutesCompany }) {
   const a = Math.max(0, Number(amount) || 0);
   if (!companyId || !a) return 0;
-  for (let i = 0; i < attempts; i += 1) {
-    const wallet = await Wallet.findOne({ companyId });
-    if (!wallet) return 0;
-    const cur = Math.max(0, Number(wallet.reservedCredits) || 0);
-    const next = Math.max(0, cur - a);
-    const updated = await Wallet.findOneAndUpdate({ companyId, reservedCredits: reservedIs(Number(wallet.reservedCredits) || 0) }, { $set: { reservedCredits: next } }, { new: true });
-    if (updated) return cur - next;
-  }
-  return 0;
+  const done = await Wallet.findOneAndUpdate({ companyId, reservedCredits: { $gte: a } }, { $inc: { reservedCredits: -a } }, { new: true });
+  if (!done) await Wallet.updateOne({ companyId, reservedCredits: { $lt: a } }, { $set: { reservedCredits: 0 } });
+  return a;
 }
 
-/**
- * Libère EXACTEMENT la réservation d'un appel, une seule fois : le passage `held` → `released` est posé atomiquement sur l'échéance, puis
- * ses crédits sont rendus. Rejouable (comptes rendus de fin multiples, débit, balayeur). @returns {Promise<number>} crédits rendus
- */
+/** Rend la réservation d'un appel une seule fois (`held` → `released` posé atomiquement). @returns {Promise<number>} crédits rendus */
 export async function releaseReservation(callSid, { Model = CallGraceDeadline, Wallet = MinutesCompany, now = Date.now() } = {}) {
   const sid = String(callSid || '').trim();
   if (!sid) return 0;
@@ -111,19 +113,54 @@ export async function releaseReservation(callSid, { Model = CallGraceDeadline, W
   return unreserveCredits({ companyId: row.companyId, amount: row.reservedCredits, Wallet });
 }
 
-/** Fin d'appel (comptes rendus Twilio, débit) : plus rien à couper, réservation rendue. Ne lève jamais ; sans base : rien. */
-export async function endGraceCall(callSid, deps = {}) {
+/**
+ * Débit d'un appel terminé avec sa durée réelle (minute entamée × crédits par minute, borné par le solde), idempotent par CallSid : ses
+ * clés (l'appel, ses jambes connues) sont inscrites dans chargedCallSids, une synchronisation ultérieure ne le débite pas une seconde fois.
+ * @returns {Promise<boolean>} débité maintenant ou déjà débité ; false : à reprendre (débits concurrents)
+ */
+export async function chargeGraceCall(row, durationSeconds, extraKeys = [], { Wallet = MinutesCompany } = {}) {
+  const seconds = Math.max(0, Math.round(Number(durationSeconds) || 0));
+  const factor = Number(row.creditFactor) > 1 ? Number(row.creditFactor) : 1;
+  const keys = [...new Set([row.callSid, ...(row.childSids || []), ...extraKeys].map((k) => String(k || '').trim()).filter(Boolean))];
+  const done = await debitMinutesClamped({ companyId: row.companyId, keys, cost: Math.ceil(seconds / 60) * factor, seconds, batch: keys.length > 1, Wallet });
+  return !done?.retryLater;
+}
+
+/**
+ * Compte rendu de fin d'appel (call-status, line-call-end, inbound-dial-result, voicemail-done ; filet du balayeur) : plus rien à couper,
+ * DÉBIT de l'appel avec sa durée, PUIS réserve rendue. Durée inconnue : la réserve est gardée jusqu'au débit. Ne lève jamais.
+ */
+export async function endGraceCall(callSid, { durationSeconds, keys = [], ...deps } = {}) {
   if (!deps.Model && !dbReady()) return 0;
+  const Model = deps.Model || CallGraceDeadline;
   try {
-    await markGraceEnded(callSid, deps);
-    return await releaseReservation(callSid, deps);
+    const sid = String(callSid || '').trim();
+    await markGraceEnded(sid, { Model });
+    const row = await Model.findOne({ $or: [{ callSid: sid }, { childSids: sid }] }).lean();
+    if (!row) return 0;
+    const duration = Number(durationSeconds);
+    if (durationSeconds === undefined || durationSeconds === null || !Number.isFinite(duration)) return 0;
+    if (!(await chargeGraceCall(row, duration, keys, deps))) return 0;
+    return await releaseReservation(row.callSid, { ...deps, Model });
   } catch (error) {
     console.warn('[minutes-grace] fin d\'appel non traitée :', error?.message || error);
     return 0;
   }
 }
 
-/** Débit d'appels (clés `calls`) : leurs réservations sont rendues au moment du débit. Ne lève jamais ; sans base : rien. */
+/** Appel repris par l'agent IA (qui ne consomme pas le solde) : plus rien à couper, réserve rendue SANS débit. */
+export async function cancelGraceCall(callSid, deps = {}) {
+  if (!deps.Model && !dbReady()) return 0;
+  try {
+    await markGraceEnded(callSid, deps);
+    return await releaseReservation(callSid, deps);
+  } catch (error) {
+    console.warn('[minutes-grace] annulation non traitée :', error?.message || error);
+    return 0;
+  }
+}
+
+/** Débit d'appels (clés `calls`, lecture du solde ou charge-call) : leurs réservations sont rendues APRÈS ce débit. Ne lève jamais. */
 export async function releaseForChargedKeys(keys, deps = {}) {
   if (!deps.Model && !dbReady()) return 0;
   let total = 0;
@@ -133,44 +170,58 @@ export async function releaseForChargedKeys(keys, deps = {}) {
   return total;
 }
 
+const planOfRow = (row) => {
+  const factor = Number(row.creditFactor) > 1 ? Number(row.creditFactor) : 1;
+  return { coveredSeconds: row.coveredSeconds || 0, reservedCredits: row.reservedCredits || 0, availableSeconds: row.coveredSeconds || 0, graceStartsAt: new Date(row.graceStartsAt), deadline: new Date(row.deadline), limitSeconds: graceLimitSeconds(row.coveredSeconds || 0), factor };
+};
+
 /**
- * Début d'un appel qui consomme des minutes : réserve sa part du solde (au plus `maxCoveredSeconds`, plafond de l'appel) et enregistre son
- * échéance (début + couvertes + 5 min) avec la réservation. Idempotent par CallSid : un webhook rejoué renvoie la même échéance sans
- * réserver deux fois. @returns {Promise<{ coveredSeconds, reservedCredits, graceStartsAt, deadline, limitSeconds }>}
+ * Début d'un appel qui consomme des minutes. 1) échéance écrite (`pending`) ; 2) réservation atomique d'une TRANCHE (10 min au plus) ;
+ * 3) échéance passée en `held` avec sa réservation (couvertes = tranche ; grâce à la fin de la tranche, prolongée par le balayeur tant
+ * que du solde est libre). Rien de libre : grâce dès le début. Idempotent par CallSid. `signal.aborted` (délai dépassé côté webhook) :
+ * rien n'est réservé, l'échéance est abandonnée.
+ * @returns {Promise<null | { coveredSeconds, reservedCredits, availableSeconds, graceStartsAt, deadline, limitSeconds }>}
+ *   `availableSeconds` : solde libre (non réservé) au démarrage, base du timeLimit large du <Dial>.
  */
-export async function startGraceCall({ callSid, companyId, path, creditFactor = 1, maxCoveredSeconds, now = Date.now() }, { Model = CallGraceDeadline, Wallet = MinutesCompany } = {}) {
+export async function startGraceCall({ callSid, companyId, path, creditFactor = 1, now = Date.now(), signal = null }, { Model = CallGraceDeadline, Wallet = MinutesCompany } = {}) {
   const sid = String(callSid || '').trim();
+  if (!sid || !companyId) return null;
   const factor = Number(creditFactor) > 1 ? Number(creditFactor) : 1;
-  const existing = sid ? await Model.findOne({ callSid: sid }).lean() : null;
-  if (existing) return { ...planGrace({ coveredSeconds: existing.coveredSeconds, now: new Date(existing.startedAt).getTime() }), reservedCredits: existing.reservedCredits || 0 };
-  const need = Math.floor(Math.max(0, Number(maxCoveredSeconds) || 0) / 60) * factor;
-  const reserved = sid && companyId ? await reserveCredits({ companyId, need, creditFactor: factor, Wallet }) : 0;
-  const coveredSeconds = Math.floor(reserved / factor) * 60;
-  const plan = planGrace({ coveredSeconds, now });
-  if (!sid || !companyId) return { ...plan, reservedCredits: 0 };
+  const existing = await Model.findOne({ callSid: sid }).lean();
+  if (existing) return planOfRow(existing);
+  const provisional = planGrace({ coveredSeconds: 0, now });
   let inserted = false;
   try {
     const r = await Model.updateOne(
       { callSid: sid },
       { $setOnInsert: {
-        callSid: sid, companyId, path, startedAt: new Date(now), coveredSeconds, creditFactor: factor,
-        graceStartsAt: plan.graceStartsAt, deadline: plan.deadline, status: 'scheduled', attempts: 0,
-        reservedCredits: reserved, reservationStatus: reserved > 0 ? 'held' : 'none',
-        expiresAt: new Date(plan.deadline.getTime() + RETENTION_MS),
+        callSid: sid, companyId, path, startedAt: new Date(now), coveredSeconds: 0, creditFactor: factor,
+        graceStartsAt: provisional.graceStartsAt, deadline: provisional.deadline, status: 'scheduled', attempts: 0,
+        reservedCredits: 0, reservationStatus: 'pending', extensible: false,
+        expiresAt: new Date(provisional.deadline.getTime() + RETENTION_MS),
       } },
       { upsert: true }
     );
     inserted = Boolean(r?.upsertedCount);
   } catch (error) {
-    if (error?.code !== 11000) { await unreserveCredits({ companyId, amount: reserved, Wallet }); throw error; }
+    if (error?.code !== 11000) throw error;
   }
   if (!inserted) {
-    // Un autre démarrage du même appel a écrit le premier : notre réserve est rendue, sa propre échéance fait foi.
-    await unreserveCredits({ companyId, amount: reserved, Wallet });
     const row = await Model.findOne({ callSid: sid }).lean();
-    if (row) return { ...planGrace({ coveredSeconds: row.coveredSeconds, now: new Date(row.startedAt).getTime() }), reservedCredits: row.reservedCredits || 0 };
+    return row ? planOfRow(row) : null;
   }
-  return { ...plan, reservedCredits: reserved };
+  const abandon = () => Model.updateOne({ callSid: sid }, { $set: { status: 'ended', reservationStatus: 'none' } });
+  if (signal?.aborted) { await abandon(); return null; }
+  const { amount, available } = await reserveCredits({ companyId, need: (TRANCHE_SECONDS / 60) * factor, creditFactor: factor, Wallet });
+  if (signal?.aborted) { await unreserveCredits({ companyId, amount, Wallet }); await abandon(); return null; }
+  const coveredSeconds = Math.floor(amount / factor) * 60;
+  const plan = planGrace({ coveredSeconds, now });
+  await Model.updateOne({ callSid: sid, reservationStatus: 'pending' }, { $set: {
+    reservationStatus: amount > 0 ? 'held' : 'none', reservedCredits: amount, coveredSeconds, extensible: amount > 0,
+    graceStartsAt: plan.graceStartsAt, deadline: plan.deadline, expiresAt: new Date(plan.deadline.getTime() + RETENTION_MS),
+  } });
+  const availableSeconds = Math.floor(available / factor) * 60;
+  return { ...plan, reservedCredits: amount, availableSeconds, limitSeconds: graceLimitSeconds(availableSeconds) };
 }
 
 /** Secondes restantes jusqu'à la coupure d'un appel (timeLimit des <Dial> suivants : file, menu, mobile) ; 0 si aucune échéance. */
@@ -189,8 +240,73 @@ export function withDialTimeLimit(xml, seconds) {
   return String(xml).replace(/<Dial\b([^>]*)>/g, (m, attrs) => (/\btimeLimit=/.test(attrs) ? m : `<Dial${attrs} timeLimit="${Math.min(n, GRACE_MAX_CALL_SECONDS)}">`));
 }
 
-/** Délai après la coupure au-delà duquel le balayeur rend une réservation encore tenue (compte rendu de fin perdu, redémarrage). */
-export const ORPHAN_RELEASE_MS = 2 * 60_000;
+/** État et durée d'un appel chez Twilio (client existant), borné à 3 s ; null si illisible. */
+async function twilioCallOf(client, callSid) {
+  if (!client) return null;
+  return withTimeout(Promise.resolve().then(() => client.calls(callSid).fetch()), 3000, null);
+}
+
+/**
+ * Prolongation : ~60 s avant la fin de la tranche d'un appel EN COURS, une tranche de plus est réservée si du solde est libre (grâce et
+ * coupure repoussées d'autant). Rien de libre : l'appel n'est plus prolongé, sa grâce de 5 min commence à la fin de la tranche. Un appel
+ * déjà terminé chez Twilio (compte rendu perdu) est débité de sa durée puis sa réserve est rendue.
+ */
+export async function extendGraceCalls({ Model = CallGraceDeadline, Wallet = MinutesCompany, client = null, now = Date.now(), limit = 50 } = {}) {
+  const out = { extended: 0, exhausted: 0, finished: 0 };
+  const due = await Model.find({ status: 'scheduled', reservationStatus: 'held', extensible: true, graceStartsAt: { $lte: new Date(now + EXTEND_LEAD_MS) } }).sort({ graceStartsAt: 1 }).limit(limit).lean();
+  for (const row of due || []) {
+    const call = await twilioCallOf(client, row.callSid);
+    if (call && FINISHED.has(String(call.status || ''))) {
+      await endGraceCall(row.callSid, { durationSeconds: Number(call.duration) || 0, Model, Wallet });
+      out.finished += 1;
+      continue;
+    }
+    const factor = Number(row.creditFactor) > 1 ? Number(row.creditFactor) : 1;
+    const { amount } = await reserveCredits({ companyId: row.companyId, need: (TRANCHE_SECONDS / 60) * factor, creditFactor: factor, Wallet });
+    if (amount > 0) {
+      const add = Math.floor(amount / factor) * 60 * 1000;
+      const graceStartsAt = new Date(new Date(row.graceStartsAt).getTime() + add);
+      const deadline = new Date(new Date(row.deadline).getTime() + add);
+      const done = await Model.findOneAndUpdate(
+        { _id: row._id, status: 'scheduled', reservationStatus: 'held', graceStartsAt: new Date(row.graceStartsAt) },
+        { $inc: { reservedCredits: amount, coveredSeconds: add / 1000 }, $set: { graceStartsAt, deadline, expiresAt: new Date(deadline.getTime() + RETENTION_MS) } },
+        { new: true }
+      );
+      if (done) out.extended += 1; else await unreserveCredits({ companyId: row.companyId, amount, Wallet });
+    } else {
+      await Model.updateOne({ _id: row._id, extensible: true }, { $set: { extensible: false } });
+      out.exhausted += 1;
+    }
+  }
+  return out;
+}
+
+/** Réserve auto-réparatrice : reservedCredits = somme des échéances `held` de l'entreprise (crash entre deux écritures, course). */
+export async function reconcileReserves({ Model = CallGraceDeadline, Wallet = MinutesCompany, now = Date.now(), limit = 200 } = {}) {
+  let fixed = 0;
+  const held = await Model.find({ reservationStatus: { $in: ['held', 'pending'] } }).limit(5000).lean();
+  const byCompany = new Map();
+  for (const r of held || []) {
+    const k = String(r.companyId);
+    const e = byCompany.get(k) || { sum: 0, pending: false };
+    if (r.reservationStatus === 'held') e.sum += Number(r.reservedCredits) || 0;
+    if (r.reservationStatus === 'pending' && now - new Date(r.startedAt).getTime() < PENDING_GRACE_MS) e.pending = true;
+    byCompany.set(k, e);
+  }
+  const wallets = await Wallet.find({ reservedCredits: { $gt: 0 } }).select('companyId reservedCredits').limit(limit).lean();
+  const ids = new Set([...(wallets || []).map((w) => String(w.companyId)), ...byCompany.keys()]);
+  for (const companyId of ids) {
+    const e = byCompany.get(companyId) || { sum: 0, pending: false };
+    if (e.pending) continue;
+    const w = (wallets || []).find((x) => String(x.companyId) === companyId) || await Wallet.findOne({ companyId });
+    if (!w) continue;
+    const cur = Math.max(0, Number(w.reservedCredits) || 0);
+    if (cur === e.sum) continue;
+    const done = await Wallet.findOneAndUpdate({ companyId: w.companyId, reservedCredits: reservedIs(Number(w.reservedCredits) || 0) }, { $set: { reservedCredits: e.sum } }, { new: true });
+    if (done) { fixed += 1; console.warn(`[minutes-grace] réserve recalculée pour l'entreprise ${companyId} : ${cur} → ${e.sum}`); }
+  }
+  return fixed;
+}
 
 /**
  * Échéances d'un appel qui démarre à `now` avec `coveredSeconds` couvertes par le solde : début de la grâce et coupure (début + couvertes + 5 min).
@@ -295,11 +411,19 @@ const callAlreadyOver = (error) => error?.code === 21220 || error?.status === 40
  * @returns {Promise<{ hungUp: number, ended: number, failed: number, retried: number, released: number }>}
  */
 export async function sweepGraceDeadlines({ Model = CallGraceDeadline, Wallet = MinutesCompany, client, now = Date.now(), limit = 50, log = console } = {}) {
-  const result = { hungUp: 0, ended: 0, failed: 0, retried: 0, released: 0 };
-  // Filet : réservation encore tenue plus de 2 min après la coupure (compte rendu de fin perdu, serveur redémarré) : rendue.
+  const result = { hungUp: 0, ended: 0, failed: 0, retried: 0, released: 0, reconciled: 0, extended: 0, exhausted: 0, finished: 0 };
+  // Réserve auto-réparatrice, puis prolongation des appels en cours (tranche suivante si du solde est libre).
+  try { result.reconciled = await reconcileReserves({ Model, Wallet, now }); } catch (error) { log.warn?.('[minutes-grace] recalcul de la réserve en échec :', error?.message || error); }
+  try { Object.assign(result, await extendGraceCalls({ Model, Wallet, client, now, limit })); } catch (error) { log.warn?.('[minutes-grace] prolongation en échec :', error?.message || error); }
+  // Filet : réservation encore tenue plus de 2 min après la coupure (compte rendu de fin perdu, serveur redémarré) : DÉBIT d'abord
+  // (durée lue chez Twilio, sinon le temps couvert réservé), puis réserve rendue.
   const orphans = await Model.find({ reservationStatus: 'held', deadline: { $lte: new Date(now - ORPHAN_RELEASE_MS) } }).sort({ deadline: 1 }).limit(limit).lean();
   for (const row of orphans || []) {
-    try { if (await releaseReservation(row.callSid, { Model, Wallet, now })) result.released += 1; } catch (error) { log.warn?.('[minutes-grace] réservation orpheline non rendue :', error?.message || error); }
+    try {
+      const call = await twilioCallOf(client, row.callSid);
+      const known = call && FINISHED.has(String(call.status || '')) && Number.isFinite(Number(call.duration));
+      if (await endGraceCall(row.callSid, { durationSeconds: known ? Number(call.duration) : row.coveredSeconds || 0, Model, Wallet })) result.released += 1;
+    } catch (error) { log.warn?.('[minutes-grace] réservation orpheline non rendue :', error?.message || error); }
   }
   if (!client) return result;
   const at = new Date(now);

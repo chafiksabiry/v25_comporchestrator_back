@@ -9,7 +9,7 @@ import { createVoiceToken } from '../services/voiceTokenService.js';
 import { voiceIdentity } from '../services/voicePresenceService.js';
 import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
-import { graceLimitSeconds, startGraceCall } from '../services/minutesGrace.js';
+import { graceLimitSeconds, raceTimeout, startGraceCall } from '../services/minutesGrace.js';
 import { LINE_CALL_END_PATH, signLineCallEnd } from '../services/lineCalls.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { isPremiumRate, MESSAGES as DESTINATION_MESSAGES } from '../services/outboundDestinations.js';
@@ -183,16 +183,19 @@ export const voicemailController = {
       const maxSeconds = maxSecondsForBalance(minutes, { creditFactor });
       // Refus international : même texte que sur tous les canaux, dans la langue de la ligne appelante (en / fr / es).
       if (!maxSeconds) return send(creditFactor > 1 ? spokenRefusal('insufficient_minutes_international', spokenLanguage(line.phoneNumber), { credits: creditFactor }) : buildRefusalTwiml('Solde de minutes insuffisant.'));
-      // B.1 : réservation atomique de la part du solde de ce rappel (les appels en cours ont déjà la leur), échéance de coupure (couvertes +
-      // 5 minutes de grâce) coupée par le serveur ; timeLimit = couvertes + 5 min. Fin du rappel (action du <Dial>) : réservation rendue.
+      // B.1 : échéance + réservation d'une tranche (10 min) du solde libre, prolongée par le balayeur ; grâce de 5 min puis coupure à l'heure.
+      // timeLimit du <Dial> : filet large (solde libre au démarrage + 5 min). Borné à 2 s : au-delà, aucune échéance, l'appel passe.
       const callSid = String(req.body?.CallSid || '').trim();
       let covered = maxSeconds;
       if (mongoose.connection.readyState === 1 && callSid) {
-        try {
-          covered = (await startGraceCall({ callSid, companyId: String(vm.companyId), path: 'voicemail_callback', creditFactor, maxCoveredSeconds: maxSeconds })).coveredSeconds;
-        } catch (graceErr) {
+        const signal = { aborted: false };
+        const TIMEOUT = Symbol('timeout');
+        const grace = await raceTimeout(startGraceCall({ callSid, companyId: String(vm.companyId), path: 'voicemail_callback', creditFactor, signal }).catch((graceErr) => {
           console.error('[minutes-grace] échéance du rappel non enregistrée :', graceErr?.message || graceErr);
-        }
+          return null;
+        }), 2000, TIMEOUT);
+        if (grace === TIMEOUT) signal.aborted = true;
+        else if (grace) covered = Math.min(grace.availableSeconds, maxSeconds);
       }
       const action = callSid ? `https://${req.get('host')}${LINE_CALL_END_PATH}?t=${signLineCallEnd({ secret: config.twilioAuthToken, callSid })}` : null;
       return send(buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds: graceLimitSeconds(covered), action }));
