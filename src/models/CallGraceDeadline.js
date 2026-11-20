@@ -24,6 +24,11 @@ const callGraceDeadlineSchema = new mongoose.Schema({
   attempts: { type: Number, default: 0 },
   hungUpAt: { type: Date, default: null },
   lastError: { type: String, default: '' },
+  /** Crédits du solde réservés pour cet appel au démarrage (réservation atomique sur MinutesCompany.reservedCredits). */
+  reservedCredits: { type: Number, default: 0 },
+  /** held : réservés ; released : rendus (une seule fois, au débit, à la fin de l'appel ou par le balayeur) ; none : rien réservé. */
+  reservationStatus: { type: String, enum: ['held', 'released', 'none'], default: 'none' },
+  releasedAt: { type: Date, default: null },
   /** Jambes enfants vues (appel entrant décroché dans le navigateur) : le portail ne connaît que la sienne. */
   childSids: { type: [String], default: [] },
   /** Purge automatique 2 jours après l'échéance. */
@@ -32,6 +37,7 @@ const callGraceDeadlineSchema = new mongoose.Schema({
 
 callGraceDeadlineSchema.index({ status: 1, deadline: 1 });
 callGraceDeadlineSchema.index({ childSids: 1 });
+callGraceDeadlineSchema.index({ reservationStatus: 1, deadline: 1 });
 callGraceDeadlineSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 const CallGraceDeadline = mongoose.models.CallGraceDeadline || mongoose.model('CallGraceDeadline', callGraceDeadlineSchema);

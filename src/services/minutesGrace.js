@@ -12,6 +12,10 @@ import MinutesCompany from '../models/MinutesCompany.js';
  *
  * L'échéance est calculée au début de l'appel avec le solde frais (comme l'ancien plafond `timeLimit`) : début + secondes couvertes + 5 min.
  * Les <Dial> gardent un `timeLimit` = couvertes + grâce : filet natif de Twilio si le serveur est arrêté à l'échéance.
+ *
+ * Appels simultanés : au démarrage, chaque appel RÉSERVE atomiquement sa part du solde (`MinutesCompany.reservedCredits`, au plus 4 h) ;
+ * disponible = solde − réserve. La réserve est rendue une seule fois (`releaseReservation`) : au débit de l'appel, à son compte rendu de
+ * fin (line-call-end, call-status, inbound-dial-result, voicemail-done), ou par le balayeur 2 min après la coupure.
  */
 export const GRACE_SECONDS = 5 * 60;
 /** Plafond de Twilio pour timeLimit (4 h) : même valeur que MAX_CALL_SECONDS de browserOutbound.js. */
@@ -33,54 +37,160 @@ export function graceLimitSeconds(coveredSeconds) {
   return Math.min(covered + GRACE_SECONDS, GRACE_MAX_CALL_SECONDS);
 }
 
-/**
- * Secondes couvertes par le solde pour un NOUVEL appel : minutes entières du solde moins les crédits encore réservés par les appels en cours
- * de la même entreprise (`committed`), divisées par les crédits par minute de cet appel. Jamais négatif (0 : grâce dès le début).
- */
-export function coveredSecondsFor({ balance, committed = 0, creditFactor = 1 }) {
-  const whole = Math.floor(Number(balance) || 0);
-  const factor = Number(creditFactor) > 1 ? Number(creditFactor) : 1;
-  const free = Math.max(0, whole - Math.max(0, Number(committed) || 0));
-  return Math.floor(free / factor) * 60;
-}
-
-const FINISHED = new Set(['completed', 'canceled', 'failed', 'busy', 'no-answer']);
 const withTimeout = (promise, ms, fallback) => {
   let timer;
   const late = new Promise((resolve) => { timer = setTimeout(() => resolve(fallback), ms); });
   return Promise.race([Promise.resolve(promise).catch(() => fallback), late]).finally(() => clearTimeout(timer));
 };
 
+/** Valeur ou `fallback` au-delà de `ms` (lecture de base qui pend pendant un webhook). */
+export const raceTimeout = withTimeout;
+
+/** Base connectée ? Remplaçable dans les tests (`setGraceDbReady`). Sans base : ni réservation ni libération (jamais d'attente). */
+let dbReadyImpl = null;
+const dbReady = () => (dbReadyImpl ? dbReadyImpl() : CallGraceDeadline.db?.readyState === 1);
+export function setGraceDbReady(fn) { dbReadyImpl = fn; }
+
+/** Filtre « reservedCredits vaut r » (champ absent = 0). */
+const reservedIs = (r) => (r > 0 ? r : { $in: [0, null] });
+
 /**
- * Crédits encore réservés par les appels EN COURS d'une entreprise : pour chaque échéance `scheduled` dont la grâce n'a pas commencé,
- * minutes couvertes restantes (minute entamée) × crédits par minute. Un appel déjà terminé chez Twilio (lecture par le client existant)
- * ne réserve plus rien et son échéance passe à `ended`. Lecture de l'état impossible : l'appel est compté comme en cours (prudence).
+ * RÉSERVATION ATOMIQUE du solde au démarrage d'un appel : `min(solde − reservedCredits, need)` arrondi aux crédits par minute, par un
+ * findOneAndUpdate conditionnel (solde et réserve lus font partie du filtre : deux démarrages simultanés ne réservent jamais la même part).
+ * @returns {Promise<number>} crédits réservés (0 : plus rien de libre, l'appel démarre directement en grâce)
  */
-export async function committedCredits({ companyId, client = null, now = Date.now(), Model = CallGraceDeadline, statusTimeoutMs = 1500 }) {
-  if (!companyId) return 0;
-  const rows = await Model.find({ companyId, status: 'scheduled', graceStartsAt: { $gt: new Date(now) } }).lean();
+export async function reserveCredits({ companyId, need, creditFactor = 1, Wallet = MinutesCompany, attempts = 8 }) {
+  const factor = Number(creditFactor) > 1 ? Number(creditFactor) : 1;
+  const wanted = Math.max(0, Math.floor(Number(need) || 0));
+  if (!companyId || !wanted) return 0;
+  for (let i = 0; i < attempts; i += 1) {
+    const wallet = await Wallet.findOne({ companyId });
+    if (!wallet) return 0;
+    const reserved = Math.max(0, Number(wallet.reservedCredits) || 0);
+    const available = Math.max(0, Math.floor(Number(wallet.minutes) || 0) - reserved);
+    const amount = Math.floor(Math.min(available, wanted) / factor) * factor;
+    if (amount <= 0) return 0;
+    const updated = await Wallet.findOneAndUpdate(
+      { companyId, minutes: wallet.minutes, reservedCredits: reservedIs(Number(wallet.reservedCredits) || 0) },
+      { $inc: { reservedCredits: amount } },
+      { new: true }
+    );
+    if (updated) return amount;
+  }
+  return 0; // contention persistante : prudence, l'appel démarre en grâce (jamais de réserve inventée)
+}
+
+/** Rend `amount` crédits à la réserve de l'entreprise, sans jamais la faire passer sous zéro (compare-and-set). */
+export async function unreserveCredits({ companyId, amount, Wallet = MinutesCompany, attempts = 8 }) {
+  const a = Math.max(0, Number(amount) || 0);
+  if (!companyId || !a) return 0;
+  for (let i = 0; i < attempts; i += 1) {
+    const wallet = await Wallet.findOne({ companyId });
+    if (!wallet) return 0;
+    const cur = Math.max(0, Number(wallet.reservedCredits) || 0);
+    const next = Math.max(0, cur - a);
+    const updated = await Wallet.findOneAndUpdate({ companyId, reservedCredits: reservedIs(Number(wallet.reservedCredits) || 0) }, { $set: { reservedCredits: next } }, { new: true });
+    if (updated) return cur - next;
+  }
+  return 0;
+}
+
+/**
+ * Libère EXACTEMENT la réservation d'un appel, une seule fois : le passage `held` → `released` est posé atomiquement sur l'échéance, puis
+ * ses crédits sont rendus. Rejouable (comptes rendus de fin multiples, débit, balayeur). @returns {Promise<number>} crédits rendus
+ */
+export async function releaseReservation(callSid, { Model = CallGraceDeadline, Wallet = MinutesCompany, now = Date.now() } = {}) {
+  const sid = String(callSid || '').trim();
+  if (!sid) return 0;
+  const row = await Model.findOneAndUpdate(
+    { $or: [{ callSid: sid }, { childSids: sid }], reservationStatus: 'held' },
+    { $set: { reservationStatus: 'released', releasedAt: new Date(now) } },
+    { new: true }
+  );
+  if (!row) return 0;
+  return unreserveCredits({ companyId: row.companyId, amount: row.reservedCredits, Wallet });
+}
+
+/** Fin d'appel (comptes rendus Twilio, débit) : plus rien à couper, réservation rendue. Ne lève jamais ; sans base : rien. */
+export async function endGraceCall(callSid, deps = {}) {
+  if (!deps.Model && !dbReady()) return 0;
+  try {
+    await markGraceEnded(callSid, deps);
+    return await releaseReservation(callSid, deps);
+  } catch (error) {
+    console.warn('[minutes-grace] fin d\'appel non traitée :', error?.message || error);
+    return 0;
+  }
+}
+
+/** Débit d'appels (clés `calls`) : leurs réservations sont rendues au moment du débit. Ne lève jamais ; sans base : rien. */
+export async function releaseForChargedKeys(keys, deps = {}) {
+  if (!deps.Model && !dbReady()) return 0;
   let total = 0;
-  await Promise.all((rows || []).map(async (row) => {
-    if (client) {
-      const status = await withTimeout(Promise.resolve().then(() => client.calls(row.callSid).fetch()).then((c) => String(c?.status || '')), statusTimeoutMs, '');
-      if (FINISHED.has(status)) {
-        await Model.updateOne({ _id: row._id, status: 'scheduled' }, { $set: { status: 'ended' } }).catch(() => {});
-        return;
-      }
-    }
-    const remaining = Math.ceil((new Date(row.graceStartsAt).getTime() - now) / 60_000);
-    total += Math.max(0, remaining) * (Number(row.creditFactor) > 1 ? Number(row.creditFactor) : 1);
-  }));
+  for (const k of [...new Set((keys || []).map(String).filter(Boolean))]) {
+    try { total += await releaseReservation(k, deps); } catch (error) { console.warn('[minutes-grace] réservation non rendue :', error?.message || error); }
+  }
   return total;
 }
 
-/** Même lecture, bornée dans le temps (webhook) : au-delà de `ms`, ou en cas d'erreur, 0 (comportement d'avant : solde entier). */
-export function committedCreditsWithin(args, ms = 2000) {
-  return withTimeout(committedCredits(args), ms, 0);
+/**
+ * Début d'un appel qui consomme des minutes : réserve sa part du solde (au plus `maxCoveredSeconds`, plafond de l'appel) et enregistre son
+ * échéance (début + couvertes + 5 min) avec la réservation. Idempotent par CallSid : un webhook rejoué renvoie la même échéance sans
+ * réserver deux fois. @returns {Promise<{ coveredSeconds, reservedCredits, graceStartsAt, deadline, limitSeconds }>}
+ */
+export async function startGraceCall({ callSid, companyId, path, creditFactor = 1, maxCoveredSeconds, now = Date.now() }, { Model = CallGraceDeadline, Wallet = MinutesCompany } = {}) {
+  const sid = String(callSid || '').trim();
+  const factor = Number(creditFactor) > 1 ? Number(creditFactor) : 1;
+  const existing = sid ? await Model.findOne({ callSid: sid }).lean() : null;
+  if (existing) return { ...planGrace({ coveredSeconds: existing.coveredSeconds, now: new Date(existing.startedAt).getTime() }), reservedCredits: existing.reservedCredits || 0 };
+  const need = Math.floor(Math.max(0, Number(maxCoveredSeconds) || 0) / 60) * factor;
+  const reserved = sid && companyId ? await reserveCredits({ companyId, need, creditFactor: factor, Wallet }) : 0;
+  const coveredSeconds = Math.floor(reserved / factor) * 60;
+  const plan = planGrace({ coveredSeconds, now });
+  if (!sid || !companyId) return { ...plan, reservedCredits: 0 };
+  let inserted = false;
+  try {
+    const r = await Model.updateOne(
+      { callSid: sid },
+      { $setOnInsert: {
+        callSid: sid, companyId, path, startedAt: new Date(now), coveredSeconds, creditFactor: factor,
+        graceStartsAt: plan.graceStartsAt, deadline: plan.deadline, status: 'scheduled', attempts: 0,
+        reservedCredits: reserved, reservationStatus: reserved > 0 ? 'held' : 'none',
+        expiresAt: new Date(plan.deadline.getTime() + RETENTION_MS),
+      } },
+      { upsert: true }
+    );
+    inserted = Boolean(r?.upsertedCount);
+  } catch (error) {
+    if (error?.code !== 11000) { await unreserveCredits({ companyId, amount: reserved, Wallet }); throw error; }
+  }
+  if (!inserted) {
+    // Un autre démarrage du même appel a écrit le premier : notre réserve est rendue, sa propre échéance fait foi.
+    await unreserveCredits({ companyId, amount: reserved, Wallet });
+    const row = await Model.findOne({ callSid: sid }).lean();
+    if (row) return { ...planGrace({ coveredSeconds: row.coveredSeconds, now: new Date(row.startedAt).getTime() }), reservedCredits: row.reservedCredits || 0 };
+  }
+  return { ...plan, reservedCredits: reserved };
 }
 
-/** Valeur ou `fallback` au-delà de `ms` (lecture de base qui pend pendant un webhook). */
-export const raceTimeout = withTimeout;
+/** Secondes restantes jusqu'à la coupure d'un appel (timeLimit des <Dial> suivants : file, menu, mobile) ; 0 si aucune échéance. */
+export async function remainingLimitFor(callSid, { Model = CallGraceDeadline, now = Date.now() } = {}) {
+  const sid = String(callSid || '').trim();
+  if (!sid) return 0;
+  const row = await Model.findOne({ callSid: sid, status: 'scheduled' }).lean();
+  if (!row) return 0;
+  return Math.min(GRACE_MAX_CALL_SECONDS, Math.max(1, Math.ceil((new Date(row.deadline).getTime() - now) / 1000)));
+}
+
+/** Ajoute `timeLimit="N"` à chaque <Dial> qui n'en a pas (TwiML des files d'attente, du menu, du mobile). N ≤ 0 : inchangé. */
+export function withDialTimeLimit(xml, seconds) {
+  const n = Math.floor(Number(seconds) || 0);
+  if (!xml || n <= 0) return xml;
+  return String(xml).replace(/<Dial\b([^>]*)>/g, (m, attrs) => (/\btimeLimit=/.test(attrs) ? m : `<Dial${attrs} timeLimit="${Math.min(n, GRACE_MAX_CALL_SECONDS)}">`));
+}
+
+/** Délai après la coupure au-delà duquel le balayeur rend une réservation encore tenue (compte rendu de fin perdu, redémarrage). */
+export const ORPHAN_RELEASE_MS = 2 * 60_000;
 
 /**
  * Échéances d'un appel qui démarre à `now` avec `coveredSeconds` couvertes par le solde : début de la grâce et coupure (début + couvertes + 5 min).
@@ -182,10 +292,15 @@ const callAlreadyOver = (error) => error?.code === 21220 || error?.status === 40
 /**
  * Un passage du balayeur : coupe les appels dont l'échéance est dépassée. Rejouable sans risque (redémarrage, plusieurs instances) :
  * chaque échéance est prise atomiquement avant l'appel à Twilio, et une échéance coupée ne l'est jamais deux fois.
- * @returns {Promise<{ hungUp: number, ended: number, failed: number, retried: number }>}
+ * @returns {Promise<{ hungUp: number, ended: number, failed: number, retried: number, released: number }>}
  */
-export async function sweepGraceDeadlines({ Model = CallGraceDeadline, client, now = Date.now(), limit = 50, log = console } = {}) {
-  const result = { hungUp: 0, ended: 0, failed: 0, retried: 0 };
+export async function sweepGraceDeadlines({ Model = CallGraceDeadline, Wallet = MinutesCompany, client, now = Date.now(), limit = 50, log = console } = {}) {
+  const result = { hungUp: 0, ended: 0, failed: 0, retried: 0, released: 0 };
+  // Filet : réservation encore tenue plus de 2 min après la coupure (compte rendu de fin perdu, serveur redémarré) : rendue.
+  const orphans = await Model.find({ reservationStatus: 'held', deadline: { $lte: new Date(now - ORPHAN_RELEASE_MS) } }).sort({ deadline: 1 }).limit(limit).lean();
+  for (const row of orphans || []) {
+    try { if (await releaseReservation(row.callSid, { Model, Wallet, now })) result.released += 1; } catch (error) { log.warn?.('[minutes-grace] réservation orpheline non rendue :', error?.message || error); }
+  }
   if (!client) return result;
   const at = new Date(now);
   const staleBefore = new Date(now - STALE_CLAIM_MS);

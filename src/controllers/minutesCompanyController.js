@@ -4,7 +4,7 @@ import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { callerAccess, ScopeError } from '../middleware/companyScope.js';
 import mongoose from 'mongoose';
 import { creditFactorForCall } from '../services/creditCoefficient.js';
-import { debitMinutesClamped } from '../services/minutesGrace.js';
+import { debitMinutesClamped, releaseForChargedKeys } from '../services/minutesGrace.js';
 
 async function readMinutes(companyId, res) {
   try {
@@ -169,6 +169,9 @@ export const minutesCompanyController = {
           data: { minutes: wallet?.minutes ?? 0 }
         });
       }
+
+      // B.1 : la réservation de l'appel est rendue au moment de son débit (idempotent).
+      await releaseForChargedKeys([chargeKey, String(callSid)]);
 
       res.status(200).json({
         success: true,
