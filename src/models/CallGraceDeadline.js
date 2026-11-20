@@ -26,8 +26,10 @@ const callGraceDeadlineSchema = new mongoose.Schema({
   lastError: { type: String, default: '' },
   /** Crédits du solde réservés pour cet appel au démarrage (réservation atomique sur MinutesCompany.reservedCredits). */
   reservedCredits: { type: Number, default: 0 },
-  /** held : réservés ; released : rendus (une seule fois, au débit, à la fin de l'appel ou par le balayeur) ; none : rien réservé. */
-  reservationStatus: { type: String, enum: ['held', 'released', 'none'], default: 'none' },
+  /** pending : démarrage en cours (échéance écrite avant la réservation) ; held : réservés ; released : rendus (une seule fois, au débit, à la fin de l'appel ou par le balayeur) ; none : rien réservé. */
+  reservationStatus: { type: String, enum: ['pending', 'held', 'released', 'none'], default: 'none' },
+  /** Le balayeur peut encore réserver une tranche de plus (faux : plus de solde libre à la dernière tentative, la grâce suit). */
+  extensible: { type: Boolean, default: false },
   releasedAt: { type: Date, default: null },
   /** Jambes enfants vues (appel entrant décroché dans le navigateur) : le portail ne connaît que la sienne. */
   childSids: { type: [String], default: [] },

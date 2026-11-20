@@ -63,6 +63,7 @@ function memoryDeadlines() {
     if (v && typeof v === 'object' && !(v instanceof Date)) {
       if ('$lte' in v) return row[k] != null && new Date(row[k]).getTime() <= new Date(v.$lte).getTime();
       if ('$gt' in v) return row[k] != null && new Date(row[k]).getTime() > new Date(v.$gt).getTime();
+      if ('$in' in v) return v.$in.includes(row[k]);
     }
     if (v instanceof Date) return row[k] instanceof Date && row[k].getTime() === v.getTime();
     return String(row[k]) === String(v);
@@ -106,6 +107,7 @@ function fakeTwilio({ fail = null, parents = {}, statuses = {} } = {}) {
 let plan; let W; let CALLS; let DL; let twilio;
 const savedLog = { log: console.log, warn: console.warn, error: console.error };
 const realDbReady = pc.dbReady;
+const realEndReportAuthentic = pc.endReportAuthentic;
 beforeEach(() => {
   if (!process.env.DBG) { console.log = () => {}; console.warn = () => {}; console.error = () => {}; }
   plan = 'full_scope'; CALLS = [];
@@ -117,6 +119,7 @@ beforeEach(() => {
   clearPresence(); clearCompanyCache();
   pc.dbReady = () => true; G.setGraceDbReady(() => true);
   pc.grantPlanMinutes = async () => undefined;
+  pc.endReportAuthentic = () => true;
   const lines = [{ _id: 'l1', companyId: C1, phoneNumber: LINE, provider: 'twilio', twilioId: 'PN1', status: 'active', billingStatus: 'active', assignedRole: 'shared', createdAt: new Date('2026-01-01'), gigId: null }];
   PhoneNumber.find = () => { const c = { sort: () => c, select: () => c, limit: () => c, lean: async () => lines, then: (r, j) => Promise.resolve(lines).then(r, j) }; return c; };
   PhoneNumber.findOne = () => { const c = { sort: () => c, select: () => c, lean: async () => lines[0], then: (r, j) => Promise.resolve(lines[0]).then(r, j) }; return c; };
@@ -128,6 +131,12 @@ beforeEach(() => {
   CallRecordingStatus.findOne = () => lean(null); CallRecordingStatus.updateOne = async () => ({});
   // Portefeuille : lecture fraîche (select/lean) et débit atomique (filtre sur le solde lu, idempotence chargedCallSids).
   MinutesCompany.findOne = () => lean(clone(W));
+  MinutesCompany.updateOne = async (filter, update) => {
+    const f = filter.reservedCredits; const cur = W.reservedCredits ?? 0;
+    if (f && typeof f === 'object' && '$lt' in f && !(cur < f.$lt)) return { modifiedCount: 0 };
+    Object.assign(W, update.$set || {}); return { modifiedCount: 1 };
+  };
+  MinutesCompany.find = () => lean((W.reservedCredits || 0) > 0 ? [clone(W)] : []);
   MinutesCompany.create = async (d) => { W = { minutes: 0, consumedSeconds: 0, chargedCallSids: [], ...d }; return clone(W); };
   MinutesCompany.findOneAndUpdate = async (filter, update) => {
     await Promise.resolve(); // entrelacement réaliste des démarrages simultanés ; le contrôle + l'écriture restent atomiques, comme en base
@@ -137,7 +146,7 @@ beforeEach(() => {
     if ('minutes' in filter && filter.minutes !== W.minutes) return null;
     if ('reservedCredits' in filter) {
       const f = filter.reservedCredits; const cur = W.reservedCredits ?? null;
-      const ok = f && typeof f === 'object' ? f.$in.includes(cur) : cur === f;
+      const ok = f && typeof f === 'object' ? ('$gte' in f ? (cur ?? 0) >= f.$gte : '$lt' in f ? (cur ?? 0) < f.$lt : f.$in.includes(cur)) : cur === f;
       if (!ok) return null;
     }
     Object.assign(W, update.$set || {});
@@ -384,10 +393,12 @@ test('3 appels simultanés mélangés (entrant, sortant, entrant) : même plafon
   DL.rows.clear(); W.reservedCredits = 0;
   await outbound(sid('7'));
   assert.equal(W.reservedCredits, 10);
-  await G.endGraceCall(sid('7')); // compte rendu de fin : réserve rendue
-  assert.equal(W.reservedCredits, 0);
+  await G.endGraceCall(sid('7')); // durée inconnue : réserve gardée jusqu'au débit
+  assert.equal(W.reservedCredits, 10);
+  await G.endGraceCall(sid('7'), { durationSeconds: 50 }); // compte rendu de fin avec la durée : débit (1 min), puis réserve rendue
+  assert.equal(W.minutes, 9); assert.equal(W.reservedCredits, 0);
   await outbound(sid('8'));
-  assert.equal([...DL.rows.values()].find((x) => x.callSid === sid('8')).coveredSeconds, 600);
+  assert.equal([...DL.rows.values()].find((x) => x.callSid === sid('8')).coveredSeconds, 540);
 });
 
 test('refus seulement à solde nul : solde > 0 entièrement réservé => l\'appel démarre (grâce), solde 0 => refus', async () => {
@@ -463,31 +474,41 @@ test('5 démarrages concurrents (Promise.all) : la somme des réservations ne d�
   for (const p of plans) assert.equal(p.coveredSeconds, (p.reservedCredits) * 60);
 });
 
-test('libération idempotente : deux comptes rendus de fin (et le débit) ne rendent la réserve qu\'une fois', async () => {
+test('libération idempotente : deux comptes rendus de fin (et le débit) ne débitent et ne rendent qu\'une fois', async () => {
   W.minutes = 10; W.reservedCredits = 4; // 4 crédits déjà tenus par un autre appel
-  await G.startGraceCall({ callSid: sid('f'), companyId: C1, path: 'outbound_browser', maxCoveredSeconds: 180 });
-  assert.equal(W.reservedCredits, 7);
-  assert.equal(await G.endGraceCall(sid('f')), 3);
-  assert.equal(await G.endGraceCall(sid('f')), 0);
+  await G.startGraceCall({ callSid: sid('f'), companyId: C1, path: 'outbound_browser' });
+  assert.equal(W.reservedCredits, 10, 'tranche = le libre (6 min)');
+  assert.equal(await G.endGraceCall(sid('f'), { durationSeconds: 90 }), 6);
+  assert.equal(W.minutes, 8, 'débité AVANT de rendre la réserve (2 min)');
+  assert.equal(await G.endGraceCall(sid('f'), { durationSeconds: 90 }), 0);
   assert.equal(await G.releaseForChargedKeys([sid('f')]), 0);
-  assert.equal(W.reservedCredits, 4, 'la réserve de l\'autre appel est intacte');
+  assert.equal(W.minutes, 8); assert.equal(W.reservedCredits, 4, 'la réserve de l\'autre appel est intacte');
+  CALLS = [{ sid: sid('f'), duration: 90, companyId: C1, direction: 'outbound', to: CALLER, from: LINE }];
+  await syncMinutesFromCalls(C1);
+  assert.equal(W.minutes, 8, 'la synchronisation ne le débite pas une seconde fois');
   // Jambe du navigateur (entrant) vue par le portail : la libération passe aussi par elle.
-  await G.startGraceCall({ callSid: sid('g'), companyId: C1, path: 'inbound', maxCoveredSeconds: 120 });
+  await G.startGraceCall({ callSid: sid('g'), companyId: C1, path: 'inbound' });
   [...DL.rows.values()].find((x) => x.callSid === sid('g')).childSids.push(sid('h'));
-  assert.equal(await G.releaseForChargedKeys([sid('h')]), 2);
+  assert.equal(await G.releaseForChargedKeys([sid('h')]), 4);
   assert.equal(W.reservedCredits, 4);
 });
 
-test('balayeur : une réservation orpheline (fin perdue, redémarrage) est rendue 2 min après la coupure, pas avant', async () => {
+test('balayeur : une réservation orpheline (fin perdue, redémarrage) est DÉBITÉE puis rendue 2 min après la coupure, pas avant', async () => {
   W.minutes = 10; W.reservedCredits = 0;
-  await G.startGraceCall({ callSid: sid('i'), companyId: C1, path: 'inbound', maxCoveredSeconds: 300, now: 0 }); // coupure à 10 min
-  assert.equal(W.reservedCredits, 5);
-  let r = await G.sweepGraceDeadlines({ client: null, now: 11 * MIN });
-  assert.equal(r.released, 0);
-  r = await G.sweepGraceDeadlines({ client: null, now: 12 * MIN + 1 });
+  await G.startGraceCall({ callSid: sid('i'), companyId: C1, path: 'inbound', now: 0 }); // tranche 10 min, coupure à 15 min
+  assert.equal(W.reservedCredits, 10);
+  let r = await G.sweepGraceDeadlines({ client: null, now: 16 * MIN });
+  assert.equal(r.released, 0); assert.equal(W.reservedCredits, 10);
+  r = await G.sweepGraceDeadlines({ client: null, now: 17 * MIN + 1 });
   assert.equal(r.released, 1); assert.equal(W.reservedCredits, 0);
+  assert.equal(W.minutes, 0, 'durée inconnue : le temps couvert réservé est débité');
   r = await G.sweepGraceDeadlines({ client: null, now: 20 * MIN });
   assert.equal(r.released, 0, 'jamais deux fois');
+  // Durée connue chez Twilio : c'est elle qui est débitée.
+  W.minutes = 10; W.chargedCallSids = [];
+  await G.startGraceCall({ callSid: sid('n'), companyId: C1, path: 'outbound_browser', now: 0 });
+  await G.sweepGraceDeadlines({ client: fakeTwilio({ statuses: { [sid('n')]: 'completed' } }), now: 17 * MIN + 1 });
+  assert.equal(W.reservedCredits, 0);
 });
 
 test('nouvelle période : solde 0 avec forfait renouvelé => octroi (borné) puis relecture, l\'appel est accepté', async () => {
@@ -496,7 +517,7 @@ test('nouvelle période : solde 0 avec forfait renouvelé => octroi (borné) pui
   const xml = await inbound(sid('j'));
   assert.equal(granted, 1);
   assert.match(xml, /<Client>/);
-  assert.equal([...DL.rows.values()][0].coveredSeconds, 1800);
+  assert.equal([...DL.rows.values()][0].coveredSeconds, 600, 'une tranche de 10 min');
   // Octroi sans effet (pas de période renouvelée) : refus après relecture.
   W.minutes = 0; W.reservedCredits = 0; DL.rows.clear(); pc.grantPlanMinutes = async () => undefined;
   assert.doesNotMatch(await inbound(sid('k')), /<Client>/);
@@ -528,5 +549,98 @@ test('file d\'attente et mobile tenté : chaque <Dial> reçoit le temps restant 
   InboundCall.findOne = async () => ({ companyId: C1, phoneNumber: LINE, from: CALLER, startedAt: new Date(), mobileTried: true, save: async () => {} });
   await pc.handleTwilioInboundDialResult({ body: { CallSid: sid('m'), DialCallStatus: 'completed', DialCallDuration: '30' }, query: { leg: 'mobile' }, get: () => 'orch.test', headers: {} }, res);
   assert.equal(W.reservedCredits, 0);
+});
+
+// ---------------------------------------------------------------- 3e revue : tranches, débit en fin d'appel, réserve auto-réparatrice
+
+test('100 min de solde : l\'agent 1 décroche, l\'agent 2 appelle 30 s après : couvert par une tranche, pas de coupure à 5 min', async () => {
+  W.minutes = 100;
+  await inbound(sid('1'));
+  const xml = await outbound(sid('2'));
+  const row = [...DL.rows.values()].find((x) => x.callSid === sid('2'));
+  assert.equal(row.coveredSeconds, 600); assert.equal(row.graceStartsAt.getTime() - row.startedAt.getTime(), 600_000);
+  assert.equal(timeLimit(xml), 90 * 60 + 300, 'filet large : solde libre au démarrage (90 min) + 5 min');
+  assert.equal(W.reservedCredits, 20);
+});
+
+test('Nomad Solo, 10 min : 4 appels entrants successifs de 12 min sans portail => au plus 5 min offertes, le reste refusé', async () => {
+  plan = 'nomad_solo'; W.minutes = 10;
+  await inbound(sid('3'));
+  const row = [...DL.rows.values()][0]; const t0 = row.startedAt.getTime();
+  await G.sweepGraceDeadlines({ client: twilio, now: t0 + 541_000 }); // 60 s avant la fin de la tranche : rien de libre
+  assert.equal(DL.rows.get(row._id).extensible, false);
+  assert.equal(twilio.hangups.length, 0);
+  // Fin réelle à 12 min (compte rendu signé de fin de sonnerie) : débit borné au solde, puis réserve rendue.
+  await G.endGraceCall(sid('3'), { durationSeconds: 720 });
+  assert.equal(W.minutes, 0); assert.equal(W.reservedCredits, 0);
+  for (const c of ['4', '5', '6']) assert.doesNotMatch(await inbound(sid(c)), /<Client>/, 'solde nul : refus (répondeur)');
+  assert.ok((W.graceWaivedMinutes || 0) <= 5, `offert ${W.graceWaivedMinutes}`);
+  // Un appel qui irait au-delà serait coupé à l'heure : coupure à 10 + 5 min.
+  assert.equal(row.deadline.getTime() - t0, 15 * MIN);
+});
+
+test('appel long : prolongé tranche par tranche par le balayeur tant que du solde est libre, puis grâce de 5 min et coupure', async () => {
+  W.minutes = 25; const t0 = Date.parse('2026-11-20T09:00:00Z');
+  await G.startGraceCall({ callSid: sid('7'), companyId: C1, path: 'outbound_browser', now: t0 });
+  const row = () => [...DL.rows.values()].find((x) => x.callSid === sid('7'));
+  let r = await G.sweepGraceDeadlines({ client: twilio, now: t0 + 9 * MIN - 1000 });
+  assert.equal(r.extended, 0, 'trop tôt');
+  r = await G.sweepGraceDeadlines({ client: twilio, now: t0 + 9 * MIN + 1000 });
+  assert.equal(r.extended, 1); assert.equal(row().coveredSeconds, 1200); assert.equal(W.reservedCredits, 20);
+  r = await G.sweepGraceDeadlines({ client: twilio, now: t0 + 19 * MIN + 1000 });
+  assert.equal(r.extended, 1); assert.equal(row().coveredSeconds, 1500, 'dernière tranche partielle (5 min)');
+  r = await G.sweepGraceDeadlines({ client: twilio, now: t0 + 24 * MIN + 1000 });
+  assert.equal(r.exhausted, 1); assert.equal(row().extensible, false);
+  assert.equal(row().graceStartsAt.getTime(), t0 + 25 * MIN); assert.equal(row().deadline.getTime(), t0 + 30 * MIN);
+  r = await G.sweepGraceDeadlines({ client: twilio, now: t0 + 30 * MIN });
+  assert.equal(r.hungUp, 1); assert.deepEqual(twilio.hangups, [{ callSid: sid('7'), status: 'completed' }]);
+});
+
+test('appel terminé dont le compte rendu s\'est perdu : la prolongation le voit fini chez Twilio, le débite puis rend la réserve', async () => {
+  W.minutes = 30; const t0 = Date.parse('2026-11-20T09:00:00Z');
+  await G.startGraceCall({ callSid: sid('8'), companyId: C1, path: 'outbound_browser', now: t0 });
+  const client = fakeTwilio({ statuses: { [sid('8')]: 'completed' } });
+  client.calls = ((orig) => (id) => ({ ...orig(id), fetch: async () => ({ sid: id, status: 'completed', duration: '125' }) }))(client.calls);
+  const r = await G.sweepGraceDeadlines({ client, now: t0 + 9 * MIN + 1000 });
+  assert.equal(r.finished, 1); assert.equal(W.minutes, 27); assert.equal(W.reservedCredits, 0);
+});
+
+test('crash entre la réservation et l\'échéance : le balayeur recalcule la réserve (somme des échéances tenues)', async () => {
+  W.minutes = 20; W.reservedCredits = 0;
+  await G.startGraceCall({ callSid: sid('9'), companyId: C1, path: 'inbound' }); // tient 10
+  W.reservedCredits += 7; // réserve gonflée : crash après le $inc, avant l'écriture de l'échéance
+  await G.sweepGraceDeadlines({ client: null });
+  assert.equal(W.reservedCredits, 10);
+  // Démarrage en cours (échéance pending récente) : le recalcul attend.
+  await DL.updateOne({ callSid: sid('a') }, { $setOnInsert: { callSid: sid('a'), companyId: C1, path: 'inbound', startedAt: new Date(), reservationStatus: 'pending', status: 'scheduled', graceStartsAt: new Date(Date.now() + 9e6), deadline: new Date(Date.now() + 9e6) } }, { upsert: true });
+  W.reservedCredits = 13;
+  await G.sweepGraceDeadlines({ client: null });
+  assert.equal(W.reservedCredits, 13);
+});
+
+test('signature Twilio invalide sur call-status, inbound-dial-result et voicemail-done : rien n\'est débité ni rendu', async () => {
+  pc.endReportAuthentic = realEndReportAuthentic; // vraie vérification : aucune en-tête X-Twilio-Signature
+  W.minutes = 10;
+  await G.startGraceCall({ callSid: sid('b'), companyId: C1, path: 'inbound' });
+  const res = { type() { return this; }, status() { return this; }, send() { return this; }, json() { return this; } };
+  const req = (body, query = {}) => ({ body, query, get: () => 'orch.test', headers: {} });
+  InboundCall.findOne = async () => ({ companyId: C1, phoneNumber: LINE, from: CALLER, startedAt: new Date(), mobileTried: true, save: async () => {} });
+  await pc.handleTwilioCallStatusWebhook(req({ CallSid: sid('b'), CallStatus: 'completed', CallDuration: '30' }), res);
+  await pc.handleTwilioInboundDialResult(req({ CallSid: sid('b'), DialCallStatus: 'completed', DialCallDuration: '30' }), res);
+  await pc.handleTwilioVoicemailDone(req({ CallSid: sid('b') }), res);
+  assert.equal(W.reservedCredits, 10); assert.equal(W.minutes, 10); assert.deepEqual(W.chargedCallSids, []);
+});
+
+test('startGrace qui pend : le webhook répond en moins de 3 s, sans échéance, avec le filet large', async () => {
+  W.minutes = 10;
+  CallGraceDeadline.findOne = () => ({ lean: () => new Promise(() => {}) });
+  let t0 = Date.now();
+  const xml = await outbound(sid('c'));
+  assert.ok(Date.now() - t0 < 3000, `${Date.now() - t0} ms`);
+  assert.equal(timeLimit(xml), 900);
+  t0 = Date.now();
+  assert.match(await inbound(sid('d')), /<Dial [^>]*timeLimit="900"/);
+  assert.ok(Date.now() - t0 < 3000);
+  assert.equal(DL.rows.size, 0); assert.equal(W.reservedCredits || 0, 0);
 });
 
