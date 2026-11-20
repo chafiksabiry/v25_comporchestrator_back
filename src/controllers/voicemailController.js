@@ -184,9 +184,9 @@ export const voicemailController = {
       // Refus international : même texte que sur tous les canaux, dans la langue de la ligne appelante (en / fr / es).
       if (!maxSeconds) return send(creditFactor > 1 ? spokenRefusal('insufficient_minutes_international', spokenLanguage(line.phoneNumber), { credits: creditFactor }) : buildRefusalTwiml('Solde de minutes insuffisant.'));
       // B.1 : échéance + réservation d'une tranche (10 min) du solde libre, prolongée par le balayeur ; grâce de 5 min puis coupure à l'heure.
-      // timeLimit du <Dial> : filet large (solde libre au démarrage + 5 min). Borné à 2 s : au-delà, aucune échéance, l'appel passe.
+      // timeLimit du <Dial> : filet large (solde total + 5 min). Borné à 2 s : au-delà, aucune échéance, l'appel passe.
       const callSid = String(req.body?.CallSid || '').trim();
-      let covered = maxSeconds;
+      const covered = maxSeconds;
       if (mongoose.connection.readyState === 1 && callSid) {
         const signal = { aborted: false };
         const TIMEOUT = Symbol('timeout');
@@ -195,7 +195,7 @@ export const voicemailController = {
           return null;
         }), 2000, TIMEOUT);
         if (grace === TIMEOUT) signal.aborted = true;
-        else if (grace) covered = Math.min(grace.availableSeconds, maxSeconds);
+        // timeLimit : filet large = solde total + 5 min (le serveur coupe précisément, prolonge dès que du solde se libère).
       }
       const action = callSid ? `https://${req.get('host')}${LINE_CALL_END_PATH}?t=${signLineCallEnd({ secret: config.twilioAuthToken, callSid })}` : null;
       return send(buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds: graceLimitSeconds(covered), action }));
