@@ -8,7 +8,7 @@ import { listLinesFor } from '../services/phoneNumberList.js';
 import { callingInfoOf } from '../services/outboundDestinations.js';
 import { LINE_BUSY_CODE, LINE_BUSY_MESSAGE, LINE_CALL_END_PATH, capacityOf, hasFreeLine, signLineCallEnd, verifyLineCallEnd, lineCallsEnforced, releaseCall, staleCheckFor, takeFirstFreeLine, takeLine } from '../services/lineCalls.js';
 import { checkNumberCountry } from '../services/numberCountry.js';
-import { availabilityFor } from '../services/numberAvailability.js';
+import { availabilityFor, AVAILABILITY_UNAVAILABLE } from '../services/numberAvailability.js';
 import { mergeSearchResults } from '../services/numberSearchMerge.js';
 import { phoneLineCurrency, purchaseCurrency } from '../services/purchaseCurrency.js';
 import { checkCompanyDestination } from '../services/outboundPolicy.js';
@@ -498,7 +498,8 @@ class PhoneNumberController {
       res.status(status).json(body);
     } catch (error) {
       console.error('[telephony] disponibilité des numéros illisible:', error?.message);
-      res.status(503).json({ error: 'Number availability check failed', code: 'NUMBER_AVAILABILITY_UNAVAILABLE' });
+      // Même code de panne que la garde du paiement (/subscriptions/checkout/init) : AVAILABILITY_UNAVAILABLE, réessayable.
+      res.status(503).json({ error: 'Number availability check failed', code: AVAILABILITY_UNAVAILABLE, retryable: true });
     }
   }
 

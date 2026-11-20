@@ -8,10 +8,14 @@ import { IDENTITY_NUMBER_COUNTRIES } from '../utils/europeZone.js';
  * numéro. Interrogé AVANT tout paiement. Mêmes sources que la recherche de l'étape « Votre numéro » :
  *  - inventaire Twilio déjà possédé et non affecté (jamais bloqué par le dossier réglementaire) ;
  *  - recherche Twilio (`searchTwilioNumbers`, qui vérifie le dossier réglementaire de plateforme du pays : getBundleSidForCountry).
- * Réponse : { available, reason? } avec reason ∈ 'no_inventory' | 'regulatory' | 'not_allowed'. Mise en cache par pays (1 h) ;
- * une panne passagère n'est jamais mise en cache (elle remonte en erreur).
+ * Réponse : { available, reason? } avec reason ∈ 'no_inventory' | 'regulatory' | 'not_allowed'. Mise en cache par pays pour
+ * l'affichage : « disponible » 10 min (un stock peut s'épuiser), « indisponible » 1 h ; une panne passagère n'est jamais mise en
+ * cache (elle remonte en erreur). La garde du paiement relit TOUJOURS sans cache (`fresh`), voir soloCheckoutEligibility.
  */
-export const AVAILABILITY_TTL_MS = 60 * 60 * 1000;
+export const AVAILABLE_TTL_MS = 10 * 60 * 1000;
+export const UNAVAILABLE_TTL_MS = 60 * 60 * 1000;
+/** @deprecated durée du cache « indisponible » ; gardé pour compatibilité. */
+export const AVAILABILITY_TTL_MS = UNAVAILABLE_TTL_MS;
 const cache = new Map();
 
 export function clearAvailabilityCache() {
@@ -23,11 +27,12 @@ const isNotServed = (e) => e?.status === 404 || e?.code === 20404 || e?.code ===
 
 /**
  * Disponibilité d'un pays, sans tenir compte de l'abonné (mise en cache par pays).
+ * `fresh` : ignore le cache (relecture chez l'opérateur) et le rafraîchit ; utilisé juste avant un paiement.
  * @returns {Promise<{available: boolean, reason?: 'no_inventory' | 'regulatory'}>}
  */
-export async function countryAvailability(countryCode, { service = phoneNumberService, now = Date.now } = {}) {
+export async function countryAvailability(countryCode, { service = phoneNumberService, now = Date.now, fresh = false } = {}) {
   const cc = normalizeCountryCode(countryCode);
-  const hit = cache.get(cc);
+  const hit = fresh ? null : cache.get(cc);
   if (hit && hit.expires > now()) return hit.value;
 
   let value;
@@ -49,7 +54,7 @@ export async function countryAvailability(countryCode, { service = phoneNumberSe
       else throw err;
     }
   }
-  cache.set(cc, { value, expires: now() + AVAILABILITY_TTL_MS });
+  cache.set(cc, { value, expires: now() + (value.available ? AVAILABLE_TTL_MS : UNAVAILABLE_TTL_MS) });
   return value;
 }
 
@@ -117,7 +122,8 @@ export async function soloCheckoutEligibility(req, companyId, deps = {}) {
   const reasons = {};
   for (const cc of candidates) {
     try {
-      const value = await countryAvailability(cc, deps);
+      // Relu SANS cache : un stock épuisé depuis le dernier affichage ne doit jamais ouvrir un paiement.
+      const value = await countryAvailability(cc, { ...deps, fresh: true });
       if (value.available) return { ok: true, numberCountry: cc };
       reasons[cc] = value.reason || 'no_inventory';
     } catch {

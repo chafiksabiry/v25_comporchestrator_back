@@ -20,7 +20,7 @@ try { import.meta.resolve('web-push'); } catch {
 const { clearCompanyCache, identityCountryOf, companyNumberProfile } = await import('../middleware/companyScope.js');
 const { checkNumberCountry } = await import('../services/numberCountry.js');
 const { numberCountryAllowed, IDENTITY_NUMBER_COUNTRIES } = await import('../utils/europeZone.js');
-const { countryAvailability, availabilityFor, clearAvailabilityCache, AVAILABILITY_TTL_MS } = await import('../services/numberAvailability.js');
+const { countryAvailability, availabilityFor, clearAvailabilityCache, AVAILABLE_TTL_MS, UNAVAILABLE_TTL_MS } = await import('../services/numberAvailability.js');
 const { phoneNumberService } = await import('../services/phoneNumberService.js');
 const { phoneNumberRoutes } = await import('../routes/phoneNumber.js');
 
@@ -157,16 +157,29 @@ describe('disponibilité d’un pays (countryAvailability)', () => {
     assert.deepEqual(await countryAvailability('JP', { service: t }), { available: false, reason: 'no_inventory' });
     assert.deepEqual(await countryAvailability('DZ', { service: t }), { available: false, reason: 'no_inventory' });
   });
-  it('réponse mise en cache 1 h par pays ; une panne passagère n’est pas mise en cache', async () => {
+  it('cache par pays : « indisponible » 1 h, « disponible » 10 min ; `fresh` relit ; une panne n’est pas mise en cache', async () => {
+    assert.equal(AVAILABLE_TTL_MS, 10 * 60 * 1000);
+    assert.equal(UNAVAILABLE_TTL_MS, 60 * 60 * 1000);
     let clock = 1_000;
     const now = () => clock;
-    const t = fakeTwilio({ search: { MA: [] } });
+    const t = fakeTwilio({ search: { MA: [], FR: [{ phoneNumber: '+33142000000' }] } });
     await countryAvailability('MA', { service: t, now });
     await countryAvailability('MA', { service: t, now });
     assert.equal(t.calls.search.length, 1);
-    clock += AVAILABILITY_TTL_MS + 1;
+    clock += AVAILABLE_TTL_MS + 1;
+    await countryAvailability('MA', { service: t, now });
+    assert.equal(t.calls.search.length, 1, '« indisponible » encore en cache après 10 min');
+    clock += UNAVAILABLE_TTL_MS;
     await countryAvailability('MA', { service: t, now });
     assert.equal(t.calls.search.length, 2);
+    await countryAvailability('FR', { service: t, now });
+    await countryAvailability('FR', { service: t, now });
+    assert.equal(t.calls.search.length, 3);
+    clock += AVAILABLE_TTL_MS + 1;
+    await countryAvailability('FR', { service: t, now });
+    assert.equal(t.calls.search.length, 4, '« disponible » relu après 10 min');
+    await countryAvailability('FR', { service: t, now, fresh: true });
+    assert.equal(t.calls.search.length, 5, '`fresh` ignore le cache');
     const down = fakeTwilio({ search: { BE: err({ message: 'Twilio search timeout' }) } });
     await assert.rejects(() => countryAvailability('BE', { service: down, now }));
     await assert.rejects(() => countryAvailability('BE', { service: down, now }));
@@ -219,6 +232,6 @@ describe('route GET /api/phone-numbers/availability', () => {
     assert.equal((await call(`/availability?countryCode=FR&companyId=${MA_CO}`, 'stranger')).status, 403);
     const down = await call('/availability?countryCode=BE', 'jp');
     assert.equal(down.status, 503);
-    assert.equal(down.body.code, 'NUMBER_AVAILABILITY_UNAVAILABLE');
+    assert.equal(down.body.code, 'AVAILABILITY_UNAVAILABLE', 'code de panne unifié avec la garde du paiement');
   });
 });
