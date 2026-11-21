@@ -77,6 +77,14 @@ assert.match(R.consentTwiml(R.consentLanguageFor('+14155550100')), /<Say languag
 assert.equal(R.normalizeConsentLanguage('ar_fr'), 'ar_fr', 'code accepté par le webhook d’annonce (?l=ar_fr)');
 assert.equal(R.consentLanguageFor('anonymous'), 'en', 'numéro illisible : anglais (langue par défaut)');
 assert.equal(R.consentLanguageFor(undefined), 'en');
+// Texte brut du consentement (message d'ouverture de l'agent IA) : ar_fr = arabe puis français ; code inconnu : anglais.
+assert.equal(R.consentText('ar_fr'), `${R.CONSENT_TEXTS.ar} ${R.CONSENT_TEXTS.fr}`);
+assert.equal(R.consentText('fr'), R.CONSENT_TEXTS.fr); assert.equal(R.consentText('en'), R.CONSENT_TEXTS.en);
+assert.equal(R.consentText('xx'), R.CONSENT_TEXTS.en); assert.equal(R.consentText(null), R.CONSENT_TEXTS.en);
+// Voix masculine (agent IA) : Mathieu en français ; l'arabe garde Zeina (seule voix) ; défaut inchangé (féminine).
+assert.match(R.consentSay('fr', { female: false }), /voice="Polly\.Mathieu"/);
+assert.deepEqual([...R.consentSay('ar_fr', { female: false }).matchAll(/voice="([^"]+)"/g)].map((m) => m[1]), ['Polly.Zeina', 'Polly.Mathieu']);
+assert.equal(R.consentSay('fr'), R.consentSay('fr', { female: true }));
 assert.match(R.consentTwiml('es'), /^<\?xml[^>]*\?><Response><Say [^>]*>Esta llamada/);
 
 // ---------------------------------------------------------------- plan d'enregistrement

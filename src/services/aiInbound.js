@@ -22,7 +22,8 @@ import {
 } from './aiInboundCore.js';
 import { say, buildNoAnswerTwiml, xmlEscape } from './inboundFlow.js';
 import { resolveDashCallsApi } from './voicemailAnalysis.js';
-import { CONSENT_TEXTS } from './callRecording.js';
+import { consentLanguageFor, consentSay, consentText } from './callRecording.js';
+import { languageForPhone } from './companyLanguage.js';
 import { normalizePhone, displayName } from './contacts.js';
 import { buildTransferTwiml, entryAvailability, isReachableNow, signTransferState, TRANSFER_WEBHOOK_PATH } from './callTransfer.js';
 import { normalizeOutboundDestination, maxSecondsForBalance } from './browserOutbound.js';
@@ -170,7 +171,10 @@ export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, 
     const short = language.startsWith('en') ? 'en' : 'fr';
     const mode = announceMode();
     const canTransfer = settings.actions.transfer && settings.transferTargets.length > 0;
-    const text = announcementText({ language, companyName: settings.companyName, canTransfer, voice: settings.voice, recorded, consentText: CONSENT_TEXTS[short] });
+    // Consentement (banc d'écoute) : même choix de langue que l'annonce d'enregistrement des appels humains (phoneNumberController :
+    // indicatif de l'appelant, sinon pays de la ligne appelée, sinon anglais). Maghreb (`ar_fr`) : arabe PUIS français.
+    const consentLang = consentLanguageFor(from, languageForPhone(to));
+    const text = announcementText({ language, companyName: settings.companyName, canTransfer, voice: settings.voice, recorded, consentText: consentText(consentLang) });
     // Pour les consignes de dash : « total » = aucun humain disponible (l'IA propose rappel / message), « partial » = humains présents.
     const level = decision.trigger === 'first' && humansAvailable ? 'partial' : 'total';
     const maxCallSeconds = settings.maxCallMinutes * 60;
@@ -218,7 +222,10 @@ export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, 
     await InboundCall.updateOne({ callSid }, { $setOnInsert: { companyId: oid(companyId), gigId: line.gigId || null, phoneNumber: to, from, callSid, startedAt: new Date(deps.now()), status: 'answered', route: 'ai_agent', answeredOn: 'ai_agent', answeredBy: 'ai-agent', waitSeconds: 0 } }, { upsert: true }).catch((e) => console.error('[ai-inbound] InboundCall:', e.message));
 
     const action = `${baseUrl}${AFTER_STREAM_PATH}?s=${encodeURIComponent(signAfterStreamState({ secret: config.twilioAuthToken || deps.env.TWILIO_AUTH_TOKEN, companyId, callSid }))}`;
-    const announce = mode === 'twiml' ? say(text, settings.voice === 'male' ? 'onyx' : 'nova', short) : '';
+    // TwiML : annonce IA dans la langue de l'agent, puis consentement en <Say> séparé(s) dans sa propre langue et voix (ar_fr : deux <Say>).
+    const announce = mode === 'twiml'
+      ? `${say(announcementText({ language, companyName: settings.companyName, canTransfer, voice: settings.voice, recorded: false }), settings.voice === 'male' ? 'onyx' : 'nova', short)}${recorded ? consentSay(consentLang, { female: settings.voice !== 'male' }) : ''}`
+      : '';
     console.log(`[ai-inbound] ${callSid} : agent IA (${decision.trigger}, ${session.provider} ${session.model})`);
     return `${announce}<Connect action="${xmlEscape(action)}" method="POST"><Stream url="${xmlEscape(session.streamUrl)}"/></Connect>`;
   } catch (error) {
