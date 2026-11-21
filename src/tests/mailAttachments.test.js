@@ -1,7 +1,8 @@
 // Run: JWT_SECRET=test TELNYX_API_KEY=x node src/tests/mailAttachments.test.js
 // Pièces jointes et « Répondre à tous » des e-mails écrits depuis HARX (nouvel e-mail, réponse, réponse à tous, transfert).
 // Couvre : MIME Gmail (multipart/mixed, base64, RFC 2231, Cc, fil), Outlook (Graph, Cc, plafond 3 Mo), limites, types bloqués, noms de fichiers,
-// propriétaire seul (une boîte n'envoie que pour la personne qui l'a connectée), destinataires de « Répondre à tous », aucune pièce stockée ni journalisée.
+// propriétaire seul (une boîte n'envoie que pour la personne qui l'a connectée), destinataires de « Répondre à tous », contenu des pièces jamais stocké
+// ni journalisé (seuls nom / taille / type sont conservés 90 jours avec le texte, dans EmailContent, jamais dans le journal).
 // Base et réseau SIMULÉS (même banc que mailOwnerOnly.test.js) : aucun appel vers un vrai Google / Microsoft.
 import assert from 'node:assert/strict';
 import express from 'express';
@@ -46,6 +47,7 @@ const { default: SecretariatTools } = await import('../models/SecretariatTools.j
 const { default: InboundEmail } = await import('../models/InboundEmail.js');
 const { default: FollowUpItem } = await import('../models/FollowUpItem.js');
 const { default: EmailLog } = await import('../models/EmailLog.js');
+const { setContentDeps } = await import('../services/emailContent.js');
 const { default: OAuthPending } = await import('../models/OAuthPending.js');
 const { default: ReceptionDirectory } = await import('../models/ReceptionDirectory.js');
 const { secretariatToolsRoutes } = await import('../routes/secretariatTools.js');
@@ -54,7 +56,8 @@ const { followUpRoutes } = await import('../routes/followUps.js');
 const { clearCompanyCache } = await import('../middleware/companyScope.js');
 
 // ---------- faux modèles (une mini-base en mémoire)
-const pendings = []; const conns = []; const accounts = []; const toolsDocs = []; const inbox = []; const items = []; const emailLogs = [];
+const pendings = []; const conns = []; const accounts = []; const toolsDocs = []; const inbox = []; const items = []; const emailLogs = []; const contents = [];
+setContentDeps({ create: async (doc) => { contents.push(clone(doc)); return doc; } });
 let seq = 0;
 const getPath = (o, p) => p.split('.').reduce((a, k) => (a == null ? undefined : a[k]), o);
 const setPath = (d, path, val) => { const keys = path.split('.'); const last = keys.pop(); keys.reduce((a, k) => (a[k] = a[k] || {}), d)[last] = val; };
@@ -157,7 +160,7 @@ const putShared = (id, over = {}, name = 'SHARED') => {
   };
   accounts.push(row); return row;
 };
-const resetDb = () => { for (const a of [conns, accounts, toolsDocs, inbox, items, emailLogs, pendings]) a.length = 0; httpCalls.length = 0; handlers = []; clearCompanyCache(); };
+const resetDb = () => { for (const a of [conns, accounts, toolsDocs, inbox, items, emailLogs, pendings, contents]) a.length = 0; httpCalls.length = 0; handlers = []; clearCompanyCache(); };
 
 // ---------- faux réseau fournisseurs
 const httpCalls = []; let handlers = [];
@@ -343,10 +346,15 @@ try {
   assert.match(sent, /\r\nTo: client@exemple\.fr\r\nCc: paul@client\.fr, lea@client\.fr\r\n/); assert.match(sent, /In-Reply-To: <orig@client\.fr>/);
   assert.ok(sent.includes("filename*=UTF-8''Bilan-confidentiel-%C3%A9t%C3%A9%202026.pdf"), 'nom accentué transmis (multipart UTF-8 → RFC 2231)');
   assert.ok(partsOf(sent).slice(1)[0].data.equals(PDF));
-  // rien n'est stocké : le journal ne contient ni nom, ni type, ni contenu de pièce jointe
+  // le journal ne contient ni nom, ni type, ni contenu de pièce jointe
   assert.equal(emailLogs.length, 1);
   const logText = JSON.stringify(emailLogs);
   assert.ok(!logText.includes('Bilan') && !logText.includes('plan.png') && !logText.includes(PDF.toString('base64').slice(0, 40)) && !/attach/i.test(Object.keys(emailLogs[0]).join(',')), 'aucune pièce jointe dans le journal');
+  // contenu conservé 90 jours (EmailContent) : nom, taille et type des pièces seulement, jamais leur contenu
+  assert.equal(contents.length, 1);
+  assert.deepEqual(contents[0].attachments, [{ name: SECRET_NAME, size: PDF.length, type: 'application/pdf' }, { name: 'plan.png', size: 5, type: 'image/png' }]);
+  assert.ok(!JSON.stringify(contents).includes(PDF.toString('base64').slice(0, 40)), 'contenu de pièce jamais conservé');
+  assert.equal(String(contents[0].logId), String(emailLogs[0]._id)); assert.equal(contents[0].sentById, 'owner1');
   // JSON sans pièce jointe : inchangé
   r = await mail('POST', '', { user: 'owner1', body: { ...FIELDS } }); assert.equal(r.status, 201); assert.equal(gmailSends().length, 2);
   // configuration : limites annoncées au front

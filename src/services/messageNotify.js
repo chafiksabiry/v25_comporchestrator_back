@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import EmailLog from '../models/EmailLog.js';
+import { saveEmailContent } from './emailContent.js';
 import { cleanDisplayName, checkRate, limits } from './emailService.js';
 import { loadUserProfile } from './followUpDirectory.js';
 import { messageEmail } from './receptionDirectory.js';
@@ -19,6 +20,8 @@ const defaults = {
   resolveUserMailbox, sendViaMailbox, loadEmailIdentity, loadUserProfile,
   countRecent: async (companyId, since) => EmailLog.countDocuments({ companyId: new mongoose.Types.ObjectId(String(companyId)), createdAt: { $gte: since } }),
   log: async (row) => EmailLog.create(row),
+  /** Contenu conservé 90 jours (texte de la notification) ; ne lève jamais. */
+  saveContent: saveEmailContent,
 };
 let deps = defaults;
 /** Remplace les dépendances (tests). Sans argument, rétablit les vraies. */
@@ -47,10 +50,12 @@ export async function notifyByMail({ companyId, followUpId, entry, message, take
     } catch (error) {
       const code = error instanceof SecretariatError ? error.code : 'provider_error';
       console.error(`message notify (${mailbox.provider}): ${code}`);
-      await deps.log({ ...base, status: 'failed', error: `provider_${code}` }).catch(() => {});
+      const failed = await deps.log({ ...base, status: 'failed', error: `provider_${code}` }).catch(() => null);
+      if (failed) await Promise.resolve(deps.saveContent({ log: failed, text, files: [] })).catch(() => {});
       return 'failed';
     }
-    await deps.log({ ...base, status: 'sent' }).catch(() => {});
+    const log = await deps.log({ ...base, status: 'sent' }).catch(() => null);
+    if (log) await Promise.resolve(deps.saveContent({ log, text, files: [] })).catch(() => {});
     return 'sent';
   } catch (error) {
     console.error('message notify:', error?.message);
