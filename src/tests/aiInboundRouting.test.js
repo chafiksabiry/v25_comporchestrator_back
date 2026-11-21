@@ -161,3 +161,30 @@ test('banc d’écoute : consentement de l’IA dans la langue de l’annonce hu
   await inbound({ from: '+14155550100' });
   assert.ok(dashBodies.at(-1).announcement.text.endsWith(CT.en)); assert.ok(!dashBodies.at(-1).announcement.text.includes(CT.fr));
 });
+
+test('agent IA sans langue réglée : langue de la ligne appelée (+44 en-GB, +33 fr-FR) ; réglage explicite prioritaire ; rien écrit dans les réglages', async () => {
+  Object.assign(env, { AI_INBOUND_ENABLED: 'true', AI_INBOUND_COMPANY_IDS: C1 });
+  const UK = '+442046522552';
+  const ukLine = { _id: 'l2', companyId: C1, phoneNumber: UK, createdAt: new Date('2026-01-01T00:00:00Z'), gigId: null };
+  PhoneNumber.findOne = (f) => { const row = String(f.phoneNumber) === UK ? ukLine : null; const c = { sort: () => c, select: () => c, lean: async () => row, then: (r, j) => Promise.resolve(row).then(r, j) }; return c; };
+  const settingsWrites = [];
+  AiAgentSettings.findOneAndUpdate = async (...a) => { settingsWrites.push(a); return null; };
+  AiAgentSettings.updateOne = async (...a) => { settingsWrites.push(a); return {}; };
+  const call = async (to) => {
+    let out = null; const res = { type() { return this; }, status() { return this; }, send(x) { out = x; return this; } };
+    const body = { To: to, From: '+447700900123', CallSid: `CA${'c'.repeat(32)}` };
+    const url = `${env.PUBLIC_API_BASE_URL.replace(/\/api$/, '')}${PATH}`;
+    await pc.handleTwilioInboundCall({ body, query: {}, originalUrl: PATH, headers: { 'x-twilio-signature': twilio.getExpectedTwilioSignature(process.env.TWILIO_AUTH_TOKEN, url, body) }, get: () => 'orch.test' }, res);
+    return out;
+  };
+  assert.match(await call(UK), /<Connect /);
+  assert.equal(aiCalls.at(-1).language, 'en-GB');
+  assert.equal(dashBodies.at(-1).language, 'en-GB');
+  assert.match(dashBodies.at(-1).announcement.text, /artificial intelligence/);
+  assert.doesNotMatch(dashBodies.at(-1).announcement.text, /intelligence artificielle/);
+  aiSettings.languages = ['fr-FR'];
+  await call(UK);
+  assert.equal(dashBodies.at(-1).language, 'fr-FR', 'réglage explicite de l’entreprise prioritaire');
+  delete aiSettings.languages;
+  assert.equal(settingsWrites.length, 0, 'aucune écriture des réglages');
+});

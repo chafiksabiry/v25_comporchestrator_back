@@ -127,6 +127,10 @@ export const PHRASES = Object.freeze({
     testCallInvalid: "Confirmation invalide. Au revoir.",
     inboundTestSuccess: "Test d'appel entrant réussi. Votre ligne reçoit bien les appels. Au revoir.",
     testCallSpoken: "Bonjour. Ceci est un appel de test depuis la plateforme Harx. Votre ligne est parfaitement configurée. Au revoir !",
+    callbackNotAuthorized: "Rappel non autorisé.",
+    callbackCannotCall: "Impossible de rappeler ce numéro.",
+    callbackInsufficientMinutes: "Solde de minutes insuffisant.",
+    callbackError: "Une erreur est survenue.",
   },
   en: {
     voicemailPrompt: 'No advisor is available at the moment. Your message will be recorded. Please leave it after the beep and we will call you back shortly.',
@@ -148,6 +152,10 @@ export const PHRASES = Object.freeze({
     testCallInvalid: "Invalid confirmation. Goodbye.",
     inboundTestSuccess: "Inbound call test successful. Your line is receiving calls. Goodbye.",
     testCallSpoken: "Hello. This is a test call from the Harx platform. Your line is fully set up. Goodbye!",
+    callbackNotAuthorized: "Callback not authorized.",
+    callbackCannotCall: "This number cannot be called back.",
+    callbackInsufficientMinutes: "Insufficient minutes balance.",
+    callbackError: "An error occurred.",
   },
   es: {
     voicemailPrompt: 'En este momento no hay ningún asesor disponible. Su mensaje será grabado. Déjelo después de la señal y le llamaremos en breve.',
@@ -169,6 +177,10 @@ export const PHRASES = Object.freeze({
     testCallInvalid: "Confirmación no válida. Hasta pronto.",
     inboundTestSuccess: "Prueba de llamada entrante superada. Su línea recibe las llamadas correctamente. Hasta pronto.",
     testCallSpoken: "Hola. Esta es una llamada de prueba desde la plataforma Harx. Su línea está perfectamente configurada. Hasta pronto.",
+    callbackNotAuthorized: "Devolución de llamada no autorizada.",
+    callbackCannotCall: "No se puede devolver la llamada a este número.",
+    callbackInsufficientMinutes: "Saldo de minutos insuficiente.",
+    callbackError: "Se ha producido un error.",
   },
   ar: {
     voicemailPrompt: 'لا يوجد أي مستشار متاح حالياً. سيتم تسجيل رسالتك. اتركها بعد الصافرة وسنعاود الاتصال بك قريباً.',
@@ -190,6 +202,10 @@ export const PHRASES = Object.freeze({
     testCallInvalid: "تأكيد غير صالح. مع السلامة.",
     inboundTestSuccess: "نجح اختبار المكالمة الواردة. خطك يستقبل المكالمات بشكل صحيح. مع السلامة.",
     testCallSpoken: "مرحباً. هذه مكالمة تجريبية من منصة Harx. تم إعداد خطك بالكامل. مع السلامة.",
+    callbackNotAuthorized: "معاودة الاتصال غير مسموح بها.",
+    callbackCannotCall: "لا يمكن معاودة الاتصال بهذا الرقم.",
+    callbackInsufficientMinutes: "رصيد الدقائق غير كافٍ.",
+    callbackError: "حدث خطأ.",
   },
   de: {
     voicemailPrompt: 'Im Moment ist kein Berater verfügbar. Ihre Nachricht wird aufgezeichnet. Sprechen Sie sie nach dem Signalton auf, wir rufen Sie in Kürze zurück.',
@@ -211,6 +227,10 @@ export const PHRASES = Object.freeze({
     testCallInvalid: "Ungültige Bestätigung. Auf Wiederhören.",
     inboundTestSuccess: "Test für eingehende Anrufe erfolgreich. Ihre Leitung empfängt Anrufe. Auf Wiederhören.",
     testCallSpoken: "Hallo. Dies ist ein Testanruf der Harx-Plattform. Ihre Leitung ist vollständig eingerichtet. Auf Wiederhören.",
+    callbackNotAuthorized: "Rückruf nicht erlaubt.",
+    callbackCannotCall: "Diese Nummer kann nicht zurückgerufen werden.",
+    callbackInsufficientMinutes: "Minutenguthaben nicht ausreichend.",
+    callbackError: "Ein Fehler ist aufgetreten.",
   },
   it: {
     voicemailPrompt: 'Al momento nessun consulente è disponibile. Il suo messaggio verrà registrato. Lo lasci dopo il segnale acustico e la richiameremo al più presto.',
@@ -232,6 +252,10 @@ export const PHRASES = Object.freeze({
     testCallInvalid: "Conferma non valida. Arrivederci.",
     inboundTestSuccess: "Test di chiamata in entrata riuscito. La sua linea riceve correttamente le chiamate. Arrivederci.",
     testCallSpoken: "Buongiorno. Questa è una chiamata di prova dalla piattaforma Harx. La sua linea è configurata correttamente. Arrivederci.",
+    callbackNotAuthorized: "Richiamata non autorizzata.",
+    callbackCannotCall: "Impossibile richiamare questo numero.",
+    callbackInsufficientMinutes: "Credito di minuti insufficiente.",
+    callbackError: "Si è verificato un errore.",
   },
   nl: {
     voicemailPrompt: 'Er is op dit moment geen adviseur beschikbaar. Uw bericht wordt opgenomen. Spreek het in na de piep, dan bellen we u zo snel mogelijk terug.',
@@ -253,6 +277,10 @@ export const PHRASES = Object.freeze({
     testCallInvalid: "Ongeldige bevestiging. Tot ziens.",
     inboundTestSuccess: "Test van inkomende oproepen geslaagd. Uw lijn ontvangt oproepen. Tot ziens.",
     testCallSpoken: "Hallo. Dit is een testoproep van het Harx-platform. Uw lijn is volledig ingesteld. Tot ziens.",
+    callbackNotAuthorized: "Terugbellen niet toegestaan.",
+    callbackCannotCall: "Dit nummer kan niet worden teruggebeld.",
+    callbackInsufficientMinutes: "Onvoldoende belminuten.",
+    callbackError: "Er is een fout opgetreden.",
   },
   pt: {
     voicemailPrompt: 'Neste momento não há nenhum consultor disponível. A sua mensagem será gravada. Deixe-a após o sinal e voltaremos a ligar-lhe em breve.',
@@ -274,6 +302,10 @@ export const PHRASES = Object.freeze({
     testCallInvalid: "Confirmação inválida. Até breve.",
     inboundTestSuccess: "Teste de chamada recebida concluído com sucesso. A sua linha recebe chamadas. Até breve.",
     testCallSpoken: "Olá. Esta é uma chamada de teste da plataforma Harx. A sua linha está totalmente configurada. Até breve.",
+    callbackNotAuthorized: "Chamada de retorno não autorizada.",
+    callbackCannotCall: "Não é possível ligar de volta para este número.",
+    callbackInsufficientMinutes: "Saldo de minutos insuficiente.",
+    callbackError: "Ocorreu um erro.",
   },
 });
 
