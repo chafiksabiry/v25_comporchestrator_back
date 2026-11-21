@@ -143,7 +143,11 @@ async function benchProvider(companyId, settings) {
  * @param {boolean} humansAvailable  un humain (navigateur ou mobile) va sonner
  * @param {object|null|undefined} queue  file de l'appel (undefined : la déterminer)
  */
-export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, stage = 'call', humansAvailable = false, queue, signatureValid = () => false }) {
+/**
+ * `humansAvailable` : un humain va sonner (décision de routage « après les humains »). `humansPresent` (par défaut = `humansAvailable`) :
+ * un humain est réellement présent (niveau « partial » / « total » de l'IA « en premier ») ; faux pour un titulaire Nomad joint par push seule.
+ */
+export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, stage = 'call', humansAvailable = false, humansPresent = humansAvailable, queue, signatureValid = () => false }) {
   const companyId = line?.companyId ? String(line.companyId) : '';
   if (!companyId || !callSid) return null;
   // Drapeau global coupé : aucun accès base, flux classique strictement inchangé. Sinon liste blanche, ou abonnement ai_agent=true.
@@ -172,7 +176,7 @@ export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, 
     const canTransfer = settings.actions.transfer && settings.transferTargets.length > 0;
     const text = announcementText({ language, companyName: settings.companyName, canTransfer, voice: settings.voice, recorded, consentText: CONSENT_TEXTS[short] });
     // Pour les consignes de dash : « total » = aucun humain disponible (l'IA propose rappel / message), « partial » = humains présents.
-    const level = decision.trigger === 'first' && humansAvailable ? 'partial' : 'total';
+    const level = decision.trigger === 'first' && humansPresent ? 'partial' : 'total';
     const maxCallSeconds = settings.maxCallMinutes * 60;
     aiCall = await AiInboundCall.create({
       companyId: oid(companyId), callSid, from, to, startedAt: new Date(deps.now()), status: 'starting', level, trigger: decision.trigger,
