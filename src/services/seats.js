@@ -266,7 +266,7 @@ async function readSeatsState({ db, stripe, companyId }) {
     return notApplicable('no_subscription', used, tier, "Aucun abonnement Call Centre actif ou en essai : pas de siège à facturer.");
   }
   if (tier === 'nomad_solo') {
-    return notApplicable('nomad_solo', used, tier, "Nomad Solo : un seul utilisateur, aucun siège en plus.");
+    return notApplicable('nomad_solo', used, tier, "Nomad : un seul utilisateur, aucun siège en plus.");
   }
   let price = null;
   let billedQuantity = null;
