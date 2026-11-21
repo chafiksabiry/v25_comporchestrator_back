@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { companyLanguage } from '../services/companyLanguageLookup.js';
 import EmailLog from '../models/EmailLog.js';
+import EmailContent from '../models/EmailContent.js';
 import FollowUpItem from '../models/FollowUpItem.js';
 import { callerAccess, scopeToCompany, ScopeError } from '../middleware/companyScope.js';
 import { loadUserProfile } from '../services/followUpDirectory.js';
@@ -13,6 +14,7 @@ import { loadEmailIdentity } from '../services/secretariatTools.js';
 import { composeSignature, listAccounts, requireAccount, sendFromAccount } from '../services/secretariatSharedAccounts.js';
 import { buildPayload, checkRate, limits, validateSend } from '../services/emailService.js';
 import { AttachmentError, limitsFor, prepareAttachments } from '../services/mailAttachments.js';
+import { contentView, isObjectId, saveEmailContent } from '../services/emailContent.js';
 
 const fail = (res, status, message, code) => res.status(status).json({ success: false, error: code || message, message, ...(code ? { code } : {}) });
 /** 409 : aucune messagerie utilisable. `code` pour le portail, `error` identique (comme les autres refus de ce contrôleur). */
@@ -20,7 +22,8 @@ const refuse = (res, code, message) => res.status(409).json({ success: false, co
 const NOT_ALLOWED = 'Seuls le titulaire et les membres autorisés à gérer les appels peuvent envoyer des e-mails.';
 const HOUR = 3600_000;
 /**
- * Pièces jointes de l'auteur, vérifiées APRÈS le contrôle du propriétaire de la boîte et selon les limites du fournisseur. Jamais stockées ni journalisées.
+ * Pièces jointes de l'auteur, vérifiées APRÈS le contrôle du propriétaire de la boîte et selon les limites du fournisseur. Leur contenu n'est jamais
+ * stocké ni journalisé ; seuls leur nom, leur taille et leur type sont conservés 90 jours avec le texte (EmailContent).
  * Répond lui-même (400 / 413 / 415) et renvoie null en cas de refus.
  */
 function attachmentsFor(req, res, provider) {
@@ -40,6 +43,8 @@ const extras = (v, files, payload) => ({ cc: v.cc, inReplyTo: v.inReplyTo, refer
 const REFUSED = 'Votre messagerie connectée a refusé l\'envoi. Reconnectez-la dans Paramétrage > Outils.';
 const NOT_CONNECTED = 'Connectez votre messagerie (Gmail ou Outlook) dans Paramétrage > Outils pour envoyer des e-mails.';
 const UNAVAILABLE = 'Votre messagerie connectée est momentanément indisponible. Aucun e-mail n’a été envoyé : réessayez dans un instant.';
+/** Contenu conservé 90 jours (texte envoyé + nom / taille / type des pièces), envoi réussi OU échoué. Ne lève jamais : n'empêche pas l'envoi. */
+const keepContent = (log, payload, files) => (log ? saveEmailContent({ log, text: payload.textContent, files }) : false);
 
 /**
  * Droits de l'appelant : titulaire, ou membre avec le droit d'appels. Chacun n'envoie QUE depuis une boîte qu'il a lui-même connectée (sa connexion, sa messagerie
@@ -141,13 +146,14 @@ async function sendFromShared(req, res, access, accountId) {
   } catch (error) {
     const e = error instanceof SecretariatError ? error : new SecretariatError('provider_error', '');
     console.error(`emails send (compte partagé ${account.provider}): ${e.code}`);
-    await EmailLog.create({ ...base, status: 'failed', error: `provider_${e.code}` }).catch(() => {});
+    await keepContent(await EmailLog.create({ ...base, status: 'failed', error: `provider_${e.code}` }).catch(() => null), payload, files);
     if (e.code === 'needs_reauth' || e.code === 'not_connected') return res.status(409).json({ success: false, code: 'account_needs_reauth', error: 'account_needs_reauth', message: e.message });
     if (e.code === 'provider_error') return fail(res, 502, UNAVAILABLE, 'email_provider_unavailable');
     const refused = personal ? 'Votre messagerie a refusé l’envoi. Aucun e-mail n’a été envoyé : reconnectez-la depuis votre profil.' : `Le compte « ${account.label} » a refusé l’envoi. Aucun e-mail n’a été envoyé : prévenez le titulaire.`;
     return fail(res, e.code === 'unavailable' ? 503 : 502, refused, 'email_provider_refused');
   }
   const log = await EmailLog.create({ ...base, status: 'sent' });
+  await keepContent(log, payload, files);
   res.status(201).json({ success: true, data: view(log) });
 }
 
@@ -191,6 +197,29 @@ export const emailController = {
     } catch (error) {
       console.error('emails list:', error.message);
       fail(res, 500, 'Lecture du journal des e-mails impossible.');
+    }
+  },
+
+  /**
+   * Contenu conservé d'un envoi (90 jours). Lisible par la SEULE personne qui l'a envoyé, dans la même société : pour toute autre personne
+   * (titulaire compris), autre société, identifiant invalide ou inconnu, la réponse est la même 404 (aucune fuite d'existence).
+   * 200 `{ available: true, text, truncated, attachments, sentAt, keptUntil }` ou `{ available: false, reason: 'not_kept_before'|'expired'|'not_kept', since }`.
+   */
+  async content(req, res) {
+    try {
+      const access = await context(req, res);
+      if (!access) return;
+      const id = String(req.params.id || '');
+      if (!isObjectId(id)) return fail(res, 404, 'E-mail introuvable.', 'email_not_found');
+      const companyId = new mongoose.Types.ObjectId(access.companyId);
+      const log = await EmailLog.findOne({ _id: new mongoose.Types.ObjectId(id), companyId }).lean();
+      if (!log || String(log.sentById) !== String(access.userId)) return fail(res, 404, 'E-mail introuvable.', 'email_not_found');
+      const content = await EmailContent.findOne({ logId: log._id, companyId, sentById: String(access.userId) }).lean();
+      res.set('Cache-Control', 'private, no-store');
+      res.json({ success: true, data: contentView(log, content) });
+    } catch (error) {
+      console.error('emails content:', error.message);
+      fail(res, 500, 'Lecture du contenu de l’e-mail impossible.');
     }
   },
 
@@ -244,10 +273,11 @@ export const emailController = {
       } catch (error) {
         const e = error instanceof SecretariatError ? error : new SecretariatError('provider_error', '');
         console.error(`emails send (${mailbox.provider}): ${e.code}`);
-        await EmailLog.create({ ...base, status: 'failed', error: `provider_${e.code}` }).catch(() => {});
+        await keepContent(await EmailLog.create({ ...base, status: 'failed', error: `provider_${e.code}` }).catch(() => null), payload, files);
         return e.code === 'provider_error' ? fail(res, 502, UNAVAILABLE, 'email_provider_unavailable') : fail(res, e.code === 'unavailable' ? 503 : 502, REFUSED, 'email_provider_refused');
       }
       const log = await EmailLog.create({ ...base, status: 'sent' });
+      await keepContent(log, payload, files);
       res.status(201).json({ success: true, data: view(log) });
     } catch (error) {
       console.error('emails send:', error.message);

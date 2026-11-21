@@ -1,6 +1,9 @@
 import mongoose from 'mongoose';
 import EmailLog from '../models/EmailLog.js';
+import { saveEmailContent } from './emailContent.js';
 import { cleanDisplayName, checkRate, limits } from './emailService.js';
+import { DEFAULT_COMPANY_LANGUAGE, normalizeCompanyLanguage } from './companyLanguage.js';
+import { companyLanguage } from './companyLanguageLookup.js';
 import { loadUserProfile } from './followUpDirectory.js';
 import { messageEmail } from './receptionDirectory.js';
 import { sendViaMailbox } from './secretariatActions.js';
@@ -16,10 +19,35 @@ import { staffTexts } from './staffTexts.js';
  * de celui qui a créé l'élément (`takenBy` = le créateur). Ne lève jamais : le message est déjà enregistré quand on arrive ici.
  * @returns {Promise<'sent'|'failed'|'not_connected'|'needs_reauth'|'no_recipient'|'limit'>}
  */
+/**
+ * Objet de la notification dans la langue de l'entreprise (audit design du 21/11/2026, B5 : « Message de … », « RELANCE · », « URGENT · »
+ * étaient écrits en français pour toutes les sociétés). Langue inconnue : anglais (règle du fondateur du 21/11/2026). Le corps suit staffTexts.js
+ * (français pour une société francophone, anglais sinon).
+ */
+const SUBJECT_WORDS = Object.freeze({
+  fr: { reminder: 'RELANCE', urgent: 'URGENT', from: 'Message de' },
+  en: { reminder: 'REMINDER', urgent: 'URGENT', from: 'Message from' },
+  es: { reminder: 'RECORDATORIO', urgent: 'URGENTE', from: 'Mensaje de' },
+  ar: { reminder: 'تذكير', urgent: 'عاجل', from: 'رسالة من' },
+  de: { reminder: 'ERINNERUNG', urgent: 'DRINGEND', from: 'Nachricht von' },
+  it: { reminder: 'PROMEMORIA', urgent: 'URGENTE', from: 'Messaggio da' },
+  nl: { reminder: 'HERINNERING', urgent: 'DRINGEND', from: 'Bericht van' },
+  pt: { reminder: 'LEMBRETE', urgent: 'URGENTE', from: 'Mensagem de' },
+});
+export function messageSubject({ callerName, escalation = false, urgent = false, language = DEFAULT_COMPANY_LANGUAGE }) {
+  const w = SUBJECT_WORDS[normalizeCompanyLanguage(language)] || SUBJECT_WORDS.en;
+  return `${escalation ? `${w.reminder} · ` : ''}${urgent ? `${w.urgent} · ` : ''}${w.from} ${callerName}`.replace(/[\r\n]+/g, ' ').slice(0, 150);
+}
+
+/** Langue de l'entreprise (pays de ses lignes, companyLanguageLookup) ; base non connectée ou erreur : anglais (langue par défaut), sans attendre. */
+const lookupLanguage = async (companyId) => (mongoose.connection.readyState === 1 ? companyLanguage(companyId) : DEFAULT_COMPANY_LANGUAGE);
+
 const defaults = {
-  resolveUserMailbox, sendViaMailbox, loadEmailIdentity, loadUserProfile,
+  resolveUserMailbox, sendViaMailbox, loadEmailIdentity, loadUserProfile, companyLanguage: lookupLanguage,
   countRecent: async (companyId, since) => EmailLog.countDocuments({ companyId: new mongoose.Types.ObjectId(String(companyId)), createdAt: { $gte: since } }),
   log: async (row) => EmailLog.create(row),
+  /** Contenu conservé 90 jours (texte de la notification) ; ne lève jamais. */
+  saveContent: saveEmailContent,
 };
 let deps = defaults;
 /** Remplace les dépendances (tests). Sans argument, rétablit les vraies. */
@@ -38,9 +66,12 @@ export async function notifyByMail({ companyId, followUpId, entry, message, take
     const now = Date.now();
     const [hour, day] = await Promise.all([deps.countRecent(companyId, new Date(now - 3600_000)), deps.countRecent(companyId, new Date(now - 86400_000))]);
     if (!checkRate({ hour, day }, limits()).ok) return 'limit';
-    const T = staffTexts(language);
-    const subject = T.messageSubject({ escalation: Boolean(message.escalationFor), urgent: message.urgency === 'urgent', callerName: message.callerName }).replace(/[\r\n]+/g, ' ').slice(0, 150);
-    const text = messageEmail({ forName: entry.name, ...message, takenByName: takenBy.name, companyName, timeZone, language });
+    // Langue de la société : celle transmise par l'appelant, sinon pays de ses lignes ; inconnue : anglais (DEFAULT_COMPANY_LANGUAGE).
+    const lang = language || await Promise.resolve(deps.companyLanguage(companyId)).catch(() => DEFAULT_COMPANY_LANGUAGE);
+    // Objet : dans les 8 langues des sociétés (#229). Corps et expéditeur : français pour une société francophone, anglais sinon (staffTexts.js).
+    const T = staffTexts(lang);
+    const subject = messageSubject({ callerName: message.callerName, escalation: Boolean(message.escalationFor), urgent: message.urgency === 'urgent', language: lang });
+    const text = messageEmail({ forName: entry.name, ...message, takenByName: takenBy.name, companyName, timeZone, language: lang });
     const base = { companyId: new mongoose.Types.ObjectId(String(companyId)), sentById: sender, sentByName: takenBy.name || '', to: [to], subject, template: message.escalationFor ? 'message_escalation' : 'message_taken', followUpId: followUpId || null, withIcs: false };
     try {
       // From = la boîte de la personne ; aucun repli sur un autre canal d'envoi en cas de refus.
@@ -50,10 +81,12 @@ export async function notifyByMail({ companyId, followUpId, entry, message, take
     } catch (error) {
       const code = error instanceof SecretariatError ? error.code : 'provider_error';
       console.error(`message notify (${mailbox.provider}): ${code}`);
-      await deps.log({ ...base, status: 'failed', error: `provider_${code}` }).catch(() => {});
+      const failed = await deps.log({ ...base, status: 'failed', error: `provider_${code}` }).catch(() => null);
+      if (failed) await Promise.resolve(deps.saveContent({ log: failed, text, files: [] })).catch(() => {});
       return 'failed';
     }
-    await deps.log({ ...base, status: 'sent' }).catch(() => {});
+    const log = await deps.log({ ...base, status: 'sent' }).catch(() => null);
+    if (log) await Promise.resolve(deps.saveContent({ log, text, files: [] })).catch(() => {});
     return 'sent';
   } catch (error) {
     console.error('message notify:', error?.message);
