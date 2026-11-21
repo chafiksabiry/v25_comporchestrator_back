@@ -27,7 +27,6 @@ import { emailRoutes } from './src/routes/emails.js';
 import { receptionRoutes } from './src/routes/reception.js';
 import { secretariatToolsRoutes } from './src/routes/secretariatTools.js';
 import { reachRoutes } from './src/routes/reach.js';
-import { deviceLinkRoutes } from './src/routes/deviceLink.js';
 import { integrationsRoutes } from './src/routes/integrations.js';
 import { publicApiRoutes } from './src/routes/publicApi.js';
 import { startIntegrationsWorker } from './src/integrations/runtime.js';
@@ -136,7 +135,6 @@ app.use('/api/emails', emailRoutes);
 app.use('/api/reception', receptionRoutes);
 app.use('/api/secretariat', secretariatToolsRoutes);
 app.use('/api/reach', reachRoutes);
-app.use('/api/device-link', deviceLinkRoutes);
 app.use('/api/company-notifications', companyNotificationRoutes);
 
 // Health check to verify deployment
