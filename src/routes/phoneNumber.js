@@ -5,6 +5,7 @@ import { authenticate } from '../middleware/auth.js';
 import { guard, companyFrom, companyFromIfPresent, ofNumber, ofPayment, ofCaller } from '../middleware/phoneScope.js';
 import { copilotGuard } from '../middleware/copilotScope.js';
 import { aiInboundAfterStream } from '../controllers/aiAgentController.js';
+import { publicAvailabilityIfNoCompany } from '../services/publicAvailability.js';
 
 // Access control: `authenticate` = valid login; `guard(...)` = login + the caller belongs to the targeted company.
 // Left open on purpose: provider webhooks only. The two REP copilot routes (gig check, configure-voice) use `copilotGuard`:
@@ -15,9 +16,11 @@ const router = express.Router();
 // Search available phone numbers (Telnyx) — `companyId` required: only the company's country (or Europe, for a European company) can be searched
 router.get('/search', ...guard(companyFrom('companyId')), phoneNumberController.searchNumbers.bind(phoneNumberController));
 
-// Numbers available in a country? (Nomad Solo, checked before any payment.) Login required; with `companyId`, the caller must belong
-// to that company and the country must be allowed to it (else reason `not_allowed`). Answer cached per country (1 h).
-router.get('/availability', ...guard(companyFromIfPresent), phoneNumberController.numberAvailability.bind(phoneNumberController));
+// Numbers available in a country? (Nomad Solo, checked before any payment.) WITHOUT `companyId`: public (NOMAD page, visitor not
+// logged in), answer reduced to { available, reason?, countryCode }, known ISO-2 country only, rate-limited per IP, shared cached
+// lookup (services/publicAvailability.js). WITH `companyId`: login required, the caller must belong to that company and the country
+// must be allowed to it (else reason `not_allowed`). Answer cached per country.
+router.get('/availability', publicAvailabilityIfNoCompany, ...guard(companyFromIfPresent), phoneNumberController.numberAvailability.bind(phoneNumberController));
 
 // Search available Twilio phone numbers
 router.get('/search/twilio', ...guard(companyFrom('companyId')), phoneNumberController.searchTwilioNumbers.bind(phoneNumberController));

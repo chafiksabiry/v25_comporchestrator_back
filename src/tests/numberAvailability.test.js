@@ -23,6 +23,8 @@ const { numberCountryAllowed, IDENTITY_NUMBER_COUNTRIES } = await import('../uti
 const { countryAvailability, availabilityFor, clearAvailabilityCache, AVAILABLE_TTL_MS, UNAVAILABLE_TTL_MS } = await import('../services/numberAvailability.js');
 const { phoneNumberService } = await import('../services/phoneNumberService.js');
 const { phoneNumberRoutes } = await import('../routes/phoneNumber.js');
+const { resetPublicAvailability, sharedCountryAvailability, PUBLIC_AVAILABILITY_LIMIT } = await import('../services/publicAvailability.js');
+const { createRateLimiter } = await import('../integrations/rateLimit.js');
 
 const MA_CO = '64b0000000000000000000c1'; // Maroc, pièce française déclarée
 const JP_CO = '64b0000000000000000000c2'; // Japon, pièce japonaise
@@ -226,11 +228,48 @@ describe('route GET /api/phone-numbers/availability', () => {
     };
   });
   after(() => server.close());
-  beforeEach(() => { clearAvailabilityCache(); searches.length = 0; });
+  beforeEach(() => { clearAvailabilityCache(); searches.length = 0; resetPublicAvailability(); });
 
-  it('exige une session (même authentification que la recherche de l’étape numéro)', async () => {
-    assert.equal((await call('/availability?countryCode=FR')).status, 401);
+  // Décision du fondateur « oui me prévenir » : la page NOMAD (visiteur non connecté) lit la disponibilité du pays choisi.
+  it('sans companyId ni session : public, réponse réduite à { available, reason?, countryCode }', async () => {
+    assert.deepEqual(await call('/availability?countryCode=FR'), { status: 200, body: { available: true, countryCode: 'FR' } });
+    assert.deepEqual(await call('/availability?countryCode=ma'), { status: 200, body: { available: false, reason: 'no_inventory', countryCode: 'MA' } });
+  });
+  it('aucune fuite : ni numéro ni détail d’inventaire, même quand l’opérateur en renvoie', async () => {
+    const r = await call('/availability?countryCode=FR');
+    assert.deepEqual(Object.keys(r.body).sort(), ['available', 'countryCode']);
+    assert.doesNotMatch(JSON.stringify(r.body), /\+33|phoneNumber|inventory|locality/);
+  });
+  it('pays invalide ou inconnu : 400, sans interroger l’opérateur', async () => {
+    for (const q of ['', '?countryCode=', '?countryCode=France', '?countryCode=XX', '?countryCode=12', '?countryCode=F']) {
+      assert.equal((await call(`/availability${q}`)).status, 400, q);
+    }
     assert.deepEqual(searches, []);
+  });
+  it('débit limité par IP : 429 au-delà de la limite (Retry-After), sans interroger l’opérateur', async () => {
+    resetPublicAvailability({ limiter: createRateLimiter({ limit: 3, windowMs: 60_000 }) });
+    for (let i = 0; i < 3; i++) assert.equal((await call('/availability?countryCode=FR')).status, 200);
+    const res = await realFetch(`${api}/availability?countryCode=MA`, { signal: AbortSignal.timeout(5000) });
+    assert.equal(res.status, 429);
+    assert.ok(Number(res.headers.get('retry-after')) >= 1);
+    assert.equal((await res.json()).code, 'RATE_LIMITED');
+    assert.deepEqual(searches, ['FR'], 'une seule recherche (cache), aucune pour la requête refusée');
+    assert.equal(PUBLIC_AVAILABILITY_LIMIT, 30);
+  });
+  it('cache par pays et recherches simultanées regroupées : une seule recherche opérateur', async () => {
+    const all = await Promise.all(Array.from({ length: 8 }, () => call('/availability?countryCode=US')));
+    assert.ok(all.every((r) => r.status === 200 && r.body.available === true));
+    await call('/availability?countryCode=US');
+    assert.deepEqual(searches, ['US']);
+  });
+  it('avec companyId et sans session : 401 (route inchangée)', async () => {
+    assert.equal((await call(`/availability?countryCode=FR&companyId=${MA_CO}`)).status, 401);
+    assert.deepEqual(searches, []);
+  });
+  it('panne de l’opérateur (public) : 503 AVAILABILITY_UNAVAILABLE, rien d’inventé', async () => {
+    const r = await call('/availability?countryCode=BE');
+    assert.equal(r.status, 503);
+    assert.equal(r.body.code, 'AVAILABILITY_UNAVAILABLE');
   });
   it('sans companyId (avant paiement) : disponibilité du pays', async () => {
     assert.deepEqual(await call('/availability?countryCode=FR', 'jp'), { status: 200, body: { available: true, countryCode: 'FR' } });
