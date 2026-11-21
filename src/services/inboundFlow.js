@@ -77,7 +77,16 @@ export function buildMobileDialTwiml({ number, ringSeconds = 25, callerId = '', 
 /** B.1 : attribut timeLimit d'un <Dial> entrant (secondes couvertes + grâce) ; absent si 0 ou illisible (comportement d'avant). */
 const limitAttr = (timeLimit) => (Number.isFinite(Number(timeLimit)) && Number(timeLimit) > 0 ? ` timeLimit="${Math.floor(Number(timeLimit))}"` : '');
 
-export function buildInboundTwiml({ settings, baseUrl, companyId, identities = [], from = '', resultUrl, voicemailUrls, mobile = null, linePhone = '', solo = false, withGreeting = true, recording = null, language = DEFAULT_COMPANY_LANGUAGE, timeLimit = 0 } = {}) {
+/** Titulaire Nomad composé sans présence : la push de Twilio réveille l'application (2 à 5 s), la sonnerie dure au moins ce délai. */
+export const SOLO_PUSH_MIN_RING_SECONDS = 25;
+/** Même cas avec renvoi vers le mobile actif : l'application sonne 15 s (à la place du plancher et du réglage), puis le mobile. */
+export const SOLO_PUSH_FORWARD_RING_SECONDS = 15;
+
+/**
+ * `minRingSeconds` : plancher du délai de sonnerie (jamais en dessous du réglage de l'entreprise s'il est plus long).
+ * `fixedRingSeconds` (> 0) : délai imposé, à la place du réglage et du plancher.
+ */
+export function buildInboundTwiml({ settings, baseUrl, companyId, identities = [], from = '', resultUrl, voicemailUrls, mobile = null, linePhone = '', solo = false, withGreeting = true, recording = null, language = DEFAULT_COMPANY_LANGUAGE, timeLimit = 0, minRingSeconds = 0, fixedRingSeconds = 0 } = {}) {
   const s = normalize(settings);
   const hello = withGreeting ? greeting(s, baseUrl, companyId, language) : '';
   if (identities.length) {
@@ -86,7 +95,11 @@ export function buildInboundTwiml({ settings, baseUrl, companyId, identities = [
     // Appel enregistré (`recording`, voir callRecording.js) : annonce à l'appelant avant la sonnerie, puis <Dial record>.
     const announce = recording ? recording.say : '';
     const record = recording ? recording.attrs : '';
-    return `${hello}${announce}<Dial timeout="${s.ringTimeoutSeconds}" answerOnBridge="true" action="${xmlEscape(resultUrl)}" method="POST" callerId="${callerId}"${limitAttr(timeLimit)}${record}>${clients}</Dial>`;
+    const floor = Number(minRingSeconds);
+    const fixed = Number(fixedRingSeconds);
+    const ringSeconds = Number.isFinite(fixed) && fixed > 0 ? Math.floor(fixed)
+      : Number.isFinite(floor) && floor > s.ringTimeoutSeconds ? Math.floor(floor) : s.ringTimeoutSeconds;
+    return `${hello}${announce}<Dial timeout="${ringSeconds}" answerOnBridge="true" action="${xmlEscape(resultUrl)}" method="POST" callerId="${callerId}"${limitAttr(timeLimit)}${record}>${clients}</Dial>`;
   }
   if (mobile) return `${hello}${buildMobileDialTwiml({ ...mobile, callerId: linePhone, resultUrl, timeLimit })}`;
   if (s.voicemailEnabled) return `${hello}${voicemailRecord(s, baseUrl, companyId, voicemailUrls, solo, language)}`;

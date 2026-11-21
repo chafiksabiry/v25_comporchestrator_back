@@ -30,7 +30,7 @@ import InboundCall from '../models/InboundCall.js';
 import { computeInboundStats } from '../services/inboundStats.js';
 import InboundSettings from '../models/InboundSettings.js';
 import Voicemail from '../models/Voicemail.js';
-import { buildInboundTwiml, buildNoAnswerTwiml, buildVoicemailDoneTwiml, greetingTwiml, wrapResponse } from '../services/inboundFlow.js';
+import { SOLO_PUSH_FORWARD_RING_SECONDS, SOLO_PUSH_MIN_RING_SECONDS, buildInboundTwiml, buildNoAnswerTwiml, buildVoicemailDoneTwiml, greetingTwiml, wrapResponse } from '../services/inboundFlow.js';
 import { continueQueuePlan, readPlan, resolveQueueRoute } from '../services/queueRouting.js';
 import { mapRecordingCallback } from '../services/voicemailMapping.js';
 import { mapTwilioCallStatus } from '../services/twilioTestCallStatus.js';
@@ -2693,6 +2693,28 @@ class PhoneNumberController {
     return ensurePlanMinutesGranted(companyId);
   }
 
+  /**
+   * Nomad Solo : identité Twilio (cc-<userId>) du titulaire de la société (companies.userId). null sans titulaire lisible, en cas
+   * d'erreur ou au-delà de 1,5 s (l'appel suit alors le flux habituel). Remplaçable dans les tests.
+   */
+  async soloOwnerIdentity(companyId, { timeoutMs = 1500 } = {}) {
+    if (!companyId) return null;
+    try {
+      const db = mongoose.connection.db;
+      if (!db) return null;
+      const id = mongoose.Types.ObjectId.isValid(String(companyId)) ? new mongoose.Types.ObjectId(String(companyId)) : companyId;
+      const read = Promise.resolve().then(() => db.collection('companies').findOne({ _id: id }, { projection: { userId: 1 } })).catch((error) => {
+        console.error('[inbound] titulaire Nomad illisible :', error?.message || error);
+        return null;
+      });
+      const company = await raceTimeout(read, timeoutMs, null);
+      return company?.userId ? voiceIdentity(company.userId) : null;
+    } catch (error) {
+      console.error('[inbound] titulaire Nomad illisible :', error?.message || error);
+      return null;
+    }
+  }
+
   /** Base connectée ? (B.1 : sans base, ni contrôle du solde entrant ni échéance ; jamais d'attente pendant un webhook.) */
   dbReady() {
     return mongoose.connection.readyState === 1;
@@ -2739,6 +2761,24 @@ class PhoneNumberController {
   }
 
   /** La règle datée des lignes est-elle configurée ? (sinon le contrôle « une ligne = un appel » n'existe pas : aucune lecture ni écriture en plus) */
+  /**
+   * Offre Accueil, règle datée active : prise de la ligne par l'appel entrant. { leaseTaken, lineBusy } ; règle inactive ou erreur :
+   * les deux à faux (aucun contrôle). Remplaçable dans les tests.
+   */
+  async inboundLineLease(line, callSid) {
+    let lineBusy = false; let leaseTaken = false;
+    if (line?.companyId && callSid && this.lineRuleConfigured()) {
+      try {
+        if (await lineCallsEnforced({ companyId: line.companyId, limits: await loadCompanyPlanLimits(line.companyId), db: mongoose.connection.db })) {
+          // Capacité choisie par l'entreprise (appels simultanés, 1 par défaut) : au-delà, flux classique de la règle comme avant.
+          const taken = await takeLine({ lineId: line._id, callSid, direction: 'inbound', isStale: staleCheckFor(phoneNumberService.twilioClient), capacity: capacityOf(line) });
+          leaseTaken = taken.ok; lineBusy = !taken.ok && taken.reason === 'busy';
+        }
+      } catch (error) { console.error('[inbound] contrôle de ligne ignoré :', error?.message || error); }
+    }
+    return { lineBusy, leaseTaken };
+  }
+
   lineRuleConfigured() {
     const rule = enforcementSettings();
     return rule.from !== null || rule.ruleStarts !== null;
@@ -2888,26 +2928,23 @@ class PhoneNumberController {
       }
       // Offre Accueil, règle datée active : une ligne = un appel actif. Ligne déjà tenue par un autre appel : traité comme « aucun conseiller disponible »
       // (même branche : mobile du titulaire s'il est configuré, sinon répondeur / flux « no_agent » existant, sans file ni sonnerie). Règle inactive : rien de tout cela.
-      let lineBusy = false; let leaseTaken = false;
-      if (line?.companyId && callSid && this.lineRuleConfigured()) {
-        try {
-          if (await lineCallsEnforced({ companyId: line.companyId, limits: await loadCompanyPlanLimits(line.companyId), db: mongoose.connection.db })) {
-            // Capacité choisie par l'entreprise (appels simultanés, 1 par défaut) : au-delà, flux classique de la règle comme avant.
-            const taken = await takeLine({ lineId: line._id, callSid, direction: 'inbound', isStale: staleCheckFor(phoneNumberService.twilioClient), capacity: capacityOf(line) });
-            leaseTaken = taken.ok; lineBusy = !taken.ok && taken.reason === 'busy';
-          }
-        } catch (error) { console.error('[inbound] contrôle de ligne ignoré :', error?.message || error); }
-      }
+      const { lineBusy, leaseTaken } = await this.inboundLineLease(line, callSid);
       // B.1 : appel entrant sans minutes (solde à zéro ou moins) : personne ne sonne, l'appel va au répondeur (jamais de dépassement).
       // Solde illisible : aucun blocage (comme les contrôles sortants). Sinon l'échéance de coupure est enregistrée plus bas.
       const minutesState = line?.companyId && callSid ? await this.inboundMinutes(line.companyId) : null;
       const noMinutes = minutesState?.exhausted === true;
       if (noMinutes) console.log(`⏳ Appel entrant sur ${maskNumber(to)} : solde de minutes épuisé, répondeur`);
       const ringAllow = await this.inboundRingFilterFor(line);
-      const online = line?.companyId && !lineBusy && !noMinutes ? (ringAllow ? availableIdentities(line.companyId).filter(ringAllow) : availableIdentities(line.companyId)) : [];
+      const present = line?.companyId && !lineBusy && !noMinutes ? (ringAllow ? availableIdentities(line.companyId).filter(ringAllow) : availableIdentities(line.companyId)) : [];
       const settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
       const baseUrl = `https://${req.get('host')}`;
       const solo = await isSoloCompany(line?.companyId);
+      // Nomad Solo (un seul titulaire, ni file ni menu) : le titulaire est composé même sans présence. L'application native fermée ou en
+      // arrière-plan n'envoie plus sa présence, mais la notification push de Twilio (<Client>) la réveille. Ligne occupée, solde épuisé,
+      // titulaire illisible ou exclu de la sonnerie : rien de changé.
+      const soloOwner = solo && line?.companyId && !lineBusy && !noMinutes ? await this.soloOwnerIdentity(line.companyId) : null;
+      const soloPush = Boolean(soloOwner) && !present.includes(soloOwner) && (!ringAllow || ringAllow(soloOwner));
+      const online = soloPush ? [...present, soloOwner] : present;
       const recording = solo ? null : await recordingPlanFor({ companyId: line?.companyId, callSid, baseUrl, from, language });
       // Files d'attente (routage par langues / compétences, menu vocal). null = aucune file, Nomad Solo ou erreur : comportement inchangé.
       const queueRoute = !solo && line?.companyId && !lineBusy && !noMinutes ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'call', recording, language, allow: ringAllow }) : null;
@@ -2922,7 +2959,9 @@ class PhoneNumberController {
       // retour du menu (file connue). null (tous les autres cas, ou échec du moteur / de la session) : flux classique inchangé.
       // Capacité de la ligne épuisée : jamais l'IA.
       if (aiInboundPilotEnabled() && line?.companyId && callSid && queueRoute?.kind !== 'menu') {
-        const aiBody = await tryAiInbound({ line, to, from, callSid, lineBusy, stage: 'call', humansAvailable: route.first !== 'voicemail', queue: queueRoute ? queueRoute.queue || null : undefined, signatureValid: () => twilioRequestValid(req) });
+        // Titulaire Nomad composé seulement par push (aucune présence) : pour la priorité « après les humains », il compte comme un humain qui
+        // sonne (l'IA attend la fin de la sonnerie) ; pour le niveau de l'IA « en premier », personne n'est réellement présent (« total »).
+        const aiBody = await tryAiInbound({ line, to, from, callSid, lineBusy, stage: 'call', humansAvailable: route.first !== 'voicemail', humansPresent: route.first !== 'voicemail' && !(soloPush && !present.length), queue: queueRoute ? queueRoute.queue || null : undefined, signatureValid: () => twilioRequestValid(req) });
         if (aiBody) return reply(aiBody);
       }
       if (leaseTaken && route.first === 'voicemail') await releaseCall(callSid).catch((e) => console.error('[inbound] libération :', e?.message || e));
@@ -2943,10 +2982,10 @@ class PhoneNumberController {
       // Filet large de Twilio sur chaque <Dial> de l'appel (navigateurs, file, mobile) : solde TOTAL + 5 min (4 h au plus) ; c'est le
       // balayeur qui coupe précisément (et prolonge l'appel dès que du solde se libère).
       const graceLimit = canRing ? graceLimitSeconds(maxSecondsForBalance(minutesState.minutes)) : 0;
-      const where = queueRoute?.kind === 'menu' ? "file d'attente : menu vocal" : route.first === 'browser' ? `sonnerie chez ${identities.length} conseiller(s)${route.mobileNext ? ', puis le mobile du titulaire' : ''}` : route.first === 'mobile' ? "aucun navigateur présent : sonnerie du mobile du titulaire" : `aucun conseiller disponible pour l'entreprise de la ligne ${line?.companyId ?? '(ligne inconnue)'} ; présents : ${JSON.stringify(presenceSummary())}`;
+      const where = queueRoute?.kind === 'menu' ? "file d'attente : menu vocal" : route.first === 'browser' ? `sonnerie chez ${identities.length} conseiller(s)${soloPush ? ' (titulaire Nomad, push)' : ''}${route.mobileNext ? ', puis le mobile du titulaire' : ''}` : route.first === 'mobile' ? "aucun navigateur présent : sonnerie du mobile du titulaire" : `aucun conseiller disponible pour l'entreprise de la ligne ${line?.companyId ?? '(ligne inconnue)'} ; présents : ${JSON.stringify(presenceSummary())}`;
       console.log(`📞 Appel entrant sur ${to} depuis ${from} : ${where}`);
-      // Aucun navigateur présent : le titulaire est prévenu par notification (elle réveille, elle ne décroche pas l'appel).
-      if (line?.companyId && !identities.length && queueRoute?.kind !== 'menu') void notifyOwners({ companyId: line.companyId }, callPayload({ from, to, callSid, language: languageForPhone(line.phoneNumber) }));
+      // Aucun navigateur présent (titulaire Nomad composé sans présence compris) : le titulaire est prévenu par notification (elle réveille, elle ne décroche pas l'appel).
+      if (line?.companyId && (!identities.length || soloPush) && queueRoute?.kind !== 'menu') void notifyOwners({ companyId: line.companyId }, callPayload({ from, to, callSid, language: languageForPhone(line.phoneNumber) }));
       const resultUrl = `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result`;
       // File choisie (menu ou sonnerie dirigée) : accueil puis menu / sonnerie. Toute anomalie : sonnerie existante.
       if (queueRoute && queueRoute.kind !== 'none') {
@@ -2964,6 +3003,10 @@ class PhoneNumberController {
         baseUrl,
         companyId: line?.companyId ? String(line.companyId) : '',
         identities: queueRoute ? online : identities,
+        // Titulaire Nomad réveillé par la push (2 à 5 s) : sonnerie d'au moins 25 s, jamais moins que le réglage de l'entreprise.
+        // Renvoi vers le mobile actif (route.mobileNext : reach.forwardEnabled + numéro valide) : 15 s dans l'application, puis le mobile.
+        minRingSeconds: soloPush ? SOLO_PUSH_MIN_RING_SECONDS : 0,
+        fixedRingSeconds: soloPush && route.mobileNext ? SOLO_PUSH_FORWARD_RING_SECONDS : 0,
         from,
         resultUrl,
         mobile: route.first === 'mobile' ? route.mobile : null,
