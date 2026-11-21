@@ -115,20 +115,25 @@ export const CONSENT_TEXTS = {
 export const CONSENT_LANGUAGES = Object.keys(CONSENT_TEXTS);
 export const DEFAULT_CONSENT_LANGUAGE = 'en';
 
-// Maghreb (+212, +213, +216) : français d'affaires, comme la langue des sociétés de ces pays (companyLanguage.js).
+/**
+ * Maghreb (+212 Maroc, +213 Algérie, +216 Tunisie) : décision du fondateur (21/11/2026), l'annonce est dite en ARABE puis en FRANÇAIS,
+ * dans le même TwiML (deux <Say>, chacun avec sa langue et sa voix). Code d'annonce dédié : `ar_fr`.
+ */
+export const MAGHREB_CONSENT = 'ar_fr';
+const MAGHREB = ['+212', '+213', '+216'];
 const ARABIC = ['+20', '+218', '+249', '+961', '+962', '+963', '+964', '+965', '+966', '+967', '+968', '+971', '+973', '+974'];
 const SPANISH = ['+34', '+51', '+52', '+53', '+54', '+56', '+57', '+58', '+591', '+593', '+595', '+598'];
 const ENGLISH = ['+1', '+44', '+61', '+64', '+353'];
-const FRENCH = ['+33', '+32', '+41', '+352', '+377', '+212', '+213', '+216', '+221', '+223', '+224', '+225', '+226', '+227', '+228', '+229', '+237', '+241', '+242', '+243', '+261', '+262', '+508', '+590', '+594', '+596', '+681', '+687', '+689'];
+const FRENCH = ['+33', '+32', '+41', '+352', '+377', '+221', '+223', '+224', '+225', '+226', '+227', '+228', '+229', '+237', '+241', '+242', '+243', '+261', '+262', '+508', '+590', '+594', '+596', '+681', '+687', '+689'];
 const GERMAN = ['+49', '+43', '+423'];
 const ITALIAN = ['+39', '+378', '+379'];
 const DUTCH = ['+31'];
 const PORTUGUESE = ['+351'];
 
-/** Code de langue d'une annonce valide (fr/en/es/ar/de/it/nl/pt), sinon null. */
+/** Code d'une annonce valide (fr/en/es/ar/de/it/nl/pt, ou `ar_fr` pour le Maghreb), sinon null. */
 export const normalizeConsentLanguage = (value) => {
   const code = String(value ?? '').trim().toLowerCase();
-  return CONSENT_LANGUAGES.includes(code) ? code : null;
+  return CONSENT_LANGUAGES.includes(code) || code === MAGHREB_CONSENT ? code : null;
 };
 
 /**
@@ -141,6 +146,7 @@ export function consentLanguageFor(number, fallback = DEFAULT_CONSENT_LANGUAGE) 
   const n = String(number ?? '').replace(/[\s().-]/g, '');
   if (!n.startsWith('+')) return fb;
   const hit = (list) => list.some((p) => n.startsWith(p));
+  if (hit(MAGHREB)) return MAGHREB_CONSENT;
   if (hit(ARABIC)) return 'ar';
   if (hit(SPANISH)) return 'es';
   if (hit(ENGLISH)) return 'en';
@@ -152,9 +158,10 @@ export function consentLanguageFor(number, fallback = DEFAULT_CONSENT_LANGUAGE) 
   return fb;
 }
 
-/** <Say> de l'annonce, dans la langue et avec la voix féminine de la langue (sayVoice). */
+/** <Say> de l'annonce, dans la langue et avec la voix féminine de la langue (sayVoice) ; Maghreb : arabe puis français. */
 export function consentSay(lang) {
   const code = normalizeConsentLanguage(lang) || DEFAULT_CONSENT_LANGUAGE;
+  if (code === MAGHREB_CONSENT) return `${consentSay('ar')}${consentSay('fr')}`;
   const { voice, language } = sayVoice(code);
   return `<Say language="${language}" voice="${voice}">${xmlEscape(CONSENT_TEXTS[code])}</Say>`;
 }

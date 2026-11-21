@@ -10,7 +10,7 @@ import { sendViaMailbox } from './secretariatActions.js';
 import { resolveUserMailbox } from './secretariatConnections.js';
 import { loadEmailIdentity } from './secretariatTools.js';
 import { SecretariatError } from './secretariatProviders/common.js';
-import { staffTexts } from './staffTexts.js';
+import { staffLanguage, staffTexts } from './staffTexts.js';
 
 /**
  * Prévient par e-mail la personne visée par un message pris à l'accueil, UNIQUEMENT depuis la boîte (Gmail / Outlook) de CELLE QUI A PRIS LE MESSAGE
@@ -68,9 +68,10 @@ export async function notifyByMail({ companyId, followUpId, entry, message, take
     if (!checkRate({ hour, day }, limits()).ok) return 'limit';
     // Langue de la société : celle transmise par l'appelant, sinon pays de ses lignes ; inconnue : anglais (DEFAULT_COMPANY_LANGUAGE).
     const lang = language || await Promise.resolve(deps.companyLanguage(companyId)).catch(() => DEFAULT_COMPANY_LANGUAGE);
-    // Objet : dans les 8 langues des sociétés (#229). Corps et expéditeur : français pour une société francophone, anglais sinon (staffTexts.js).
     const T = staffTexts(lang);
-    const subject = messageSubject({ callerName: message.callerName, escalation: Boolean(message.escalationFor), urgent: message.urgency === 'urgent', language: lang });
+    // Objet, corps et expéditeur dans la MÊME langue des membres (fr pour une société francophone, en sinon : règle du 21/11/2026).
+    // `messageSubject` garde ses 8 langues (#229) pour d'autres usages ; ici on lui passe la langue des membres.
+    const subject = messageSubject({ callerName: message.callerName, escalation: Boolean(message.escalationFor), urgent: message.urgency === 'urgent', language: staffLanguage(lang) });
     const text = messageEmail({ forName: entry.name, ...message, takenByName: takenBy.name, companyName, timeZone, language: lang });
     const base = { companyId: new mongoose.Types.ObjectId(String(companyId)), sentById: sender, sentByName: takenBy.name || '', to: [to], subject, template: message.escalationFor ? 'message_escalation' : 'message_taken', followUpId: followUpId || null, withIcs: false };
     try {

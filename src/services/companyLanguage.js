@@ -9,14 +9,14 @@
  * dans la langue où le client l'a écrit. Seules les phrases fixes ci-dessous suivent la ligne.
  *
  * Le mapping pays -> langue est le tableau COUNTRIES_BY_LANGUAGE ci-dessous (un seul endroit, à ajuster ici) :
- *   fr : FR BE CH LU MC, Maghreb (MA TN DZ : français d'affaires malgré l'arabe) et Afrique francophone (SN CI CM ML BF NE TG BJ GN CD CG GA MG) ;
+ *   fr : FR BE CH LU MC, Maroc (français d'affaires malgré l'arabe) et Afrique francophone (SN CI CM ML BF NE TG BJ GN CD CG GA MG) ;
  *   de : DE AT LI (la Suisse reste en français) ;
  *   it : IT SM VA ;
  *   nl : NL (la Belgique reste en français) ;
  *   pt : PT ;
  *   en : GB US IE CA AU NZ, et tout autre pays (pas de langue produit dédiée, ex. Grèce, Pologne, Suède) ;
  *   es : Espagne et pays hispanophones ;
- *   ar : pays arabophones (sauf le Maghreb) ;
+ *   ar : pays arabophones sauf le Maroc ; l'Algérie et la Tunisie restent en arabe (décision du fondateur : inchangé dans ce lot) ;
  *   pays absent ou inconnu : en (règle du fondateur du 21/11/2026 : « English must be the native language and French only for
  *   French-speaking countries »).
  * À garder aligné avec `src/domain/companyLanguage.ts` du front (`COMPANY_LANGUAGE_BY_COUNTRY`).
@@ -25,10 +25,10 @@ export const COMPANY_LANGUAGES = ['fr', 'en', 'es', 'ar', 'de', 'it', 'nl', 'pt'
 export const DEFAULT_COMPANY_LANGUAGE = 'en';
 
 export const COUNTRIES_BY_LANGUAGE = Object.freeze({
-  fr: ['FR', 'BE', 'CH', 'LU', 'MC', 'MA', 'TN', 'DZ', 'SN', 'CI', 'CM', 'ML', 'BF', 'NE', 'TG', 'BJ', 'GN', 'CD', 'CG', 'GA', 'MG'],
+  fr: ['FR', 'BE', 'CH', 'LU', 'MC', 'MA', 'SN', 'CI', 'CM', 'ML', 'BF', 'NE', 'TG', 'BJ', 'GN', 'CD', 'CG', 'GA', 'MG'],
   en: ['GB', 'US', 'IE', 'CA', 'AU', 'NZ'],
   es: ['ES', 'MX', 'AR', 'CO', 'CL', 'PE', 'VE', 'EC', 'GT', 'CU', 'BO', 'DO', 'HN', 'PY', 'SV', 'NI', 'CR', 'PA', 'UY', 'PR', 'GQ'],
-  ar: ['AE', 'SA', 'EG', 'JO', 'KW', 'QA', 'BH', 'OM', 'LB', 'IQ', 'LY', 'SY', 'YE', 'SD', 'PS', 'MR'],
+  ar: ['AE', 'SA', 'EG', 'JO', 'KW', 'QA', 'BH', 'OM', 'LB', 'IQ', 'DZ', 'TN', 'LY', 'SY', 'YE', 'SD', 'PS', 'MR'],
   de: ['DE', 'AT', 'LI'],
   it: ['IT', 'SM', 'VA'],
   nl: ['NL'],

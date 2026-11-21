@@ -9,7 +9,7 @@ import { notifyByMail } from '../services/messageNotify.js';
 import { matchesNumber } from '../services/receptionExtras.js';
 import { messagePayload, notifyOwners } from '../services/webPush.js';
 import { loadTools, mergedTools } from '../services/secretariatTools.js';
-import { companyLanguage } from '../services/companyLanguageLookup.js';
+import { companyLanguageIfConnected } from '../services/companyLanguageLookup.js';
 import { staffTexts } from '../services/staffTexts.js';
 import {
   messageTitle, parseAbsences, todayIn, toDirectoryView, validateDirectory, validateMessage,
@@ -125,7 +125,7 @@ export const receptionController = {
       let origin = null;
       if (v.callId) origin = await InboundCall.findOne({ _id: v.callId, companyId }).select('from').lean();
       // Langue des membres de la société (français pour un pays francophone, anglais sinon) : titre, e-mail et push du message.
-      const language = await companyLanguage(access.companyId);
+      const language = await companyLanguageIfConnected(access.companyId);
       const takerName = (await loadUserName(access.userId)) || staffTexts(language).reception;
       const tools = mergedTools(await loadTools(access.companyId));
       // Motif choisi parmi les réponses types de l'entreprise (libellé enregistré) et appelant prioritaire (liste de l'entreprise).

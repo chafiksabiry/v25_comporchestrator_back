@@ -59,7 +59,22 @@ assert.equal(R.consentSay('xx'), R.consentSay('en'), 'langue inconnue : anglais 
 assert.equal(R.consentLanguageFor('+33612345678'), 'fr');
 assert.equal(R.consentLanguageFor('+34600000000'), 'es');
 assert.equal(R.consentLanguageFor('+447911123456'), 'en');
-assert.equal(R.consentLanguageFor('+212612345678'), 'fr', 'Maroc : français d’affaires');
+// Maghreb (+212, +213, +216) : arabe PUIS français, dans le même TwiML (décision du fondateur)
+for (const n of ['+212612345678', '+213551234567', '+21698123456']) {
+  assert.equal(R.consentLanguageFor(n), 'ar_fr', n);
+  const twiml = R.consentTwiml(R.consentLanguageFor(n));
+  const says = [...twiml.matchAll(/<Say language="([^"]+)" voice="([^"]+)">([^<]*)<\/Say>/g)].map((m) => [m[1], m[2], m[3]]);
+  assert.equal(says.length, 2, n);
+  assert.deepEqual(says.map((x) => x[0]), ['arb', 'fr-FR'], `${n} : arabe puis français`);
+  assert.equal(says[0][1], 'Polly.Zeina'); assert.equal(says[1][1], 'Polly.Lea');
+  assert.equal(says[0][2], R.CONSENT_TEXTS.ar); assert.equal(says[1][2], R.CONSENT_TEXTS.fr.replace(/'/g, '&apos;'));
+}
+// France : français seul ; États-Unis : anglais seul
+assert.equal([...R.consentTwiml(R.consentLanguageFor('+33612345678')).matchAll(/<Say /g)].length, 1);
+assert.match(R.consentTwiml(R.consentLanguageFor('+33612345678')), /<Say language="fr-FR" voice="Polly.Lea">Cet appel/);
+assert.equal([...R.consentTwiml(R.consentLanguageFor('+14155550100')).matchAll(/<Say /g)].length, 1);
+assert.match(R.consentTwiml(R.consentLanguageFor('+14155550100')), /<Say language="en-US" voice="Polly.Joanna">This call may be recorded/);
+assert.equal(R.normalizeConsentLanguage('ar_fr'), 'ar_fr', 'code accepté par le webhook d’annonce (?l=ar_fr)');
 assert.equal(R.consentLanguageFor('anonymous'), 'en', 'numéro illisible : anglais (langue par défaut)');
 assert.equal(R.consentLanguageFor(undefined), 'en');
 assert.match(R.consentTwiml('es'), /^<\?xml[^>]*\?><Response><Say [^>]*>Esta llamada/);

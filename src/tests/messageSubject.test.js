@@ -37,7 +37,7 @@ assert.deepEqual(asked, ['64b0000000000000000000c1'], 'langue lue pour la socié
 // relance (messageReminders passe escalationFor)
 setNotifyDeps(deps({ companyLanguage: async () => 'ar' }));
 assert.equal(await notifyByMail({ ...args, message: { ...args.message, urgency: 'normal', escalationFor: 'Paul' } }), 'sent');
-assert.equal(sent.at(-1).subject, 'تذكير · رسالة من Dupont'); assert.equal(logs.at(-1).template, 'message_escalation');
+assert.equal(sent.at(-1).subject, 'REMINDER · Message from Dupont', 'société arabophone : objet, corps et expéditeur en anglais (fr / en seulement)'); assert.equal(logs.at(-1).template, 'message_escalation');
 // langue illisible : anglais (langue par défaut), et l'envoi part quand même
 setNotifyDeps(deps({ companyLanguage: async () => { throw new Error('base'); } }));
 assert.equal(await notifyByMail(args), 'sent');
@@ -55,8 +55,8 @@ asked.length = 0;
 setNotifyDeps(deps());
 assert.equal(await notifyByMail({ ...args, language: 'fr' }), 'sent');
 assert.equal(sent.at(-1).subject, 'URGENT · Message de Dupont'); assert.match(sent.at(-1).text, /^Bonjour Paul,/); assert.deepEqual(asked, []);
-// société espagnole : objet en espagnol (#229), corps en anglais (staffTexts : fr ou en)
+// société espagnole : objet ET corps en anglais (même langue partout, fr ou en)
 assert.equal(await notifyByMail({ ...args, language: 'es' }), 'sent');
-assert.equal(sent.at(-1).subject, 'URGENTE · Mensaje de Dupont'); assert.match(sent.at(-1).text, /^Hello Paul,/);
+assert.equal(sent.at(-1).subject, 'URGENT · Message from Dupont'); assert.match(sent.at(-1).text, /^Hello Paul,/); assert.equal(sent.at(-1).fromName, 'Acme');
 setNotifyDeps(null);
 console.log('messageSubject : OK');

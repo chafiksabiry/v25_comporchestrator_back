@@ -5,7 +5,7 @@ import { notifyByMail } from './messageNotify.js';
 import { escalationTargets, reminderAction, settingsOf } from './receptionExtras.js';
 import { loadTools, mergedTools } from './secretariatTools.js';
 import { messagePayload, notifyOwners } from './webPush.js';
-import { companyLanguage } from './companyLanguageLookup.js';
+import { companyLanguageIfConnected } from './companyLanguageLookup.js';
 
 /**
  * Relance automatique des messages pris à l'accueil (tâche planifiée simple, un minuteur dans l'orchestrateur).
@@ -27,7 +27,7 @@ const defaults = {
   mail: notifyByMail,
   timeZone: async (companyId) => mergedTools(await loadTools(companyId)).timeZone,
   /** Langue des membres de la société (français pour un pays francophone, anglais sinon). */
-  language: (companyId) => companyLanguage(companyId),
+  language: (companyId) => companyLanguageIfConnected(companyId),
 };
 
 /** @returns {Promise<{checked: number, reminded: number, escalated: number}>} */

@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { companyLanguage } from '../services/companyLanguageLookup.js';
+import { companyLanguageIfConnected } from '../services/companyLanguageLookup.js';
 import EmailLog from '../models/EmailLog.js';
 import EmailContent from '../models/EmailContent.js';
 import FollowUpItem from '../models/FollowUpItem.js';
@@ -129,7 +129,7 @@ async function sendFromShared(req, res, access, accountId) {
   const personal = Boolean(account.personalUserId);
   const fromName = personal ? (me.name || account.ownerName || account.label) : account.ownerName || account.label;
   // Langue du texte envoyée par l'application ; à défaut, celle de la société (pays de ses lignes), sinon l'anglais.
-  const language = v.language || await companyLanguage(access.companyId);
+  const language = v.language || await companyLanguageIfConnected(access.companyId);
   const signature = composeSignature({ secretaryName: me.name, ownerName: account.ownerName || account.label, companyName: v.centerName, personal, language });
   const payload = buildPayload({
     senderEmail: account.accountEmail, centerName: fromName, to: v.to, subject: v.subject, text: v.body, signature, icsContent, harxFooter: false,

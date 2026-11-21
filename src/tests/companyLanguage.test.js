@@ -25,8 +25,8 @@ const { buildAnalyzeUrl } = await import('../services/voicemailAnalysis.js');
 test('pays -> langue : anglophones, hispanophones, arabophones (sauf le Maroc), francophones, autres, inconnu', () => {
   for (const c of ['GB', 'US', 'IE', 'CA', 'AU', 'NZ']) assert.equal(L.languageForCountry(c), 'en', c);
   for (const c of ['ES', 'MX', 'AR', 'CO']) assert.equal(L.languageForCountry(c), 'es', c);
-  for (const c of ['AE', 'SA', 'EG', 'JO', 'KW', 'QA', 'BH', 'OM', 'LB', 'IQ', 'LY']) assert.equal(L.languageForCountry(c), 'ar', c);
-  for (const c of ['FR', 'BE', 'CH', 'LU', 'MC', 'MA', 'TN', 'DZ', 'SN', 'CI', 'CM', 'ML', 'BF', 'NE', 'TG', 'BJ', 'GN', 'CD', 'CG', 'GA', 'MG']) assert.equal(L.languageForCountry(c), 'fr', c);
+  for (const c of ['AE', 'SA', 'EG', 'JO', 'KW', 'QA', 'BH', 'OM', 'LB', 'IQ', 'DZ', 'TN', 'LY']) assert.equal(L.languageForCountry(c), 'ar', c);
+  for (const c of ['FR', 'BE', 'CH', 'LU', 'MC', 'MA', 'SN', 'CI', 'CM', 'ML', 'BF', 'NE', 'TG', 'BJ', 'GN', 'CD', 'CG', 'GA', 'MG']) assert.equal(L.languageForCountry(c), 'fr', c);
   for (const c of ['JP', 'BR', 'GR', 'PL', 'SE', 'DK']) assert.equal(L.languageForCountry(c), 'en', c);
   for (const c of [undefined, null, '', ' ', 'X', 'XYZ', '12']) assert.equal(L.languageForCountry(c), 'en', String(c));
   assert.equal(L.languageForCountry(' uk '), 'en');
@@ -49,7 +49,8 @@ test('langue déduite du numéro de la ligne', () => {
   assert.equal(L.languageForPhone('+306912345678'), 'en', 'autre pays : anglais');
   assert.equal(L.languageForPhone('442071234567'), 'en', 'numéro stocké sans +');
   for (const bad of [undefined, '', 'abc', '+1', '0612345678']) assert.equal(L.languageForPhone(bad), 'en', String(bad));
-  for (const [n, c] of [['+21698123456', 'TN'], ['+213551234567', 'DZ'], ['+237612345678', 'CM'], ['+22177123456', 'SN'], ['+37799123456', 'MC']]) assert.equal(L.languageForPhone(n), 'fr', c);
+  assert.equal(L.languageForPhone('+21698123456'), 'ar', 'Tunisie : arabe (inchangé)'); assert.equal(L.languageForPhone('+213551234567'), 'ar', 'Algérie : arabe (inchangé)');
+  for (const [n, c] of [['+237612345678', 'CM'], ['+22177123456', 'SN'], ['+37799123456', 'MC']]) assert.equal(L.languageForPhone(n), 'fr', c);
   assert.equal(L.languageForPhone('', ''), '');
 });
 

@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { DEFAULT_COMPANY_LANGUAGE, languageForPhone } from './companyLanguage.js';
 
@@ -33,3 +34,7 @@ export async function companyLanguage(companyId, { loadLines = defaultLoadLines,
     return DEFAULT_COMPANY_LANGUAGE;
   }
 }
+
+/** Comme `companyLanguage`, mais sans attendre une base non connectée (tests, démarrage) : langue par défaut (anglais) tout de suite. */
+export const companyLanguageIfConnected = (companyId, opts) =>
+  (mongoose.connection.readyState === 1 ? companyLanguage(companyId, opts) : Promise.resolve(DEFAULT_COMPANY_LANGUAGE));

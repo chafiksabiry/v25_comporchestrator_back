@@ -8,7 +8,7 @@ assert.equal(staffLanguage('fr'), 'fr');
 for (const l of ['en', 'es', 'ar', 'de', '', undefined, null, 'xx']) assert.equal(staffLanguage(l), 'en', String(l));
 assert.equal(staffLanguage(languageForCountry('MA')), 'fr', 'Maroc : français');
 assert.equal(staffLanguage(languageForCountry('US')), 'en');
-assert.equal(staffLanguage(languageForPhone('+21612345678')), 'fr', 'Tunisie : français');
+assert.equal(staffLanguage(languageForPhone('+33612345678')), 'fr', 'France : français');
 assert.equal(staffLanguage(languageForPhone('')), 'en', 'numéro illisible : anglais');
 
 const FRENCH = /[àâçèêëîïôûùœ]|(^|[^\p{L}])(vous|votre|vos|nous|avec|pour|une|des|aux|du|appel|appelant|rappeler|bonjour|message de|accueil)(?=$|[^\p{L}])/iu;
