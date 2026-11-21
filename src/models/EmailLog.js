@@ -1,8 +1,10 @@
 import mongoose from 'mongoose';
 
 /**
- * Journal des e-mails envoyés depuis le secrétariat : qui, à qui, quand, objet. Le contenu du message n'est PAS conservé.
- * Lié à l'élément « À traiter » d'origine quand il existe.
+ * Journal des e-mails envoyés depuis le secrétariat : qui, à qui, quand, objet. Lié à l'élément « À traiter » d'origine quand il existe.
+ * Le CONTENU (texte envoyé, nom / taille / type des pièces jointes) n'est pas ici : il est conservé à part, 90 jours, dans EmailContent
+ * (collection `secretariat_email_content`, index TTL), lisible par la seule personne qui a envoyé l'e-mail. Avant la mise en service de cette
+ * conservation (décision du fondateur, novembre 2026), le contenu n'était pas conservé du tout.
  */
 const schema = new mongoose.Schema(
   {

@@ -3,9 +3,10 @@ import multer from 'multer';
 /**
  * Pièces jointes des e-mails écrits depuis HARX (nouvel e-mail, réponse, réponse à tous, transfert).
  *
- * CONFIDENTIALITÉ : une pièce jointe n'est JAMAIS stockée. Elle est reçue en mémoire (multer memoryStorage : aucun fichier temporaire sur disque),
- * vérifiée, encodée pour le fournisseur (Gmail / Outlook) puis abandonnée à la fin de la requête. Ni son nom, ni son type, ni son contenu ne sont
- * écrits en base, dans le journal d'envoi (EmailLog) ou dans les journaux du serveur.
+ * CONFIDENTIALITÉ : le CONTENU d'une pièce jointe n'est JAMAIS stocké. Il est reçu en mémoire (multer memoryStorage : aucun fichier temporaire sur
+ * disque), vérifié, encodé pour le fournisseur (Gmail / Outlook) puis abandonné à la fin de la requête. Seuls le nom, la taille et le type sont
+ * conservés 90 jours avec le texte de l'e-mail (EmailContent, lisible par l'auteur seulement) ; rien de la pièce n'est écrit dans le journal d'envoi
+ * (EmailLog) ni dans les journaux du serveur.
  *
  * Limites (communes) : 10 fichiers, 10 Mio par fichier, 20 Mio au total. Limites RÉELLES par fournisseur (plus strictes) :
  *  - Gmail : le message complet (pièces encodées en base64, +37 % avec les retours à la ligne) doit rester sous 25 Mo → 17 Mio de pièces au total
