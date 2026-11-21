@@ -30,7 +30,7 @@ import InboundCall from '../models/InboundCall.js';
 import { computeInboundStats } from '../services/inboundStats.js';
 import InboundSettings from '../models/InboundSettings.js';
 import Voicemail from '../models/Voicemail.js';
-import { SOLO_PUSH_MIN_RING_SECONDS, buildInboundTwiml, buildNoAnswerTwiml, buildVoicemailDoneTwiml, greetingTwiml, wrapResponse } from '../services/inboundFlow.js';
+import { SOLO_PUSH_FORWARD_RING_SECONDS, SOLO_PUSH_MIN_RING_SECONDS, buildInboundTwiml, buildNoAnswerTwiml, buildVoicemailDoneTwiml, greetingTwiml, wrapResponse } from '../services/inboundFlow.js';
 import { continueQueuePlan, readPlan, resolveQueueRoute } from '../services/queueRouting.js';
 import { mapRecordingCallback } from '../services/voicemailMapping.js';
 import { mapTwilioCallStatus } from '../services/twilioTestCallStatus.js';
@@ -2760,6 +2760,24 @@ class PhoneNumberController {
   }
 
   /** La règle datée des lignes est-elle configurée ? (sinon le contrôle « une ligne = un appel » n'existe pas : aucune lecture ni écriture en plus) */
+  /**
+   * Offre Accueil, règle datée active : prise de la ligne par l'appel entrant. { leaseTaken, lineBusy } ; règle inactive ou erreur :
+   * les deux à faux (aucun contrôle). Remplaçable dans les tests.
+   */
+  async inboundLineLease(line, callSid) {
+    let lineBusy = false; let leaseTaken = false;
+    if (line?.companyId && callSid && this.lineRuleConfigured()) {
+      try {
+        if (await lineCallsEnforced({ companyId: line.companyId, limits: await loadCompanyPlanLimits(line.companyId), db: mongoose.connection.db })) {
+          // Capacité choisie par l'entreprise (appels simultanés, 1 par défaut) : au-delà, flux classique de la règle comme avant.
+          const taken = await takeLine({ lineId: line._id, callSid, direction: 'inbound', isStale: staleCheckFor(phoneNumberService.twilioClient), capacity: capacityOf(line) });
+          leaseTaken = taken.ok; lineBusy = !taken.ok && taken.reason === 'busy';
+        }
+      } catch (error) { console.error('[inbound] contrôle de ligne ignoré :', error?.message || error); }
+    }
+    return { lineBusy, leaseTaken };
+  }
+
   lineRuleConfigured() {
     const rule = enforcementSettings();
     return rule.from !== null || rule.ruleStarts !== null;
@@ -2909,16 +2927,7 @@ class PhoneNumberController {
       }
       // Offre Accueil, règle datée active : une ligne = un appel actif. Ligne déjà tenue par un autre appel : traité comme « aucun conseiller disponible »
       // (même branche : mobile du titulaire s'il est configuré, sinon répondeur / flux « no_agent » existant, sans file ni sonnerie). Règle inactive : rien de tout cela.
-      let lineBusy = false; let leaseTaken = false;
-      if (line?.companyId && callSid && this.lineRuleConfigured()) {
-        try {
-          if (await lineCallsEnforced({ companyId: line.companyId, limits: await loadCompanyPlanLimits(line.companyId), db: mongoose.connection.db })) {
-            // Capacité choisie par l'entreprise (appels simultanés, 1 par défaut) : au-delà, flux classique de la règle comme avant.
-            const taken = await takeLine({ lineId: line._id, callSid, direction: 'inbound', isStale: staleCheckFor(phoneNumberService.twilioClient), capacity: capacityOf(line) });
-            leaseTaken = taken.ok; lineBusy = !taken.ok && taken.reason === 'busy';
-          }
-        } catch (error) { console.error('[inbound] contrôle de ligne ignoré :', error?.message || error); }
-      }
+      const { lineBusy, leaseTaken } = await this.inboundLineLease(line, callSid);
       // B.1 : appel entrant sans minutes (solde à zéro ou moins) : personne ne sonne, l'appel va au répondeur (jamais de dépassement).
       // Solde illisible : aucun blocage (comme les contrôles sortants). Sinon l'échéance de coupure est enregistrée plus bas.
       const minutesState = line?.companyId && callSid ? await this.inboundMinutes(line.companyId) : null;
@@ -2949,7 +2958,9 @@ class PhoneNumberController {
       // retour du menu (file connue). null (tous les autres cas, ou échec du moteur / de la session) : flux classique inchangé.
       // Capacité de la ligne épuisée : jamais l'IA.
       if (aiInboundPilotEnabled() && line?.companyId && callSid && queueRoute?.kind !== 'menu') {
-        const aiBody = await tryAiInbound({ line, to, from, callSid, lineBusy, stage: 'call', humansAvailable: route.first !== 'voicemail', queue: queueRoute ? queueRoute.queue || null : undefined, signatureValid: () => twilioRequestValid(req) });
+        // Titulaire Nomad composé seulement par push (aucune présence) : pour la priorité « après les humains », il compte comme un humain qui
+        // sonne (l'IA attend la fin de la sonnerie) ; pour le niveau de l'IA « en premier », personne n'est réellement présent (« total »).
+        const aiBody = await tryAiInbound({ line, to, from, callSid, lineBusy, stage: 'call', humansAvailable: route.first !== 'voicemail', humansPresent: route.first !== 'voicemail' && !(soloPush && !present.length), queue: queueRoute ? queueRoute.queue || null : undefined, signatureValid: () => twilioRequestValid(req) });
         if (aiBody) return reply(aiBody);
       }
       if (leaseTaken && route.first === 'voicemail') await releaseCall(callSid).catch((e) => console.error('[inbound] libération :', e?.message || e));
@@ -2992,7 +3003,9 @@ class PhoneNumberController {
         companyId: line?.companyId ? String(line.companyId) : '',
         identities: queueRoute ? online : identities,
         // Titulaire Nomad réveillé par la push (2 à 5 s) : sonnerie d'au moins 25 s, jamais moins que le réglage de l'entreprise.
+        // Renvoi vers le mobile actif (route.mobileNext : reach.forwardEnabled + numéro valide) : 15 s dans l'application, puis le mobile.
         minRingSeconds: soloPush ? SOLO_PUSH_MIN_RING_SECONDS : 0,
+        fixedRingSeconds: soloPush && route.mobileNext ? SOLO_PUSH_FORWARD_RING_SECONDS : 0,
         from,
         resultUrl,
         mobile: route.first === 'mobile' ? route.mobile : null,
