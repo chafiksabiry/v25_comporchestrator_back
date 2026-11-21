@@ -55,13 +55,13 @@ assert.match(R.consentSay('fr'), /Cet appel peut être enregistré/);
 assert.match(R.consentSay('en'), /may be recorded/);
 assert.match(R.consentSay('es'), /puede ser grabada/);
 assert.match(R.consentSay('ar'), /voice="Polly\.Zeina"/);
-assert.equal(R.consentSay('xx'), R.consentSay('fr'), 'langue inconnue : français');
+assert.equal(R.consentSay('xx'), R.consentSay('en'), 'langue inconnue : anglais (langue par défaut)');
 assert.equal(R.consentLanguageFor('+33612345678'), 'fr');
 assert.equal(R.consentLanguageFor('+34600000000'), 'es');
 assert.equal(R.consentLanguageFor('+447911123456'), 'en');
-assert.equal(R.consentLanguageFor('+212612345678'), 'ar');
-assert.equal(R.consentLanguageFor('anonymous'), 'fr');
-assert.equal(R.consentLanguageFor(undefined), 'fr');
+assert.equal(R.consentLanguageFor('+212612345678'), 'fr', 'Maroc : français d’affaires');
+assert.equal(R.consentLanguageFor('anonymous'), 'en', 'numéro illisible : anglais (langue par défaut)');
+assert.equal(R.consentLanguageFor(undefined), 'en');
 assert.match(R.consentTwiml('es'), /^<\?xml[^>]*\?><Response><Say [^>]*>Esta llamada/);
 
 // ---------------------------------------------------------------- plan d'enregistrement
@@ -202,7 +202,7 @@ try {
   assert.equal(res.code, 200); assert.match(res.payload, /Polly\.Zeina/);
   res = mkRes();
   await pc.handleTwilioCallAnnounce({ query: { l: '"><Hangup/>' } }, res);
-  assert.match(res.payload, /Cet appel peut être enregistré/, 'langue invalide : français, rien de l\'URL n\'est recopié');
+  assert.match(res.payload, /This call may be recorded/, 'langue invalide : anglais (langue par défaut), rien de l\'URL n\'est recopié');
   assert(!res.payload.includes('<Hangup/>'));
 } finally {
   global.fetch = realFetch;

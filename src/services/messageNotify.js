@@ -7,6 +7,7 @@ import { sendViaMailbox } from './secretariatActions.js';
 import { resolveUserMailbox } from './secretariatConnections.js';
 import { loadEmailIdentity } from './secretariatTools.js';
 import { SecretariatError } from './secretariatProviders/common.js';
+import { staffTexts } from './staffTexts.js';
 
 /**
  * Prévient par e-mail la personne visée par un message pris à l'accueil, UNIQUEMENT depuis la boîte (Gmail / Outlook) de CELLE QUI A PRIS LE MESSAGE
@@ -24,7 +25,8 @@ let deps = defaults;
 /** Remplace les dépendances (tests). Sans argument, rétablit les vraies. */
 export function setNotifyDeps(next) { deps = next ? { ...defaults, ...next } : defaults; }
 
-export async function notifyByMail({ companyId, followUpId, entry, message, takenBy, companyName, timeZone }) {
+/** `language` : langue de la société (français pour un pays francophone, sinon anglais : objet, corps et expéditeur, voir staffTexts.js). */
+export async function notifyByMail({ companyId, followUpId, entry, message, takenBy, companyName, timeZone, language }) {
   try {
     const identity = await deps.loadEmailIdentity(companyId);
     const sender = takenBy?.id;
@@ -36,13 +38,14 @@ export async function notifyByMail({ companyId, followUpId, entry, message, take
     const now = Date.now();
     const [hour, day] = await Promise.all([deps.countRecent(companyId, new Date(now - 3600_000)), deps.countRecent(companyId, new Date(now - 86400_000))]);
     if (!checkRate({ hour, day }, limits()).ok) return 'limit';
-    const subject = `${message.escalationFor ? 'RELANCE · ' : ''}${message.urgency === 'urgent' ? 'URGENT · ' : ''}Message de ${message.callerName}`.replace(/[\r\n]+/g, ' ').slice(0, 150);
-    const text = messageEmail({ forName: entry.name, ...message, takenByName: takenBy.name, companyName, timeZone });
+    const T = staffTexts(language);
+    const subject = T.messageSubject({ escalation: Boolean(message.escalationFor), urgent: message.urgency === 'urgent', callerName: message.callerName }).replace(/[\r\n]+/g, ' ').slice(0, 150);
+    const text = messageEmail({ forName: entry.name, ...message, takenByName: takenBy.name, companyName, timeZone, language });
     const base = { companyId: new mongoose.Types.ObjectId(String(companyId)), sentById: sender, sentByName: takenBy.name || '', to: [to], subject, template: message.escalationFor ? 'message_escalation' : 'message_taken', followUpId: followUpId || null, withIcs: false };
     try {
       // From = la boîte de la personne ; aucun repli sur un autre canal d'envoi en cas de refus.
       await deps.sendViaMailbox(companyId, mailbox, {
-        fromName: cleanDisplayName(companyName, 'Accueil'), to: [to], subject, text, replyTo: { email: mailbox.account, name: cleanDisplayName(companyName, 'Accueil') },
+        fromName: cleanDisplayName(companyName, T.reception), to: [to], subject, text, replyTo: { email: mailbox.account, name: cleanDisplayName(companyName, T.reception) },
       }, { userId: sender });
     } catch (error) {
       const code = error instanceof SecretariatError ? error.code : 'provider_error';

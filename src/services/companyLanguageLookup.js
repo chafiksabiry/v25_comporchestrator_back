@@ -4,7 +4,7 @@ import { DEFAULT_COMPANY_LANGUAGE, languageForPhone } from './companyLanguage.js
 /**
  * Langue des textes de l'entreprise quand seul son identifiant est connu (rappel Twilio sans numéro, analyse d'un message du répondeur).
  * Le pays de la société est celui de ses propres lignes (premier numéro dont l'indicatif donne une langue) : c'est déjà ainsi que le
- * serveur déduit son pays pour les appels sortants (outboundPolicy.js). Aucune ligne, indicatif illisible ou erreur : français, comme avant.
+ * serveur déduit son pays pour les appels sortants (outboundPolicy.js). Aucune ligne, indicatif illisible ou erreur : anglais (langue par défaut).
  * `loadLines` est injectable pour les tests ; le résultat est gardé quelques minutes (un webhook Twilio ne doit pas attendre la base).
  */
 const TTL_MS = 10 * 60 * 1000;

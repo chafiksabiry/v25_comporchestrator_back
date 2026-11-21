@@ -25,10 +25,10 @@ const { buildAnalyzeUrl } = await import('../services/voicemailAnalysis.js');
 test('pays -> langue : anglophones, hispanophones, arabophones (sauf le Maroc), francophones, autres, inconnu', () => {
   for (const c of ['GB', 'US', 'IE', 'CA', 'AU', 'NZ']) assert.equal(L.languageForCountry(c), 'en', c);
   for (const c of ['ES', 'MX', 'AR', 'CO']) assert.equal(L.languageForCountry(c), 'es', c);
-  for (const c of ['AE', 'SA', 'EG', 'JO', 'KW', 'QA', 'BH', 'OM', 'LB', 'IQ', 'DZ', 'TN', 'LY']) assert.equal(L.languageForCountry(c), 'ar', c);
-  for (const c of ['FR', 'BE', 'CH', 'LU', 'MA', 'SN', 'CI']) assert.equal(L.languageForCountry(c), 'fr', c);
+  for (const c of ['AE', 'SA', 'EG', 'JO', 'KW', 'QA', 'BH', 'OM', 'LB', 'IQ', 'LY']) assert.equal(L.languageForCountry(c), 'ar', c);
+  for (const c of ['FR', 'BE', 'CH', 'LU', 'MC', 'MA', 'TN', 'DZ', 'SN', 'CI', 'CM', 'ML', 'BF', 'NE', 'TG', 'BJ', 'GN', 'CD', 'CG', 'GA', 'MG']) assert.equal(L.languageForCountry(c), 'fr', c);
   for (const c of ['JP', 'BR', 'GR', 'PL', 'SE', 'DK']) assert.equal(L.languageForCountry(c), 'en', c);
-  for (const c of [undefined, null, '', ' ', 'X', 'XYZ', '12']) assert.equal(L.languageForCountry(c), 'fr', String(c));
+  for (const c of [undefined, null, '', ' ', 'X', 'XYZ', '12']) assert.equal(L.languageForCountry(c), 'en', String(c));
   assert.equal(L.languageForCountry(' uk '), 'en');
   assert.equal(L.languageForCountry('ma'), 'fr');
 });
@@ -48,7 +48,8 @@ test('langue déduite du numéro de la ligne', () => {
   assert.equal(L.languageForPhone('+262692123456'), 'fr', 'La Réunion = France');
   assert.equal(L.languageForPhone('+306912345678'), 'en', 'autre pays : anglais');
   assert.equal(L.languageForPhone('442071234567'), 'en', 'numéro stocké sans +');
-  for (const bad of [undefined, '', 'abc', '+1', '0612345678']) assert.equal(L.languageForPhone(bad), 'fr', String(bad));
+  for (const bad of [undefined, '', 'abc', '+1', '0612345678']) assert.equal(L.languageForPhone(bad), 'en', String(bad));
+  for (const [n, c] of [['+21698123456', 'TN'], ['+213551234567', 'DZ'], ['+237612345678', 'CM'], ['+22177123456', 'SN'], ['+37799123456', 'MC']]) assert.equal(L.languageForPhone(n), 'fr', c);
   assert.equal(L.languageForPhone('', ''), '');
 });
 
@@ -59,16 +60,18 @@ test('voix de <Say> par langue, féminine ou masculine', () => {
   assert.deepEqual(L.sayVoice('en', false), { language: 'en-US', voice: 'Polly.Matthew' });
   assert.deepEqual(L.sayVoice('es', false), { language: 'es-ES', voice: 'Polly.Enrique' });
   assert.equal(L.sayVoice('ar', false).voice, 'Polly.Zeina');
-  assert.deepEqual(L.sayVoice('xx'), L.sayVoice('fr'));
+  assert.deepEqual(L.sayVoice('xx'), L.sayVoice('en'));
 });
 
 test('phrases : chaque langue a les mêmes clés que le français', () => {
   for (const lang of ['en', 'es', 'ar', 'de', 'it', 'nl', 'pt']) assert.deepEqual(Object.keys(L.PHRASES[lang]).sort(), Object.keys(L.PHRASES.fr).sort(), lang);
 });
 
-test('accueil, répondeur, repli : français inchangé par défaut, langue de la société sinon', () => {
+test('accueil, répondeur, repli : anglais par défaut (langue inconnue), langue de la société sinon', () => {
   const base = { settings: null, baseUrl: 'https://x.test', companyId: 'c1', identities: [], resultUrl: 'https://x.test/r' };
-  const fr = flow.buildInboundTwiml(base);
+  const def = flow.buildInboundTwiml(base);
+  assert.match(def, /<Say language="en-US" voice="Polly.Joanna">No advisor is available at the moment/);
+  const fr = flow.buildInboundTwiml({ ...base, language: 'fr' });
   assert.match(fr, /<Say language="fr-FR" voice="Polly.Lea">Aucun conseiller n&apos;est disponible/);
   const en = flow.buildInboundTwiml({ ...base, language: 'en' });
   assert.match(en, /<Say language="en-US" voice="Polly.Joanna">No advisor is available at the moment/);
@@ -91,12 +94,14 @@ test('après la sonnerie et remerciement du répondeur dans la langue de la soci
   const noAnswer = flow.buildNoAnswerTwiml({ settings: { voicemailEnabled: false }, baseUrl: 'b', companyId: 'c1', dialStatus: 'no-answer', language: 'en' });
   assert.match(noAnswer, /No advisor was able to answer/);
   assert.match(flow.buildVoicemailDoneTwiml('en'), /Thank you, your message has been recorded/);
-  assert.match(flow.buildVoicemailDoneTwiml(), /Merci, votre message a bien été enregistré/);
+  assert.match(flow.buildVoicemailDoneTwiml('fr'), /Merci, votre message a bien été enregistré/);
+  assert.match(flow.buildVoicemailDoneTwiml(), /Thank you, your message has been recorded/);
   assert.equal(flow.NO_ANSWER_MESSAGE, "Aucun conseiller n'a pu répondre. Veuillez rappeler plus tard. Au revoir.");
 });
 
-test('transfert : annonce et indisponibilité dans la langue de la société, français par défaut', () => {
-  assert.equal(transfer.announceText('Marie  Durand'), 'Je vous passe Marie Durand, ne quittez pas.');
+test('transfert : annonce et indisponibilité dans la langue de la société, anglais par défaut', () => {
+  assert.equal(transfer.announceText('Marie  Durand', 'fr'), 'Je vous passe Marie Durand, ne quittez pas.');
+  assert.equal(transfer.announceText('Marie Durand'), 'Putting you through to Marie Durand, please hold.');
   assert.equal(transfer.announceText('Sam Lee', 'en'), 'Putting you through to Sam Lee, please hold.');
   assert.equal(transfer.unavailableText('Sam Lee', 'es'), 'Sam Lee no puede atenderle en este momento.');
   const twiml = transfer.buildTransferTwiml({ name: 'Sam Lee', number: '+442071234567', resultUrl: 'https://x.test/t', language: 'en' });
@@ -104,25 +109,26 @@ test('transfert : annonce et indisponibilité dans la langue de la société, fr
   const msg = transfer.buildTransferMessageTwiml({ name: 'Sam Lee', settings: { voicemailEnabled: false }, baseUrl: 'b', companyId: 'c1', language: 'en' });
   assert.match(msg, /Sam Lee is not available to take your call/);
   assert.match(msg, /No advisor was able to answer/);
-  const fr = transfer.buildTransferTwiml({ name: 'Sam', number: '+33612345678', resultUrl: 'r' });
+  const fr = transfer.buildTransferTwiml({ name: 'Sam', number: '+33612345678', resultUrl: 'r', language: 'fr' });
   assert.match(fr, /<Say language="fr-FR" voice="Polly.Lea">Je vous passe Sam/);
 });
 
 test('appelant bloqué : refus poli dans la langue de la société', async () => {
   const load = async () => ({ blockedNumbers: [{ phone: '+33611111111' }] });
-  const fr = await blockedCallBody('64b0000000000000000000c1', '+33611111111', { load, env: {} });
+  const fr = await blockedCallBody('64b0000000000000000000c1', '+33611111111', { load, env: {}, language: 'fr' });
+  assert.match(await blockedCallBody('64b0000000000000000000c1', '+33611111111', { load, env: {} }), /We are unable to take your call/);
   assert.match(fr, /Polly.Lea">Nous ne pouvons pas donner suite à votre appel/);
   const en = await blockedCallBody('64b0000000000000000000c1', '+33611111111', { load, env: {}, language: 'en' });
   assert.match(en, /language="en-US" voice="Polly.Joanna">We are unable to take your call. Goodbye./);
 });
 
-test('annonce d’enregistrement : la langue de l’interlocuteur prime, sinon celle de la société, sinon le français', () => {
+test('annonce d’enregistrement : la langue de l’interlocuteur prime, sinon celle de la société, sinon l’anglais', () => {
   assert.equal(rec.consentLanguageFor('+971501234567', 'en'), 'ar');
   assert.equal(rec.consentLanguageFor('+33612345678', 'en'), 'fr', 'indicatif français reconnu : français');
   assert.equal(rec.consentLanguageFor('+306912345678', 'en'), 'en', 'indicatif non reconnu : langue de la société');
   assert.equal(rec.consentLanguageFor('anonymous', 'es'), 'es');
-  assert.equal(rec.consentLanguageFor('+306912345678'), 'fr', 'sans langue de société : français comme avant');
-  assert.equal(rec.consentLanguageFor('+306912345678', 'zz'), 'fr');
+  assert.equal(rec.consentLanguageFor('+306912345678'), 'en', 'sans langue de société : anglais (langue par défaut)');
+  assert.equal(rec.consentLanguageFor('+306912345678', 'zz'), 'en');
   assert.equal(rec.consentLanguageFor('+442071234567', 'fr'), 'en');
   const plan = rec.buildRecordingPlan({ record: true, companyId: '64b0000000000000000000c1', callSid: `CA${'a'.repeat(32)}`, baseUrl: 'https://x.test', language: rec.consentLanguageFor('+306912345678', 'en') });
   assert.match(plan.say, /This call may be recorded/);
@@ -130,7 +136,8 @@ test('annonce d’enregistrement : la langue de l’interlocuteur prime, sinon c
 
 test('menu vocal : phrase générique dans la langue de la société ; langue de file inchangée', () => {
   const q = { name: 'Billing', menuKey: '2', languages: [], prompt: '' };
-  assert.equal(menuLine(q).text, 'Pour Billing, tapez 2.');
+  assert.equal(menuLine(q, 'fr').text, 'Pour Billing, tapez 2.');
+  assert.equal(menuLine(q).text, 'For Billing, press 2.', 'langue inconnue : anglais');
   assert.deepEqual(menuLine(q, 'en'), { language: 'en-US', voice: 'Polly.Joanna', text: 'For Billing, press 2.' });
   assert.equal(menuLine({ ...q, languages: ['es'] }, 'en').text, 'Para español, pulse 2.');
   assert.equal(menuLine({ ...q, prompt: 'Welcome' }, 'en').language, 'en-US', 'texte sans langue : voix de la société');
@@ -151,9 +158,9 @@ test('langue de l’entreprise lue sur ses lignes : première ligne lisible, cac
   assert.equal(await companyLanguage('c1', { loadLines }), 'en');
   assert.equal(await companyLanguage('c1', { loadLines }), 'en');
   assert.equal(calls, 1, 'résultat gardé en cache');
-  assert.equal(await companyLanguage('c2', { loadLines: async () => [] }), 'fr');
-  assert.equal(await companyLanguage('c3', { loadLines: async () => { throw new Error('base indisponible'); } }), 'fr');
-  assert.equal(await companyLanguage(''), 'fr');
+  assert.equal(await companyLanguage('c2', { loadLines: async () => [] }), 'en');
+  assert.equal(await companyLanguage('c3', { loadLines: async () => { throw new Error('base indisponible'); } }), 'en');
+  assert.equal(await companyLanguage(''), 'en');
 });
 
 // ---------------------------------------------------------------- langue de la ligne : allemand, italien, néerlandais, portugais
@@ -261,7 +268,7 @@ test('annonce d’enregistrement : langue de l’interlocuteur prioritaire, repl
   assert.equal(rec.consentLanguageFor('+33612345678', 'de'), 'fr', 'interlocuteur français : français même sur une ligne allemande');
   assert.equal(rec.consentLanguageFor('+306912345678', 'de'), 'de', 'indicatif non reconnu : langue de la ligne');
   assert.equal(rec.consentLanguageFor('anonymous', 'it'), 'it');
-  assert.equal(rec.consentLanguageFor('+306912345678'), 'fr');
+  assert.equal(rec.consentLanguageFor('+306912345678'), 'en');
   assert.deepEqual(rec.CONSENT_LANGUAGES.sort(), ['ar', 'de', 'en', 'es', 'fr', 'it', 'nl', 'pt']);
   const plan = rec.buildRecordingPlan({ record: true, companyId: '64b0000000000000000000c1', callSid: `CA${'a'.repeat(32)}`, baseUrl: 'https://x.test', language: 'de' });
   assert.match(plan.say, /Polly.Vicki/);

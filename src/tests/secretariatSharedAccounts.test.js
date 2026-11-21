@@ -56,7 +56,9 @@ E.setMailTransport(async () => { harxMails += 1; throw new Error('transport HARX
   }
   assert.deepEqual(A.validateAccountInput({ permissions: { calendar: true } }, { partial: true }).value, { calendar: true });
   assert.ok(A.validateAccountInput({}, { partial: true }).error, 'rien à modifier');
-  assert.equal(A.composeSignature({ secretaryName: 'Sophie Martin', ownerName: 'Marie Durand', companyName: 'Acme' }), 'Sophie Martin\nSecrétariat de Marie Durand — Acme');
+  assert.equal(A.composeSignature({ secretaryName: 'Sophie Martin', ownerName: 'Marie Durand', companyName: 'Acme', language: 'fr' }), 'Sophie Martin\nSecrétariat de Marie Durand — Acme');
+  assert.equal(A.composeSignature({ secretaryName: 'Sam Lee', ownerName: 'Jane Doe', companyName: 'Acme' }), 'Sam Lee\nOffice of Jane Doe — Acme', 'langue inconnue : anglais');
+  assert.equal(A.composeSignature({ secretaryName: 'Ana', ownerName: 'Luis', companyName: 'Acme', language: 'es' }), 'Ana\nSecretaría de Luis — Acme');
   const ev = A.validateEventInput({ title: ' RDV  client ', startsAt: '2026-11-10T09:00:00Z', durationMinutes: 45, timeZone: 'Europe/Paris' }).value;
   assert.equal(ev.title, 'RDV client'); assert.equal(ev.endsAt.toISOString(), '2026-11-10T09:45:00.000Z');
   for (const bad of [{}, { title: 'x' }, { title: 'x', startsAt: 'demain' }, { title: 'x', startsAt: '2026-11-10T09:00:00Z', durationMinutes: 2 }, { title: 'x', startsAt: '2026-11-10T09:00:00Z', timeZone: 'Mars/Phobos' }, { title: 'x', startsAt: '2026-11-10T09:00:00Z', description: 'a'.repeat(1001) }, { title: 'x', startsAt: '2026-11-10T09:00:00Z', ignoreConflicts: 'oui' }]) {
@@ -199,7 +201,7 @@ const req = async (method, path, { user, body, root = `${origin}/secretariat` } 
 };
 const stateFrom = (href) => new URL(href).searchParams.get('state');
 const mail = (user, body) => req('POST', '/', { user, body, root: `${origin}/emails` });
-const MSG = { to: ['client@exemple.fr'], subject: 'Votre rendez-vous', body: 'Bonjour,\n\nVotre rendez-vous est confirmé.', centerName: 'Acme' };
+const MSG = { to: ['client@exemple.fr'], subject: 'Votre rendez-vous', body: 'Bonjour,\n\nVotre rendez-vous est confirmé.', centerName: 'Acme', language: 'fr' };
 
 try {
   // ---------- 3. démarrage du consentement : réservé au titulaire / responsables

@@ -113,12 +113,13 @@ export const CONSENT_TEXTS = {
   pt: 'Esta chamada pode ser gravada para fins de qualidade e formação. Ao continuar esta chamada, aceita a gravação.',
 };
 export const CONSENT_LANGUAGES = Object.keys(CONSENT_TEXTS);
-export const DEFAULT_CONSENT_LANGUAGE = 'fr';
+export const DEFAULT_CONSENT_LANGUAGE = 'en';
 
-const ARABIC = ['+20', '+212', '+213', '+216', '+218', '+249', '+961', '+962', '+963', '+964', '+965', '+966', '+967', '+968', '+971', '+973', '+974'];
+// Maghreb (+212, +213, +216) : français d'affaires, comme la langue des sociétés de ces pays (companyLanguage.js).
+const ARABIC = ['+20', '+218', '+249', '+961', '+962', '+963', '+964', '+965', '+966', '+967', '+968', '+971', '+973', '+974'];
 const SPANISH = ['+34', '+51', '+52', '+53', '+54', '+56', '+57', '+58', '+591', '+593', '+595', '+598'];
 const ENGLISH = ['+1', '+44', '+61', '+64', '+353'];
-const FRENCH = ['+33', '+32', '+41', '+352', '+221', '+225', '+262', '+590', '+594', '+596', '+687', '+689'];
+const FRENCH = ['+33', '+32', '+41', '+352', '+377', '+212', '+213', '+216', '+221', '+223', '+224', '+225', '+226', '+227', '+228', '+229', '+237', '+241', '+242', '+243', '+261', '+262', '+508', '+590', '+594', '+596', '+681', '+687', '+689'];
 const GERMAN = ['+49', '+43', '+423'];
 const ITALIAN = ['+39', '+378', '+379'];
 const DUTCH = ['+31'];
@@ -132,7 +133,7 @@ export const normalizeConsentLanguage = (value) => {
 
 /**
  * Langue de l'annonce selon l'indicatif du numéro de l'interlocuteur (E.164), quand il est reconnu (arabe, espagnol, anglais, français, allemand, italien, néerlandais, portugais).
- * Indicatif non reconnu ou numéro illisible : `fallback`, la langue de la ligne (`languageForPhone`), sinon le français comme avant.
+ * Indicatif non reconnu ou numéro illisible : `fallback`, la langue de la ligne (`languageForPhone`), sinon l'anglais (langue par défaut).
  * Le comportement pour un indicatif reconnu est inchangé : la langue de l'interlocuteur prime sur celle de la société.
  */
 export function consentLanguageFor(number, fallback = DEFAULT_CONSENT_LANGUAGE) {
