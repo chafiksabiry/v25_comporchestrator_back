@@ -43,12 +43,12 @@ assert.equal(T.verifyTransferState({ secret: 's3', token: `${tok.split('.')[0]}x
 assert.equal(T.verifyTransferState({ secret: 's3', token: '', now: 2000 }), null);
 
 // ---------------------------------------------------------------- TwiML
-const x = T.buildTransferTwiml({ name: 'Mme <Martin>', number: '+33612345678', extension: '204', callerId: '+33140000000', resultUrl: 'https://h/api?s=a.b', maxSeconds: 600.7 });
+const x = T.buildTransferTwiml({ name: 'Mme <Martin>', number: '+33612345678', extension: '204', callerId: '+33140000000', resultUrl: 'https://h/api?s=a.b', maxSeconds: 600.7, language: 'fr' });
 assert.match(x, /Je vous passe Mme &lt;Martin&gt;, ne quittez pas\./); assert.match(x, /<Number sendDigits="wwww204">\+33612345678<\/Number>/);
 assert.match(x, /timeLimit="600"/); assert.match(x, /callerId="\+33140000000"/); assert.match(x, /action="https:\/\/h\/api\?s=a\.b"/);
 assert.ok(!/sendDigits/.test(T.buildTransferTwiml({ name: 'A', number: '+33612345678', extension: '', resultUrl: 'u' })));
 assert.ok(!/sendDigits/.test(T.buildTransferTwiml({ name: 'A', number: '+33612345678', extension: '1"><x', resultUrl: 'u' })), 'poste non numérique ignoré');
-const args = { name: 'Mme Martin', settings: { voicemailEnabled: true }, baseUrl: 'https://h', companyId: 'c1' };
+const args = { name: 'Mme Martin', settings: { voicemailEnabled: true }, baseUrl: 'https://h', companyId: 'c1', language: 'fr' };
 assert.match(T.buildTransferResultTwiml({ ...args, dialStatus: 'no-answer' }), /ne peut pas vous répondre[\s\S]*<Record /);
 assert.match(T.buildTransferResultTwiml({ ...args, dialStatus: 'busy' }), /<Record /);
 assert.match(T.buildTransferResultTwiml({ ...args, dialStatus: 'completed' }), /<Hangup\/>/);

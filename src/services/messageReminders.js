@@ -5,6 +5,7 @@ import { notifyByMail } from './messageNotify.js';
 import { escalationTargets, reminderAction, settingsOf } from './receptionExtras.js';
 import { loadTools, mergedTools } from './secretariatTools.js';
 import { messagePayload, notifyOwners } from './webPush.js';
+import { companyLanguageIfConnected } from './companyLanguageLookup.js';
 
 /**
  * Relance automatique des messages pris à l'accueil (tâche planifiée simple, un minuteur dans l'orchestrateur).
@@ -25,6 +26,8 @@ const defaults = {
   push: (userId, payload) => notifyOwners({ userId }, payload),
   mail: notifyByMail,
   timeZone: async (companyId) => mergedTools(await loadTools(companyId)).timeZone,
+  /** Langue des membres de la société (français pour un pays francophone, anglais sinon). */
+  language: (companyId) => companyLanguageIfConnected(companyId),
 };
 
 /** @returns {Promise<{checked: number, reminded: number, escalated: number}>} */
@@ -48,20 +51,22 @@ export async function runMessageReminders({ now = Date.now(), deps: custom } = {
         // La personne visée est alertée de nouveau : le message redevient « nouveau » (compteur de l'application).
         if (!(await deps.claim({ ...base, remindedAt: null }, { remindedAt: new Date(now), remindReason: action.reason, seenAt: null }))) continue;
         result.reminded += 1;
-        if (item.assigneeId) void deps.push(item.assigneeId, messagePayload({ callerName: item.contactName, urgent: item.urgency === 'urgent', reminder: true, id: String(item._id) }));
+        const language = await deps.language(String(item.companyId)).catch(() => undefined);
+        if (item.assigneeId) void deps.push(item.assigneeId, messagePayload({ callerName: item.contactName, urgent: item.urgency === 'urgent', reminder: true, id: String(item._id), language }));
         continue;
       }
       const targets = escalationTargets(doc?.entries, item);
       if (!(await deps.claim({ ...base, escalatedAt: null, remindedAt: { $ne: null } }, { escalatedAt: new Date(now), escalatedToNames: targets.map((t) => t.name).slice(0, 10) }))) continue;
       result.escalated += 1;
       const tz = await deps.timeZone(String(item.companyId)).catch(() => undefined);
+      const language = await deps.language(String(item.companyId)).catch(() => undefined);
       for (const t of targets) {
-        if (t.userId) void deps.push(t.userId, messagePayload({ callerName: item.contactName, urgent: item.urgency === 'urgent', reminder: true, id: String(item._id) }));
+        if (t.userId) void deps.push(t.userId, messagePayload({ callerName: item.contactName, urgent: item.urgency === 'urgent', reminder: true, id: String(item._id), language }));
         if (t.email || t.userId) {
           await deps.mail({
             companyId: String(item.companyId), followUpId: item._id, entry: { name: t.name, email: t.email, userId: t.userId },
             message: { callerName: item.contactName, callerCompany: item.callerCompany, callerPhone: item.contactPhone, reason: item.note, urgency: item.urgency, callbackBefore: item.dueAt, escalationFor: item.forName || item.assigneeName },
-            takenBy: { id: item.createdById || '', name: item.createdByName || '' }, companyName: doc?.general?.companyName || '', timeZone: tz,
+            takenBy: { id: item.createdById || '', name: item.createdByName || '' }, companyName: doc?.general?.companyName || '', timeZone: tz, language,
           });
         }
       }

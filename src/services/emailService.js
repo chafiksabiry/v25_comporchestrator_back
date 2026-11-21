@@ -89,10 +89,12 @@ export function validateSend(body) {
   if (cc.error) return cc;
   const thread = parseThreading(b);
   if (thread.error) return thread;
+  // Langue du texte (celle de la société, choisie par l'application) : sert aux mentions ajoutées par le serveur (signature). Facultative.
+  const language = typeof b.language === 'string' && /^(fr|en|es|ar|de|it|nl|pt)$/.test(b.language.trim().toLowerCase()) ? b.language.trim().toLowerCase() : '';
   return {
     value: {
       to: to.value, cc: cc.value, inReplyTo: thread.value.inReplyTo, references: thread.value.references, subject: b.subject.trim(), body: b.body.replace(/\r\n?/g, '\n').trim(), template, followUpId,
-      attachIcs: b.attachIcs === true, centerName: cleanDisplayName(b.centerName, ''),
+      attachIcs: b.attachIcs === true, centerName: cleanDisplayName(b.centerName, ''), language,
     },
   };
 }
