@@ -9,21 +9,23 @@
  * dans la langue où le client l'a écrit. Seules les phrases fixes ci-dessous suivent la ligne.
  *
  * Le mapping pays -> langue est le tableau COUNTRIES_BY_LANGUAGE ci-dessous (un seul endroit, à ajuster ici) :
- *   fr : FR BE CH LU MA SN CI (BE et CH restent en français ; le Maroc reste en français d'affaires malgré l'arabe) ;
+ *   fr : FR BE CH LU MC, Maroc (français d'affaires malgré l'arabe) et Afrique francophone (SN CI CM ML BF NE TG BJ GN CD CG GA MG) ;
  *   de : DE AT LI (la Suisse reste en français) ;
  *   it : IT SM VA ;
  *   nl : NL (la Belgique reste en français) ;
  *   pt : PT ;
  *   en : GB US IE CA AU NZ, et tout autre pays (pas de langue produit dédiée, ex. Grèce, Pologne, Suède) ;
  *   es : Espagne et pays hispanophones ;
- *   ar : pays arabophones (sauf le Maroc) ;
- *   pays absent ou inconnu : fr (comme avant ce réglage).
+ *   ar : pays arabophones sauf le Maroc ; l'Algérie et la Tunisie restent en arabe (décision du fondateur : inchangé dans ce lot) ;
+ *   pays absent ou inconnu : en (règle du fondateur du 21/11/2026 : « English must be the native language and French only for
+ *   French-speaking countries »).
+ * À garder aligné avec `src/domain/companyLanguage.ts` du front (`COMPANY_LANGUAGE_BY_COUNTRY`).
  */
 export const COMPANY_LANGUAGES = ['fr', 'en', 'es', 'ar', 'de', 'it', 'nl', 'pt'];
-export const DEFAULT_COMPANY_LANGUAGE = 'fr';
+export const DEFAULT_COMPANY_LANGUAGE = 'en';
 
 export const COUNTRIES_BY_LANGUAGE = Object.freeze({
-  fr: ['FR', 'BE', 'CH', 'LU', 'MA', 'SN', 'CI'],
+  fr: ['FR', 'BE', 'CH', 'LU', 'MC', 'MA', 'SN', 'CI', 'CM', 'ML', 'BF', 'NE', 'TG', 'BJ', 'GN', 'CD', 'CG', 'GA', 'MG'],
   en: ['GB', 'US', 'IE', 'CA', 'AU', 'NZ'],
   es: ['ES', 'MX', 'AR', 'CO', 'CL', 'PE', 'VE', 'EC', 'GT', 'CU', 'BO', 'DO', 'HN', 'PY', 'SV', 'NI', 'CR', 'PA', 'UY', 'PR', 'GQ'],
   ar: ['AE', 'SA', 'EG', 'JO', 'KW', 'QA', 'BH', 'OM', 'LB', 'IQ', 'DZ', 'TN', 'LY', 'SY', 'YE', 'SD', 'PS', 'MR'],
@@ -33,7 +35,7 @@ export const COUNTRIES_BY_LANGUAGE = Object.freeze({
   pt: ['PT'],
 });
 
-/** Langue des textes d'entreprise pour un code pays ISO 3166-1 alpha-2 (« UK » = GB). Absent ou illisible : français. */
+/** Langue des textes d'entreprise pour un code pays ISO 3166-1 alpha-2 (« UK » = GB). Absent ou illisible : anglais. */
 export function languageForCountry(iso2) {
   let code = String(iso2 ?? '').trim().toUpperCase();
   if (code === 'UK') code = 'GB';
@@ -49,6 +51,8 @@ export function languageForCountry(iso2) {
  */
 const CALLING_CODE_COUNTRY = Object.freeze({
   '+1': 'US', '+20': 'EG', '+212': 'MA', '+213': 'DZ', '+216': 'TN', '+218': 'LY', '+221': 'SN', '+222': 'MR', '+225': 'CI', '+240': 'GQ',
+  '+223': 'ML', '+224': 'GN', '+226': 'BF', '+227': 'NE', '+228': 'TG', '+229': 'BJ', '+237': 'CM', '+241': 'GA', '+242': 'CG', '+243': 'CD',
+  '+261': 'MG', '+377': 'MC',
   '+249': 'SD', '+262': 'FR', '+31': 'NL', '+32': 'BE', '+33': 'FR', '+34': 'ES', '+351': 'PT', '+352': 'LU', '+353': 'IE', '+378': 'SM',
   '+379': 'VA', '+39': 'IT', '+41': 'CH', '+423': 'LI', '+43': 'AT', '+44': 'GB', '+49': 'DE',
   '+502': 'GT', '+503': 'SV', '+504': 'HN', '+505': 'NI', '+506': 'CR', '+507': 'PA', '+508': 'FR', '+51': 'PE', '+52': 'MX', '+53': 'CU',
@@ -59,7 +63,7 @@ const CALLING_CODE_COUNTRY = Object.freeze({
 
 /**
  * Langue des textes d'entreprise d'après le numéro E.164 de la ligne de la société. Indicatif reconnu : langue de son pays (un indicatif
- * sans langue dédiée donne l'anglais) ; numéro absent ou illisible : `fallback` (français par défaut).
+ * sans langue dédiée donne l'anglais) ; numéro absent ou illisible : `fallback` (anglais par défaut).
  */
 export function languageForPhone(e164, fallback = DEFAULT_COMPANY_LANGUAGE) {
   let n = String(e164 ?? '').replace(/[\s().-]/g, '');
@@ -73,7 +77,7 @@ export function languageForPhone(e164, fallback = DEFAULT_COMPANY_LANGUAGE) {
   return 'en';
 }
 
-/** Langue valide du produit, sinon français. */
+/** Langue valide du produit, sinon anglais. */
 export const normalizeCompanyLanguage = (value) => {
   const code = String(value ?? '').trim().toLowerCase().slice(0, 2);
   return COMPANY_LANGUAGES.includes(code) ? code : DEFAULT_COMPANY_LANGUAGE;
@@ -95,7 +99,7 @@ const SAY_VOICES = Object.freeze({
   pt: { language: 'pt-PT', female: 'Polly.Ines-Neural', male: 'Polly.Cristiano' },
 });
 
-/** Attributs `language` et `voice` d'un <Say> dans la langue de la société (français si langue inconnue). */
+/** Attributs `language` et `voice` d'un <Say> dans la langue de la société (anglais si langue inconnue). */
 export const sayVoice = (language, female = true) => {
   const v = SAY_VOICES[normalizeCompanyLanguage(language)];
   return { language: v.language, voice: female ? v.female : v.male };

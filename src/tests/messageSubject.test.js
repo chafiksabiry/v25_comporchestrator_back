@@ -6,14 +6,14 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret';
 const { messageSubject, notifyByMail, setNotifyDeps } = await import('../services/messageNotify.js');
 
 // ---------------------------------------------------------------- objet seul
-assert.equal(messageSubject({ callerName: 'Aziz SLASSI' }), 'Message de Aziz SLASSI', 'sans langue : français, comme avant');
+assert.equal(messageSubject({ callerName: 'Aziz SLASSI' }), 'Message from Aziz SLASSI', 'sans langue : anglais (langue par défaut, règle du 21/11)');
 assert.equal(messageSubject({ callerName: 'Aziz SLASSI', language: 'fr', escalation: true, urgent: true }), 'RELANCE · URGENT · Message de Aziz SLASSI', 'français inchangé');
 assert.equal(messageSubject({ callerName: 'Aziz SLASSI', language: 'en' }), 'Message from Aziz SLASSI');
 assert.equal(messageSubject({ callerName: 'Aziz SLASSI', language: 'en', escalation: true, urgent: true }), 'REMINDER · URGENT · Message from Aziz SLASSI');
 assert.equal(messageSubject({ callerName: 'Aziz SLASSI', language: 'es', urgent: true }), 'URGENTE · Mensaje de Aziz SLASSI');
 assert.equal(messageSubject({ callerName: 'Aziz SLASSI', language: 'ar', escalation: true }), 'تذكير · رسالة من Aziz SLASSI');
 assert.equal(messageSubject({ callerName: 'X', language: 'de' }), 'Nachricht von X');
-assert.equal(messageSubject({ callerName: 'X', language: 'xx' }), 'Message de X', 'langue inconnue : français');
+assert.equal(messageSubject({ callerName: 'X', language: 'xx' }), 'Message from X', 'langue inconnue : anglais');
 assert.equal(messageSubject({ callerName: 'Jean\r\nBcc: pirate@x', language: 'en' }), 'Message from Jean Bcc: pirate@x', 'aucun saut de ligne dans l’objet');
 assert.equal(messageSubject({ callerName: 'A'.repeat(300), language: 'en' }).length, 150, '150 caractères au plus');
 
@@ -37,17 +37,26 @@ assert.deepEqual(asked, ['64b0000000000000000000c1'], 'langue lue pour la socié
 // relance (messageReminders passe escalationFor)
 setNotifyDeps(deps({ companyLanguage: async () => 'ar' }));
 assert.equal(await notifyByMail({ ...args, message: { ...args.message, urgency: 'normal', escalationFor: 'Paul' } }), 'sent');
-assert.equal(sent.at(-1).subject, 'تذكير · رسالة من Dupont'); assert.equal(logs.at(-1).template, 'message_escalation');
-// langue illisible : français, et l'envoi part quand même
+assert.equal(sent.at(-1).subject, 'REMINDER · Message from Dupont', 'société arabophone : objet, corps et expéditeur en anglais (fr / en seulement)'); assert.equal(logs.at(-1).template, 'message_escalation');
+// langue illisible : anglais (langue par défaut), et l'envoi part quand même
 setNotifyDeps(deps({ companyLanguage: async () => { throw new Error('base'); } }));
 assert.equal(await notifyByMail(args), 'sent');
-assert.equal(sent.at(-1).subject, 'URGENT · Message de Dupont');
-// dépendances réelles (base non connectée) : français sans attendre la base
+assert.equal(sent.at(-1).subject, 'URGENT · Message from Dupont');
+// dépendances réelles (base non connectée) : anglais sans attendre la base
 const { companyLanguage: _unused, ...noLang } = deps(); // eslint-disable-line no-unused-vars
 setNotifyDeps(noLang);
 const t0 = Date.now();
 assert.equal(await notifyByMail(args), 'sent');
 assert.ok(Date.now() - t0 < 2000, 'pas d’attente de la base');
-assert.equal(sent.at(-1).subject, 'URGENT · Message de Dupont');
+assert.equal(sent.at(-1).subject, 'URGENT · Message from Dupont');
+setNotifyDeps(null);
+// langue transmise par l'appelant (prise du message, relance) : utilisée sans relire la base ; corps en français pour une société francophone
+asked.length = 0;
+setNotifyDeps(deps());
+assert.equal(await notifyByMail({ ...args, language: 'fr' }), 'sent');
+assert.equal(sent.at(-1).subject, 'URGENT · Message de Dupont'); assert.match(sent.at(-1).text, /^Bonjour Paul,/); assert.deepEqual(asked, []);
+// société espagnole : objet ET corps en anglais (même langue partout, fr ou en)
+assert.equal(await notifyByMail({ ...args, language: 'es' }), 'sent');
+assert.equal(sent.at(-1).subject, 'URGENT · Message from Dupont'); assert.match(sent.at(-1).text, /^Hello Paul,/); assert.equal(sent.at(-1).fromName, 'Acme');
 setNotifyDeps(null);
 console.log('messageSubject : OK');

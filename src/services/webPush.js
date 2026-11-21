@@ -1,5 +1,6 @@
 import webpush from 'web-push';
 import PushSubscription from '../models/PushSubscription.js';
+import { staffTexts } from './staffTexts.js';
 
 /**
  * Notifications Web Push (VAPID). Les clés viennent UNIQUEMENT de l'environnement :
@@ -43,27 +44,28 @@ export function validateSubscription(sub) {
   return errors.length ? { ok: false, errors, value: null } : { ok: true, errors, value: { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } } };
 }
 
-export const callPayload = ({ from = '', to = '', callSid = '' } = {}) => ({
+/** `language` : langue de la société (français pour un pays francophone, sinon anglais, voir staffTexts.js). */
+export const callPayload = ({ from = '', to = '', callSid = '', language } = {}) => ({
   kind: 'call',
-  title: 'Appel entrant sur votre ligne',
-  body: `${from || 'Numéro masqué'}${to ? ` → ${to}` : ''}. Touchez pour répondre ; sinon votre mobile sonne si le renvoi est activé.`,
+  title: staffTexts(language).pushCallTitle,
+  body: staffTexts(language).pushCallBody(from || staffTexts(language).hiddenNumber, to),
   tag: callSid ? `call-${callSid}` : 'call',
   url: '/app/calls',
 });
 
-export const voicemailPayload = ({ from = '', durationSeconds = 0, recordingSid = '' } = {}) => ({
+export const voicemailPayload = ({ from = '', durationSeconds = 0, recordingSid = '', language } = {}) => ({
   kind: 'voicemail',
-  title: 'Nouveau message sur le répondeur',
-  body: `${from || 'Numéro masqué'}${durationSeconds ? ` · ${durationSeconds} s` : ''}`,
+  title: staffTexts(language).pushVoicemailTitle,
+  body: `${from || staffTexts(language).hiddenNumber}${durationSeconds ? ` · ${durationSeconds} s` : ''}`,
   tag: recordingSid ? `voicemail-${recordingSid}` : 'voicemail',
   url: '/app/voicemails',
 });
 
 /** Message pris à l'accueil, urgent (prise du message) ou relancé : le contenu du message reste dans l'application, la notification n'en dit que l'essentiel. */
-export const messagePayload = ({ callerName = '', urgent = false, reminder = false, id = '' } = {}) => ({
+export const messagePayload = ({ callerName = '', urgent = false, reminder = false, id = '', language } = {}) => ({
   kind: 'message',
-  title: reminder ? 'Rappel : un message vous attend' : urgent ? 'Message URGENT pour vous' : 'Un message a été pris pour vous',
-  body: `${String(callerName).slice(0, 80) || 'Un appelant'} vous demande. Touchez pour ouvrir « Demandes à traiter ».`,
+  title: reminder ? staffTexts(language).pushMessageReminder : urgent ? staffTexts(language).pushMessageUrgent : staffTexts(language).pushMessageTaken,
+  body: staffTexts(language).pushMessageBody(String(callerName).slice(0, 80) || staffTexts(language).unknownCaller),
   tag: id ? `message-${id}${reminder ? '-reminder' : ''}` : 'message',
   url: '/app/followups',
 });
