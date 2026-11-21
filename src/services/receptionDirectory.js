@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { isValidEmail } from './emailService.js';
 import { DEFAULT_TIME_ZONE, normalizeTimeZone } from './timeZone.js';
+import { staffTexts } from './staffTexts.js';
 
 /**
  * Annuaire et consignes d'accueil : logique pure (validation, vue, absences, message pris). Aucun accès base ni réseau.
@@ -239,29 +240,32 @@ export function validateMessage(body, entryIds, now = Date.now()) {
   return { value: { scriptId, callerName, callerCompany, callerPhone, forEntryId: b.forEntryId, reason: multiline(b.reason, MAX_MESSAGE), urgency, callbackBefore, callId } };
 }
 
-export const messageTitle = (forName, urgency) => `${urgency === 'urgent' ? 'URGENT · ' : ''}Message pour ${forName}`.slice(0, 120);
+/** Titre enregistré d'un message pris, dans la langue des membres de la société (`language`, voir staffTexts.js). */
+export const messageTitle = (forName, urgency, language) => staffTexts(language).messageTitle(forName, urgency === 'urgent').slice(0, 120);
 
 /** Texte de l'e-mail qui prévient la personne visée (texte brut). Envoyé depuis la messagerie connectée de l'entreprise, jamais depuis HARX. */
-export function messageEmail({ forName, callerName, callerCompany, callerPhone, reason, urgency, callbackBefore, takenByName, companyName, timeZone, escalationFor }) {
+export function messageEmail({ forName, callerName, callerCompany, callerPhone, reason, urgency, callbackBefore, takenByName, companyName, timeZone, escalationFor, language }) {
   const one = (s) => String(s || '').replace(/[\r\n]+/g, ' ').trim();
+  // Langue des membres de la société : français pour un pays francophone, anglais sinon (staffTexts.js).
+  const T = staffTexts(language);
   const when = callbackBefore
-    ? new Intl.DateTimeFormat('fr-FR', { timeZone: normalizeTimeZone(timeZone) || DEFAULT_TIME_ZONE, dateStyle: 'full', timeStyle: 'short' }).format(new Date(callbackBefore))
+    ? new Intl.DateTimeFormat(T.locale, { timeZone: normalizeTimeZone(timeZone) || DEFAULT_TIME_ZONE, dateStyle: 'full', timeStyle: 'short' }).format(new Date(callbackBefore))
     : '';
   const lines = [
-    `Bonjour ${one(forName)},`,
+    T.hello(one(forName)),
     '',
-    escalationFor ? `RELANCE : ce message destiné à ${one(escalationFor)} n’a pas été traité dans le délai prévu. Merci de vous en assurer.` : null,
+    escalationFor ? T.escalation(one(escalationFor)) : null,
     escalationFor ? '' : null,
-    `${urgency === 'urgent' ? 'Message URGENT' : 'Message'} pris à l’accueil${companyName ? ` de ${one(companyName)}` : ''}${takenByName ? ` par ${one(takenByName)}` : ''}.`,
+    T.takenAt({ urgent: urgency === 'urgent', companyName: companyName ? one(companyName) : '', takenByName: takenByName ? one(takenByName) : '' }),
     '',
-    `Appelant : ${one(callerName)}${callerCompany ? ` (${one(callerCompany)})` : ''}`,
-    callerPhone ? `Numéro : ${callerPhone}` : null,
-    when ? `À rappeler avant : ${when}` : null,
+    T.caller(one(callerName), callerCompany ? one(callerCompany) : ''),
+    callerPhone ? T.number(callerPhone) : null,
+    when ? T.callbackBefore(when) : null,
     '',
-    'Message :',
+    T.messageLabel,
     String(reason).trim(),
     '',
-    'Retrouvez ce message dans « Demandes à traiter » de votre application.',
+    T.findIt,
   ];
   return lines.filter((l) => l !== null).join('\n');
 }

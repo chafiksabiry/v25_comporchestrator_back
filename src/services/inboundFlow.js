@@ -1,5 +1,5 @@
 import { FEMALE_VOICES, toPublicSettings } from './inboundSettings.js';
-import { PHRASES, normalizeCompanyLanguage, sayVoice } from './companyLanguage.js';
+import { DEFAULT_COMPANY_LANGUAGE, PHRASES, normalizeCompanyLanguage, sayVoice } from './companyLanguage.js';
 
 /**
  * Construction pure du TwiML des appels entrants réels (aucun accès réseau ni base).
@@ -22,8 +22,8 @@ export const xmlEscape = (value) => String(value ?? '')
 
 export const pollyVoice = (voice) => (FEMALE_VOICES.includes(voice) || !voice ? 'Polly.Lea' : 'Polly.Mathieu');
 
-/** <Say> dans la langue de la société (français par défaut) ; la voix féminine ou masculine suit le réglage de voix de l'entreprise. */
-export const say = (text, voice, language = 'fr') => {
+/** <Say> dans la langue de la société (anglais par défaut) ; la voix féminine ou masculine suit le réglage de voix de l'entreprise. */
+export const say = (text, voice, language = DEFAULT_COMPANY_LANGUAGE) => {
   const v = sayVoice(language, FEMALE_VOICES.includes(voice) || !voice);
   return `<Say language="${v.language}" voice="${v.voice}">${xmlEscape(text)}</Say>`;
 };
@@ -36,7 +36,7 @@ export const defaultVoicemailUrls = (baseUrl) => ({
 });
 
 /** Accueil : audio validé, sinon voix de synthèse, sinon rien. */
-function greeting(s, baseUrl, companyId, language = 'fr') {
+function greeting(s, baseUrl, companyId, language = DEFAULT_COMPANY_LANGUAGE) {
   if (s.greetingEnabled === false) return '';
   if (s.greetingValidated && s.greetingAudioVersion) return play(baseUrl, companyId, 'greeting', s.greetingAudioVersion);
   if (s.greetingText) return say(s.greetingText, s.voice, language);
@@ -44,7 +44,7 @@ function greeting(s, baseUrl, companyId, language = 'fr') {
 }
 
 /** Invitation puis enregistrement du message. */
-function voicemailRecord(s, baseUrl, companyId, voicemailUrls, solo = false, language = 'fr') {
+function voicemailRecord(s, baseUrl, companyId, voicemailUrls, solo = false, language = DEFAULT_COMPANY_LANGUAGE) {
   const urls = voicemailUrls || defaultVoicemailUrls(baseUrl);
   const p = PHRASES[normalizeCompanyLanguage(language)];
   const prompt = s.voicemailValidated && s.voicemailAudioVersion
@@ -57,7 +57,7 @@ function voicemailRecord(s, baseUrl, companyId, voicemailUrls, solo = false, lan
 const normalize = (settings) => (settings && 'greetingValidated' in settings ? { ...toPublicSettings(null), ...settings } : toPublicSettings(settings));
 
 /** Accueil seul (audio validé, sinon voix de synthèse, sinon rien) : sert aux files d'attente (accueil puis menu vocal). */
-export const greetingTwiml = (settings, baseUrl, companyId, language = 'fr') => greeting(normalize(settings), baseUrl, companyId, language);
+export const greetingTwiml = (settings, baseUrl, companyId, language = DEFAULT_COMPANY_LANGUAGE) => greeting(normalize(settings), baseUrl, companyId, language);
 /** Délai de sonnerie des conseillers (secondes) pour ces réglages. */
 export const ringTimeoutOf = (settings) => normalize(settings).ringTimeoutSeconds;
 
@@ -77,7 +77,16 @@ export function buildMobileDialTwiml({ number, ringSeconds = 25, callerId = '', 
 /** B.1 : attribut timeLimit d'un <Dial> entrant (secondes couvertes + grâce) ; absent si 0 ou illisible (comportement d'avant). */
 const limitAttr = (timeLimit) => (Number.isFinite(Number(timeLimit)) && Number(timeLimit) > 0 ? ` timeLimit="${Math.floor(Number(timeLimit))}"` : '');
 
-export function buildInboundTwiml({ settings, baseUrl, companyId, identities = [], from = '', resultUrl, voicemailUrls, mobile = null, linePhone = '', solo = false, withGreeting = true, recording = null, language = 'fr', timeLimit = 0 } = {}) {
+/** Titulaire Nomad composé sans présence : la push de Twilio réveille l'application (2 à 5 s), la sonnerie dure au moins ce délai. */
+export const SOLO_PUSH_MIN_RING_SECONDS = 25;
+/** Même cas avec renvoi vers le mobile actif : l'application sonne 15 s (à la place du plancher et du réglage), puis le mobile. */
+export const SOLO_PUSH_FORWARD_RING_SECONDS = 15;
+
+/**
+ * `minRingSeconds` : plancher du délai de sonnerie (jamais en dessous du réglage de l'entreprise s'il est plus long).
+ * `fixedRingSeconds` (> 0) : délai imposé, à la place du réglage et du plancher.
+ */
+export function buildInboundTwiml({ settings, baseUrl, companyId, identities = [], from = '', resultUrl, voicemailUrls, mobile = null, linePhone = '', solo = false, withGreeting = true, recording = null, language = DEFAULT_COMPANY_LANGUAGE, timeLimit = 0, minRingSeconds = 0, fixedRingSeconds = 0 } = {}) {
   const s = normalize(settings);
   const hello = withGreeting ? greeting(s, baseUrl, companyId, language) : '';
   if (identities.length) {
@@ -86,7 +95,11 @@ export function buildInboundTwiml({ settings, baseUrl, companyId, identities = [
     // Appel enregistré (`recording`, voir callRecording.js) : annonce à l'appelant avant la sonnerie, puis <Dial record>.
     const announce = recording ? recording.say : '';
     const record = recording ? recording.attrs : '';
-    return `${hello}${announce}<Dial timeout="${s.ringTimeoutSeconds}" answerOnBridge="true" action="${xmlEscape(resultUrl)}" method="POST" callerId="${callerId}"${limitAttr(timeLimit)}${record}>${clients}</Dial>`;
+    const floor = Number(minRingSeconds);
+    const fixed = Number(fixedRingSeconds);
+    const ringSeconds = Number.isFinite(fixed) && fixed > 0 ? Math.floor(fixed)
+      : Number.isFinite(floor) && floor > s.ringTimeoutSeconds ? Math.floor(floor) : s.ringTimeoutSeconds;
+    return `${hello}${announce}<Dial timeout="${ringSeconds}" answerOnBridge="true" action="${xmlEscape(resultUrl)}" method="POST" callerId="${callerId}"${limitAttr(timeLimit)}${record}>${clients}</Dial>`;
   }
   if (mobile) return `${hello}${buildMobileDialTwiml({ ...mobile, callerId: linePhone, resultUrl, timeLimit })}`;
   if (s.voicemailEnabled) return `${hello}${voicemailRecord(s, baseUrl, companyId, voicemailUrls, solo, language)}`;
@@ -95,7 +108,7 @@ export function buildInboundTwiml({ settings, baseUrl, companyId, identities = [
 }
 
 /** TwiML après la sonnerie : décroché → raccrocher ; appelant parti → rien ; sinon répondeur ou message de repli. */
-export function buildNoAnswerTwiml({ settings, baseUrl, companyId, dialStatus = '', voicemailUrls, mobile = null, linePhone = '', resultUrl = '', solo = false, language = 'fr' } = {}) {
+export function buildNoAnswerTwiml({ settings, baseUrl, companyId, dialStatus = '', voicemailUrls, mobile = null, linePhone = '', resultUrl = '', solo = false, language = DEFAULT_COMPANY_LANGUAGE } = {}) {
   const status = String(dialStatus).toLowerCase();
   if (status === 'completed' || status === 'answered') return '<Hangup/>';
   if (status === 'canceled') return '<Hangup/>';
@@ -107,4 +120,4 @@ export function buildNoAnswerTwiml({ settings, baseUrl, companyId, dialStatus = 
   return `${say(solo ? p.soloNoAnswer : p.noAnswer, 'nova', language)}<Hangup/>`;
 }
 
-export const buildVoicemailDoneTwiml = (language = 'fr') => `${say(PHRASES[normalizeCompanyLanguage(language)].voicemailThanks, 'nova', language)}<Hangup/>`;
+export const buildVoicemailDoneTwiml = (language = DEFAULT_COMPANY_LANGUAGE) => `${say(PHRASES[normalizeCompanyLanguage(language)].voicemailThanks, 'nova', language)}<Hangup/>`;

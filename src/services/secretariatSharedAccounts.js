@@ -132,13 +132,26 @@ const shaped = (error) => { const e = safe(error); if (e.code === 'needs_reauth'
 
 // ---------- e-mail
 /** Signature : nom de la secrétaire, son rôle au service du propriétaire du compte, et la société. */
-export function composeSignature({ secretaryName, ownerName, companyName, personal = false }) {
+/** « Secrétariat de … » dans la langue de la société (celle du texte de l'e-mail, lu par le contact) ; anglais si elle est inconnue. */
+const SECRETARIAT_OF = Object.freeze({
+  fr: (owner) => `Secrétariat${owner ? ` de ${owner}` : ''}`,
+  en: (owner) => (owner ? `Office of ${owner}` : 'Office'),
+  es: (owner) => `Secretaría${owner ? ` de ${owner}` : ''}`,
+  ar: (owner) => `السكرتارية${owner ? ` لـ ${owner}` : ''}`,
+  de: (owner) => `Sekretariat${owner ? ` von ${owner}` : ''}`,
+  it: (owner) => `Segreteria${owner ? ` di ${owner}` : ''}`,
+  nl: (owner) => `Secretariaat${owner ? ` van ${owner}` : ''}`,
+  pt: (owner) => `Secretariado${owner ? ` de ${owner}` : ''}`,
+});
+
+export function composeSignature({ secretaryName, ownerName, companyName, personal = false, language = 'en' }) {
   const who = (secretaryName || '').trim();
   const on = (ownerName || '').trim();
   const co = (companyName || '').trim();
   // Messagerie personnelle : elle écrit en son nom, pas « pour le compte de » quelqu'un.
   if (personal) return [who, co].filter(Boolean).join('\n');
-  return [who, `Secrétariat${on ? ` de ${on}` : ''}${co ? ` — ${co}` : ''}`].filter(Boolean).join('\n');
+  const office = SECRETARIAT_OF[String(language || '').slice(0, 2).toLowerCase()] || SECRETARIAT_OF.en;
+  return [who, `${office(on)}${co ? ` — ${co}` : ''}`].filter(Boolean).join('\n');
 }
 
 /** Envoie par la boîte du compte partagé (From = ce compte). Aucun repli sur une autre boîte ni sur l'expéditeur HARX. */
