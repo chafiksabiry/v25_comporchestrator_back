@@ -98,7 +98,7 @@ const cleanId = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 /** Refus si l'offre ne permet pas d'affecter une ligne à une personne (Nomad, Accueil, autres). */
 function assertAssignable(kind) {
   if (kind === 'accueil') throw fail(409, 'SHARED_LINE_NOT_ASSIGNABLE', 'Les lignes de l’offre Accueil sont partagées : elles ne s’affectent pas à une personne.');
-  if (kind === 'nomad') throw fail(403, 'LINE_ASSIGNMENT_NOT_AVAILABLE', 'L’offre Nomad Solo n’a qu’un agent : aucune affectation de ligne.');
+  if (kind === 'nomad') throw fail(403, 'LINE_ASSIGNMENT_NOT_AVAILABLE', 'L’offre Nomad n’a qu’un agent : aucune affectation de ligne.');
   if (kind !== 'agents') throw fail(403, 'LINE_ASSIGNMENT_NOT_AVAILABLE', 'L’affectation des lignes n’est pas disponible pour cette offre.');
 }
 
