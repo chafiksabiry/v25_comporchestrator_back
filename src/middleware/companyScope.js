@@ -135,6 +135,29 @@ export async function companyCountry(req, companyId) {
  * @returns {Promise<string>} code ISO en majuscules (GB pour UK), ou '' si non renseigné
  */
 export async function companyCountryRaw(req, companyId) {
+  return (await companyNumberProfile(req, companyId)).country;
+}
+
+/**
+ * Pays de délivrance de la pièce d'identité déclaré par un abonné Nomad Solo et ENREGISTRÉ côté serveur (état de l'espace de
+ * travail : `company.profile.identityCountry`, sinon `issuingCountry` du justificatif `identity`). Seul le parcours Solo le
+ * renseigne. Vide s'il n'est pas déclaré. Une valeur envoyée par le client avec la requête n'est jamais lue.
+ */
+export function identityCountryOf(profile) {
+  if (!profile || typeof profile !== 'object') return '';
+  const docs = Array.isArray(profile.documents) ? profile.documents : [];
+  const fromDoc = docs.find((d) => d && d.kind === 'identity' && d.issuingCountry)?.issuingCountry;
+  const c = normalizeCountryCode(profile.identityCountry || fromDoc);
+  return /^[A-Z]{2}$/.test(c) ? c : '';
+}
+
+/**
+ * Pays de l'entreprise (`country`, vide si non renseigné) et pays de la pièce d'identité déclarée (`identityCountry`, vide sinon),
+ * lus en une fois dans l'état de l'espace de travail. Mêmes contrôles, même cache et mêmes erreurs que `companyCountryRaw`.
+ * `fresh` : relit le service d'inscription sans utiliser le cache (garde de paiement Nomad Solo : le profil vient d'être enregistré).
+ * @returns {Promise<{country: string, identityCountry: string}>}
+ */
+export async function companyNumberProfile(req, companyId, { fresh = false } = {}) {
   const id = String(companyId || '');
   const userId = req.user && (req.user.userId || req.user.id);
   const token = req.headers?.authorization?.split(' ')[1];
@@ -144,7 +167,7 @@ export async function companyCountryRaw(req, companyId) {
   // Clé par personne ET entreprise : un autre appelant repasse toujours par le contrôle d'accès du service d'inscription.
   const key = `${userId}:${id}`;
   const cached = countryByCompany.get(key);
-  if (cached && cached.expires > Date.now()) return cached.country;
+  if (!fresh && cached && cached.expires > Date.now()) return { country: cached.country, identityCountry: cached.identityCountry || '' };
 
   const origin = registrationOrigin();
   if (!origin) throw new ScopeError(503, 'Company country lookup is not configured', 'COMPANY_COUNTRY_LOOKUP_NOT_CONFIGURED');
@@ -162,8 +185,9 @@ export async function companyCountryRaw(req, companyId) {
       throw new ScopeError(503, 'Company country lookup failed', 'COMPANY_COUNTRY_LOOKUP_FAILED');
     }
     const country = normalizeCountryCode(company.profile?.country);
-    countryByCompany.set(key, { country, expires: Date.now() + CACHE_TTL_MS });
-    return country;
+    const identityCountry = identityCountryOf(company.profile);
+    countryByCompany.set(key, { country, identityCountry, expires: Date.now() + CACHE_TTL_MS });
+    return { country, identityCountry };
   } catch (error) {
     if (error instanceof ScopeError) throw error;
     throw new ScopeError(503, 'Company country lookup failed', 'COMPANY_COUNTRY_LOOKUP_FAILED');

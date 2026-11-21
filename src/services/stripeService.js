@@ -624,6 +624,18 @@ export const stripeService = {
     }
   },
 
+  /** Métadonnées du produit Stripe d'un prix ; null si le prix est illisible (Stripe non configuré, prix inconnu). */
+  priceProductMetadata: async (priceId) => {
+    try {
+      const price = await getStripe().prices.retrieve(String(priceId), { expand: ['product'] });
+      const product = price?.product;
+      return product && typeof product === 'object' ? product.metadata || {} : null;
+    } catch (err) {
+      console.warn('[subscription] priceProductMetadata:', err?.message);
+      return null;
+    }
+  },
+
   /** Résout un code promotionnel d'abonnement en id Stripe (null si aucun code) ; lève `invalid_promotion_code`. */
   resolvePromotionCode: async (code) => {
     if (code == null || !String(code).trim()) return null;
