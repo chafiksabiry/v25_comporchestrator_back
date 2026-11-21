@@ -262,6 +262,14 @@ describe('route GET /api/phone-numbers/availability', () => {
     await call('/availability?countryCode=US');
     assert.deepEqual(searches, ['US']);
   });
+  it('utilisateur connecté sans companyId : chemin authentifié inchangé, jamais limité par le limiteur public', async () => {
+    resetPublicAvailability({ limiter: createRateLimiter({ limit: 1, windowMs: 60_000 }) });
+    for (let i = 0; i < 5; i++) {
+      assert.deepEqual(await call('/availability?countryCode=FR', 'jp'), { status: 200, body: { available: true, countryCode: 'FR' } });
+    }
+    assert.equal((await call('/availability?countryCode=FR')).status, 200, 'le visiteur anonyme a encore sa requête : les appels connectés ne l’ont pas consommée');
+    assert.equal((await call('/availability?countryCode=FR')).status, 429);
+  });
   it('avec companyId et sans session : 401 (route inchangée)', async () => {
     assert.equal((await call(`/availability?countryCode=FR&companyId=${MA_CO}`)).status, 401);
     assert.deepEqual(searches, []);

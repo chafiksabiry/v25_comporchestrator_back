@@ -7,7 +7,8 @@ import { countryAvailability, AVAILABILITY_UNAVAILABLE } from './numberAvailabil
 /**
  * Disponibilité PUBLIQUE des numéros d'un pays (décision du fondateur « oui me prévenir ») : la page NOMAD, visiteur non connecté,
  * remplace « Choisir cette offre » par « Me prévenir » quand le pays n'a pas de numéro.
- *  - sans `companyId` seulement (avec `companyId` : route inchangée, session + appartenance à l'entreprise) ;
+ *  - sans `companyId` ni en-tête Authorization seulement (sinon : route inchangée, session, et appartenance à l'entreprise avec
+ *    `companyId`) ;
  *  - réponse réduite à `{ available, reason?, countryCode }` : ni numéro, ni détail d'inventaire ;
  *  - `countryCode` validé strictement (ISO alpha-2 d'un pays connu), sinon 400 ;
  *  - débit limité par IP (30 requêtes / 10 min), 429 au-delà ;
@@ -72,8 +73,12 @@ export function resetPublicAvailability(options) {
   handler = createPublicAvailabilityHandler(options);
 }
 
-/** Avant la garde de la route : une requête sans `companyId` est servie ici, sans session ; sinon la suite (session + entreprise). */
+/**
+ * Avant la garde de la route : une requête anonyme (sans `companyId` NI en-tête Authorization) est servie ici, sans session ; toute
+ * autre requête suit le chemin authentifié inchangé (session + entreprise), sans le limiteur public : un utilisateur connecté n'est
+ * jamais compté avec les visiteurs de sa connexion.
+ */
 export function publicAvailabilityIfNoCompany(req, res, next) {
-  if (!isPublicAvailabilityRequest(req)) return next();
+  if (!isPublicAvailabilityRequest(req) || req.headers?.authorization) return next();
   return handler(req, res);
 }

@@ -16,8 +16,8 @@ const router = express.Router();
 // Search available phone numbers (Telnyx) — `companyId` required: only the company's country (or Europe, for a European company) can be searched
 router.get('/search', ...guard(companyFrom('companyId')), phoneNumberController.searchNumbers.bind(phoneNumberController));
 
-// Numbers available in a country? (Nomad Solo, checked before any payment.) WITHOUT `companyId`: public (NOMAD page, visitor not
-// logged in), answer reduced to { available, reason?, countryCode }, known ISO-2 country only, rate-limited per IP, shared cached
+// Numbers available in a country? (Nomad, checked before any payment.) WITHOUT `companyId` and without Authorization header:
+// public (NOMAD page, visitor not logged in), answer reduced to { available, reason?, countryCode }, known ISO-2 country only, rate-limited per IP, shared cached
 // lookup (services/publicAvailability.js). WITH `companyId`: login required, the caller must belong to that company and the country
 // must be allowed to it (else reason `not_allowed`). Answer cached per country.
 router.get('/availability', publicAvailabilityIfNoCompany, ...guard(companyFromIfPresent), phoneNumberController.numberAvailability.bind(phoneNumberController));
