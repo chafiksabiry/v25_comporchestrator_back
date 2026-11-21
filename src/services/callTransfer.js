@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { absenceOf, todayIn } from './receptionDirectory.js';
 import { DEFAULT_TIME_ZONE, normalizeTimeZone } from './timeZone.js';
 import { buildNoAnswerTwiml, say, wrapResponse, xmlEscape } from './inboundFlow.js';
-import { phrasesFor } from './companyLanguage.js';
+import { DEFAULT_COMPANY_LANGUAGE, phrasesFor } from './companyLanguage.js';
 
 /**
  * Transfert d'un appel en cours (secrétaire -> personne de l'annuaire). Logique pure : aucun accès base ni réseau.
@@ -87,11 +87,11 @@ export function verifyTransferState({ secret, token, now = Date.now() }) {
 // ---------- TwiML
 const oneLine = (name) => String(name).replace(/\s+/g, ' ').trim();
 /** Phrase d'annonce faite à l'appelant avant de lui passer la personne, dans la langue de la société (`language`, français par défaut). */
-export const announceText = (name, language = 'fr') => phrasesFor(language).transferAnnounce(oneLine(name));
-export const unavailableText = (name, language = 'fr') => phrasesFor(language).transferUnavailable(oneLine(name));
+export const announceText = (name, language = DEFAULT_COMPANY_LANGUAGE) => phrasesFor(language).transferAnnounce(oneLine(name));
+export const unavailableText = (name, language = DEFAULT_COMPANY_LANGUAGE) => phrasesFor(language).transferUnavailable(oneLine(name));
 
 /** Annonce puis sonnerie du numéro de la fiche (poste composé après la mise en relation). */
-export function buildTransferTwiml({ name, number, extension = '', callerId = '', voice = '', resultUrl, ringSeconds = TRANSFER_RING_SECONDS, maxSeconds, language = 'fr' }) {
+export function buildTransferTwiml({ name, number, extension = '', callerId = '', voice = '', resultUrl, ringSeconds = TRANSFER_RING_SECONDS, maxSeconds, language = DEFAULT_COMPANY_LANGUAGE }) {
   const caller = String(callerId).replace(/[^+\d]/g, '');
   const callerAttr = caller ? ` callerId="${caller}"` : '';
   const limit = Number.isFinite(maxSeconds) && maxSeconds > 0 ? ` timeLimit="${Math.floor(maxSeconds)}"` : '';
@@ -100,13 +100,13 @@ export function buildTransferTwiml({ name, number, extension = '', callerId = ''
 }
 
 /** Suite d'un transfert qui n'a pas abouti (ou personne absente) : l'appelant est invité à laisser un message sur le répondeur existant. */
-export function buildTransferMessageTwiml({ name, settings, baseUrl, companyId, language = 'fr' }) {
+export function buildTransferMessageTwiml({ name, settings, baseUrl, companyId, language = DEFAULT_COMPANY_LANGUAGE }) {
   const voice = settings?.voice;
   return wrapResponse(say(unavailableText(name, language), voice, language) + buildNoAnswerTwiml({ settings, baseUrl, companyId: String(companyId), dialStatus: 'no-answer', language }));
 }
 
 /** Réponse au webhook de fin de sonnerie : décroché ou appelant parti -> rien de plus ; sinon message. */
-export function buildTransferResultTwiml({ dialStatus, name, settings, baseUrl, companyId, language = 'fr' }) {
+export function buildTransferResultTwiml({ dialStatus, name, settings, baseUrl, companyId, language = DEFAULT_COMPANY_LANGUAGE }) {
   const status = String(dialStatus || '').toLowerCase();
   if (status === 'completed' || status === 'answered' || status === 'canceled') return wrapResponse('<Hangup/>');
   return buildTransferMessageTwiml({ name, settings, baseUrl, companyId, language });

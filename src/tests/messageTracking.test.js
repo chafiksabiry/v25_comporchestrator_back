@@ -55,8 +55,9 @@ assert.equal(X.matchesNumber(VIP, ''), null); assert.equal(X.matchesNumber(VIP, 
 // appel bloqué : message poli, ou repli sur le comportement actuel (null) en cas d'erreur
 const C1 = '64b0000000000000000000c1'; const C2 = '64b0000000000000000000c2';
 const load = async (id) => (String(id) === C1 ? { blockedNumbers: [{ phone: '+14155552671' }] } : { blockedNumbers: [] });
-const body = await blockedCallBody(C1, '+14155552671', { load });
+const body = await blockedCallBody(C1, '+14155552671', { load, language: 'fr' });
 assert.match(body, /<Say[^>]*>Nous ne pouvons pas donner suite[^<]*<\/Say><Hangup\/>/);
+assert.match(await blockedCallBody(C1, '+14155552671', { load }), /We are unable to take your call/, 'langue inconnue : anglais');
 assert.equal(await blockedCallBody(C1, '+14155552671', { load, env: { BLOCKED_CALL_MODE: 'reject' } }), '<Reject reason="rejected"/>');
 assert.equal(await blockedCallBody(C1, '+33612345678', { load }), null, 'autre appelant : inchangé');
 assert.equal(await blockedCallBody(C2, '+14155552671', { load }), null, 'liste d’une autre entreprise : inchangé');
@@ -162,9 +163,11 @@ const timer = startMessageReminders({ env: {}, run: async () => ({ reminded: 0, 
 assert.ok(timer); clearInterval(timer);
 
 // push : contenu minimal, jamais le texte du message
-const pl = messagePayload({ callerName: 'M. Dupont', urgent: true, id: 'abc' });
+const pl = messagePayload({ callerName: 'M. Dupont', urgent: true, id: 'abc', language: 'fr' });
 assert.equal(pl.kind, 'message'); assert.match(pl.title, /URGENT/); assert.equal(pl.url, '/app/followups'); assert.ok(!JSON.stringify(pl).includes('Devis'));
-assert.match(messagePayload({ reminder: true }).title, /Rappel/);
+assert.match(messagePayload({ reminder: true, language: 'fr' }).title, /Rappel/);
+assert.match(messagePayload({ reminder: true }).title, /^Reminder/, 'société non francophone ou inconnue : anglais');
+assert.match(messagePayload({ urgent: true, language: 'ar' }).title, /^URGENT message/, 'arabe : anglais (le serveur ne connaît pas la langue de l’appareil)');
 
 // ---------------------------------------------------------------- statistiques
 const st = X.computeStats([
