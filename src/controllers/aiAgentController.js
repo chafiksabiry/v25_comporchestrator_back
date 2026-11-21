@@ -6,7 +6,7 @@ import { validateSettingsUpdate, toPublicSettings, pilotAvailability, announceme
 import { usageView, verifyCallToken, latencyStats } from '../services/aiInboundCore.js';
 import { loadSettings, monthUsage, engines, runTool, finalizeCall, callOf, ToolError, afterStreamTwiml, deps, applyRetention, resolveAvailability } from '../services/aiInbound.js';
 import { publicOrigin, twilioRequestValid } from '../services/twilioSignature.js';
-import { CONSENT_TEXTS } from '../services/callRecording.js';
+import { consentText } from '../services/callRecording.js';
 
 /**
  * Pilote « Téléphonie + agent IA » : routes de l'écran (réglages réservés au TITULAIRE, fiches d'appel pour l'entreprise),
@@ -16,11 +16,16 @@ const fail = (res, status, code, message, extra = {}) => res.status(status).json
 const validId = (v) => typeof v === 'string' && /^[0-9a-fA-F]{24}$/.test(v) && mongoose.Types.ObjectId.isValid(v);
 const oid = (id) => new mongoose.Types.ObjectId(String(id));
 const companyOf = (req) => req.query?.companyId ?? req.body?.companyId;
+/**
+ * Consentement de l'APERÇU de l'annonce (écran des réglages) : aucun appelant, donc langue de l'agent (en / fr), comme avant.
+ * En appel réel (aiInbound.tryAiInbound), la langue suit consentLanguageFor, comme l'annonce humaine (Maghreb : arabe puis français).
+ */
+const previewConsent = (language) => consentText(String(language).startsWith('en') ? 'en' : 'fr');
 
 async function settingsView(companyId) {
   const { settings } = await loadSettings(companyId);
   const usage = await monthUsage(companyId, settings.businessHours.timeZone);
-  const announcement = Object.fromEntries(settings.languages.map((l) => [l, announcementText({ language: l, companyName: settings.companyName, canTransfer: settings.actions.transfer && settings.transferTargets.length > 0, voice: settings.voice, recorded: settings.listeningBench.enabled, consentText: CONSENT_TEXTS[l.startsWith('en') ? 'en' : 'fr'] })]));
+  const announcement = Object.fromEntries(settings.languages.map((l) => [l, announcementText({ language: l, companyName: settings.companyName, canTransfer: settings.actions.transfer && settings.transferTargets.length > 0, voice: settings.voice, recorded: settings.listeningBench.enabled, consentText: previewConsent(l) })]));
   return {
     settings,
     warnings: settingsWarnings(settings),
@@ -98,7 +103,7 @@ export const aiAgentController = {
     try {
       const { settings } = await loadSettings(companyId);
       const language = LANGUAGES.includes(req.query?.language) ? req.query.language : settings.languages[0];
-      res.json({ success: true, data: { language, text: announcementText({ language, companyName: settings.companyName, canTransfer: settings.actions.transfer && settings.transferTargets.length > 0, voice: settings.voice, recorded: settings.listeningBench.enabled, consentText: CONSENT_TEXTS[language.startsWith('en') ? 'en' : 'fr'] }) } });
+      res.json({ success: true, data: { language, text: announcementText({ language, companyName: settings.companyName, canTransfer: settings.actions.transfer && settings.transferTargets.length > 0, voice: settings.voice, recorded: settings.listeningBench.enabled, consentText: previewConsent(language) }) } });
     } catch (e) { console.error('ai-agent announcement:', e.message); fail(res, 500, 'AI_SETTINGS_READ_FAILED', 'Lecture impossible.'); }
   },
 

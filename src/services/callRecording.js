@@ -158,12 +158,24 @@ export function consentLanguageFor(number, fallback = DEFAULT_CONSENT_LANGUAGE) 
   return fb;
 }
 
-/** <Say> de l'annonce, dans la langue et avec la voix féminine de la langue (sayVoice) ; Maghreb : arabe puis français. */
-export function consentSay(lang) {
+/**
+ * <Say> de l'annonce, dans la langue et avec la voix de la langue (sayVoice, féminine par défaut) ; Maghreb : arabe puis français.
+ * `female: false` : voix masculine de la langue (agent IA réglé en voix masculine ; l'arabe n'a que Zeina).
+ */
+export function consentSay(lang, { female = true } = {}) {
   const code = normalizeConsentLanguage(lang) || DEFAULT_CONSENT_LANGUAGE;
-  if (code === MAGHREB_CONSENT) return `${consentSay('ar')}${consentSay('fr')}`;
-  const { voice, language } = sayVoice(code);
+  if (code === MAGHREB_CONSENT) return `${consentSay('ar', { female })}${consentSay('fr', { female })}`;
+  const { voice, language } = sayVoice(code, female);
   return `<Say language="${language}" voice="${voice}">${xmlEscape(CONSENT_TEXTS[code])}</Say>`;
+}
+
+/**
+ * Texte brut du consentement pour un code d'annonce, quand il est énoncé par une voix qui lit un seul texte (message d'ouverture de
+ * l'agent IA temps réel) : Maghreb (`ar_fr`) = arabe PUIS français, comme les deux <Say> de consentSay. Code inconnu : anglais.
+ */
+export function consentText(lang) {
+  const code = normalizeConsentLanguage(lang) || DEFAULT_CONSENT_LANGUAGE;
+  return code === MAGHREB_CONSENT ? `${CONSENT_TEXTS.ar} ${CONSENT_TEXTS.fr}` : CONSENT_TEXTS[code];
 }
 
 /** Réponse TwiML complète de l'annonce jouée à la personne appelée (<Number url>), avant la mise en relation. */
