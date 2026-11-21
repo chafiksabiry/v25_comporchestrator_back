@@ -48,4 +48,4 @@ Routes (toutes authentifiées, titulaire seulement) sous `/api/reach` : `GET /pu
 ### Téléphones
 
 * Android (Chrome) : fonctionne dans le navigateur.
-* iPhone / iPad : Web Push exige que l'application soit **installée sur l'écran d'accueil** (iOS 16.4 ou plus récent).
+* iPhone / iPad : utiliser l'app HARX Nomad (App Store) ; pas de Web Push sur iOS (l'application web installable a été retirée).

@@ -1,5 +1,5 @@
 import { createRateLimiter } from '../integrations/rateLimit.js';
-import { clientIp } from '../controllers/deviceLinkController.js';
+import { clientIp } from '../integrations/clientIp.js';
 import { normalizeCountryCode } from '../middleware/companyScope.js';
 import { COUNTRY_LABELS_EN } from './outboundDestinations.js';
 import { countryAvailability, AVAILABILITY_UNAVAILABLE } from './numberAvailability.js';
