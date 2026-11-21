@@ -128,7 +128,7 @@ test('durée maximale : solde / coefficient pour une destination internationale,
 test('decideOutboundCall : durée = solde / coefficient ; refus clair « 1 minute = N crédits »', () => {
   const line = { phoneNumber: '+33411112222' }; const base = { to: GB, line, subscribed: true };
   const ok = decideOutboundCall({ ...base, minutes: 10, creditFactor: 4 });
-  assert.equal(ok.ok, true); assert.equal(ok.maxSeconds, 120); assert.match(ok.twiml, /timeLimit="120"/);
+  assert.equal(ok.ok, true); assert.equal(ok.maxSeconds, 120); assert.match(ok.twiml, /timeLimit="420"/, 'B.1 : couvert + 5 min de grâce');
   const refused = decideOutboundCall({ ...base, minutes: 3, creditFactor: 4 });
   assert.equal(refused.ok, false); assert.equal(refused.key, 'insufficient_minutes_international'); assert.equal(refused.creditFactor, 4);
   assert.match(refused.message, /1 minute = 4 crédits/);

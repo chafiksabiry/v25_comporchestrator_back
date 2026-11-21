@@ -12,6 +12,7 @@ import { loadUserName } from '../services/followUpDirectory.js';
 import { loadTools, mergedTools } from '../services/secretariatTools.js';
 import { voiceIdentity } from '../services/voicePresenceService.js';
 import { normalizeOutboundDestination, maxSecondsForBalance } from '../services/browserOutbound.js';
+import { graceLimitSeconds } from '../services/minutesGrace.js';
 import { insufficientInternationalMessages, loadCallDecisions, outboundCreditFactor, recordCallDecision } from '../services/creditCoefficient.js';
 import { dialLegCall, outboundRemainderCall } from '../services/transferBilling.js';
 import { twilioRequestValid } from '../services/twilioSignature.js';
@@ -76,6 +77,12 @@ const deps = {
   /** Requête signée par Twilio (X-Twilio-Signature), URL publique ou hôte reçu. */
   signatureValid: (req) => twilioRequestValid(req, { requestHost: true }),
   directory: (companyId) => ReceptionDirectory.findOne({ companyId }).lean(),
+  /**
+   * B.1 : clôture de la partie « secrétaire » d'un appel ENTRANT transféré : l'action du <Dial> interrompu n'est jamais appelée par Twilio.
+   * Débit de la jambe navigateur (durée écoulée), sous la clé du parent ET de la jambe navigateur, puis réserve rendue ; la jambe transférée
+   * suit son propre débit (sa clé). Le temps transféré n'est donc jamais débité sous la clé du parent.
+   */
+  endGrace: async (callSid, opts) => (await import('../services/minutesGrace.js')).endGraceCall(callSid, opts),
 };
 export const setTransferDeps = (over) => Object.assign(deps, over);
 /** Solde de minutes et coefficient de la destination : réutilisés par le transfert de l'agent IA (services/aiInbound.js). */
@@ -226,7 +233,8 @@ export const callTransferController = {
       const twiml = mode === 'message'
         ? buildTransferMessageTwiml({ name: entry.name, settings, baseUrl, companyId: access.companyId, language })
         : buildTransferTwiml({
-          name: entry.name, number, extension: entry.extension, callerId: lineNumber, voice: settings?.voice, maxSeconds, language,
+          // B.1 : solde couvert + 5 minutes de grâce gratuites, puis Twilio coupe la jambe transférée.
+          name: entry.name, number, extension: entry.extension, callerId: lineNumber, voice: settings?.voice, maxSeconds: graceLimitSeconds(maxSeconds), language,
           resultUrl: `${baseUrl}${TRANSFER_WEBHOOK_PATH}?s=${encodeURIComponent(signTransferState({ secret: config.twilioAuthToken, companyId: access.companyId, callSid: parentSid, entryId, userId: access.userId, to: number, factor: transferFactor, now }))}`,
         });
       // Sortant : la ligne reste tenue par la jambe du correspondant jusqu'à sa fin réelle (bail déplacé, puis libéré par son
@@ -248,6 +256,11 @@ export const callTransferController = {
         }
         if (call) await InboundCall.updateOne({ _id: call._id, companyId }, { $set: { transfer: { startedAt: null, byUserId: '', byName: '', entryId: '', entryName: '', mode: 'dial', result: 'ringing', endedAt: null } } }).catch(() => undefined);
         return fail(res, 502, 'Le transfert a échoué : l’appel est resté avec vous. Réessayez ou prenez un message.', { code: 'provider_failed' });
+      }
+      if (!outbound) {
+        const start = leg?.startTime ? new Date(leg.startTime).getTime() : NaN;
+        const secretarySeconds = Number.isFinite(start) && start <= now ? Math.round((now - start) / 1000) : 0;
+        try { await deps.endGrace(parentSid, { durationSeconds: secretarySeconds, keys: [callSid] }); } catch (e) { console.warn('reception transfer (minutes) :', e?.message); }
       }
       console.log(`📞 Appel ${outbound ? 'sortant ' : ''}${parentSid} transféré par ${access.userId} vers la fiche ${entryId} (${mode})`);
       res.json({ success: true, data: { mode, name: entry.name, availability, result: mode === 'dial' ? 'ringing' : 'message_offered' } });

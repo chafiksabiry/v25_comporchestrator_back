@@ -42,11 +42,12 @@ import MinutesCompany from '../models/MinutesCompany.js';
 import { syncMinutesFromCalls } from './escrowController.js';
 import { insufficientInternationalMessages, outboundCreditFactor, outboundCreditDecision, recordCallDecision } from '../services/creditCoefficient.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
-import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket, MINUTES_INSUFFICIENT_CODE, MINUTES_INSUFFICIENT_MESSAGE, spokenLanguage, spokenRefusal, SPOKEN_REFUSALS } from '../services/browserOutbound.js';
+import { decideOutboundCall, ensureOutboundApp, freshMinutesBalance, maxSecondsForBalance, normalizeOutboundDestination, OUTBOUND_WEBHOOK_PATH, outboundTicketRole, refusal, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, signOutboundTicket, MINUTES_INSUFFICIENT_CODE, MINUTES_INSUFFICIENT_MESSAGE, spokenLanguage, spokenRefusal, SPOKEN_REFUSALS } from '../services/browserOutbound.js';
 import { billLineCallEnd, transferResult } from './callTransferController.js';
 import { buildRecordingPlan, consentLanguageFor, consentTwiml, mapCallRecordingCallback, normalizeConsentLanguage, planForCall, verifyRecordingToken } from '../services/callRecording.js';
 import { attachRecordingTracked, firstRecordingDecision, recordDecision } from '../services/recordingStatus.js';
 import { journalForwardedCall, journalUnansweredCall } from '../services/journalCall.js';
+import { cancelGraceCall, endGraceCall, graceLimitSeconds, raceTimeout, remainingLimitFor, startGraceCall, withDialTimeLimit } from '../services/minutesGrace.js';
 import ReachSettings from '../models/ReachSettings.js';
 import { decideInboundRoute, mobileTarget, shouldRingMobileAfter } from '../services/reach.js';
 import { callPayload, notifyOwners, voicemailPayload } from '../services/webPush.js';
@@ -2319,6 +2320,10 @@ class PhoneNumberController {
           reachedActive: mapped.reachedActive,
           answeredBy: answeredBy || prev?.answeredBy || null,
         });
+        // B.1 : compte rendu de fin d'appel : plus rien à couper, réservation rendue.
+        if (['completed', 'canceled', 'failed', 'busy', 'no-answer'].includes(rawStatus.toLowerCase()) && this.endReportAuthentic(req)) {
+          await this.endGrace(callId, { durationSeconds: req.body?.CallDuration != null ? Number(req.body.CallDuration) : (rawStatus.toLowerCase() === 'completed' ? undefined : 0) });
+        }
         console.log(
           `🔔 Twilio call status ${callId}: ${rawStatus || '(amd)'}` +
             (answeredBy ? ` answeredBy=${answeredBy}` : '')
@@ -2610,7 +2615,10 @@ class PhoneNumberController {
       // Crédits débités par minute vers cette destination (1, ou N à l'international) : plafonne la durée à solde / N.
       let credit = await outboundCreditDecision({ companyId, limits, to, lineNumber: callerLine?.phoneNumber });
       let creditFactor = credit.factor;
-      let decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, creditFactor });
+      // B.1 : compte rendu de fin TOUJOURS demandé (action du <Dial> vers line-call-end, signée) : débit puis réserve rendue à la fin.
+      const sidForEnd = String(req.body?.CallSid || '').trim();
+      let decisionAction = sidForEnd ? `https://${req.get('host')}${LINE_CALL_END_PATH}?t=${signLineCallEnd({ secret: config.twilioAuthToken, callSid: sidForEnd })}` : null;
+      let decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, creditFactor, action: decisionAction });
       if (!decision.ok) {
         console.warn(`[browser-outbound] refusé pour l'entreprise ${companyId} : ${decision.message}`);
         return send(spokenRefusal(decision.key, spokenLanguage(callerLine?.phoneNumber), { credits: decision.creditFactor }));
@@ -2630,7 +2638,8 @@ class PhoneNumberController {
           // La ligne réellement prise dans la réserve peut être d'un autre pays que la première : le facteur (donc le plafond) est recalculé avec elle.
           credit = await outboundCreditDecision({ companyId, limits, to, lineNumber: callerLine?.phoneNumber });
           creditFactor = credit.factor;
-          decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, creditFactor, action: `https://${req.get('host')}${LINE_CALL_END_PATH}?t=${signLineCallEnd({ secret: config.twilioAuthToken, callSid: sidForLine })}` });
+          decisionAction = `https://${req.get('host')}${LINE_CALL_END_PATH}?t=${signLineCallEnd({ secret: config.twilioAuthToken, callSid: sidForLine })}`;
+          decision = decideOutboundCall({ to, line: callerLine, subscribed: Boolean(limits), minutes, recording, creditFactor, action: decisionAction });
         } catch (error) {
           console.error('[browser-outbound] contrôle de ligne ignoré :', error?.message || error);
         }
@@ -2643,12 +2652,92 @@ class PhoneNumberController {
       }
       // Trace de la décision (ligne retenue, zone, facteur) : le débit la relit au lieu de reclasser l'appel.
       if (credit.coefficient > 1) await recordCallDecision({ sid: String(req.body?.CallSid || ''), companyId, factor: creditFactor, zone: credit.zone, line: callerLine?.phoneNumber || '' });
+      // B.1 : échéance + réservation atomique d'une tranche (10 min) du solde libre ; le balayeur prolonge tranche par tranche dès que du
+      // solde est libre (même après un manque momentané), sinon 5 min de grâce et coupure à l'heure. timeLimit du <Dial> : filet large =
+      // solde TOTAL (maxSecondsForBalance) + 5 min, 4 h au plus ; c'est le serveur qui coupe précisément.
+      await this.startGrace({ callSid: req.body?.CallSid, companyId, path: 'outbound_browser', creditFactor });
       console.log(`📞 Appel sortant du navigateur (entreprise ${companyId}) vers ${to.slice(0, 6)}… depuis ${callerLine.phoneNumber}${recording ? ' (enregistré)' : ''}`);
       return send(decision.twiml);
     } catch (error) {
       console.error('Error in handleBrowserOutbound:', error);
       return send(spokenRefusal('error'));
     }
+  }
+
+  /**
+   * B.1 : solde de minutes d'un appel entrant (1 crédit la minute). Lecture DIRECTE du portefeuille (pas de synchronisation des appels : trop
+   * lente pour un webhook), bornée à 2 s. Solde nul : la période a peut-être été renouvelée sans octroi encore fait : octroi borné à 2 s
+   * puis relecture ; le refus n'est prononcé qu'après. `exhausted` : moins d'une minute entière. Lecture impossible ou trop lente : null
+   * (aucun blocage, aucune échéance).
+   */
+  async inboundMinutes(companyId, { timeoutMs = 2000 } = {}) {
+    if (!this.dbReady()) return null;
+    const TIMEOUT = Symbol('timeout');
+    const read = () => raceTimeout(Promise.resolve().then(() => MinutesCompany.findOne({ companyId }).select('minutes').lean()), timeoutMs, TIMEOUT);
+    let wallet = await read();
+    if (wallet === TIMEOUT) {
+      console.warn('[minutes] solde illisible (délai ou erreur) pour un appel entrant : aucun contrôle');
+      return null;
+    }
+    const balanceOf = (w) => (Number.isFinite(Number(w?.minutes)) ? Number(w.minutes) : 0);
+    if (maxSecondsForBalance(balanceOf(wallet)) === 0) {
+      await raceTimeout(Promise.resolve().then(() => this.grantPlanMinutes(String(companyId))), timeoutMs, null);
+      const again = await read();
+      if (again === TIMEOUT) return null;
+      wallet = again;
+    }
+    const balance = balanceOf(wallet);
+    return { minutes: balance, exhausted: maxSecondsForBalance(balance) === 0 };
+  }
+
+  /** Octroi des minutes de la période en cours (remplaçable dans les tests). */
+  grantPlanMinutes(companyId) {
+    return ensurePlanMinutesGranted(companyId);
+  }
+
+  /** Base connectée ? (B.1 : sans base, ni contrôle du solde entrant ni échéance ; jamais d'attente pendant un webhook.) */
+  dbReady() {
+    return mongoose.connection.readyState === 1;
+  }
+
+  /**
+   * B.1 : début d'un appel qui consomme des minutes : réservation atomique de sa part du solde + échéance de coupure (startGraceCall).
+   * Base absente ou écriture en échec : null (l'appel passe comme avant, avec le timeLimit du solde entier).
+   */
+  async startGrace(args, { timeoutMs = 2000 } = {}) {
+    if (!this.dbReady()) return null;
+    // Borné : au-delà de 2 s, aucune échéance n'est posée (le démarrage en cours s'abandonne) et l'appel n'est pas bloqué (timeLimit large).
+    const signal = { aborted: false };
+    const TIMEOUT = Symbol('timeout');
+    const out = await raceTimeout(startGraceCall({ ...args, signal }).catch((error) => {
+      console.error('[minutes-grace] échéance non enregistrée :', error?.message || error);
+      return null;
+    }), timeoutMs, TIMEOUT);
+    if (out === TIMEOUT) { signal.aborted = true; console.warn('[minutes-grace] échéance non posée (délai dépassé)'); return null; }
+    return out;
+  }
+
+  /** B.1 : compte rendu de fin d'appel : plus rien à couper, débit avec la durée, puis réserve rendue (idempotent ; sans base : rien). */
+  async endGrace(callSid, opts = {}) {
+    if (!this.dbReady() || !callSid) return;
+    await endGraceCall(String(callSid), opts);
+  }
+
+  /** B.1 : appel repris par l'agent IA (hors solde de minutes) : réserve rendue sans débit. */
+  async cancelGrace(callSid) {
+    if (!this.dbReady() || !callSid) return;
+    await cancelGraceCall(String(callSid));
+  }
+
+  /** B.1 : compte rendu Twilio authentique (signature X-Twilio-Signature) avant de débiter / rendre une réserve. Remplaçable dans les tests. */
+  endReportAuthentic(req) {
+    return twilioRequestValid(req, { requestHost: true });
+  }
+
+  /** B.1 : secondes restantes jusqu'à la coupure (timeLimit des <Dial> suivants : menu, file, mobile), lecture bornée à 1 s ; 0 si inconnue. */
+  async graceRemaining(callSid) {
+    if (!this.dbReady() || !callSid) return 0;
+    return raceTimeout(remainingLimitFor(String(callSid)), 1000, 0);
   }
 
   /** La règle datée des lignes est-elle configurée ? (sinon le contrôle « une ligne = un appel » n'existe pas : aucune lecture ni écriture en plus) */
@@ -2718,6 +2807,15 @@ class PhoneNumberController {
       return res.type('text/xml').status(403).send('<?xml version="1.0" encoding="UTF-8"?><Response/>');
     }
     try { await releaseCall(req.body?.CallSid); } catch (error) { console.error('line-call-end:', error?.message || error); }
+    // B.1 : fin de l'appel (sortant navigateur, rappel du répondeur) : débit avec la durée Twilio (DialCallDuration de l'action du <Dial>,
+    // sinon CallDuration), idempotent par sid, puis réserve rendue. Durée absente : réserve gardée jusqu'au débit.
+    {
+      const b = req.body || {};
+      const raw = b.DialCallDuration ?? b.CallDuration;
+      const answered = b.DialCallStatus === undefined || ['completed', 'answered'].includes(String(b.DialCallStatus).toLowerCase());
+      const durationSeconds = raw === undefined || raw === '' ? (b.DialCallStatus !== undefined && !answered ? 0 : undefined) : (answered ? Number(raw) : 0);
+      await this.endGrace(b.CallSid, { durationSeconds, keys: [String(b.DialCallSid || '')] });
+    }
     // Jambe du correspondant d'un appel sortant transféré : le reste de l'appel après la redirection est débité (sans effet sinon).
     await billLineCallEnd(req);
     res.type('text/xml').status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response/>');
@@ -2803,18 +2901,24 @@ class PhoneNumberController {
           }
         } catch (error) { console.error('[inbound] contrôle de ligne ignoré :', error?.message || error); }
       }
+      // B.1 : appel entrant sans minutes (solde à zéro ou moins) : personne ne sonne, l'appel va au répondeur (jamais de dépassement).
+      // Solde illisible : aucun blocage (comme les contrôles sortants). Sinon l'échéance de coupure est enregistrée plus bas.
+      const minutesState = line?.companyId && callSid ? await this.inboundMinutes(line.companyId) : null;
+      const noMinutes = minutesState?.exhausted === true;
+      if (noMinutes) console.log(`⏳ Appel entrant sur ${maskNumber(to)} : solde de minutes épuisé, répondeur`);
       const ringAllow = await this.inboundRingFilterFor(line);
-      const online = line?.companyId && !lineBusy ? (ringAllow ? availableIdentities(line.companyId).filter(ringAllow) : availableIdentities(line.companyId)) : [];
+      const online = line?.companyId && !lineBusy && !noMinutes ? (ringAllow ? availableIdentities(line.companyId).filter(ringAllow) : availableIdentities(line.companyId)) : [];
       const settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
       const baseUrl = `https://${req.get('host')}`;
       const solo = await isSoloCompany(line?.companyId);
       const recording = solo ? null : await recordingPlanFor({ companyId: line?.companyId, callSid, baseUrl, from, language });
       // Files d'attente (routage par langues / compétences, menu vocal). null = aucune file, Nomad Solo ou erreur : comportement inchangé.
-      const queueRoute = !solo && line?.companyId && !lineBusy ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'call', recording, language, allow: ringAllow }) : null;
+      const queueRoute = !solo && line?.companyId && !lineBusy && !noMinutes ? await resolveQueueRoute({ companyId: line.companyId, settings, baseUrl, from, stage: 'call', recording, language, allow: ringAllow }) : null;
       // File choisie sans conseiller éligible (langues / compétences) : les conseillers présents sonnent quand même, plutôt que le répondeur.
       const identities = queueRoute ? (queueRoute.kind === 'ring' ? queueRoute.firstIds : queueRoute.kind === 'none' ? online : []) : online;
       const reach = line?.companyId ? await ReachSettings.findOne({ companyId: line.companyId }).lean().catch((e) => { console.error('ReachSettings read:', e.message); return null; }) : null;
-      const route = queueRoute?.kind === 'menu' ? { first: 'browser', mobileNext: false, mobile: null } : decideInboundRoute({ identities, reach, linePhone: to });
+      const route = noMinutes ? { first: 'voicemail', mobileNext: false, mobile: null }
+        : queueRoute?.kind === 'menu' ? { first: 'browser', mobileNext: false, mobile: null } : decideInboundRoute({ identities, reach, linePhone: to });
       // Aucun conseiller à faire sonner : l'appel va au répondeur, il ne tient pas la ligne (un message laissé n'est pas un appel actif).
       // Pilote « Téléphonie + agent IA » (recette) : l'IA se règle comme un agent (interrupteur, horaires, compétences, priorité).
       // Elle décroche ici si elle est « en premier », ou « après les humains » quand aucun humain ne va sonner. Menu vocal : décision au
@@ -2835,6 +2939,13 @@ class PhoneNumberController {
         // Aucun conseiller à faire sonner : l'appel va au répondeur et doit être au journal même sans message laissé.
         if (route.first === 'voicemail') void journalUnansweredCall({ callSid, companyId: line.companyId, gigId: line.gigId, from, to, startedAt: new Date(), voicemail: settings?.voicemailEnabled !== false });
       }
+      // B.1 : l'appel peut être pris (navigateur, file, mobile) : réservation atomique de sa part du solde (4 h au plus, les appels en cours
+      // ont déjà la leur) et coupure à l'échéance (couvertes + 5 minutes de grâce). Rien de libre : grâce dès le début.
+      const canRing = line?.companyId && callSid && route.first !== 'voicemail' && minutesState && !noMinutes;
+      if (canRing) await this.startGrace({ callSid, companyId: line.companyId, path: 'inbound', creditFactor: 1 });
+      // Filet large de Twilio sur chaque <Dial> de l'appel (navigateurs, file, mobile) : solde TOTAL + 5 min (4 h au plus) ; c'est le
+      // balayeur qui coupe précisément (et prolonge l'appel dès que du solde se libère).
+      const graceLimit = canRing ? graceLimitSeconds(maxSecondsForBalance(minutesState.minutes)) : 0;
       const where = queueRoute?.kind === 'menu' ? "file d'attente : menu vocal" : route.first === 'browser' ? `sonnerie chez ${identities.length} conseiller(s)${route.mobileNext ? ', puis le mobile du titulaire' : ''}` : route.first === 'mobile' ? "aucun navigateur présent : sonnerie du mobile du titulaire" : `aucun conseiller disponible pour l'entreprise de la ligne ${line?.companyId ?? '(ligne inconnue)'} ; présents : ${JSON.stringify(presenceSummary())}`;
       console.log(`📞 Appel entrant sur ${to} depuis ${from} : ${where}`);
       // Aucun navigateur présent : le titulaire est prévenu par notification (elle réveille, elle ne décroche pas l'appel).
@@ -2843,13 +2954,15 @@ class PhoneNumberController {
       // File choisie (menu ou sonnerie dirigée) : accueil puis menu / sonnerie. Toute anomalie : sonnerie existante.
       if (queueRoute && queueRoute.kind !== 'none') {
         try {
-          return reply(greetingTwiml(settings, baseUrl, line?.companyId ? String(line.companyId) : '', language) + queueRoute.body);
+          return reply(greetingTwiml(settings, baseUrl, line?.companyId ? String(line.companyId) : '', language) + withDialTimeLimit(queueRoute.body, graceLimit));
         } catch (e) {
           console.error('Files d\'attente (accueil) :', e.message);
         }
       }
       return reply(buildInboundTwiml({
         solo,
+        // B.1 : filet de Twilio si l'échéance n'a pas pu être écrite ou si le balayeur est arrêté (couvertes + 5 min de grâce).
+        timeLimit: graceLimit,
         settings,
         baseUrl,
         companyId: line?.companyId ? String(line.companyId) : '',
@@ -2875,7 +2988,9 @@ class PhoneNumberController {
    * retombe sur la sonnerie existante (toutes les identités présentes, puis mobile, puis répondeur).
    */
   async handleTwilioInboundMenu(req, res) {
-    const reply = (body) => res.type('text/xml').status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response>${body}</Response>`);
+    // B.1 : chaque <Dial> du retour de menu reçoit le temps restant jusqu'à la coupure de l'appel (filet de Twilio).
+    let graceLimit = 0;
+    const reply = (body) => res.type('text/xml').status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response>${withDialTimeLimit(body, graceLimit)}</Response>`);
     const baseUrl = `https://${req.get('host')}`;
     let line = null;
     let settings = null;
@@ -2889,6 +3004,7 @@ class PhoneNumberController {
       language = languageForPhone(to);
       from = String(req.body?.From || '').trim();
       const callSid = String(req.body?.CallSid || '').trim();
+      graceLimit = await this.graceRemaining(callSid);
       const attempt = Math.min(2, Math.max(1, Number.parseInt(req.query?.a, 10) || 1));
       line = to ? (await PhoneNumber.findOne({ phoneNumber: to })) || (await PhoneNumber.findOne({ phoneNumber: to.replace(/^\+/, '') })) : null;
       settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
@@ -2902,7 +3018,7 @@ class PhoneNumberController {
       if (aiInboundPilotEnabled() && line?.companyId && callSid && queueRoute?.queue?._id) await InboundCall.updateOne({ callSid }, { $set: { queueId: String(queueRoute.queue._id) } }).catch(() => undefined);
       if (aiInboundPilotEnabled() && line?.companyId && callSid && queueRoute && queueRoute.kind !== 'menu') {
         const aiFirst = await tryAiInbound({ line, to, from, callSid, stage: 'menu', humansAvailable: queueRoute.kind === 'ring', queue: queueRoute.queue || null, signatureValid: () => twilioRequestValid(req) });
-        if (aiFirst) return reply(aiFirst);
+        if (aiFirst) { await this.cancelGrace(callSid); return reply(aiFirst); }
       }
       if (queueRoute && (queueRoute.kind === 'menu' || queueRoute.kind === 'ring')) return reply(queueRoute.body);
       // Aucune file ne couvre ce cas (ou personne d'éligible) : repli existant, sans rejouer l'accueil.
@@ -2951,7 +3067,7 @@ class PhoneNumberController {
       const planOwner = (() => { try { return readPlan(req.query?.s).companyId; } catch { return ''; } })();
       const recording = await recordingPlanFromFirstDecision({ companyId: planOwner, callSid: callSid0, baseUrl, from, language: languageForPhone(toE164(req.body?.To || req.body?.Called)) });
       const step = continueQueuePlan({ token: req.query?.s, dialStatus: req.body?.DialCallStatus, baseUrl, from, recording });
-      if (step.action === 'dial') return res.type('text/xml').status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response>${step.body}</Response>`);
+      if (step.action === 'dial') return res.type('text/xml').status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response>${withDialTimeLimit(step.body, await this.graceRemaining(callSid0))}</Response>`);
       const callSid = String(req.body?.CallSid || '').trim();
       if (step.answeredBy && callSid) await InboundCall.updateOne({ callSid }, { $set: { answeredBy: step.answeredBy } }).catch((e) => console.error('InboundCall answeredBy:', e.message));
     } catch (error) {
@@ -2983,11 +3099,18 @@ class PhoneNumberController {
         const aiBody = await tryAiInbound({ line: aiLine, to: call.phoneNumber, from: call.from, callSid, stage: 'after_humans', queue: aiQueue && aiQueue.deferred ? null : aiQueue, signatureValid: () => twilioRequestValid(req) });
         if (aiBody) {
           await InboundCall.updateOne({ callSid }, { $set: { status: 'answered', answeredOn: 'ai_agent', answeredBy: 'ai-agent', route: 'ai_agent' } }).catch(() => undefined);
+          await this.cancelGrace(callSid); // l'agent IA ne consomme pas le solde de minutes
           return reply(aiBody);
         }
       }
       // Fin de la sonnerie (décroché puis raccroché, non décroché, abandonné) : la ligne est libérée, sauf si le mobile du titulaire va encore sonner. Idempotent.
       if (!ringMobile && callSid && this.lineRuleConfigured()) await releaseCall(callSid).catch((e) => console.error('[inbound] libération :', e?.message || e));
+      // B.1 : fin de la sonnerie sans mobile à tenter (appel terminé, répondeur) : débit de la jambe décrochée (durée Twilio, idempotent
+      // par sid, jambe navigateur comprise), puis réserve rendue. Compte rendu non signé par Twilio : rien (filet du balayeur). Mobile : timeLimit restant.
+      if (!ringMobile && callSid && this.endReportAuthentic(req)) {
+        await this.endGrace(callSid, { durationSeconds: answered && Number.isFinite(dialDuration) ? dialDuration : 0, keys: [String(req.body?.DialCallSid || '')] });
+      }
+      const mobileLimit = ringMobile ? await this.graceRemaining(callSid) : 0;
       if (call) {
         const elapsed = Math.max(0, (Date.now() - new Date(call.startedAt).getTime()) / 1000);
         if (ringMobile) {
@@ -3009,7 +3132,7 @@ class PhoneNumberController {
       }
       const settings = call?.companyId ? await InboundSettings.findOne({ companyId: call.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
       const solo = await isSoloCompany(call?.companyId);
-      return reply(buildNoAnswerTwiml({ solo, settings, baseUrl, companyId: call?.companyId ? String(call.companyId) : '', dialStatus, mobile: ringMobile ? mobile : null, linePhone: call?.phoneNumber || '', resultUrl: `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result`, language: languageForPhone(call?.phoneNumber) }));
+      return reply(withDialTimeLimit(buildNoAnswerTwiml({ solo, settings, baseUrl, companyId: call?.companyId ? String(call.companyId) : '', dialStatus, mobile: ringMobile ? mobile : null, linePhone: call?.phoneNumber || '', resultUrl: `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result`, language: languageForPhone(call?.phoneNumber) }), mobileLimit));
     } catch (error) {
       console.error('Error in handleTwilioInboundDialResult:', error);
       return reply('<Hangup/>');
@@ -3060,6 +3183,8 @@ class PhoneNumberController {
 
   /** Action du <Record> : remercie l'appelant puis raccroche. */
   async handleTwilioVoicemailDone(req, res) {
+    // B.1 : message laissé (appel non décroché, rien de consommé) : débit nul inscrit, réserve rendue. Compte rendu non signé : rien.
+    if (this.endReportAuthentic(req)) await this.endGrace(String(req.body?.CallSid || '').trim(), { durationSeconds: 0 });
     res.type('text/xml').status(200).send(wrapResponse(buildVoicemailDoneTwiml(languageForPhone(toE164(req.body?.To || req.body?.Called)))));
   }
 

@@ -98,12 +98,13 @@ const endCall = (callSid, token = signLineCallEnd({ secret: process.env.TWILIO_A
 const callerIdOf = (twiml) => (String(twiml).match(/callerId="([^"]+)"/) || [])[1];
 const busy = (id) => Boolean(lines.find((l) => l._id === id).activeCall);
 
-test('règle inactive ou en préavis : l\'appel sortant garde le comportement actuel (ligne la plus ancienne, aucun bail posé, pas d\'action sur le <Dial>)', async () => {
+test('règle inactive ou en préavis : l\'appel sortant garde le comportement actuel (ligne la plus ancienne, aucun bail posé) ; B.1 : action line-call-end toujours présente (compte rendu de fin)', async () => {
   for (const r of [undefined, FUTURE]) {
     if (r) rule(r);
     const xml = await outbound(`CA-${r}`);
     assert.equal(callerIdOf(xml), L1);
-    assert.ok(!String(xml).includes('line-call-end'));
+    // B.1 : le compte rendu de fin (débit puis réserve rendue) est demandé même sans la règle « une ligne = un appel ».
+    assert.match(String(xml), /action="https:\/\/orch\.test\/api\/phone-numbers\/webhooks\/twilio\/line-call-end\?t=[0-9a-f]{64}"/);
     assert.ok(!busy('l1') && !busy('l2'));
   }
 });
