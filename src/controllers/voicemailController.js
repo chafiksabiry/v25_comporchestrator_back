@@ -19,6 +19,16 @@ import { loadCompanyPlanLimits } from '../services/planLimits.js';
 import InboundSettings from '../models/InboundSettings.js';
 import { callerAccess } from '../middleware/companyScope.js';
 import { buildCallbackTwiml, buildRefusalTwiml, ensureCallbackApp, pickDestination, signTicket, verifyTicket } from '../services/voicemailCallback.js';
+import { languageForPhone, phrasesFor, sayVoice } from '../services/companyLanguage.js';
+
+/**
+ * Refus parlé au collaborateur qui rappelle un message : phrase système dans la langue du pays de la ligne émettrice (`languageForPhone`,
+ * anglais si la ligne est inconnue), voix de la table commune.
+ */
+const callbackRefusal = (key, linePhone) => {
+  const language = languageForPhone(linePhone);
+  return buildRefusalTwiml(phrasesFor(language)[key], sayVoice(language));
+};
 
 const FOLLOW_UPS = ['new', 'to_call', 'called', 'closed'];
 const validId = (v) => mongoose.Types.ObjectId.isValid(String(v)) && String(v).length === 24;
@@ -163,16 +173,19 @@ export const voicemailController = {
   /** Webhook Twilio de l'application de rappel : compose le numéro du message depuis la ligne qui l'a reçu, si la preuve est valide. */
   async callbackVoice(req, res) {
     const send = (xml) => res.type('text/xml').status(200).send(xml);
+    let linePhone = ''; // ligne émettrice, dès qu'elle est connue : langue des refus parlés
     try {
       const { VoicemailId, Ticket, From } = req.body || {};
       const identity = String(From || '').replace(/^client:/, '');
       if (!validId(VoicemailId) || !verifyTicket({ secret: config.twilioAuthToken, voicemailId: String(VoicemailId), identity, ticket: Ticket })) {
-        return send(buildRefusalTwiml('Rappel non autorisé.'));
+        // Preuve invalide : aucune ligne établie (rien n'est lu en base avant la preuve) -> anglais.
+        return send(callbackRefusal('callbackNotAuthorized', ''));
       }
       const vm = await Voicemail.findById(VoicemailId).lean();
       const to = vm ? pickDestination(vm) : '';
       const line = vm ? await callbackLine(vm) : null;
-      if (!vm || !to || !line || isPremiumRate(to)) return send(buildRefusalTwiml('Impossible de rappeler ce numéro.'));
+      linePhone = line?.phoneNumber || vm?.phoneNumber || '';
+      if (!vm || !to || !line || isPremiumRate(to)) return send(callbackRefusal('callbackCannotCall', linePhone));
       // Un rappel est un appel sortant : il consomme des minutes, donc seulement avec des minutes disponibles, et il est
       // coupé quand elles sont écoulées.
       const minutes = await freshMinutesBalance(String(vm.companyId), { sync: syncMinutesFromCalls, grant: ensurePlanMinutesGranted, readWallet: (id) => MinutesCompany.findOne({ companyId: id }).select('minutes').lean() });
@@ -182,7 +195,7 @@ export const voicemailController = {
       const creditFactor = await outboundCreditFactor({ companyId: String(vm.companyId), limits: planLimits, to, lineNumber: line.phoneNumber });
       const maxSeconds = maxSecondsForBalance(minutes, { creditFactor });
       // Refus international : même texte que sur tous les canaux, dans la langue de la ligne appelante (en / fr / es).
-      if (!maxSeconds) return send(creditFactor > 1 ? spokenRefusal('insufficient_minutes_international', spokenLanguage(line.phoneNumber), { credits: creditFactor }) : buildRefusalTwiml('Solde de minutes insuffisant.'));
+      if (!maxSeconds) return send(creditFactor > 1 ? spokenRefusal('insufficient_minutes_international', spokenLanguage(line.phoneNumber), { credits: creditFactor }) : callbackRefusal('callbackInsufficientMinutes', linePhone));
       // B.1 : échéance + réservation d'une tranche (10 min) du solde libre, prolongée par le balayeur ; grâce de 5 min puis coupure à l'heure.
       // timeLimit du <Dial> : filet large (solde total + 5 min). Borné à 2 s : au-delà, aucune échéance, l'appel passe.
       const callSid = String(req.body?.CallSid || '').trim();
@@ -201,7 +214,7 @@ export const voicemailController = {
       return send(buildCallbackTwiml({ callerId: line.phoneNumber, to, maxSeconds: graceLimitSeconds(covered), action }));
     } catch (error) {
       console.error('[voicemail] callbackVoice failed:', error.message);
-      return send(buildRefusalTwiml('Une erreur est survenue.'));
+      return send(callbackRefusal('callbackError', linePhone));
     }
   },
 };

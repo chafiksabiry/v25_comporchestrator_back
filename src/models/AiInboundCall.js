@@ -22,7 +22,8 @@ const schema = new mongoose.Schema(
     endReason: { type: String, default: '' },
     level: { type: String, default: 'partial' },
     trigger: { type: String, default: '' },
-    language: { type: String, default: 'fr-FR' },
+    // Toujours renseignée à la création (langue de l'agent, déduite de la ligne sans réglage) ; défaut de secours : anglais.
+    language: { type: String, default: 'en-US' },
     engine: { provider: { type: String, default: '' }, model: { type: String, default: '' }, fallbackUsed: { type: Boolean, default: false } },
     sessionId: { type: String, default: '' },
     announcement: { mode: String, language: String, text: String, verified: { type: Boolean, default: null } },
