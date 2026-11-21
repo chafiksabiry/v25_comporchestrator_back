@@ -154,7 +154,7 @@ test('banc d’écoute : consentement de l’IA dans la langue de l’annonce hu
   assert.ok(t.indexOf(CT.ar) > 0 && t.indexOf(CT.ar) < t.indexOf(CT.fr), '+212 : arabe puis français'); assert.ok(!t.includes(CT.en));
   env.AI_INBOUND_ANNOUNCE_MODE = 'twiml';
   const x = await inbound({ from: '+212612345678' });
-  assert.match(x, /<Say language="fr-FR" voice="Polly\.Lea">Bonjour[^<]*intelligence artificielle[^<]*<\/Say><Say language="arb" voice="Polly\.Zeina">[^<]+<\/Say><Say language="fr-FR" voice="Polly\.Lea">Cet appel peut être enregistré[^<]*<\/Say><Connect /);
+  assert.match(x, /<Say language="fr-FR" voice="Polly\.Lea-Generative">Bonjour[^<]*intelligence artificielle[^<]*<\/Say><Say language="arb" voice="Polly\.Zeina">[^<]+<\/Say><Say language="fr-FR" voice="Polly\.Lea-Generative">Cet appel peut être enregistré[^<]*<\/Say><Connect /);
   delete env.AI_INBOUND_ANNOUNCE_MODE;
   await inbound({ from: '+33612345678' });
   assert.ok(dashBodies.at(-1).announcement.text.endsWith(CT.fr)); assert.ok(!dashBodies.at(-1).announcement.text.includes(CT.ar));

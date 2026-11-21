@@ -337,15 +337,15 @@ delete env.AI_INBOUND_ANNOUNCE_MODE;
   assert.equal(says.length, 3, 'TwiML +212 : annonce + arabe + français');
   assert.match(says[0][2], /intelligence artificielle/); assert.ok(!says[0][2].includes(xml(CT.fr)) && !says[0][2].includes(CT.ar), 'consentement hors du <Say> de l’annonce');
   assert.deepEqual(says[1], ['arb', 'Polly.Zeina', CT.ar], 'TwiML : arabe d’abord');
-  assert.deepEqual(says[2], ['fr-FR', 'Polly.Lea', xml(CT.fr)], 'TwiML : français ensuite');
+  assert.deepEqual(says[2], ['fr-FR', 'Polly.Lea-Generative', xml(CT.fr)], 'TwiML : français ensuite');
   assert.match(twiml, /<\/Say><Connect /);
   // +1 en TwiML : un seul <Say> de consentement, anglais.
   ({ twiml } = await benchRoute('+14155550100'));
-  assert.equal((twiml.match(/<Say /g) || []).length, 2); assert.match(twiml, /<Say language="en-US" voice="Polly\.Joanna">This call may be recorded/);
+  assert.equal((twiml.match(/<Say /g) || []).length, 2); assert.match(twiml, /<Say language="en-US" voice="Polly\.Joanna-Generative">This call may be recorded/);
   // Voix masculine réglée : consentement en voix masculine de la langue (l'arabe n'a que Zeina).
   reset(); store.settings[0].listeningBench = { enabled: true, provider: 'gemini' }; store.settings[0].voice = 'male';
   twiml = await route({ from: '+33612345678' });
-  assert.match(twiml, /<Say language="fr-FR" voice="Polly\.Mathieu">Cet appel peut être enregistré/);
+  assert.match(twiml, /<Say language="fr-FR" voice="Polly\.Remi-Neural">Cet appel peut être enregistré/);
   delete env.AI_INBOUND_ANNOUNCE_MODE;
   // +33 : français seul ; +1 : anglais seul ; indicatif inconnu ou numéro masqué : anglais (ligne sans langue dédiée), comme l'annonce humaine.
   ({ text } = await benchRoute('+33612345678')); only(text, 'fr', '+33'); assert.ok(text.endsWith(CT.fr));

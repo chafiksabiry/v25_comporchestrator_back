@@ -66,14 +66,14 @@ for (const n of ['+212612345678', '+213551234567', '+21698123456']) {
   const says = [...twiml.matchAll(/<Say language="([^"]+)" voice="([^"]+)">([^<]*)<\/Say>/g)].map((m) => [m[1], m[2], m[3]]);
   assert.equal(says.length, 2, n);
   assert.deepEqual(says.map((x) => x[0]), ['arb', 'fr-FR'], `${n} : arabe puis français`);
-  assert.equal(says[0][1], 'Polly.Zeina'); assert.equal(says[1][1], 'Polly.Lea');
+  assert.equal(says[0][1], 'Polly.Zeina'); assert.equal(says[1][1], 'Polly.Lea-Generative');
   assert.equal(says[0][2], R.CONSENT_TEXTS.ar); assert.equal(says[1][2], R.CONSENT_TEXTS.fr.replace(/'/g, '&apos;'));
 }
 // France : français seul ; États-Unis : anglais seul
 assert.equal([...R.consentTwiml(R.consentLanguageFor('+33612345678')).matchAll(/<Say /g)].length, 1);
-assert.match(R.consentTwiml(R.consentLanguageFor('+33612345678')), /<Say language="fr-FR" voice="Polly.Lea">Cet appel/);
+assert.match(R.consentTwiml(R.consentLanguageFor('+33612345678')), /<Say language="fr-FR" voice="Polly.Lea-Generative">Cet appel/);
 assert.equal([...R.consentTwiml(R.consentLanguageFor('+14155550100')).matchAll(/<Say /g)].length, 1);
-assert.match(R.consentTwiml(R.consentLanguageFor('+14155550100')), /<Say language="en-US" voice="Polly.Joanna">This call may be recorded/);
+assert.match(R.consentTwiml(R.consentLanguageFor('+14155550100')), /<Say language="en-US" voice="Polly.Joanna-Generative">This call may be recorded/);
 assert.equal(R.normalizeConsentLanguage('ar_fr'), 'ar_fr', 'code accepté par le webhook d’annonce (?l=ar_fr)');
 assert.equal(R.consentLanguageFor('anonymous'), 'en', 'numéro illisible : anglais (langue par défaut)');
 assert.equal(R.consentLanguageFor(undefined), 'en');
@@ -82,8 +82,8 @@ assert.equal(R.consentText('ar_fr'), `${R.CONSENT_TEXTS.ar} ${R.CONSENT_TEXTS.fr
 assert.equal(R.consentText('fr'), R.CONSENT_TEXTS.fr); assert.equal(R.consentText('en'), R.CONSENT_TEXTS.en);
 assert.equal(R.consentText('xx'), R.CONSENT_TEXTS.en); assert.equal(R.consentText(null), R.CONSENT_TEXTS.en);
 // Voix masculine (agent IA) : Mathieu en français ; l'arabe garde Zeina (seule voix) ; défaut inchangé (féminine).
-assert.match(R.consentSay('fr', { female: false }), /voice="Polly\.Mathieu"/);
-assert.deepEqual([...R.consentSay('ar_fr', { female: false }).matchAll(/voice="([^"]+)"/g)].map((m) => m[1]), ['Polly.Zeina', 'Polly.Mathieu']);
+assert.match(R.consentSay('fr', { female: false }), /voice="Polly\.Remi-Neural"/);
+assert.deepEqual([...R.consentSay('ar_fr', { female: false }).matchAll(/voice="([^"]+)"/g)].map((m) => m[1]), ['Polly.Zeina', 'Polly.Remi-Neural']);
 assert.equal(R.consentSay('fr'), R.consentSay('fr', { female: true }));
 assert.match(R.consentTwiml('es'), /^<\?xml[^>]*\?><Response><Say [^>]*>Esta llamada/);
 
