@@ -9,6 +9,8 @@ import { notifyByMail } from '../services/messageNotify.js';
 import { matchesNumber } from '../services/receptionExtras.js';
 import { messagePayload, notifyOwners } from '../services/webPush.js';
 import { loadTools, mergedTools } from '../services/secretariatTools.js';
+import { companyLanguageIfConnected } from '../services/companyLanguageLookup.js';
+import { staffTexts } from '../services/staffTexts.js';
 import {
   messageTitle, parseAbsences, todayIn, toDirectoryView, validateDirectory, validateMessage,
 } from '../services/receptionDirectory.js';
@@ -122,7 +124,9 @@ export const receptionController = {
       const companyId = oid(access.companyId);
       let origin = null;
       if (v.callId) origin = await InboundCall.findOne({ _id: v.callId, companyId }).select('from').lean();
-      const takerName = (await loadUserName(access.userId)) || 'Accueil';
+      // Langue des membres de la société (français pour un pays francophone, anglais sinon) : titre, e-mail et push du message.
+      const language = await companyLanguageIfConnected(access.companyId);
+      const takerName = (await loadUserName(access.userId)) || staffTexts(language).reception;
       const tools = mergedTools(await loadTools(access.companyId));
       // Motif choisi parmi les réponses types de l'entreprise (libellé enregistré) et appelant prioritaire (liste de l'entreprise).
       const motif = v.scriptId ? (doc?.scripts || []).find((sc) => String(sc._id) === v.scriptId)?.label || '' : '';
@@ -130,7 +134,7 @@ export const receptionController = {
       const priorityCaller = Boolean(matchesNumber(doc?.vipNumbers, callerPhone));
       let item = await FollowUpItem.create({
         companyId, model: 'message_taken', originType: origin ? 'call' : 'none', originId: origin ? oid(v.callId) : null,
-        title: messageTitle(entry.name, v.urgency), note: v.reason, contactName: v.callerName, contactPhone: callerPhone, motif, priorityCaller,
+        title: messageTitle(entry.name, v.urgency, language), note: v.reason, contactName: v.callerName, contactPhone: callerPhone, motif, priorityCaller,
         callerCompany: v.callerCompany, forEntryId: v.forEntryId, forName: entry.name, urgency: v.urgency, dueAt: v.callbackBefore,
         assigneeId: entry.userId || '', assigneeName: entry.name, createdById: access.userId, createdByName: takerName,
       });
@@ -138,12 +142,12 @@ export const receptionController = {
       const emailStatus = await notifyByMail({
         companyId: access.companyId, followUpId: item._id, entry: { ...entry, name: entry.name },
         message: { callerName: v.callerName, callerCompany: v.callerCompany, callerPhone: v.callerPhone, reason: v.reason, urgency: v.urgency, callbackBefore: v.callbackBefore },
-        takenBy: { id: access.userId, name: takerName }, companyName: doc?.general?.companyName || '', timeZone: tools.timeZone,
+        takenBy: { id: access.userId, name: takerName }, companyName: doc?.general?.companyName || '', timeZone: tools.timeZone, language,
       });
       item.emailStatus = emailStatus;
       await item.save();
       // Message urgent : push web à la personne visée si elle est abonnée (silencieux sinon ; jamais de SMS ni d'appel).
-      if (v.urgency === 'urgent' && entry.userId) void notifyOwners({ userId: entry.userId }, messagePayload({ callerName: v.callerName, urgent: true, id: String(item._id) }));
+      if (v.urgency === 'urgent' && entry.userId) void notifyOwners({ userId: entry.userId }, messagePayload({ callerName: v.callerName, urgent: true, id: String(item._id), language }));
       res.status(201).json({ success: true, data: { item: toItem(item), notified: { inApp: true, email: emailStatus, assigned: Boolean(entry.userId) } } });
     } catch (error) {
       console.error('reception takeMessage:', error.message);

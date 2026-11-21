@@ -135,7 +135,7 @@ assert.equal(Q.buildPlan({ queue: q({ strategy: 'longest_idle' }), online: many,
 
 // ---------------------------------------------------------------- menu vocal : TwiML
 const mq = (key, over) => ({ _id: `m${key}`, name: `File ${key}`, direction: 'inbound', menuKey: String(key), languages: [], skills: [], prompt: '', promptLanguage: '', ...over });
-const menu = R.buildMenuBody({ queues: [mq(2, { languages: ['en'] }), mq(1, { languages: ['fr'] }), mq(3, { languages: ['ar'], prompt: 'للعربية اضغط ثلاثة' }), mq(4, { languages: ['he'] }), mq(5, { name: 'Compta', prompt: 'Pour la comptabilité, tapez 5.', promptLanguage: 'fr', languages: ['en'] }), mq(6, { name: 'Ventes' })], baseUrl: BASE, attempt: 1 });
+const menu = R.buildMenuBody({ language: 'fr', queues: [mq(2, { languages: ['en'] }), mq(1, { languages: ['fr'] }), mq(3, { languages: ['ar'], prompt: 'للعربية اضغط ثلاثة' }), mq(4, { languages: ['he'] }), mq(5, { name: 'Compta', prompt: 'Pour la comptabilité, tapez 5.', promptLanguage: 'fr', languages: ['en'] }), mq(6, { name: 'Ventes' })], baseUrl: BASE, attempt: 1 });
 assert.ok(menu.startsWith(`<Gather numDigits="1" timeout="6" action="${WEBHOOK}/inbound-menu?a=1" method="POST">`));
 assert.ok(menu.endsWith(`</Gather><Redirect method="POST">${WEBHOOK}/inbound-menu?a=1</Redirect>`), 'sans touche : rappel du même webhook');
 const says = [...menu.matchAll(/<Say language="([^"]+)" voice="([^"]+)">([^<]*)<\/Say>/g)].map((m) => m.slice(1));
@@ -146,9 +146,10 @@ assert.deepEqual(says, [
   ['en-US', 'Polly.Joanna-Generative', 'For Hebrew, press 4.'],
   ['fr-FR', 'Polly.Lea-Generative', 'Pour la comptabilité, tapez 5.'],
   ['fr-FR', 'Polly.Lea-Generative', 'Pour Ventes, tapez 6.'],
-], 'ordre par touche, phrase dans SA langue, texte personnalisé prioritaire, repli anglais, file sans langue : français');
-assert.ok(R.buildMenuBody({ queues: [mq(1), mq(2)], baseUrl: BASE, attempt: 2 }).includes('inbound-menu?a=2'));
-assert.ok(R.buildMenuBody({ queues: [mq(1, { name: 'A & <B>' })], baseUrl: BASE }).includes('Pour A &amp; &lt;B&gt;, tapez 1.'), 'échappement XML');
+], 'ordre par touche, phrase dans SA langue, texte personnalisé prioritaire, repli anglais, file sans langue sur une ligne française : français');
+assert.match(R.buildMenuBody({ queues: [mq(6, { name: 'Ventes' })], baseUrl: 'https://x.test' }), /For Ventes, press 6\./, 'langue de la ligne inconnue : anglais (langue par défaut)');
+assert.ok(R.buildMenuBody({ language: 'fr', queues: [mq(1), mq(2)], baseUrl: BASE, attempt: 2 }).includes('inbound-menu?a=2'));
+assert.ok(R.buildMenuBody({ language: 'fr', queues: [mq(1, { name: 'A & <B>' })], baseUrl: BASE }).includes('Pour A &amp; &lt;B&gt;, tapez 1.'), 'échappement XML');
 assert.equal(R.menuLine(mq(1, { languages: ['en', 'fr'] })).text, 'For English, press 1.', 'première langue de la file');
 assert.equal(R.menuLine(mq(1, { languages: ['en'], promptLanguage: 'es' })).text, 'Para español, pulse 1.', 'langue du texte explicite');
 
@@ -243,11 +244,11 @@ queueStore = []; staffStore = []; calls = [];
 present('alice', 'bob');
 assert.equal(await inbound(), wrap(dialOf(['cc-alice', 'cc-bob'])), 'sans file : toutes les identités présentes, timeout 30, action standard');
 settingsDoc = { ringTimeoutSeconds: 45, greetingText: 'Bonjour', voice: 'nova' }; present('alice');
-const legacyWithSettings = F.buildInboundTwiml({ settings: settingsDoc, baseUrl: BASE, companyId: C1, identities: ['cc-alice'], from: CALLER, resultUrl: RESULT, linePhone: LINE });
+const legacyWithSettings = F.buildInboundTwiml({ settings: settingsDoc, baseUrl: BASE, companyId: C1, identities: ['cc-alice'], from: CALLER, resultUrl: RESULT, linePhone: LINE, language: 'fr' });
 assert.equal(await inbound(), wrap(legacyWithSettings), 'sans file, avec accueil et délai paramétrés');
 assert.ok(legacyWithSettings.startsWith('<Say language="fr-FR" voice="Polly.Lea-Generative">Bonjour</Say><Dial timeout="45"'));
 present();
-assert.equal(await inbound(), wrap(F.buildInboundTwiml({ settings: settingsDoc, baseUrl: BASE, companyId: C1, identities: [], from: CALLER, resultUrl: RESULT, linePhone: LINE })), 'sans file ni conseiller : répondeur');
+assert.equal(await inbound(), wrap(F.buildInboundTwiml({ settings: settingsDoc, baseUrl: BASE, companyId: C1, identities: [], from: CALLER, resultUrl: RESULT, linePhone: LINE, language: 'fr' })), 'sans file ni conseiller : répondeur');
 reachDoc = { forwardEnabled: true, mobileNumber: '+33611223344', mobileRingSeconds: 25 };
 assert.ok((await inbound()).includes('<Number>+33611223344</Number>'), 'sans file ni conseiller : mobile');
 reachDoc = null; settingsDoc = null;

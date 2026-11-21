@@ -89,11 +89,16 @@ koM({ ...base, callbackBefore: '2026-11-04T10:00:00Z' }, /à venir/);
 koM({ ...base, callbackBefore: 'demain' }, /invalides/);
 koM({ ...base, callerPhone: 'abc' }, /Numéro/);
 koM({ ...base, callId: 'x' }, /Appel/);
-assert.equal(D.messageTitle('Mme Martin', 'urgent'), 'URGENT · Message pour Mme Martin');
+assert.equal(D.messageTitle('Mme Martin', 'urgent', 'fr'), 'URGENT · Message pour Mme Martin');
+assert.equal(D.messageTitle('Mr Smith', 'urgent'), 'URGENT · Message for Mr Smith', 'langue inconnue : anglais');
 assert.equal(D.messageTitle('x'.repeat(200), 'normal').length, 120);
-const mail = D.messageEmail({ forName: 'Mme Martin', callerName: 'M. Dupont', callerCompany: 'SARL', callerPhone: '0612345678', reason: 'Devis', urgency: 'urgent', callbackBefore: '2026-11-05T15:00:00Z', takenByName: 'Léa', companyName: 'Cabinet Martin', timeZone: 'Europe/Paris' });
+const mail = D.messageEmail({ forName: 'Mme Martin', callerName: 'M. Dupont', callerCompany: 'SARL', callerPhone: '0612345678', reason: 'Devis', urgency: 'urgent', callbackBefore: '2026-11-05T15:00:00Z', takenByName: 'Léa', companyName: 'Cabinet Martin', timeZone: 'Europe/Paris', language: 'fr' });
 assert.match(mail, /Message URGENT pris à l’accueil de Cabinet Martin par Léa/); assert.match(mail, /16 h 00|16:00/); assert.match(mail, /Devis/);
 for (const w of ['centre d’appels', 'call centre', 'siège', 'agent']) assert.ok(!mail.toLowerCase().includes(w), w);
+const mailEn = D.messageEmail({ forName: 'Mr Smith', callerName: 'Ms Jones', callerCompany: 'Acme', callerPhone: '+14155550100', reason: 'Quote', urgency: 'urgent', callbackBefore: '2026-11-05T15:00:00Z', takenByName: 'Lea', companyName: 'Smith LLC', timeZone: 'America/New_York', language: 'en' });
+assert.match(mailEn, /^Hello Mr Smith,/); assert.match(mailEn, /URGENT message taken at reception for Smith LLC by Lea\./); assert.match(mailEn, /Call back before: /);
+assert.doesNotMatch(mailEn, /[àâçéèêëîïôûùœ]|Bonjour|Appelant|Message :|rappeler/i, 'aucun mot français dans l’e-mail anglais');
+assert.equal(D.messageEmail({ forName: 'A', callerName: 'B', reason: 'x', urgency: 'normal' }).split('\n')[0], 'Hello A,', 'langue absente : anglais');
 
 // ---------------------------------------------------------------- toItem / tri / filtre : modèles existants intacts
 const msgItem = { _id: 'i1', model: 'message_taken', title: 'x', status: 'todo', urgency: 'urgent', forName: 'Mme Martin', callerCompany: 'SARL', seenAt: null, emailStatus: 'sent' };

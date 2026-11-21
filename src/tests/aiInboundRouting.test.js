@@ -37,7 +37,7 @@ const C1 = '64b0000000000000000000c1';
 const LINE = '+33900000001'; const CALLER = '+33612345678';
 const lean = (v) => ({ lean: async () => v, select() { return this; }, sort() { return this; }, limit() { return this; }, then(r, j) { return Promise.resolve(v).then(r, j); } });
 const EVENING = Date.parse('2026-11-03T19:00:00Z'); const MORNING = Date.parse('2026-11-03T09:00:00Z');
-let env; let dashOk; let dashHits; let aiCalls; let now; let aiSettings;
+let env; let dashOk; let dashHits; let dashBodies; let aiCalls; let now; let aiSettings;
 const savedLog = { log: console.log, warn: console.warn, error: console.error };
 beforeEach(() => {
   console.log = () => {}; console.warn = () => {}; console.error = () => {};
@@ -61,18 +61,18 @@ beforeEach(() => {
   AiInboundCall.create = async (doc) => { const r = { _id: '64b0000000000000000000f1', ...doc }; aiCalls.push(r); return r; };
   AiInboundCall.updateOne = async (f, u) => { Object.assign(aiCalls[0] || {}, u.$set || {}); return { modifiedCount: 1 }; };
   AiInboundCall.countDocuments = async () => 0;
-  env = { DASH_CALLS_API_URL: 'https://dash.test', PUBLIC_API_BASE_URL: 'https://orch.test/api' }; dashOk = true; dashHits = 0; now = EVENING;
+  env = { DASH_CALLS_API_URL: 'https://dash.test', PUBLIC_API_BASE_URL: 'https://orch.test/api' }; dashOk = true; dashHits = 0; dashBodies = []; now = EVENING;
   AI.setAiInboundDeps({
     env, now: () => now, sleep: async () => {}, planLimits: async () => null,
-    fetch: async () => { dashHits += 1; if (!dashOk) return { ok: false, status: 503, json: async () => ({}) }; return { ok: true, status: 201, json: async () => ({ sessionId: 's', streamUrl: 'wss://dash.test/ai-voice-stream/t0k', provider: 'gemini', model: 'm' }) }; },
+    fetch: async (url, init) => { dashHits += 1; dashBodies.push(JSON.parse(init?.body || '{}')); if (!dashOk) return { ok: false, status: 503, json: async () => ({}) }; return { ok: true, status: 201, json: async () => ({ sessionId: 's', streamUrl: 'wss://dash.test/ai-voice-stream/t0k', provider: 'gemini', model: 'm' }) }; },
   });
 });
 after(() => { Object.assign(console, savedLog); });
 
 const PATH = '/api/phone-numbers/webhooks/twilio/inbound-call';
-const inbound = async ({ signed = true } = {}) => {
+const inbound = async ({ signed = true, from = CALLER } = {}) => {
   let out = null; const res = { type() { return this; }, status() { return this; }, send(x) { out = x; return this; } };
-  const body = { To: LINE, From: CALLER, CallSid: `CA${'a'.repeat(32)}` };
+  const body = { To: LINE, From: from, CallSid: `CA${'a'.repeat(32)}` };
   const headers = signed ? { 'x-twilio-signature': twilio.getExpectedTwilioSignature(process.env.TWILIO_AUTH_TOKEN, `https://orch.test${PATH}`, body) } : {};
   await pc.handleTwilioInboundCall({ body, query: {}, headers, originalUrl: PATH, get: () => 'orch.test' }, res);
   return out;
@@ -143,4 +143,21 @@ test('pilote fermé : fin de sonnerie sans aucune lecture liée à l’agent IA 
   let out = null; const res = { type() { return this; }, status() { return this; }, send(x) { out = x; return this; } };
   await pc.handleTwilioInboundDialResult({ body: { CallSid: call.callSid, DialCallStatus: 'no-answer' }, query: {}, headers: {}, get: () => 'orch.test' }, res);
   assert.equal(reads, 0); assert.match(out, /<Record /, 'répondeur classique');
+});
+
+test('banc d’écoute : consentement de l’IA dans la langue de l’annonce humaine (+212 arabe puis français, +33 français, +1 anglais)', async () => {
+  const { CONSENT_TEXTS: CT } = await import('../services/callRecording.js');
+  Object.assign(env, { AI_INBOUND_ENABLED: 'true', AI_INBOUND_COMPANY_IDS: C1 });
+  aiSettings.listeningBench = { enabled: true, provider: 'gemini' };
+  assert.match(await inbound({ from: '+212612345678' }), /<Connect /);
+  const t = dashBodies.at(-1).announcement.text;
+  assert.ok(t.indexOf(CT.ar) > 0 && t.indexOf(CT.ar) < t.indexOf(CT.fr), '+212 : arabe puis français'); assert.ok(!t.includes(CT.en));
+  env.AI_INBOUND_ANNOUNCE_MODE = 'twiml';
+  const x = await inbound({ from: '+212612345678' });
+  assert.match(x, /<Say language="fr-FR" voice="Polly\.Lea-Generative">Bonjour[^<]*intelligence artificielle[^<]*<\/Say><Say language="arb" voice="Polly\.Zeina">[^<]+<\/Say><Say language="fr-FR" voice="Polly\.Lea-Generative">Cet appel peut être enregistré[^<]*<\/Say><Connect /);
+  delete env.AI_INBOUND_ANNOUNCE_MODE;
+  await inbound({ from: '+33612345678' });
+  assert.ok(dashBodies.at(-1).announcement.text.endsWith(CT.fr)); assert.ok(!dashBodies.at(-1).announcement.text.includes(CT.ar));
+  await inbound({ from: '+14155550100' });
+  assert.ok(dashBodies.at(-1).announcement.text.endsWith(CT.en)); assert.ok(!dashBodies.at(-1).announcement.text.includes(CT.fr));
 });

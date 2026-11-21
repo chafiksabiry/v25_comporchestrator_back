@@ -53,6 +53,7 @@ import { decideInboundRoute, mobileTarget, shouldRingMobileAfter } from '../serv
 import { callPayload, notifyOwners, voicemailPayload } from '../services/webPush.js';
 import { blockedCallBody } from '../services/blockedCallers.js';
 import { languageForPhone } from '../services/companyLanguage.js';
+import { staffTexts } from '../services/staffTexts.js';
 import { getInboundTest, needsInboundTestProof, realCallProof, receiveInboundCall, startInboundTest as startInboundTestSession } from '../services/inboundTestService.js';
 import { stripeLocaleFromRequest } from '../services/stripeLocale.js';
 import { tryAiInbound, aiQueueFor, aiInboundPilotEnabled } from '../services/aiInbound.js';
@@ -2988,7 +2989,7 @@ class PhoneNumberController {
       const where = queueRoute?.kind === 'menu' ? "file d'attente : menu vocal" : route.first === 'browser' ? `sonnerie chez ${identities.length} conseiller(s)${soloPush ? ' (titulaire Nomad, push)' : ''}${route.mobileNext ? ', puis le mobile du titulaire' : ''}` : route.first === 'mobile' ? "aucun navigateur présent : sonnerie du mobile du titulaire" : `aucun conseiller disponible pour l'entreprise de la ligne ${line?.companyId ?? '(ligne inconnue)'} ; présents : ${JSON.stringify(presenceSummary())}`;
       console.log(`📞 Appel entrant sur ${to} depuis ${from} : ${where}`);
       // Aucun navigateur présent (titulaire Nomad composé sans présence compris) : le titulaire est prévenu par notification (elle réveille, elle ne décroche pas l'appel).
-      if (line?.companyId && (!identities.length || soloPush) && queueRoute?.kind !== 'menu') void notifyOwners({ companyId: line.companyId }, callPayload({ from, to, callSid }));
+      if (line?.companyId && (!identities.length || soloPush) && queueRoute?.kind !== 'menu') void notifyOwners({ companyId: line.companyId }, callPayload({ from, to, callSid, language: languageForPhone(line.phoneNumber) }));
       const resultUrl = `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result`;
       // File choisie (menu ou sonnerie dirigée) : accueil puis menu / sonnerie. Toute anomalie : sonnerie existante.
       if (queueRoute && queueRoute.kind !== 'none') {
@@ -3076,7 +3077,7 @@ class PhoneNumberController {
         // Appel envoyé au répondeur sans sonnerie : il est au journal même si l'appelant ne laisse pas de message.
         if (route.first === 'voicemail') void journalUnansweredCall({ callSid, companyId: line.companyId, gigId: line.gigId, from, to, startedAt: new Date(), voicemail: settings?.voicemailEnabled !== false });
       }
-      if (line?.companyId && !identities.length) void notifyOwners({ companyId: line.companyId }, callPayload({ from, to, callSid }));
+      if (line?.companyId && !identities.length) void notifyOwners({ companyId: line.companyId }, callPayload({ from, to, callSid, language: languageForPhone(line.phoneNumber) }));
       return reply(buildInboundTwiml({
         solo, settings, baseUrl, companyId: line?.companyId ? String(line.companyId) : '', identities, from,
         resultUrl: `${baseUrl}/api/phone-numbers/webhooks/twilio/inbound-dial-result`,
@@ -3270,12 +3271,12 @@ class PhoneNumberController {
           companyId: line.companyId,
           key: `voicemail-${v.recordingSid}`,
           kind: 'voicemail',
-          title: 'Nouveau message sur le répondeur',
-          message: `${v.from || 'Numéro masqué'} · ${v.durationSeconds} s`,
+          title: staffTexts(languageForPhone(line.phoneNumber)).pushVoicemailTitle,
+          message: `${v.from || staffTexts(languageForPhone(line.phoneNumber)).hiddenNumber} · ${v.durationSeconds} s`,
           gigId: line.gigId || null,
           actionPath: '/app/voicemails',
         });
-        void notifyOwners({ companyId: line.companyId }, voicemailPayload({ from: v.from, durationSeconds: v.durationSeconds, recordingSid: v.recordingSid }));
+        void notifyOwners({ companyId: line.companyId }, voicemailPayload({ from: v.from, durationSeconds: v.durationSeconds, recordingSid: v.recordingSid, language: languageForPhone(line.phoneNumber) }));
         const created = await Voicemail.findOne({ recordingSid: v.recordingSid }).select('_id').lean();
         // HARX rapatrie et conserve l'audio (puis supprime l'original chez Twilio), avant l'analyse.
         if (created) ingestRecording(created._id).then(() => analyzeVoicemail(created._id)).catch((e) => console.error('analyzeVoicemail:', e.message));

@@ -6,7 +6,8 @@ import { toPublicSettings } from '../services/inboundSettings.js';
 const base = 'https://orch.test';
 const companyId = '64b0000000000000000000c1';
 const resultUrl = `${base}/api/phone-numbers/webhooks/twilio/inbound-dial-result`;
-const common = { baseUrl: base, companyId, from: '+33612345678', resultUrl };
+// Ligne française : phrases et voix en français (la langue par défaut, sans langue connue, est l'anglais : voir plus bas).
+const common = { baseUrl: base, companyId, from: '+33612345678', resultUrl, language: 'fr' };
 const audio = (text, voice) => ({ data: true, text, voice, version: 'abc123def456' });
 
 // Sans réglage + conseillers : identique à l'ancien comportement (timeout 30, aucun accueil).
@@ -66,7 +67,7 @@ assert.ok(!evil.includes('</Say><Hangup/>'));
 assert.ok(evil.includes('&lt;/Say&gt;&lt;Hangup/&gt;'));
 
 // Après la sonnerie
-const na = (dialStatus, settings = null) => buildNoAnswerTwiml({ baseUrl: base, companyId, dialStatus, settings });
+const na = (dialStatus, settings = null) => buildNoAnswerTwiml({ baseUrl: base, companyId, language: 'fr', dialStatus, settings });
 for (const st of ['no-answer', 'busy', 'failed']) assert.ok(na(st).includes('<Record '), st);
 assert.equal(na('canceled'), '<Hangup/>', "l'appelant a raccroché : rien à enregistrer");
 assert.equal(na('completed'), '<Hangup/>');
@@ -78,7 +79,8 @@ assert.equal(
 assert.ok(!na('no-answer', { greetingText: 'Bonjour' }).includes('Bonjour'), "l'accueil n'est pas rejoué");
 
 // Remerciement
-assert.equal(buildVoicemailDoneTwiml(), '<Say language="fr-FR" voice="Polly.Lea-Generative">Merci, votre message a bien été enregistré. Au revoir.</Say><Hangup/>');
+assert.match(buildVoicemailDoneTwiml(), /^<Say language="en-US" voice="Polly.Joanna-Generative">Thank you/, 'langue inconnue : anglais');
+assert.equal(buildVoicemailDoneTwiml('fr'), '<Say language="fr-FR" voice="Polly.Lea-Generative">Merci, votre message a bien été enregistré. Au revoir.</Say><Hangup/>');
 
 // settings déjà publics acceptés
 assert.ok(buildInboundTwiml({ ...common, settings: toPublicSettings(validated), identities: [] }).includes('greeting/abc123def456.mp3'));
@@ -90,8 +92,8 @@ assert.ok(soloVm.includes(esc(SOLO_VOICEMAIL_PROMPT)) && !soloVm.includes('conse
 assert.ok(buildInboundTwiml({ ...common, settings: { voicemailText: 'Laissez un mot' }, identities: [], solo: true }).includes('>Laissez un mot</Say><Record'), 'le texte personnalisé prime');
 const soloNoAgent = buildInboundTwiml({ ...common, settings: { voicemailEnabled: false }, identities: [], solo: true });
 assert.ok(soloNoAgent.includes(esc(SOLO_NO_AGENT_MESSAGE)) && !soloNoAgent.includes('Harx') && !soloNoAgent.includes('conseiller'));
-const soloNa = buildNoAnswerTwiml({ baseUrl: base, companyId, dialStatus: 'no-answer', settings: { voicemailEnabled: false }, solo: true });
+const soloNa = buildNoAnswerTwiml({ baseUrl: base, companyId, language: 'fr', dialStatus: 'no-answer', settings: { voicemailEnabled: false }, solo: true });
 assert.ok(soloNa.includes(esc(SOLO_NO_ANSWER_MESSAGE)) && !soloNa.includes('conseiller'));
-assert.ok(buildNoAnswerTwiml({ baseUrl: base, companyId, dialStatus: 'no-answer', settings: null, solo: true }).includes(esc(SOLO_VOICEMAIL_PROMPT)));
-assert.ok(buildNoAnswerTwiml({ baseUrl: base, companyId, dialStatus: 'no-answer', settings: { voicemailEnabled: false } }).includes('Aucun conseiller n&apos;a pu répondre'), 'entreprise : texte inchangé');
+assert.ok(buildNoAnswerTwiml({ baseUrl: base, companyId, language: 'fr', dialStatus: 'no-answer', settings: null, solo: true }).includes(esc(SOLO_VOICEMAIL_PROMPT)));
+assert.ok(buildNoAnswerTwiml({ baseUrl: base, companyId, language: 'fr', dialStatus: 'no-answer', settings: { voicemailEnabled: false } }).includes('Aucun conseiller n&apos;a pu répondre'), 'entreprise : texte inchangé');
 console.log('inboundFlow OK');

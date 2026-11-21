@@ -55,13 +55,36 @@ assert.match(R.consentSay('fr'), /Cet appel peut être enregistré/);
 assert.match(R.consentSay('en'), /may be recorded/);
 assert.match(R.consentSay('es'), /puede ser grabada/);
 assert.match(R.consentSay('ar'), /voice="Polly\.Zeina"/);
-assert.equal(R.consentSay('xx'), R.consentSay('fr'), 'langue inconnue : français');
+assert.equal(R.consentSay('xx'), R.consentSay('en'), 'langue inconnue : anglais (langue par défaut)');
 assert.equal(R.consentLanguageFor('+33612345678'), 'fr');
 assert.equal(R.consentLanguageFor('+34600000000'), 'es');
 assert.equal(R.consentLanguageFor('+447911123456'), 'en');
-assert.equal(R.consentLanguageFor('+212612345678'), 'ar');
-assert.equal(R.consentLanguageFor('anonymous'), 'fr');
-assert.equal(R.consentLanguageFor(undefined), 'fr');
+// Maghreb (+212, +213, +216) : arabe PUIS français, dans le même TwiML (décision du fondateur)
+for (const n of ['+212612345678', '+213551234567', '+21698123456']) {
+  assert.equal(R.consentLanguageFor(n), 'ar_fr', n);
+  const twiml = R.consentTwiml(R.consentLanguageFor(n));
+  const says = [...twiml.matchAll(/<Say language="([^"]+)" voice="([^"]+)">([^<]*)<\/Say>/g)].map((m) => [m[1], m[2], m[3]]);
+  assert.equal(says.length, 2, n);
+  assert.deepEqual(says.map((x) => x[0]), ['arb', 'fr-FR'], `${n} : arabe puis français`);
+  assert.equal(says[0][1], 'Polly.Zeina'); assert.equal(says[1][1], 'Polly.Lea-Generative');
+  assert.equal(says[0][2], R.CONSENT_TEXTS.ar); assert.equal(says[1][2], R.CONSENT_TEXTS.fr.replace(/'/g, '&apos;'));
+}
+// France : français seul ; États-Unis : anglais seul
+assert.equal([...R.consentTwiml(R.consentLanguageFor('+33612345678')).matchAll(/<Say /g)].length, 1);
+assert.match(R.consentTwiml(R.consentLanguageFor('+33612345678')), /<Say language="fr-FR" voice="Polly.Lea-Generative">Cet appel/);
+assert.equal([...R.consentTwiml(R.consentLanguageFor('+14155550100')).matchAll(/<Say /g)].length, 1);
+assert.match(R.consentTwiml(R.consentLanguageFor('+14155550100')), /<Say language="en-US" voice="Polly.Joanna-Generative">This call may be recorded/);
+assert.equal(R.normalizeConsentLanguage('ar_fr'), 'ar_fr', 'code accepté par le webhook d’annonce (?l=ar_fr)');
+assert.equal(R.consentLanguageFor('anonymous'), 'en', 'numéro illisible : anglais (langue par défaut)');
+assert.equal(R.consentLanguageFor(undefined), 'en');
+// Texte brut du consentement (message d'ouverture de l'agent IA) : ar_fr = arabe puis français ; code inconnu : anglais.
+assert.equal(R.consentText('ar_fr'), `${R.CONSENT_TEXTS.ar} ${R.CONSENT_TEXTS.fr}`);
+assert.equal(R.consentText('fr'), R.CONSENT_TEXTS.fr); assert.equal(R.consentText('en'), R.CONSENT_TEXTS.en);
+assert.equal(R.consentText('xx'), R.CONSENT_TEXTS.en); assert.equal(R.consentText(null), R.CONSENT_TEXTS.en);
+// Voix masculine (agent IA) : Mathieu en français ; l'arabe garde Zeina (seule voix) ; défaut inchangé (féminine).
+assert.match(R.consentSay('fr', { female: false }), /voice="Polly\.Remi-Neural"/);
+assert.deepEqual([...R.consentSay('ar_fr', { female: false }).matchAll(/voice="([^"]+)"/g)].map((m) => m[1]), ['Polly.Zeina', 'Polly.Remi-Neural']);
+assert.equal(R.consentSay('fr'), R.consentSay('fr', { female: true }));
 assert.match(R.consentTwiml('es'), /^<\?xml[^>]*\?><Response><Say [^>]*>Esta llamada/);
 
 // ---------------------------------------------------------------- plan d'enregistrement
@@ -202,7 +225,7 @@ try {
   assert.equal(res.code, 200); assert.match(res.payload, /Polly\.Zeina/);
   res = mkRes();
   await pc.handleTwilioCallAnnounce({ query: { l: '"><Hangup/>' } }, res);
-  assert.match(res.payload, /Cet appel peut être enregistré/, 'langue invalide : français, rien de l\'URL n\'est recopié');
+  assert.match(res.payload, /This call may be recorded/, 'langue invalide : anglais (langue par défaut), rien de l\'URL n\'est recopié');
   assert(!res.payload.includes('<Hangup/>'));
 } finally {
   global.fetch = realFetch;
