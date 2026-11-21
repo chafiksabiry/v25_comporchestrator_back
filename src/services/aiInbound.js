@@ -60,6 +60,13 @@ export const deps = {
     return Boolean(row);
   },
 };
+deps.companyLinePhone = async (companyId) => {
+  // Numéro de la plus ancienne ligne de l'entreprise (langue par défaut de l'agent). Base absente : aucune ligne (anglais).
+  if (mongoose.connection.readyState !== 1) return '';
+  const { PhoneNumber } = await import('../models/PhoneNumber.js');
+  const row = await PhoneNumber.findOne({ companyId: oid(companyId) }).sort({ createdAt: 1 }).select('phoneNumber').lean();
+  return row?.phoneNumber || '';
+};
 export const setAiInboundDeps = (over) => Object.assign(deps, over);
 
 const enginesFromEnv = (env = deps.env) => ({
@@ -109,12 +116,21 @@ export async function resolveAvailability(companyId) {
 /** Drapeau global du pilote : sans lui, aucune lecture ni écriture liée à l'agent IA dans le flux d'appel. */
 export const aiInboundPilotEnabled = () => pilotAvailability(null, deps.env).pilotEnabled;
 
-export async function loadSettings(companyId) {
+/**
+ * Réglages de l'agent complétés des valeurs par défaut. Sans langue réglée par l'entreprise, la langue par défaut vient de la ligne :
+ * `linePhone` (ligne appelée) si fourni, sinon la plus ancienne ligne de l'entreprise (lecture seule, rien n'est écrit), sinon l'anglais.
+ */
+export async function loadSettings(companyId, { linePhone = '' } = {}) {
   const [doc, dir] = await Promise.all([
     AiAgentSettings.findOne({ companyId: oid(companyId) }).lean(),
     ReceptionDirectory.findOne({ companyId: oid(companyId) }).select('general entries').lean(),
   ]);
-  return { settings: toPublicSettings(doc, { companyNameFallback: dir?.general?.companyName || '' }), directory: dir };
+  const explicit = Array.isArray(doc?.languages) && doc.languages.length > 0;
+  let phone = linePhone;
+  if (!explicit && !phone) {
+    try { phone = (await deps.companyLinePhone(companyId)) || ''; } catch (e) { console.error('[ai-inbound] ligne illisible :', e?.message || e); phone = ''; }
+  }
+  return { settings: toPublicSettings(doc, { companyNameFallback: dir?.general?.companyName || '', linePhone: phone }), directory: dir };
 }
 
 export async function monthUsage(companyId, timeZone) {
@@ -162,14 +178,14 @@ export async function tryAiInbound({ line, to, from, callSid, lineBusy = false, 
   const baseUrl = new URL(apiBase).origin;
   let aiCall = null;
   try {
-    const { settings, directory } = await loadSettings(companyId);
+    const { settings, directory } = await loadSettings(companyId, { linePhone: to || line?.phoneNumber || '' });
     const usage = await monthUsage(companyId, settings.businessHours.timeZone);
     const q = queue === undefined ? await aiQueueFor(companyId) : queue;
     if (q && q.deferred) { console.log(`[ai-inbound] ${callSid} : menu vocal d'abord (compétence connue au retour du menu)`); return null; }
     const decision = decideAiRoute({ settings, availability, lineBusy, stage, humansAvailable, queue: q, minutesUsed: usage.minutesUsed, now: deps.now() });
     if (!decision.route) { console.log(`[ai-inbound] ${callSid} : flux classique (${decision.reason})`); return null; }
 
-    const language = greetingLanguage(settings);
+    const language = greetingLanguage(settings, { linePhone: to || line?.phoneNumber || '' });
     const provider = await benchProvider(companyId, settings);
     const recorded = Boolean(provider);
     const short = language.startsWith('en') ? 'en' : 'fr';
@@ -276,7 +292,7 @@ export async function ingestLearning(doc, body = {}) {
   const companyId = oid(doc.companyId);
   const claim = await AiInboundCall.updateOne({ _id: doc._id, 'learning.analyzed': { $ne: true } }, { $set: { 'learning.analyzed': true, 'learning.unanswered': Number.isFinite(Number(body.unanswered)) ? Math.max(0, Math.min(50, Math.floor(Number(body.unanswered)))) : null } });
   if (!claim?.modifiedCount) return { ingested: 0, alreadyAnalyzed: true };
-  const { settings } = await loadSettings(doc.companyId);
+  const { settings } = await loadSettings(doc.companyId, { linePhone: doc.to || '' });
   if (!settings.learning.enabled) return { ingested: 0, disabled: true };
   const names = [doc.caller?.name, ...(Array.isArray(body.callerNames) ? body.callerNames.slice(0, 5) : [])].filter(Boolean);
   const proposals = cleanProposals(body.proposals, { names: [...names, doc.from] });
@@ -348,7 +364,7 @@ export async function finalizeCall(doc, report = {}, { detailsOnly = false } = {
   const set = detailsOnly ? {} : { endedAt: new Date(end), durationSeconds, endReason, status };
   if (summary) set.summary = summary;
   if (!detailsOnly) {
-    const { settings } = await loadSettings(doc.companyId);
+    const { settings } = await loadSettings(doc.companyId, { linePhone: doc.to || '' });
     await countMinutesOnce(doc, minutes, settings.businessHours.timeZone);
   }
   if (Array.isArray(report.transcript)) {
@@ -561,7 +577,7 @@ export async function runTool(name, claims, body = {}, ctx = {}) {
   // Plafond d'actions par appel (anti-abus) : 2 RDV et 3 demandes au plus par défaut.
   const cap = { book_appointment: int(deps.env.AI_MAX_APPOINTMENTS_PER_CALL, 2), create_request: int(deps.env.AI_MAX_REQUESTS_PER_CALL, 3) }[name];
   if (cap !== undefined && (doc.actions || []).filter((a) => a.type === name && a.ok).length >= cap) throw new ToolError(409, 'action_limit', 'Nombre maximal atteint pour cet appel.');
-  const { settings, directory } = await loadSettings(claims.companyId);
+  const { settings, directory } = await loadSettings(claims.companyId, { linePhone: doc?.to || '' });
   const b = body && typeof body === 'object' ? { ...body } : {};
   delete b.companyId; // l'entreprise vient du jeton, jamais du corps
   return TOOLS[name](claims, b, doc, settings, directory, ctx);

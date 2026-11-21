@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { normalizeTimeZone, DEFAULT_TIME_ZONE } from './timeZone.js';
 import { clockIn } from './callTransfer.js';
 import { covers, normalizeSkills } from './callQueues.js';
+import { languageForPhone } from './companyLanguage.js';
 
 /**
  * Pilote « Téléphonie + agent IA » (appels ENTRANTS) : réglages de l'entreprise, disponibilité du pilote, annonce IA obligatoire et
@@ -10,6 +11,20 @@ import { covers, normalizeSkills } from './callQueues.js';
 /** Priorité de l'agent IA face aux humains : « après les humains » (défaut) ou « en premier ». */
 export const PRIORITIES = ['after_humans', 'first'];
 export const LANGUAGES = ['fr-FR', 'en-GB', 'en-US'];
+/** Langue de l'agent quand rien n'est connu (ni réglage de l'entreprise, ni ligne lisible) : anglais (règle du fondateur du 21/11/2026). */
+export const DEFAULT_AGENT_LANGUAGE = 'en-US';
+
+/**
+ * Langue par DÉFAUT de l'agent IA d'après le numéro de la ligne (`languageForPhone`), au format de `LANGUAGES` : français -> fr-FR,
+ * Royaume-Uni (+44) -> en-GB, autre anglais -> en-US. L'agent ne parle que les langues de `LANGUAGES` : une ligne d'une autre langue
+ * (espagnol, arabe, allemand, italien, néerlandais, portugais) ou illisible donne l'anglais. Un réglage explicite de l'entreprise reste prioritaire.
+ */
+export function agentLanguageForPhone(e164) {
+  const lang = languageForPhone(e164, '');
+  if (lang === 'fr') return 'fr-FR';
+  if (lang === 'en' && /^\+?44/.test(String(e164 ?? '').replace(/[\s().-]/g, '').replace(/^00/, '+'))) return 'en-GB';
+  return DEFAULT_AGENT_LANGUAGE;
+}
 export const VOICES = ['female', 'male'];
 export const ADDRESS_FORMS = ['vous', 'tu'];
 export const TONES = ['professional', 'warm', 'energetic'];
@@ -28,7 +43,7 @@ export const RANGES = Object.freeze({
 
 const WEEKDAY_SLOTS = [1, 2, 3, 4, 5].flatMap((day) => [{ day, start: '09:00', end: '12:00' }, { day, start: '14:00', end: '18:00' }]);
 
-export function defaultSettings() {
+export function defaultSettings({ linePhone = '' } = {}) {
   return {
     enabled: false,
     // L'agent IA se règle comme un agent humain : ses horaires (plages jour / heure, même format que le planning de l'annuaire),
@@ -38,7 +53,8 @@ export function defaultSettings() {
     priority: 'after_humans',
     // Horaires d'ouverture : servent seulement à proposer des créneaux de rendez-vous.
     businessHours: { timeZone: DEFAULT_TIME_ZONE, slots: WEEKDAY_SLOTS.map((s) => ({ ...s })) },
-    languages: ['fr-FR'],
+    // Langue par défaut : celle de la ligne (agentLanguageForPhone), anglais si aucune ligne n'est connue.
+    languages: [agentLanguageForPhone(linePhone)],
     voice: 'female',
     addressForm: 'vous',
     tone: 'professional',
@@ -61,8 +77,8 @@ const isObjectId = (v) => typeof v === 'string' && /^[0-9a-fA-F]{24}$/.test(v) &
 const issue = (field, code, message, extra = {}) => ({ field, code, message, ...extra });
 
 /** Réglages stockés (document, éventuellement partiel) complétés des valeurs par défaut : forme publique du contrat (2.2). */
-export function toPublicSettings(doc, { companyNameFallback = '' } = {}) {
-  const d = defaultSettings();
+export function toPublicSettings(doc, { companyNameFallback = '', linePhone = '' } = {}) {
+  const d = defaultSettings({ linePhone });
   const s = doc || {};
   const pick = (v, def) => (v === undefined || v === null ? def : v);
   return {
@@ -354,4 +370,4 @@ export const ANNOUNCEMENT_MARKERS = { fr: /intelligence artificielle/i, en: /art
 export const announcementVerified = (transcript, language) => ANNOUNCEMENT_MARKERS[shortLang(language)].test(String(transcript || ''));
 
 /** Langue d'accueil : la première langue réglée (l'IA suit ensuite l'appelant parmi les langues réglées). */
-export const greetingLanguage = (settings) => (settings?.languages?.[0] && LANGUAGES.includes(settings.languages[0]) ? settings.languages[0] : 'fr-FR');
+export const greetingLanguage = (settings, { linePhone = '' } = {}) => (settings?.languages?.[0] && LANGUAGES.includes(settings.languages[0]) ? settings.languages[0] : agentLanguageForPhone(linePhone));
