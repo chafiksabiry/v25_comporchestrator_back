@@ -75,7 +75,7 @@ const fakeTwilio = ({ inv = {}, search = {} } = {}) => {
   const calls = { inventory: [], search: [] };
   return {
     calls,
-    listClaimableInventory: async ({ countryCode }) => { calls.inventory.push(countryCode); return inv[countryCode] || []; },
+    listClaimableInventory: async ({ countryCode }) => { calls.inventory.push(countryCode); if (inv[countryCode] instanceof Error) throw inv[countryCode]; return inv[countryCode] || []; },
     searchTwilioNumbers: async ({ countryCode }) => {
       calls.search.push(countryCode);
       const r = search[countryCode];
@@ -141,6 +141,15 @@ describe('contrat : profil tel qu’enregistré par le service d’inscription (
 
 describe('disponibilité d’un pays (countryAvailability)', () => {
   beforeEach(() => clearAvailabilityCache());
+  it('inventaire illisible : jamais « no_inventory » (panne, rien en cache) ; numéros trouvés par la recherche : disponible', async () => {
+    const t = fakeTwilio({ inv: { MA: err({ message: 'Twilio inventory timeout' }), FR: err({ message: 'Twilio inventory timeout' }) }, search: { MA: [], FR: [{ phoneNumber: '+33142000000' }] } });
+    await assert.rejects(() => countryAvailability('MA', { service: t }), (e) => e.code === 'INVENTORY_LOOKUP_FAILED');
+    await assert.rejects(() => countryAvailability('MA', { service: t }));
+    assert.deepEqual(t.calls.inventory.filter((c) => c === 'MA'), ['MA', 'MA'], 'la panne n’est pas mise en cache');
+    assert.deepEqual(await countryAvailability('FR', { service: t }), { available: true });
+    const ns = fakeTwilio({ inv: { JP: err({ message: 'down' }) }, search: { JP: err({ status: 404 }) } });
+    await assert.rejects(() => countryAvailability('JP', { service: ns }), (e) => e.code === 'INVENTORY_LOOKUP_FAILED');
+  });
   it('inventaire non affecté : disponible sans chercher chez Twilio', async () => {
     const t = fakeTwilio({ inv: { FR: [{ phoneNumber: '+33142000000' }] } });
     assert.deepEqual(await countryAvailability('FR', { service: t }), { available: true });
