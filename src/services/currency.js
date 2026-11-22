@@ -1,8 +1,20 @@
 /**
- * Devises proposées à la vente des abonnements : mêmes montants en EUR, USD et GBP (prix multi-devises Stripe,
- * `currency_options` sur le prix). Une devise absente du prix n'est jamais proposée : on retombe sur celle du prix.
+ * Devises proposées à la vente des abonnements (prix multi-devises Stripe, `currency_options` sur le prix). Le montant est celui
+ * que le prix Stripe fixe POUR CHAQUE devise (19,99 en EUR, USD, GBP ; 29,99 en CAD pour Nomad Solo, décision du fondateur du
+ * 22/11/2026). Une devise absente du prix n'est jamais proposée : on retombe sur celle du prix.
  */
-export const SUPPORTED_CURRENCIES = ['eur', 'usd', 'gbp'];
+export const SUPPORTED_CURRENCIES = ['eur', 'usd', 'gbp', 'cad'];
+
+/**
+ * Devises des achats ponctuels au prix de la plateforme (packs de minutes et de jetons, ligne hors abonnement, prix de ligne
+ * `phone_line_price_cents`) : un SEUL montant, repris tel quel dans chacune de ces devises. Le CAD n'y est pas : aucun montant
+ * n'a été décidé en dollars canadiens pour ces achats (décision attendue du fondateur). Une entreprise canadienne les paie donc en
+ * EUR, la devise de repli, comme avant (voir `oneShotCurrencyForCountry`).
+ */
+export const SAME_AMOUNT_CURRENCIES = ['eur', 'usd', 'gbp'];
+
+/** Devise de repli des achats ponctuels d'un pays dont la devise n'a pas encore de montant décidé (Canada). */
+export const ONE_SHOT_FALLBACK_CURRENCY = 'eur';
 
 /** Code devise ISO en minuscules s'il est pris en charge, sinon `fallback`. */
 export function normalizeCurrency(value, fallback = 'eur') {
@@ -33,15 +45,26 @@ export function pickCurrency(requested, amounts, baseCurrency = 'eur') {
 }
 
 /**
- * Devise affichée et facturée selon le PAYS du souscripteur (décision produit, pas de sélecteur manuel) :
- * Royaume-Uni -> GBP, États-Unis -> USD, tous les autres pays (et pays inconnu ou absent) -> EUR.
- * Les montants sont identiques dans les trois devises : seule la devise change.
+ * Devise affichée et facturée d'un ABONNEMENT selon le PAYS du souscripteur (décision produit, pas de sélecteur manuel) :
+ * Royaume-Uni -> GBP, États-Unis -> USD, Canada -> CAD, tous les autres pays (et pays inconnu ou absent) -> EUR.
+ * Le montant est celui du prix Stripe dans cette devise ; un prix sans cette devise est vendu dans sa devise de base (`pickCurrency`).
  * @param {string|null|undefined} iso2 code pays ISO 3166-1 alpha-2 (« UK » est accepté comme alias de GB).
- * @returns {'eur'|'usd'|'gbp'}
+ * @returns {'eur'|'usd'|'gbp'|'cad'}
  */
 export function currencyForCountry(iso2) {
   const code = String(iso2 ?? '').trim().toUpperCase();
   if (code === 'GB' || code === 'UK') return 'gbp';
   if (code === 'US') return 'usd';
+  if (code === 'CA') return 'cad';
   return 'eur';
+}
+
+/**
+ * Devise d'un achat ponctuel au prix de la plateforme (un seul montant pour toutes les devises) : celle du pays si elle fait partie
+ * de SAME_AMOUNT_CURRENCIES, sinon ONE_SHOT_FALLBACK_CURRENCY (Canada -> EUR tant que les montants CAD ne sont pas décidés).
+ * @returns {'eur'|'usd'|'gbp'}
+ */
+export function oneShotCurrencyForCountry(iso2) {
+  const currency = currencyForCountry(iso2);
+  return SAME_AMOUNT_CURRENCIES.includes(currency) ? currency : ONE_SHOT_FALLBACK_CURRENCY;
 }

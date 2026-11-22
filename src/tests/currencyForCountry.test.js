@@ -13,12 +13,17 @@ test('États-Unis -> USD', () => {
   assert.equal(currencyForCountry('us'), 'usd');
 });
 
+test('Canada -> CAD', () => {
+  assert.equal(currencyForCountry('CA'), 'cad');
+  assert.equal(currencyForCountry(' ca '), 'cad');
+});
+
 test('tous les autres pays, inconnu ou absent -> EUR', () => {
-  for (const code of ['FR', 'DE', 'ES', 'MA', 'CA', 'AE', 'IE', 'CH', 'JP', 'XX', '', 'USA', 'United States', null, undefined]) {
+  for (const code of ['FR', 'DE', 'ES', 'MA', 'AE', 'IE', 'CH', 'JP', 'XX', '', 'USA', 'United States', null, undefined]) {
     assert.equal(currencyForCountry(code), 'eur', String(code));
   }
 });
 
 test('le résultat est toujours une devise prise en charge', () => {
-  for (const code of ['GB', 'US', 'FR', null]) assert.ok(SUPPORTED_CURRENCIES.includes(currencyForCountry(code)));
+  for (const code of ['GB', 'US', 'CA', 'FR', null]) assert.ok(SUPPORTED_CURRENCIES.includes(currencyForCountry(code)));
 });
