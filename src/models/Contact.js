@@ -72,6 +72,14 @@ const schema = new mongoose.Schema(
     /** Fiche `phone` : dernier passage de synchronisation qui l'a vue (détecte les contacts supprimés du téléphone). */
     lastSyncRunId: { type: String, default: '', maxlength: 64 },
     lastSyncedAt: { type: Date, default: null },
+    /**
+     * Contacts du téléphone FUSIONNÉS dans cette fiche (même numéro qu'une fiche existante) : `{ deviceId, externalId }`, sans doublon.
+     * À la suppression de la fiche dans le portail, une trace est posée pour chacun : la synchronisation suivante ne les recrée pas.
+     */
+    phoneOrigins: {
+      type: [new mongoose.Schema({ deviceId: { type: String, required: true, maxlength: 100 }, externalId: { type: String, required: true, maxlength: 200 } }, { _id: false })],
+      default: [],
+    },
     tags: { type: [String], default: [] },
     notes: { type: String, default: '', maxlength: 2000 },
     ownerId: { type: String, default: '' },
