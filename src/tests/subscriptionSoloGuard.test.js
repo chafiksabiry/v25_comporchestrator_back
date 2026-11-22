@@ -41,7 +41,6 @@ beforeEach(() => {
   stripeService.isConfigured = () => true;
   stripeService.resolveSubscriptionPriceId = async ({ priceId }) => priceId;
   stripeService.getPublicPlans = async () => Object.entries(products).map(([id, metadata]) => ({ id, unit_amount: 2999, currency: 'eur', product: { id: `prod_${id}`, metadata } }));
-  stripeService.priceAllowsPromotionCodes = async () => false;
   stripeService.priceProductMetadata = async (id) => products[id] || null;
   stripeService.createEmbeddedSubscriptionSession = async () => { calls.sessions += 1; return { id: 'cs', client_secret: 'sec' }; };
   stripeService.createCheckoutSession = async () => { calls.sessions += 1; return { id: 'cs', url: 'https://checkout' }; };

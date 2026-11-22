@@ -38,11 +38,11 @@ __setStripeClientForTests({
   products: { retrieve: async (id) => ({ id, active: true }) },
 });
 process.env.STRIPE_SECRET_KEY ||= 'sk_test_x';
-await stripeService.createEmbeddedSubscriptionSession('u1', 'price_1', {}, null, 'usd');
+await stripeService.createEmbeddedSubscriptionSession('u1', 'price_1', {}, 'usd');
 assert.equal(created[0].currency, 'usd');
-await stripeService.createEmbeddedSubscriptionSession('u1', 'price_1', {}, null);
+await stripeService.createEmbeddedSubscriptionSession('u1', 'price_1', {});
 assert.equal('currency' in created[1], false);
-await stripeService.createCheckoutSession('u1', 'price_1', 'https://ok', 'https://ko', {}, null, 'GBP');
+await stripeService.createCheckoutSession('u1', 'price_1', 'https://ok', 'https://ko', {}, 'GBP');
 assert.equal(created[2].currency, 'gbp');
 await stripeService.getPublicPlans();
 assert.ok(listArgs.expand.includes('data.currency_options') && listArgs.expand.includes('data.product'));
