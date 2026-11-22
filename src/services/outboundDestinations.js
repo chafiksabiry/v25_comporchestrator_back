@@ -136,6 +136,12 @@ export const COUNTRY_CATALOG = Object.freeze([
 const KNOWN = new Set(COUNTRY_CATALOG.map((c) => c.prefix));
 
 /**
+ * Tous les indicatifs du catalogue : destinations autorisées PAR DÉFAUT (décision du fondateur : tous les pays sont traités de façon égale,
+ * seul le prix de la minute varie ; aucun pays, la France comprise, n'a de statut préférentiel). Les numéros surtaxés restent refusés.
+ */
+export const ALL_COUNTRY_PREFIXES = Object.freeze(COUNTRY_CATALOG.map((c) => c.prefix));
+
+/**
  * Plages surtaxées ou à valeur ajoutée, refusées pour toutes les entreprises, quel que soit leur réglage.
  * Préfixes E.164 complets (indicatif pays compris).
  */
@@ -150,9 +156,12 @@ export const PREMIUM_RATE_PREFIXES = Object.freeze([
   '+979', '+870', '+871', '+872', '+873', '+874', '+881', '+882', '+883', '+888', '+878', '+808',
 ]);
 
-/** Numéro E.164 strict (« + », un indicatif ne commençant pas par 0, 8 à 15 chiffres), ou '' sinon. */
-export function toStrictE164(raw) {
-  const to = normalizeDestination(raw);
+/**
+ * Numéro E.164 strict (« + », un indicatif ne commençant pas par 0, 8 à 15 chiffres), ou '' sinon. `lineNumber` (facultatif) : ligne
+ * appelante, seule base de lecture d'un numéro national (voir normalizeDestination) ; sans elle, un numéro national est refusé.
+ */
+export function toStrictE164(raw, { lineNumber = '' } = {}) {
+  const to = normalizeDestination(raw, { lineNumber });
   return /^\+[1-9]\d{7,14}$/.test(to) ? to : '';
 }
 
@@ -225,11 +234,11 @@ export function validatePrefixList(list) {
 }
 
 /**
- * Pays autorisés pour une entreprise : sa sélection enregistrée si elle en a une ; sinon son propre pays
- * (déduit de ses lignes) et la liste globale de l'environnement (OUTBOUND_ALLOWED_PREFIXES, +33 sans réglage).
+ * Pays autorisés pour une entreprise : sa sélection enregistrée si elle en a une (respectée telle quelle) ; sinon son propre pays
+ * (déduit de ses lignes) et la liste globale de l'environnement (OUTBOUND_ALLOWED_PREFIXES ; sans réglage : TOUS les pays du catalogue).
  * @returns {{prefixes: string[], customized: boolean}}
  */
-export function effectiveOutboundPrefixes({ saved, companyCountry = '', envPrefixes = ['+33'] }) {
+export function effectiveOutboundPrefixes({ saved, companyCountry = '', envPrefixes = ALL_COUNTRY_PREFIXES }) {
   if (Array.isArray(saved)) {
     const checked = validatePrefixList(saved);
     return { prefixes: checked.ok ? checked.value : [], customized: true };
@@ -239,11 +248,11 @@ export function effectiveOutboundPrefixes({ saved, companyCountry = '', envPrefi
 }
 
 /**
- * Décision serveur sur une destination.
+ * Décision serveur sur une destination. `options.lineNumber` : ligne appelante (lecture d'un numéro national).
  * @returns {{ok: true, to: string} | {ok: false, code: string, reason: string, message: string}}
  */
-export function checkDestination(raw, allowedPrefixes) {
-  const to = toStrictE164(raw);
+export function checkDestination(raw, allowedPrefixes, { lineNumber = '' } = {}) {
+  const to = toStrictE164(raw, { lineNumber });
   if (!to) return { ok: false, code: INVALID_NUMBER, reason: 'invalid_number', message: MESSAGES.invalid_number, messageEn: MESSAGES_EN.invalid_number };
   if (isPremiumRate(to)) return { ok: false, code: DESTINATION_NOT_ALLOWED, reason: 'premium_rate', message: MESSAGES.premium_rate, messageEn: MESSAGES_EN.premium_rate };
   const country = countryPrefixOf(to);

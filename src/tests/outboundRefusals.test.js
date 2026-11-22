@@ -22,18 +22,18 @@ const { phoneNumberService } = await import('../services/phoneNumberService.js')
 
 const C1 = '64b0000000000000000000c1';
 const PLAN = { harx_product: 'callcenter', callcenter_tier: 'full_scope', phone_line_price_cents: '1999' };
-let lineNumber; let minutes; let walletError; let secretaryOutbound; let who;
+let lineNumber; let minutes; let walletError; let secretaryOutbound; let who; let savedPrefixes;
 const lean = (v) => ({ lean: async () => v, select() { return this; }, sort() { return this; }, limit() { return this; }, then(r, j) { return Promise.resolve(v).then(r, j); } });
 const saved = { log: console.log, warn: console.warn, error: console.error };
 beforeEach(() => {
   console.log = () => {}; console.warn = () => {}; console.error = () => {};
   clearCompanyCache?.();
-  lineNumber = '+33611110001'; minutes = 100; walletError = false; secretaryOutbound = true; who = 'owner';
+  lineNumber = '+33611110001'; minutes = 100; walletError = false; secretaryOutbound = true; who = 'owner'; savedPrefixes = undefined;
   const row = () => ({ _id: 'l1', companyId: C1, phoneNumber: lineNumber, provider: 'twilio', twilioId: 'PN1', status: 'active', billingStatus: 'active', createdAt: new Date('2026-01-01') });
   PhoneNumber.find = () => lean([row()]);
   PhoneNumber.findOne = () => lean(row());
   Subscription.findOne = () => ({ populate: async () => ({ planId: { name: 'Offre', metadata: PLAN } }) });
-  InboundSettings.findOne = () => lean({ secretaryOutbound });
+  InboundSettings.findOne = () => lean({ secretaryOutbound, outboundPrefixes: savedPrefixes });
   MinutesCompany.findOne = () => ({ select: () => ({ lean: async () => { if (walletError) throw new Error('mongo down'); return minutes === undefined ? null : { minutes }; } }) });
   global.fetch = async () => ({ ok: true, json: async () => ({ success: true, data: who === 'agent' ? { companyId: C1, isOwner: false, isAgent: true } : { companyId: C1, isOwner: true } }) });
   mongoose.models.VoiceSigningKey.findOne = () => lean({ sid: 'SK00000000000000000000000000000000', secret: 'secret' });
@@ -84,7 +84,10 @@ test('webhook : preuve invalide, destination refusée, secrétaire non autorisé
   assert.equal(said(await webhook('+33612345678', { ticket: 'faux' })).language, 'en-US');
   assert.equal(said(await webhook('+1 900 555 1234')).text, 'Premium-rate and value-added numbers cannot be called.');
   assert.equal(said(await webhook('abc')).text, 'Invalid number. Enter it in international format.');
-  assert.equal(said(await webhook('+4915112345678')).text, 'Calls to this country are not enabled for your company.');
+  assert.ok(String(await webhook('+4915112345678')).includes('<Dial'), 'Allemagne : autorisée par défaut (tous pays)');
+  savedPrefixes = ['+33'];
+  assert.equal(said(await webhook('+4915112345678')).text, 'Calls to this country are not enabled for your company.', 'liste enregistrée respectée');
+  savedPrefixes = undefined;
   secretaryOutbound = false;
   assert.equal(said(await webhook('+33612345678', { secretary: true })).text, 'The account owner has turned off outbound calls for secretaries.');
 });
@@ -98,6 +101,7 @@ test('outbound-check : 422 portent `code` (= error), `reason`, message FR exista
     ['+999123456789', 'destination_not_allowed', 'unknown_country', /not supported/],
     ['+4915112345678', 'destination_not_allowed', 'country_not_enabled', /not enabled/],
   ]) {
+    savedPrefixes = reason === 'country_not_enabled' ? ['+33'] : undefined; // pays non activé : seulement avec une liste enregistrée
     const r = await check(to);
     assert.equal(r.code, 422, to);
     assert.deepEqual([r.body.success, r.body.error, r.body.code, r.body.reason], [false, code, code, reason], to);

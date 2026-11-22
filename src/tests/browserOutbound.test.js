@@ -13,13 +13,17 @@ import {
   signOutboundTicket,
   verifyOutboundTicket,
 } from '../services/browserOutbound.js';
+import { ALL_COUNTRY_PREFIXES } from '../services/outboundDestinations.js';
 
 // destinations : France par défaut, jamais un numéro que le serveur ne comprend pas
-assert.deepEqual(allowedPrefixes(undefined), ['+33']);
+assert.deepEqual(allowedPrefixes(undefined), ALL_COUNTRY_PREFIXES, 'défaut : tous les pays, aucun préférentiel');
+assert.ok(!allowedPrefixes(undefined).includes('+881') && !allowedPrefixes(undefined).includes('+870'), 'satellites hors catalogue');
 assert.deepEqual(allowedPrefixes('+33, +32 ,abc'), ['+33', '+32']);
-assert.equal(normalizeOutboundDestination('06 12 34 56 78'), '+33612345678');
+assert.equal(normalizeOutboundDestination('06 12 34 56 78', undefined, { lineNumber: '+33142000001' }), '+33612345678');
+assert.equal(normalizeOutboundDestination('06 12 34 56 78'), '', 'national sans ligne : refusé (plus de France par défaut)');
 assert.equal(normalizeOutboundDestination('+33 1 42 00 00 01'), '+33142000001');
-assert.equal(normalizeOutboundDestination('+44 20 7946 0958'), '', 'hors France : refusé par défaut');
+assert.equal(normalizeOutboundDestination('+44 20 7946 0958'), '+442079460958', 'Royaume-Uni : autorisé par défaut');
+assert.equal(normalizeOutboundDestination('+44 20 7946 0958', ['+33']), '', 'liste explicite respectée');
 assert.equal(normalizeOutboundDestination('+44 20 7946 0958', ['+44']), '+442079460958');
 for (const bad of ['', 'abc', '112', '+33; <Reject/>', undefined]) assert.equal(normalizeOutboundDestination(bad), '', `refuse « ${bad} »`);
 

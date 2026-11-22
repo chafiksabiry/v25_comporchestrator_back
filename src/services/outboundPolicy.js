@@ -2,6 +2,7 @@ import InboundSettings from '../models/InboundSettings.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { allowedPrefixes } from './browserOutbound.js';
 import { checkDestination, countryPrefixOf, effectiveOutboundPrefixes, toStrictE164 } from './outboundDestinations.js';
+import { isNationalFormat } from './voicemailCallback.js';
 
 /**
  * Pays autorisés pour les appels sortants d'une entreprise. Le pays de l'entreprise est celui de ses propres lignes
@@ -54,8 +55,14 @@ export async function resolveCompanyHome(companyId, {
   return '';
 }
 
-/** Contrôle serveur d'une destination pour cette entreprise (E.164, pays activé, pas de numéro surtaxé). */
-export async function checkCompanyDestination(companyId, raw, options) {
+/**
+ * Contrôle serveur d'une destination pour cette entreprise (E.164, pays activé, pas de numéro surtaxé). Un numéro saisi au format national
+ * est lu selon le pays de la ligne appelante : `options.lineNumber` si fourni, sinon la première ligne lisible de l'entreprise (jamais la
+ * France par défaut ; entreprise sans ligne lisible : numéro national refusé, à saisir au format international).
+ */
+export async function checkCompanyDestination(companyId, raw, options = {}) {
   const policy = await resolveOutboundPolicy(companyId, options);
-  return checkDestination(raw, policy.prefixes);
+  let lineNumber = options.lineNumber;
+  if (lineNumber === undefined) lineNumber = isNationalFormat(raw) ? await resolveCompanyHome(companyId, options.loadLines ? { loadLines: options.loadLines } : {}) : '';
+  return checkDestination(raw, policy.prefixes, { lineNumber });
 }

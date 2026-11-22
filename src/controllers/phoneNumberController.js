@@ -12,6 +12,7 @@ import { availabilityFor, AVAILABILITY_UNAVAILABLE } from '../services/numberAva
 import { mergeSearchResults } from '../services/numberSearchMerge.js';
 import { phoneLineCurrency, purchaseCurrency } from '../services/purchaseCurrency.js';
 import { checkCompanyDestination } from '../services/outboundPolicy.js';
+import { isNationalFormat, normalizeDestination } from '../services/voicemailCallback.js';
 import { isPremiumRate, MESSAGES as DESTINATION_MESSAGES, DESTINATION_NOT_ALLOWED } from '../services/outboundDestinations.js';
 import { paypalService } from '../services/paypalService.js';
 import { stripeService } from '../services/stripeService.js';
@@ -2608,6 +2609,10 @@ class PhoneNumberController {
         if (gate.blocked || (own && !usable && gate.enforced)) return send(spokenRefusal('line_not_assigned'));
         if (usable) callerLine = own;
       }
+      // Numéro saisi au format national : il a été lu selon la première ligne de l'entreprise ; si la ligne qui appelle réellement est d'un
+      // autre pays, la lecture diffère : refus (saisir au format international) plutôt que composer un autre numéro que celui voulu.
+      const nationalMismatch = (lineNumber) => Boolean(lineNumber) && isNationalFormat(To) && normalizeDestination(To, { lineNumber }) !== to;
+      if (nationalMismatch(callerLine?.phoneNumber)) return send(spokenRefusal('invalid_number'));
       // Crédits débités par minute vers cette destination (1, ou N à l'international) : plafonne la durée à solde / N.
       let credit = await outboundCreditDecision({ companyId, limits, to, lineNumber: callerLine?.phoneNumber });
       let creditFactor = credit.factor;
@@ -2631,6 +2636,10 @@ class PhoneNumberController {
             return send(spokenRefusal('line_busy'));
           }
           callerLine = pool.find((l) => String(l._id) === String(taken.lineId));
+          if (nationalMismatch(callerLine?.phoneNumber)) {
+            try { await releaseCall(sidForLine); } catch (error) { console.warn('[browser-outbound] ligne non libérée :', error?.message || error); }
+            return send(spokenRefusal('invalid_number'));
+          }
           // La ligne réellement prise dans la réserve peut être d'un autre pays que la première : le facteur (donc le plafond) est recalculé avec elle.
           credit = await outboundCreditDecision({ companyId, limits, to, lineNumber: callerLine?.phoneNumber });
           creditFactor = credit.factor;
