@@ -188,3 +188,54 @@ test('sans companyId : checkout/config garde la devise de base (EUR), montant in
   await phoneNumberController.getCheckoutConfig(authed({}, {}), res);
   assert.equal(res.body.pricing.currency, 'EUR');
 });
+
+// ───────── Canada : ligne en CAD au montant de l'option CAD du prix Stripe de la ligne (21,50 $ CA), jamais 14,99 ─────────
+
+test('Canada : ligne mensuelle en CAD ; ligne hors abonnement en EUR (prix de la plateforme sans montant CAD)', async () => {
+  assert.deepEqual(await phoneLineCurrency(authed(), COMPANY, { monthly: true, lookup: lookupOf('CA'), customerCurrency: noCustomer }), { currency: 'CAD', source: 'company_country' });
+  assert.deepEqual(await phoneLineCurrency(authed(), COMPANY, { monthly: true, lookup: lookupOf('FR'), customerCurrency: async () => 'cad' }), { currency: 'CAD', source: 'stripe_customer' });
+  assert.deepEqual(await phoneLineCurrency(authed(), COMPANY, { monthly: false, lookup: lookupOf('CA'), customerCurrency: noCustomer }), { currency: 'EUR', source: 'company_country' });
+  assert.deepEqual(await phoneLineCurrency(authed(), COMPANY, { monthly: true, hintCountry: 'CA', lookup: lookupOf(''), customerCurrency: noCustomer }), { currency: 'CAD', source: 'client_country' });
+});
+
+test('phoneLineAmountForCurrency : EUR/USD/GBP = prix de l\'offre ; CAD = option CAD du prix Stripe ; absente ou illisible = null', async () => {
+  const stripeAmounts = async () => ({ eur: 1499, usd: 1499, gbp: 1499, cad: 2150 });
+  for (const c of ['EUR', 'usd', 'GBP']) assert.equal(await sub.phoneLineAmountForCurrency(c, 1499, { amounts: stripeAmounts }), 1499, c);
+  assert.equal(await sub.phoneLineAmountForCurrency('CAD', 1499, { amounts: stripeAmounts }), 2150);
+  assert.equal(await sub.phoneLineAmountForCurrency('CAD', 1499, { amounts: async () => ({ eur: 1499 }) }), null);
+  assert.equal(await sub.phoneLineAmountForCurrency('CAD', 1499, { amounts: async () => { throw new Error('stripe down'); } }), null);
+});
+
+test('société canadienne (client Stripe en CAD) : checkout/config affiche 21,50 $ CA, checkout/init encaisse 2150 CAD, abonnement 2150 cad', async () => {
+  country = 'CA';
+  customerCurrency = 'cad';
+  stripeService.getPhoneLinePriceAmounts = async () => ({ eur: 1499, usd: 1499, gbp: 1499, cad: 2150 });
+  let res = mockRes();
+  await phoneNumberController.getCheckoutConfig(authed({}, { companyId: COMPANY }), res);
+  assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+  assert.deepEqual([res.body.pricing.amountCents, res.body.pricing.currency], [2150, 'CAD']);
+
+  res = mockRes();
+  await phoneNumberController.initLineCheckout(authed({ phoneNumber: '+14165550123', companyId: COMPANY, provider: 'stripe' }), res);
+  assert.equal(res.statusCode, 201, JSON.stringify(res.body));
+  assert.deepEqual([checkouts[0].amountCents, checkouts[0].currency], [2150, 'CAD']);
+  assert.deepEqual([payment.amount, payment.currency, payment.lineBilling], [2150, 'CAD', 'monthly']);
+  const params = stripeService.buildPhoneLineSubscriptionParams({ customerId: 'cus_1', productId: 'prod_line', amountCents: payment.amount, currency: payment.currency, firstCycleAt: new Date() });
+  assert.deepEqual([params.items[0].price_data.currency, params.items[0].price_data.unit_amount], ['cad', 2150]);
+});
+
+test('société canadienne, prix Stripe de la ligne sans option CAD : refus 409 avant tout paiement (jamais 14,99 en CAD)', async () => {
+  country = 'CA';
+  customerCurrency = 'cad';
+  stripeService.getPhoneLinePriceAmounts = async () => ({ eur: 1499, usd: 1499, gbp: 1499 });
+  let res = mockRes();
+  await phoneNumberController.getCheckoutConfig(authed({}, { companyId: COMPANY }), res);
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.body.code, 'PHONE_LINE_PRICE_NOT_CONFIGURED');
+  res = mockRes();
+  await phoneNumberController.initLineCheckout(authed({ phoneNumber: '+14165550123', companyId: COMPANY, provider: 'stripe' }), res);
+  assert.equal(res.statusCode, 409, JSON.stringify(res.body));
+  assert.deepEqual([res.body.code, res.body.moneyStatus, res.body.currency], ['PHONE_LINE_PRICE_NOT_CONFIGURED', 'not_charged', 'CAD']);
+  assert.equal(checkouts.length, 0);
+  assert.equal(payment, null);
+});

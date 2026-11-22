@@ -22,7 +22,7 @@ import mongoose from 'mongoose';
 import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { getPhoneLinePricing } from '../services/platformPricingService.js';
-import { activateMonthlyLine, assertMonthlyLineBillable, BILLING_MODEL_MONTHLY, getLinePaymentState, markLineReleaseFailed, startMonthlyLineSubscription } from '../services/phoneLineSubscription.js';
+import { activateMonthlyLine, assertMonthlyLineBillable, BILLING_MODEL_MONTHLY, getLinePaymentState, markLineReleaseFailed, phoneLineAmountForCurrency, startMonthlyLineSubscription } from '../services/phoneLineSubscription.js';
 import { isFrenchCountry, resolvePhoneProvider } from '../utils/phoneProvider.js';
 import { isLineIncluded, isLineTrialAllowed, loadCompanyPlanLimits, localNumberLimitPayload } from '../services/planLimits.js';
 import { availableIdentities, isAvailable, markAvailable, markUnavailable, presenceSummary, voiceIdentity } from '../services/voicePresenceService.js';
@@ -1471,17 +1471,23 @@ class PhoneNumberController {
           });
         }
       }
-      // Devise de la ligne (mêmes montants dans les trois devises) : celle du client Stripe de l'offre pour une ligne mensuelle,
-      // sinon celle du pays de l'entreprise (GB -> GBP, US -> USD, sinon EUR). Le premier mois ET l'abonnement mensuel
-      // (startMonthlyLineSubscription reprend payment.currency) sont dans cette devise.
+      // Devise de la ligne : celle du client Stripe de l'offre pour une ligne mensuelle, sinon celle du pays de l'entreprise
+      // (GB -> GBP, US -> USD, CA -> CAD pour une ligne mensuelle, sinon EUR). Le premier mois ET l'abonnement mensuel
+      // (startMonthlyLineSubscription reprend payment.amount et payment.currency) sont dans cette devise.
       const { currency: lineCurrency } = await phoneLineCurrency(req, companyId, { monthly: linePricing.monthly, hintCountry: req.body?.country });
+      // Montant dans cette devise : même montant en EUR, USD, GBP ; en CAD, l'option CAD du prix Stripe de la ligne (21,50 $ CA), jamais
+      // le montant en euros. Devise sans montant dans Stripe : refus avant tout paiement.
+      const lineAmountCents = linePricing.monthly
+        ? await phoneLineAmountForCurrency(lineCurrency, linePricing.setupFeeCents)
+        : linePricing.setupFeeCents;
+      if (lineAmountCents == null) return res.status(409).json({ ...PHONE_LINE_PRICE_NOT_CONFIGURED_BODY, currency: lineCurrency });
 
       payment = await PhoneNumberPayment.create({
         companyId: new mongoose.Types.ObjectId(companyId),
         gigId: gigId && mongoose.Types.ObjectId.isValid(gigId) ? new mongoose.Types.ObjectId(gigId) : undefined,
         phoneNumber,
         provider,
-        amount: linePricing.setupFeeCents,
+        amount: lineAmountCents,
         currency: lineCurrency,
         ...(linePricing.monthly ? { lineBilling: BILLING_MODEL_MONTHLY } : {}),
         ...(initAgent ? { assignedAgentId: initAgent } : {}),
@@ -1740,6 +1746,11 @@ class PhoneNumberController {
       const currency = req.query?.companyId
         ? (await phoneLineCurrency(req, req.query.companyId, { monthly: linePricing.monthly, hintCountry: req.query?.country })).currency
         : String(linePricing.currency || 'EUR').toUpperCase();
+      // Montant affiché = montant encaissé (checkout/init) : en CAD, l'option CAD du prix Stripe de la ligne ; null si elle manque.
+      const amountCents = linePricing.unavailable
+        ? null
+        : linePricing.monthly ? await phoneLineAmountForCurrency(currency, linePricing.setupFeeCents) : linePricing.setupFeeCents;
+      if (amountCents == null && !included && !linePricing.unavailable) return res.status(409).json({ ...PHONE_LINE_PRICE_NOT_CONFIGURED_BODY, currency });
       res.json({
         success: true,
         paypal: {
@@ -1752,7 +1763,7 @@ class PhoneNumberController {
         },
         included,
         pricing: {
-          amountCents: linePricing.unavailable ? null : linePricing.setupFeeCents,
+          amountCents,
           currency,
           trialDays: linePricing.unavailable ? null : linePricing.trialDays,
         }

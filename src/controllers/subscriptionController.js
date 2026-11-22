@@ -263,7 +263,7 @@ export const subscriptionController = {
         const eligibility = await soloCheckoutEligibility(req, companyId);
         if (!eligibility.ok) return res.status(eligibility.status).json(eligibility.body);
       }
-      // Devise choisie par le visiteur (mêmes montants en EUR, USD, GBP) si le prix Stripe la propose ; sinon celle du prix.
+      // Devise du pays (EUR, USD, GBP, CAD) si le prix Stripe la propose, au montant que ce prix fixe pour elle (Nomad Solo : 29,99 en CAD) ; sinon celle du prix.
       const chosenCurrency = pickCurrency(requestedCurrency, resolved.amounts, resolved.currency);
       const amountCents = resolved.amounts?.[chosenCurrency] ?? resolved.amountCents;
       const currency = chosenCurrency.toUpperCase();
