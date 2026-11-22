@@ -192,7 +192,8 @@ export const callTransferController = {
       let maxSeconds;
       let transferFactor = 0;
       if (mode === 'dial') {
-        number = normalizeOutboundDestination(entry.phone);
+        // Numéro de fiche au format national : lu selon le pays de la ligne qui transfère (jamais la France par défaut).
+        number = normalizeOutboundDestination(entry.phone, undefined, { lineNumber });
         if (!number) return fail(res, 422, `Le numéro de ${entry.name} n’est pas une destination autorisée.`, { code: 'destination_not_allowed' });
         const creditFactor = await deps.creditFactor(access.companyId, number, lineNumber);
         transferFactor = creditFactor;
@@ -348,7 +349,7 @@ async function billDialLeg({ req, state, companyId, line, display = {} }) {
       // Jeton émis avant cette version (sans numéro) ou appel sans nom de fiche consigné : fiche relue dans l'annuaire.
       const dir = await deps.directory(companyId).catch(() => null);
       const entry = (dir?.entries || []).find((e) => String(e._id) === String(state.entryId));
-      if (!to) to = entry?.phone ? normalizeOutboundDestination(entry.phone) || '' : '';
+      if (!to) to = entry?.phone ? normalizeOutboundDestination(entry.phone, undefined, { lineNumber: line }) || '' : '';
       if (!shown.entryName) shown.entryName = entry?.name || '';
     }
     const doc = dialLegCall({ body: req.body || {}, companyId, parentCallSid: state.callSid, from: line, to, now: deps.now(), display: shown });

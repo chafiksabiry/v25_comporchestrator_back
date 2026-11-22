@@ -3,14 +3,24 @@ import assert from 'node:assert/strict';
 import { buildCallbackTwiml, buildRefusalTwiml, normalizeDestination, pickDestination, signTicket, verifyTicket } from '../services/voicemailCallback.js';
 
 // numéros : mis au format international, le reste refusé
-assert.equal(normalizeDestination('06 23 98 47 08'), '+33623984708');
+// numéro national : lu selon le pays de la LIGNE appelante, jamais la France par défaut
+const FR_LINE = { lineNumber: '+33142000001' };
+assert.equal(normalizeDestination('06 23 98 47 08', FR_LINE), '+33623984708');
+assert.equal(normalizeDestination('06 23 98 47 08'), '', 'sans ligne connue : aucun pays supposé');
+assert.equal(normalizeDestination('06 23 98 47 08', { lineNumber: '+390612345678' }), '+390623984708', 'Italie : pas de préfixe national');
+assert.equal(normalizeDestination('(415) 555-2671', { lineNumber: '+14155550100' }), '+14155552671', 'ligne US : 10 chiffres');
+assert.equal(normalizeDestination('07911 123456', { lineNumber: '+442079460958' }), '+447911123456', 'ligne UK : 0 retiré');
+assert.equal(normalizeDestination('0612345678', { lineNumber: '+212522000000' }), '+212612345678', 'ligne Maroc');
+assert.equal(normalizeDestination('0612345678', { lineNumber: '+74951234567' }), '', 'pays sans règle sûre : format international exigé');
 assert.equal(normalizeDestination('+33 6 23 98 47 08'), '+33623984708');
 assert.equal(normalizeDestination('0033623984708'), '+33623984708');
 assert.equal(normalizeDestination('+1 (415) 555-2671'), '+14155552671');
 for (const bad of ['', 'abc', '123', '+33; rm']) assert.equal(normalizeDestination(bad), '', `refuse « ${bad} »`);
 
 // numéro à rappeler : celui du message, sinon celui de l'appel
-assert.equal(pickDestination({ from: '+33612345678', analysis: { callbackNumber: '06 23 98 47 08' } }), '+33623984708');
+assert.equal(pickDestination({ phoneNumber: '+33142000001', from: '+33612345678', analysis: { callbackNumber: '06 23 98 47 08' } }), '+33623984708');
+assert.equal(pickDestination({ phoneNumber: '+14155550100', from: '+14155559999', analysis: { callbackNumber: '415 555 2671' } }), '+14155552671', 'numéro dicté lu selon la ligne US qui rappelle');
+assert.equal(pickDestination({ phoneNumber: '+14155550100', from: '+14155559999', analysis: { callbackNumber: '06 23 98 47 08' } }), '+14155559999', 'pas lu comme français depuis une ligne US : repli sur le numéro d’appel');
 assert.equal(pickDestination({ from: '+33612345678', analysis: {} }), '+33612345678');
 assert.equal(pickDestination({ from: '', analysis: {} }), '');
 

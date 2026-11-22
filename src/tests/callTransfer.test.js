@@ -83,7 +83,7 @@ ReceptionDirectory.findOne = (f) => lean(String(f.companyId) === C1 ? {
     { _id: E_ONE, name: 'Mme Martin', userId: 'u1', phone: '+33612345678', extension: '204', hours },
     { _id: E_ABS, name: 'M. Roux', userId: 'uabs', phone: '+33699999999', hours },
     { _id: E_NONUM, name: 'Service technique', phone: '' },
-    { _id: E_FOREIGN, name: 'M. Smith', phone: '+442079460958' },
+    { _id: E_FOREIGN, name: 'M. Smith', phone: '+33891234567' }, // surtaxé : toujours refusé (tous pays autorisés par défaut)
   ],
 } : { companyId: C2, entries: [{ _id: E_OTHER, name: 'Autre société', phone: '+33611111111' }], absences: [] });
 InboundSettings.findOne = () => lean({ voicemailEnabled: true, voice: 'nova' });

@@ -1,13 +1,14 @@
 // Run: node src/tests/outboundDestinations.test.js
 import assert from 'node:assert/strict';
 import {
-  checkDestination, COUNTRY_CATALOG, countryPrefixOf, DESTINATION_NOT_ALLOWED, effectiveOutboundPrefixes, isPremiumRate, MESSAGES, toStrictE164, validatePrefixList,
+  ALL_COUNTRY_PREFIXES, checkDestination, COUNTRY_CATALOG, countryPrefixOf, DESTINATION_NOT_ALLOWED, effectiveOutboundPrefixes, isPremiumRate, MESSAGES, toStrictE164, validatePrefixList,
 } from '../services/outboundDestinations.js';
 import { checkCompanyDestination, resolveOutboundPolicy } from '../services/outboundPolicy.js';
 import { normalizeOutboundDestination } from '../services/browserOutbound.js';
 
 // E.164 strict
-assert.equal(toStrictE164('06 12 34 56 78'), '+33612345678');
+assert.equal(toStrictE164('06 12 34 56 78', { lineNumber: '+33142000001' }), '+33612345678');
+assert.equal(toStrictE164('06 12 34 56 78'), '', 'national sans ligne : aucun pays supposé');
 assert.equal(toStrictE164('0033 6 12 34 56 78'), '+33612345678');
 assert.equal(toStrictE164('+44 20 7946 0958'), '+442079460958');
 for (const bad of ['', 'abc', '112', '+0123456789', '+33; <Reject/>', '+123', '+1234567890123456', undefined, null]) assert.equal(toStrictE164(bad), '', `refuse « ${bad} »`);
@@ -48,7 +49,10 @@ assert.deepEqual(validatePrefixList(['+44', '+33', '+33']), { ok: true, value: [
 assert.deepEqual(validatePrefixList([]), { ok: true, value: [] });
 for (const bad of [['+999'], ['33'], ['+33; drop'], 'fr', null, [{}]]) assert.equal(validatePrefixList(bad).ok, false, JSON.stringify(bad));
 
-// défaut = pays de la société + liste globale de l'environnement ; sélection enregistrée = remplace le défaut
+// défaut = tous les pays (aucun préférentiel) ; liste globale explicite de l'environnement : pays de la société + cette liste ; sélection enregistrée = remplace le défaut
+const sorted = (l) => [...l].sort();
+assert.deepEqual(sorted(effectiveOutboundPrefixes({ saved: undefined, companyCountry: '+1' }).prefixes), sorted(ALL_COUNTRY_PREFIXES));
+assert.equal(effectiveOutboundPrefixes({ saved: undefined, companyCountry: '+1' }).customized, false);
 assert.deepEqual(effectiveOutboundPrefixes({ saved: undefined, companyCountry: '+212', envPrefixes: ['+33'] }), { prefixes: ['+212', '+33'], customized: false });
 assert.deepEqual(effectiveOutboundPrefixes({ saved: undefined, companyCountry: '', envPrefixes: ['+33'] }), { prefixes: ['+33'], customized: false });
 assert.deepEqual(effectiveOutboundPrefixes({ saved: ['+44'], companyCountry: '+33', envPrefixes: ['+33'] }), { prefixes: ['+44'], customized: true });
@@ -56,15 +60,19 @@ assert.deepEqual(effectiveOutboundPrefixes({ saved: [], companyCountry: '+33', e
 
 // politique d'une société (lecture injectée) : pays déduit de ses lignes
 const policy = (saved, lines, env) => resolveOutboundPolicy('c1', { loadSaved: async () => saved, loadLines: async () => lines, env });
-assert.deepEqual((await policy(undefined, [{ phoneNumber: '+32470123456' }], undefined)).prefixes, ['+32', '+33']);
+assert.deepEqual(sorted((await policy(undefined, [{ phoneNumber: '+32470123456' }], undefined)).prefixes), sorted(ALL_COUNTRY_PREFIXES), 'défaut : tous les pays');
+assert.deepEqual((await policy(undefined, [{ phoneNumber: '+32470123456' }], '+33')).prefixes, ['+32', '+33'], 'liste d’environnement explicite : respectée');
 assert.deepEqual((await policy(undefined, [], '+33,+41')).prefixes, ['+33', '+41']);
 assert.equal((await policy(['+44'], [{ phoneNumber: '+32470123456' }])).customized, true);
 assert.equal((await checkCompanyDestination('c1', '+442079460958', { loadSaved: async () => ['+44'], loadLines: async () => [] })).ok, true);
-assert.equal((await checkCompanyDestination('c1', '+442079460958', { loadSaved: async () => undefined, loadLines: async () => [{ phoneNumber: '+33142000001' }] })).reason, 'country_not_enabled');
+assert.equal((await checkCompanyDestination('c1', '+442079460958', { loadSaved: async () => undefined, loadLines: async () => [{ phoneNumber: '+33142000001' }] })).ok, true, 'Royaume-Uni depuis une société française : autorisé par défaut');
+assert.equal((await checkCompanyDestination('c1', '+442079460958', { loadSaved: async () => ['+33'], loadLines: async () => [{ phoneNumber: '+33142000001' }] })).reason, 'country_not_enabled', 'liste enregistrée respectée');
+assert.deepEqual(await checkCompanyDestination('c1', '06 12 34 56 78', { loadSaved: async () => undefined, loadLines: async () => [{ phoneNumber: '+33142000001' }] }), { ok: true, to: '+33612345678' }, 'national : pays de la ligne (FR)');
+assert.equal((await checkCompanyDestination('c1', '06 12 34 56 78', { loadSaved: async () => undefined, loadLines: async () => [] })).reason, 'invalid_number', 'national sans ligne : refusé');
 assert.equal((await checkCompanyDestination('c1', '+33891234567', { loadSaved: async () => everything, loadLines: async () => [] })).reason, 'premium_rate');
 
 // l'ancienne fonction ne contourne pas non plus
 assert.equal(normalizeOutboundDestination('+33 8 91 23 45 67', ['+33']), '');
-assert.equal(normalizeOutboundDestination('06 12 34 56 78', ['+33']), '+33612345678');
+assert.equal(normalizeOutboundDestination('06 12 34 56 78', ['+33'], { lineNumber: '+33142000001' }), '+33612345678');
 
 console.log('outboundDestinations: OK');

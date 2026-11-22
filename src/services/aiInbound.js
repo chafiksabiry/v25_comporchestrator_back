@@ -513,7 +513,7 @@ const TOOLS = {
     const tools = mergedTools(await loadTools(claims.companyId));
     const availability = entryAvailability(entry, dir?.absences || [], deps.now(), tools.timeZone);
     if (!isReachableNow(availability)) return { ok: false, code: 'unavailable', label: availability.label };
-    const number = normalizeOutboundDestination(entry.phone);
+    const number = normalizeOutboundDestination(entry.phone, undefined, { lineNumber: doc.to });
     if (!number) return { ok: false, code: 'no_number' };
     const td = await deps.transfer();
     const creditFactor = await td.creditFactor(claims.companyId, number, doc.to);

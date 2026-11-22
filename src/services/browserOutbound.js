@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { xmlEscape } from './inboundFlow.js';
 import { ensureEnvTwimlApp } from './twimlApps.js';
 import { normalizeDestination, buildRefusalTwiml, buildCallbackTwiml } from './voicemailCallback.js';
-import { isPremiumRate } from './outboundDestinations.js';
+import { ALL_COUNTRY_PREFIXES, isPremiumRate } from './outboundDestinations.js';
 import { languageForPhone } from './companyLanguage.js';
 import { graceLimitSeconds } from './minutesGrace.js';
 
@@ -12,14 +12,18 @@ import { graceLimitSeconds } from './minutesGrace.js';
  * Le jeton vocal ne suffit pas : sans `outgoingApplicationSid`, Twilio refuse tout appel sortant du navigateur. Ce module
  * fournit l'application TwiML qui reçoit l'appel, la preuve signée délivrée avec le jeton (le serveur sait ainsi pour
  * quelle entreprise et quelle personne le jeton a été émis) et la consigne de numérotation. Le navigateur n'est jamais
- * cru sur l'entreprise : seule la preuve signée compte. La destination est limitée (France par défaut).
+ * cru sur l'entreprise : seule la preuve signée compte. Destinations : tous les pays par défaut (aucun pays préférentiel), jamais un
+ * numéro surtaxé ; une entreprise qui a enregistré sa propre liste de pays la garde telle quelle.
  */
 export const OUTBOUND_APP_NAME = 'harx-callcentre-outbound';
 export const OUTBOUND_WEBHOOK_PATH = '/api/phone-numbers/webhooks/twilio/browser-outbound';
 /** Même durée que le jeton vocal (1 h) : la preuve doit rester valable aussi longtemps que lui. */
 export const OUTBOUND_TICKET_TTL_MS = 60 * 60 * 1000;
-/** Préfixes de destination autorisés ; OUTBOUND_ALLOWED_PREFIXES (liste séparée par des virgules) les remplace. */
-export const DEFAULT_ALLOWED_PREFIXES = ['+33'];
+/**
+ * Préfixes de destination autorisés par défaut : TOUS les pays du catalogue (décision du fondateur : aucun pays préférentiel, seul le prix
+ * de la minute varie). OUTBOUND_ALLOWED_PREFIXES (liste séparée par des virgules), si elle est définie, les remplace.
+ */
+export const DEFAULT_ALLOWED_PREFIXES = ALL_COUNTRY_PREFIXES;
 /** Plafond de Twilio pour timeLimit (4 h). */
 export const MAX_CALL_SECONDS = 14400;
 
@@ -31,9 +35,12 @@ export function allowedPrefixes(env = process.env.OUTBOUND_ALLOWED_PREFIXES) {
   return list.length ? list : DEFAULT_ALLOWED_PREFIXES;
 }
 
-/** Numéro E.164 à composer, ou '' s'il est invalide ou hors des destinations autorisées. */
-export function normalizeOutboundDestination(raw, prefixes = allowedPrefixes()) {
-  const to = normalizeDestination(raw);
+/**
+ * Numéro E.164 à composer, ou '' s'il est invalide ou hors des destinations autorisées. `options.lineNumber` : ligne appelante, seule base
+ * de lecture d'un numéro national (sans elle, un numéro national est refusé).
+ */
+export function normalizeOutboundDestination(raw, prefixes = allowedPrefixes(), { lineNumber = '' } = {}) {
+  const to = normalizeDestination(raw, { lineNumber });
   return to && !isPremiumRate(to) && prefixes.some((p) => to.startsWith(p)) ? to : '';
 }
 
