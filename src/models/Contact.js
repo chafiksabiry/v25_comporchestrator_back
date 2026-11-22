@@ -58,8 +58,20 @@ const schema = new mongoose.Schema(
     language: { type: String, default: '', maxlength: 5 },
     /** Étape du cycle de vie. */
     status: { type: String, enum: ['lead', 'prospect', 'client', 'partner', 'other'], default: 'lead' },
-    /** D'où vient la fiche : créée à la réception d'un appel, à un appel sortant ou à la main. */
-    source: { type: String, enum: ['inbound_call', 'outbound_call', 'manual'], default: 'manual' },
+    /**
+     * D'où vient la fiche : créée à la réception d'un appel, à un appel sortant, à la main, ou synchronisée depuis le carnet du
+     * téléphone (`phone`, app native Nomad, sens unique téléphone → HARX).
+     */
+    source: { type: String, enum: ['inbound_call', 'outbound_call', 'manual', 'phone'], default: 'manual' },
+    /** Fiche `phone` : appareil d'où elle vient (identifiant d'installation de l'app, pas un identifiant matériel). */
+    deviceId: { type: String, default: '', maxlength: 100 },
+    /** Fiche `phone` : identifiant du contact dans le carnet du téléphone (clé de synchronisation, avec `deviceId`). */
+    externalId: { type: String, default: '', maxlength: 200 },
+    /** Modifiée dans le portail : la synchronisation ne l'écrase plus et ne la supprime jamais. */
+    editedInPortal: { type: Boolean, default: false },
+    /** Fiche `phone` : dernier passage de synchronisation qui l'a vue (détecte les contacts supprimés du téléphone). */
+    lastSyncRunId: { type: String, default: '', maxlength: 64 },
+    lastSyncedAt: { type: Date, default: null },
     tags: { type: [String], default: [] },
     notes: { type: String, default: '', maxlength: 2000 },
     ownerId: { type: String, default: '' },
@@ -75,5 +87,6 @@ const schema = new mongoose.Schema(
 
 schema.index({ companyId: 1, 'phones.number': 1 });
 schema.index({ companyId: 1, updatedAt: -1 });
+schema.index({ companyId: 1, source: 1, deviceId: 1, externalId: 1 });
 
 export default mongoose.models.Contact || mongoose.model('Contact', schema);
