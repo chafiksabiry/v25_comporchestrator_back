@@ -1,6 +1,6 @@
 import Stripe from 'stripe';
 import { config } from '../config/env.js';
-import { promotionCodesAllowed, resolvePromotionCodeId, withPromotion } from './promotionCode.js';
+import { withoutPromotion } from './checkoutNoPromotion.js';
 import { resolveStripeLocale } from './stripeLocale.js';
 
 let stripeOverride = null;
@@ -547,9 +547,9 @@ export const stripeService = {
   cancelCheckoutAuthorization,
   getCheckoutPaymentState,
   refundCheckoutSession,
-  createCheckoutSession: async (userId, priceId, successUrl, cancelUrl, metadata = {}, promotionCodeId = null, currency = null, { locale = null, allowPromotionCodes = true } = {}) => {
+  createCheckoutSession: async (userId, priceId, successUrl, cancelUrl, metadata = {}, currency = null, { locale = null } = {}) => {
     try {
-      const session = await getStripe().checkout.sessions.create(withPromotion({
+      const session = await getStripe().checkout.sessions.create(withoutPromotion({
         payment_method_types: ['card'],
         line_items: [
           {
@@ -561,8 +561,7 @@ export const stripeService = {
         // Prix multi-devises : la devise choisie (mêmes montants en EUR, USD, GBP).
         ...(currency ? { currency: String(currency).toLowerCase() } : {}),
         locale: resolveStripeLocale(locale),
-        // Pas d'essai : la carte est demandée dès qu'il y a un montant à payer. Code promo à 100 % (total du jour à 0) :
-        // aucune carte demandée ; Stripe la réclamera à la première facture payante (fin du code).
+        // Pas d'essai : la carte est demandée dès qu'il y a un montant à payer (prix du catalogue, sans remise).
         payment_method_collection: 'if_required',
         success_url: successUrl,
         cancel_url: cancelUrl,
@@ -578,7 +577,7 @@ export const stripeService = {
             ...metadata
           },
         },
-      }, promotionCodeId, { allowPromotionCodes }));
+      }));
       return session;
     } catch (error) {
       console.error('Error creating Stripe checkout session:', error);
@@ -590,15 +589,15 @@ export const stripeService = {
    * Create an EMBEDDED Stripe Checkout Session (UI rendered inside HARX as a modal).
    * No redirect: the front uses onComplete + confirm endpoint.
    */
-  createEmbeddedSubscriptionSession: async (userId, priceId, metadata = {}, promotionCodeId = null, currency = null, { locale = null, allowPromotionCodes = true } = {}) => {
-    return getStripe().checkout.sessions.create(withPromotion({
+  createEmbeddedSubscriptionSession: async (userId, priceId, metadata = {}, currency = null, { locale = null } = {}) => {
+    return getStripe().checkout.sessions.create(withoutPromotion({
       ui_mode: 'embedded_page',
       mode: 'subscription',
       payment_method_types: ['card'],
       line_items: [{ price: priceId, quantity: 1 }],
       ...(currency ? { currency: String(currency).toLowerCase() } : {}),
       locale: resolveStripeLocale(locale),
-      // Pas d'essai : carte demandée dès qu'il y a un montant à payer ; code promo à 100 % -> pas de carte (voir createCheckoutSession).
+      // Pas d'essai : carte demandée dès qu'il y a un montant à payer (voir createCheckoutSession).
       payment_method_collection: 'if_required',
       redirect_on_completion: 'never',
       client_reference_id: userId.toString(),
@@ -606,22 +605,7 @@ export const stripeService = {
       subscription_data: {
         metadata: { userId: userId.toString(), ...metadata },
       },
-    }, promotionCodeId, { allowPromotionCodes }));
-  },
-
-  /**
-   * Le prix accepte-t-il un code promotionnel ? Lit le produit du prix : non pour une offre CLOUD ou NOMAD (`harx_product=callcenter`).
-   * Prix illisible : non (par prudence ; la création de la session échouera de toute façon sur un prix inconnu).
-   */
-  priceAllowsPromotionCodes: async (priceId) => {
-    try {
-      const price = await getStripe().prices.retrieve(String(priceId), { expand: ['product'] });
-      const product = price?.product;
-      return promotionCodesAllowed(product && typeof product === 'object' ? product.metadata : null);
-    } catch (err) {
-      console.warn('[subscription] priceAllowsPromotionCodes:', err?.message);
-      return false;
-    }
+    }));
   },
 
   /** Métadonnées du produit Stripe d'un prix ; null si le prix est illisible (Stripe non configuré, prix inconnu). */
@@ -634,12 +618,6 @@ export const stripeService = {
       console.warn('[subscription] priceProductMetadata:', err?.message);
       return null;
     }
-  },
-
-  /** Résout un code promotionnel d'abonnement en id Stripe (null si aucun code) ; lève `invalid_promotion_code`. */
-  resolvePromotionCode: async (code) => {
-    if (code == null || !String(code).trim()) return null;
-    return resolvePromotionCodeId(getStripe(), code);
   },
 
   handleWebhook: async (signature, rawBody) => {

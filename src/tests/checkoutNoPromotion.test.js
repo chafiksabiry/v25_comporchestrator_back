@@ -1,7 +1,7 @@
-// Run: JWT_SECRET=t TELNYX_API_KEY=x TWILIO_ACCOUNT_SID=ACtest TWILIO_AUTH_TOKEN=x node --test src/tests/cloudNomadNoPromotion.test.js
-// Grille 2026-11 (décision du 18/11/2026) : plus aucune promotion sur les offres CLOUD et NOMAD (produits Stripe `harx_product=callcenter`).
-// Paiement : `allow_promotion_codes=false` et aucun `discounts`, un code transmis est refusé (400) avant toute création de paiement.
-// `GET /launch-offers` : liste vide, sans lecture des coupons. Offres TAAS : inchangé (champ de code proposé, code appliqué).
+// Run: JWT_SECRET=t TELNYX_API_KEY=x TWILIO_ACCOUNT_SID=ACtest TWILIO_AUTH_TOKEN=x node --test src/tests/checkoutNoPromotion.test.js
+// Aucune promotion (décision du fondateur, 22/11/2026 : tarification simple, les prix ont été baissés à la place), pour TOUTES les offres
+// (CLOUD, NOMAD, TAAS) : session Checkout avec `allow_promotion_codes=false` et sans `discounts` ; un code transmis est refusé (400)
+// avant toute création de paiement. `GET /launch-offers` : liste vide, sans lecture des coupons.
 import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import jwt from 'jsonwebtoken';
@@ -11,7 +11,7 @@ process.env.TELNYX_API_KEY = process.env.TELNYX_API_KEY || 'x';
 process.env.TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || 'ACtest';
 process.env.TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || 'x';
 process.env.REGISTRATION_BACKEND_URL = 'https://registration.test';
-const { promotionCodesAllowed, withPromotion } = await import('../services/promotionCode.js');
+const { withoutPromotion } = await import('../services/checkoutNoPromotion.js');
 const { stripeService, __setStripeClientForTests } = await import('../services/stripeService.js');
 const { subscriptionRoutes } = await import('../routes/subscription.js');
 const { SubscriptionPlan } = await import('../models/SubscriptionPlan.js');
@@ -26,52 +26,35 @@ const NOMAD = { harx_product: 'callcenter', callcenter_tier: 'nomad_solo' }; // 
 const AI_AGENT = { harx_product: 'callcenter', callcenter_tier: 'accueil', ai_agent: 'true', offer_version: '2026-11' };
 const TAAS = { 'COMMUNICATION MINUTES Included': '120' }; // STARTER, RUNNER : pas de harx_product
 
-test('promotionCodesAllowed : non pour CLOUD et NOMAD (casse et espaces tolérés), oui pour TAAS', () => {
-  for (const m of [CLOUD, NOMAD, AI_AGENT, { ' HARX_PRODUCT ': ' CallCenter ' }, new Map([['harx_product', 'callcenter']])]) assert.equal(promotionCodesAllowed(m), false);
-  for (const m of [TAAS, {}, null, undefined, { harx_product: 'taas' }]) assert.equal(promotionCodesAllowed(m), true);
-});
-
-test('withPromotion : sans promotion, ni discounts ni champ de saisie, même avec un code ; TAAS inchangé', () => {
+test('withoutPromotion : jamais de champ de code ni de remise, même si les paramètres en contiennent', () => {
   const base = { mode: 'subscription' };
-  assert.deepEqual(withPromotion(base, null, { allowPromotionCodes: false }), { ...base, allow_promotion_codes: false });
-  const forced = withPromotion({ ...base, allow_promotion_codes: true, discounts: [{ promotion_code: 'x' }] }, 'promo_1', { allowPromotionCodes: false });
+  assert.deepEqual(withoutPromotion(base), { ...base, allow_promotion_codes: false });
+  const forced = withoutPromotion({ ...base, allow_promotion_codes: true, discounts: [{ promotion_code: 'x' }] });
   assert.equal(forced.allow_promotion_codes, false);
   assert.equal('discounts' in forced, false);
-  assert.deepEqual(withPromotion(base, null), { ...base, allow_promotion_codes: true });
-  assert.deepEqual(withPromotion(base, 'promo_1').discounts, [{ promotion_code: 'promo_1' }]);
 });
 
 // Fonctions réelles du service (`orig`) : le beforeEach ci-dessous les remplace pour les tests de routes.
-test('sessions Stripe : allowPromotionCodes=false -> allow_promotion_codes=false, aucun discounts (hébergée et intégrée) ; par défaut inchangé', async () => {
+test('sessions Stripe réelles (hébergée et intégrée) : allow_promotion_codes=false, aucun discounts, prix du catalogue en une ligne', async () => {
   const bodies = [];
   __setStripeClientForTests({ checkout: { sessions: { create: async (b) => { bodies.push(b); return { id: 'cs' }; } } } });
-  await orig.createCheckoutSession('u1', 'price_c', 'https://ok', 'https://ko', {}, 'promo_1', null, { allowPromotionCodes: false });
-  await orig.createEmbeddedSubscriptionSession('u1', 'price_c', {}, 'promo_1', null, { allowPromotionCodes: false });
-  await orig.createCheckoutSession('u1', 'price_c', 'https://ok', 'https://ko', {}, null, null, { allowPromotionCodes: false });
-  await orig.createEmbeddedSubscriptionSession('u1', 'price_c', {}, null, null, { allowPromotionCodes: false });
-  for (const b of bodies) { assert.equal(b.allow_promotion_codes, false); assert.equal('discounts' in b, false); }
-  bodies.length = 0;
-  await orig.createEmbeddedSubscriptionSession('u1', 'price_t', {}, 'promo_1');
+  await orig.createCheckoutSession('u1', 'price_c', 'https://ok', 'https://ko', {}, null, {});
+  await orig.createEmbeddedSubscriptionSession('u1', 'price_c', {}, null, {});
+  await orig.createCheckoutSession('u1', 'price_t', 'https://ok', 'https://ko');
   await orig.createEmbeddedSubscriptionSession('u1', 'price_t');
-  assert.deepEqual(bodies[0].discounts, [{ promotion_code: 'promo_1' }]);
-  assert.equal(bodies[1].allow_promotion_codes, true);
+  assert.equal(bodies.length, 4);
+  for (const b of bodies) {
+    assert.equal(b.allow_promotion_codes, false);
+    assert.equal('discounts' in b, false);
+    assert.equal(b.line_items.length, 1);
+    assert.equal(b.line_items[0].quantity, 1);
+  }
   __setStripeClientForTests(null);
 });
 
-test('priceAllowsPromotionCodes : lit le produit du prix ; CLOUD/NOMAD non, TAAS oui, prix illisible non', async () => {
-  const products = { price_cloud: CLOUD, price_nomad: NOMAD, price_taas: TAAS };
-  __setStripeClientForTests({ prices: { retrieve: async (id, opts) => {
-    assert.deepEqual(opts, { expand: ['product'] });
-    if (!products[id]) throw new Error('No such price');
-    return { id, product: { id: 'prod', metadata: products[id] } };
-  } } });
-  const saved = console.warn; console.warn = () => {};
-  try {
-    assert.equal(await orig.priceAllowsPromotionCodes('price_cloud'), false);
-    assert.equal(await orig.priceAllowsPromotionCodes('price_nomad'), false);
-    assert.equal(await orig.priceAllowsPromotionCodes('price_taas'), true);
-    assert.equal(await orig.priceAllowsPromotionCodes('price_inconnu'), false);
-  } finally { console.warn = saved; __setStripeClientForTests(null); }
+test('le service Stripe n’expose plus de résolution de code promotionnel', () => {
+  assert.equal(typeof orig.resolvePromotionCode, 'undefined');
+  assert.equal(typeof orig.priceAllowsPromotionCodes, 'undefined');
 });
 
 // ── Routes réelles (chaîne de middlewares) ──
@@ -86,8 +69,7 @@ beforeEach(() => {
   stripeService.isConfigured = () => true;
   stripeService.resolveSubscriptionPriceId = async ({ priceId }) => priceId;
   stripeService.getPublicPlans = async () => Object.entries(products).map(([id, metadata]) => ({ id, unit_amount: 2999, currency: 'eur', product: { id: `prod_${id}`, metadata } }));
-  stripeService.resolvePromotionCode = async () => { calls.resolved += 1; return 'promo_resolved'; };
-  stripeService.priceAllowsPromotionCodes = async (id) => promotionCodesAllowed(products[id]);
+  stripeService.resolvePromotionCode = async () => { calls.resolved += 1; return 'promo_resolved'; }; // ne doit jamais être appelé
   stripeService.priceProductMetadata = async (id) => products[id] || null;
   stripeService.createEmbeddedSubscriptionSession = async (...args) => { calls.sessions.push(['embedded', ...args]); return { id: 'cs', client_secret: 'sec' }; };
   stripeService.createCheckoutSession = async (...args) => { calls.sessions.push(['hosted', ...args]); return { id: 'cs', url: 'https://checkout' }; };
@@ -114,7 +96,6 @@ async function call(method, path, body = {}) {
 }
 const INIT = (over = {}) => ({ userId: 'u-owner', companyId: C1, priceId: 'price_cloud', planName: 'Accueil', provider: 'stripe', uiMode: 'embedded', ...over });
 const opts = (s) => s[s.length - 1];
-const promoId = (s) => (s[0] === 'embedded' ? s[4] : s[6]);
 
 test('GET /launch-offers : liste vide, sans lire les coupons Stripe', async () => {
   const r = await call('get', '/launch-offers');
@@ -123,45 +104,36 @@ test('GET /launch-offers : liste vide, sans lire les coupons Stripe', async () =
   assert.equal(calls.couponReads, 0);
 });
 
-for (const priceId of ['price_cloud', 'price_nomad', 'price_ai']) {
+for (const priceId of ['price_cloud', 'price_nomad', 'price_ai', 'price_taas']) {
   test(`POST /checkout/init ${priceId} : session sans code (intégrée et hébergée) ; un code transmis est refusé avant tout paiement`, async () => {
     for (const uiMode of ['embedded', 'hosted']) {
       calls.sessions.length = 0;
       const ok = await call('post', '/checkout/init', INIT({ priceId, uiMode }));
       assert.equal(ok.code, 201, JSON.stringify(ok.body));
       assert.equal(calls.sessions.length, 1);
-      assert.equal(opts(calls.sessions[0]).allowPromotionCodes, false);
-      assert.equal(promoId(calls.sessions[0]), null);
+      const args = calls.sessions[0];
+      assert.equal(args.some((a) => typeof a === 'string' && a.startsWith('promo_')), false, 'aucun code transmis à la session');
+      assert.equal('allowPromotionCodes' in opts(args), false);
     }
     calls.sessions.length = 0; calls.payments = 0;
-    for (const code of ['LANCEMENT40-ACCUEIL', 'FOUNDERSFAMILY2026', 'REPS2027']) {
+    for (const code of ['LANCEMENT40-ACCUEIL', 'FOUNDERSFAMILY2026', 'REPS2027', ' x ']) {
       const r = await call('post', '/checkout/init', INIT({ priceId, promotionCode: code }));
       assert.equal(r.code, 400);
       assert.equal(r.body.error, 'promotion_code_not_allowed');
     }
+    for (const empty of ['', '   ', null]) {
+      const r = await call('post', '/checkout/init', INIT({ priceId, promotionCode: empty }));
+      assert.equal(r.code, 201, 'champ vide : paiement normal');
+    }
     assert.equal(calls.resolved, 0, 'code jamais résolu dans Stripe');
-    assert.equal(calls.payments, 0, 'aucun paiement créé');
-    assert.equal(calls.sessions.length, 0, 'aucune session créée');
   });
 }
 
-test('POST /checkout/init TAAS : inchangé (champ de code proposé sans code, code résolu et appliqué)', async () => {
-  const r1 = await call('post', '/checkout/init', INIT({ priceId: 'price_taas' }));
-  assert.equal(r1.code, 201);
-  assert.equal(opts(calls.sessions[0]).allowPromotionCodes, true);
-  assert.equal(promoId(calls.sessions[0]), null);
-  const r2 = await call('post', '/checkout/init', INIT({ priceId: 'price_taas', promotionCode: 'FOUNDERSFAMILY2026' }));
-  assert.equal(r2.code, 201);
-  assert.equal(calls.resolved, 1);
-  assert.equal(opts(calls.sessions[1]).allowPromotionCodes, true);
-  assert.equal(promoId(calls.sessions[1]), 'promo_resolved');
-});
-
-test('POST /checkout (ancien chemin) : CLOUD/NOMAD sans champ de code, TAAS inchangé', async () => {
-  for (const [priceId, allowed] of [['price_cloud', false], ['price_nomad', false], ['price_taas', true]]) {
+test('POST /checkout (ancien chemin) : aucune option de code, toutes offres', async () => {
+  for (const priceId of ['price_cloud', 'price_nomad', 'price_taas']) {
     calls.sessions.length = 0;
     const r = await call('post', '/checkout', { userId: 'u-owner', companyId: C1, priceId, successUrl: 'https://ok', cancelUrl: 'https://ko' });
     assert.equal(r.code, 200, JSON.stringify(r.body));
-    assert.equal(opts(calls.sessions[0]).allowPromotionCodes, allowed, priceId);
+    assert.equal('allowPromotionCodes' in opts(calls.sessions[0]), false, priceId);
   }
 });
