@@ -4,7 +4,8 @@ import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
 import { callerAccess, ScopeError } from '../middleware/companyScope.js';
 import mongoose from 'mongoose';
 import { creditFactorForCall } from '../services/creditCoefficient.js';
-import { debitMinutesClamped, releaseForChargedKeys } from '../services/minutesGrace.js';
+import { debitMinutesClamped, raceTimeout, releaseForChargedKeys } from '../services/minutesGrace.js';
+import { freeZeroKeys, recordOwnerLanguage, zeroInboundView } from '../services/zeroBalanceInbound.js';
 
 async function readMinutes(companyId, res) {
   try {
@@ -30,6 +31,8 @@ async function readMinutes(companyId, res) {
     const minutes = typeof wallet.minutes === 'number' ? wallet.minutes : 0;
     const consumedSeconds =
       typeof wallet.consumedSeconds === 'number' ? wallet.consumedSeconds : 0;
+    // Solde épuisé : réserve gratuite de 5 minutes d'appels entrants (bandeau du portail). Lecture bornée, jamais bloquante ; absente sinon.
+    const zeroBalanceInbound = await raceTimeout(zeroInboundView({ companyId, wallet }), 1500, null);
 
     res.status(200).json({
       success: true,
@@ -46,6 +49,7 @@ async function readMinutes(companyId, res) {
           : [],
         consumedSeconds,
         limitReached: minutes <= 0,
+        ...(zeroBalanceInbound ? { zeroBalanceInbound } : {}),
       }
     });
   } catch (err) {
@@ -65,6 +69,8 @@ export const minutesCompanyController = {
       if (!access.companyId || access.role === 'agent' || String(companyId) !== String(access.companyId)) {
         return res.status(403).json({ error: 'Forbidden', code: 'forbidden' });
       }
+      // Langue de l'interface du TITULAIRE (portail : `?lang=fr|en|es|ar`) : langue des notifications « rechargez vos minutes ». Jamais bloquant.
+      if (access.isOwner && req.query?.lang) void recordOwnerLanguage(companyId, req.query.lang).catch(() => undefined);
     } catch (error) {
       const status = error instanceof ScopeError ? error.status : 503;
       return res.status(status).json({ error: error.message || 'Company lookup failed', code: error.code || 'COMPANY_LOOKUP_FAILED' });
@@ -151,8 +157,10 @@ export const minutesCompanyController = {
 
       // Billing rule: any started minute is billed in full (10s → 1 min, 1m02s → 2 min), then multiplied by the credits of the zone.
       // B.1 : débit borné par le solde (jamais sous zéro) : les minutes de grâce ne sont pas facturées.
-      const durationMinutes = Math.ceil(durationSeconds / 60) * factor;
-      const done = await debitMinutesClamped({ companyId, keys: [chargeKey], cost: durationMinutes, seconds: durationSeconds });
+      // Appel entrant gratuit à solde nul (réserve de 5 minutes) : inscrit sans débit, jamais facturé.
+      const free = (await freeZeroKeys([chargeKey, String(callSid)]).catch(() => new Set())).size > 0;
+      const durationMinutes = free ? 0 : Math.ceil(durationSeconds / 60) * factor;
+      const done = await debitMinutesClamped({ companyId, keys: [chargeKey], cost: durationMinutes, seconds: free ? 0 : durationSeconds });
       const updated = done?.wallet;
 
       // Verrou du solde perdu à chaque essai (débits concurrents) : rien n'est débité ici, la prochaine lecture du solde le reprendra.

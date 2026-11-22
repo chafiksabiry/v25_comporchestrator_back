@@ -51,6 +51,16 @@ let dbReadyImpl = null;
 const dbReady = () => (dbReadyImpl ? dbReadyImpl() : CallGraceDeadline.db?.readyState === 1);
 export function setGraceDbReady(fn) { dbReadyImpl = fn; }
 
+/**
+ * Réserve « appels entrants à solde nul » (zeroBalanceInbound.js) : ses fonctions sont inscrites ici au chargement de ce module-là (pas
+ * d'import circulaire). Sans inscription (tests unitaires de ce fichier seul) : aucune ligne de réserve n'existe, rien ne change.
+ * `end(row, durationSeconds, keys)`, `cancel(row)`, `sweep({ client, now })`, `onExhausted(companyId)`.
+ */
+let zeroHandlers = null;
+export function setZeroReserveHandlers(handlers) { zeroHandlers = handlers || null; }
+/** Moins d'une minute entière : solde épuisé (même règle que maxSecondsForBalance et le contrôle des appels entrants). */
+const balanceExhausted = (minutes) => Math.floor(Number(minutes) || 0) < 1;
+
 /** Filtre « reservedCredits vaut r » (champ absent = 0). */
 const reservedIs = (r) => (r > 0 ? r : { $in: [0, null] });
 
@@ -140,6 +150,8 @@ export async function endGraceCall(callSid, { durationSeconds, keys = [], ...dep
     if (!row) return 0;
     const duration = Number(durationSeconds);
     if (durationSeconds === undefined || durationSeconds === null || !Number.isFinite(duration)) return 0;
+    // Appel pris sur la réserve gratuite à solde nul : jamais débité, sa consommation est consignée et sa part de la réserve rendue.
+    if (row.zeroReserve) return zeroHandlers?.end ? zeroHandlers.end(row, duration, keys) : 0;
     if (!(await chargeGraceCall(row, duration, keys, deps))) return 0;
     return await releaseReservation(row.callSid, { ...deps, Model });
   } catch (error) {
@@ -153,6 +165,7 @@ export async function cancelGraceCall(callSid, deps = {}) {
   if (!deps.Model && !dbReady()) return 0;
   try {
     await markGraceEnded(callSid, deps);
+    if (zeroHandlers?.cancel) await zeroHandlers.cancel(callSid);
     return await releaseReservation(callSid, deps);
   } catch (error) {
     console.warn('[minutes-grace] annulation non traitée :', error?.message || error);
@@ -230,7 +243,9 @@ export async function remainingLimitFor(callSid, { Model = CallGraceDeadline, no
   if (!sid) return 0;
   const row = await Model.findOne({ callSid: sid, status: 'scheduled' }).lean();
   if (!row) return 0;
-  return Math.min(GRACE_MAX_CALL_SECONDS, Math.max(1, Math.ceil((new Date(row.deadline).getTime() - now) / 1000)));
+  // Appel gratuit à solde nul : son échéance avance tranche par tranche ; la limite de Twilio est la réserve libre au démarrage.
+  const end = row.zeroReserve && row.zeroLimitAt ? new Date(row.zeroLimitAt).getTime() : new Date(row.deadline).getTime();
+  return Math.min(GRACE_MAX_CALL_SECONDS, Math.max(1, Math.ceil((end - now) / 1000)));
 }
 
 /** Ajoute `timeLimit="N"` à chaque <Dial> qui n'en a pas (TwiML des files d'attente, du menu, du mobile). N ≤ 0 : inchangé. */
@@ -429,6 +444,10 @@ export async function debitMinutesClamped({ companyId, keys, cost, seconds, batc
     );
     if (updated) {
       if (waived > 0) console.log(`[minutes-grace] ${waived} crédit(s) non facturé(s) (solde à zéro) pour l'entreprise ${companyId}`);
+      // Passage du solde à 0 par ce débit : la réserve « appels entrants à solde nul » s'ouvre (notification). Jamais bloquant.
+      if (zeroHandlers?.onExhausted && !balanceExhausted(balance) && balanceExhausted(updated.minutes)) {
+        Promise.resolve().then(() => zeroHandlers.onExhausted(companyId)).catch((error) => console.warn('[minutes-zero] ouverture non traitée :', error?.message || error));
+      }
       return { wallet: updated, debit, waived };
     }
   }
@@ -520,14 +539,20 @@ export async function sweepGraceDeadlines({ Model = CallGraceDeadline, Wallet = 
       if (await endGraceCall(row.callSid, { durationSeconds: known ? Number(call.duration) : row.coveredSeconds || 0, Model, Wallet })) result.released += 1;
     } catch (error) { log.warn?.('[minutes-grace] réservation orpheline non rendue :', error?.message || error); }
   }, 40, { clock });
+  // 3) Réserve « appels entrants à solde nul » : tranches suivantes, réserve épuisée, filet des appels gratuits dont le compte rendu s'est perdu.
+  if (zeroHandlers?.sweep) {
+    try { const zero = await zeroHandlers.sweep({ client, now: clock(), log }); if (zero) result.zero = zero; } catch (error) { log.warn?.('[minutes-zero] passage en échec :', error?.message || error); }
+  }
   return result;
 }
 
 /** Vue pour le portail : instants de la grâce et de la coupure (le portail avertit au début de la grâce puis à 1 minute de la fin). */
 export function graceView(row, now = Date.now()) {
   if (!row) return null;
-  const graceStartsAt = new Date(row.graceStartsAt).getTime();
   const deadline = new Date(row.deadline).getTime();
+  // Appel gratuit à solde nul : pas de « grâce de 5 minutes » à annoncer ; seul l'avertissement « plus qu'une minute » est montré, une fois
+  // la dernière tranche de la réserve prise (avant, l'échéance est encore repoussée).
+  const graceStartsAt = row.zeroReserve ? (row.zeroFinal ? Math.max(new Date(row.startedAt).getTime() || 0, deadline - LAST_MINUTE_SECONDS * 1000) : deadline) : new Date(row.graceStartsAt).getTime();
   const active = row.status === 'scheduled' || row.status === 'hanging';
   return {
     callSid: row.callSid,
@@ -537,6 +562,7 @@ export function graceView(row, now = Date.now()) {
     inGrace: active && now >= graceStartsAt && now < deadline,
     secondsLeft: Math.max(0, Math.round((deadline - now) / 1000)),
     status: row.status,
+    ...(row.zeroReserve ? { zeroReserve: true } : {}),
   };
 }
 

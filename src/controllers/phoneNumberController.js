@@ -48,6 +48,7 @@ import { buildRecordingPlan, consentLanguageFor, consentTwiml, mapCallRecordingC
 import { attachRecordingTracked, firstRecordingDecision, recordDecision } from '../services/recordingStatus.js';
 import { journalForwardedCall, journalUnansweredCall } from '../services/journalCall.js';
 import { cancelGraceCall, endGraceCall, graceLimitSeconds, raceTimeout, remainingLimitFor, startGraceCall, withDialTimeLimit } from '../services/minutesGrace.js';
+import { cancelZeroCall, startZeroCall, zeroDbReady } from '../services/zeroBalanceInbound.js';
 import ReachSettings from '../models/ReachSettings.js';
 import { decideInboundRoute, mobileTarget, shouldRingMobileAfter } from '../services/reach.js';
 import { callPayload, notifyOwners, voicemailPayload } from '../services/webPush.js';
@@ -2741,6 +2742,28 @@ class PhoneNumberController {
     await endGraceCall(String(callSid), opts);
   }
 
+  /**
+   * Solde nul : part de la réserve gratuite de 5 minutes d'appels entrants (zeroBalanceInbound.js). Bornée à 2 s ; base absente, réserve
+   * épuisée, délai dépassé ou erreur : null (comportement d'avant : répondeur). Remplaçable dans les tests.
+   */
+  async zeroInboundStart(args, { timeoutMs = 2000 } = {}) {
+    if (!this.dbReady() || !zeroDbReady()) return null;
+    const signal = { aborted: false };
+    const TIMEOUT = Symbol('timeout');
+    const out = await raceTimeout(startZeroCall({ ...args, signal }).catch((error) => {
+      console.error('[minutes-zero] réserve illisible :', error?.message || error);
+      return null;
+    }), timeoutMs, TIMEOUT);
+    if (out === TIMEOUT) { signal.aborted = true; console.warn('[minutes-zero] réserve non lue (délai dépassé) : répondeur'); return null; }
+    return out;
+  }
+
+  /** Appel gratuit à solde nul qui ne sonnera chez personne (répondeur, agent IA) : sa part de la réserve est rendue. */
+  async zeroInboundCancel(callSid) {
+    if (!this.dbReady() || !zeroDbReady() || !callSid) return;
+    await cancelZeroCall(String(callSid)).catch((error) => console.warn('[minutes-zero] part non rendue :', error?.message || error));
+  }
+
   /** B.1 : appel repris par l'agent IA (hors solde de minutes) : réserve rendue sans débit. */
   async cancelGrace(callSid) {
     if (!this.dbReady() || !callSid) return;
@@ -2930,8 +2953,12 @@ class PhoneNumberController {
       // B.1 : appel entrant sans minutes (solde à zéro ou moins) : personne ne sonne, l'appel va au répondeur (jamais de dépassement).
       // Solde illisible : aucun blocage (comme les contrôles sortants). Sinon l'échéance de coupure est enregistrée plus bas.
       const minutesState = line?.companyId && callSid ? await this.inboundMinutes(line.companyId) : null;
-      const noMinutes = minutesState?.exhausted === true;
-      if (noMinutes) console.log(`⏳ Appel entrant sur ${maskNumber(to)} : solde de minutes épuisé, répondeur`);
+      // Règle du fondateur : solde nul, l'appel sonne quand même tant que la réserve gratuite de 5 minutes d'appels entrants n'est pas
+      // épuisée (tranche réservée atomiquement, coupure par le balayeur quand la réserve est consommée). Réserve épuisée : répondeur.
+      const zeroGrant = minutesState?.exhausted === true ? await this.zeroInboundStart({ callSid, companyId: line.companyId }) : null;
+      const noMinutes = minutesState?.exhausted === true && !zeroGrant;
+      if (zeroGrant) console.log(`⏳ Appel entrant sur ${maskNumber(to)} : solde de minutes épuisé, réserve gratuite d'appels entrants (${zeroGrant.limitSeconds} s au plus)`);
+      else if (noMinutes) console.log(`⏳ Appel entrant sur ${maskNumber(to)} : solde de minutes épuisé, répondeur`);
       const ringAllow = await this.inboundRingFilterFor(line);
       const present = line?.companyId && !lineBusy && !noMinutes ? (ringAllow ? availableIdentities(line.companyId).filter(ringAllow) : availableIdentities(line.companyId)) : [];
       const settings = line?.companyId ? await InboundSettings.findOne({ companyId: line.companyId }).select('-greetingAudio.data -voicemailAudio.data').lean().catch((e) => { console.error('InboundSettings read:', e.message); return null; }) : null;
@@ -2960,9 +2987,11 @@ class PhoneNumberController {
         // Titulaire Nomad composé seulement par push (aucune présence) : pour la priorité « après les humains », il compte comme un humain qui
         // sonne (l'IA attend la fin de la sonnerie) ; pour le niveau de l'IA « en premier », personne n'est réellement présent (« total »).
         const aiBody = await tryAiInbound({ line, to, from, callSid, lineBusy, stage: 'call', humansAvailable: route.first !== 'voicemail', humansPresent: route.first !== 'voicemail' && !(soloPush && !present.length), queue: queueRoute ? queueRoute.queue || null : undefined, signatureValid: () => twilioRequestValid(req) });
-        if (aiBody) return reply(aiBody);
+        if (aiBody) { if (zeroGrant) await this.zeroInboundCancel(callSid); return reply(aiBody); }
       }
       if (leaseTaken && route.first === 'voicemail') await releaseCall(callSid).catch((e) => console.error('[inbound] libération :', e?.message || e));
+      // Appel gratuit qui ne sonnera chez personne (aucun conseiller) : il part au répondeur, sa part de la réserve est rendue.
+      if (zeroGrant && route.first === 'voicemail') await this.zeroInboundCancel(callSid);
       // Chaque appel est consigné : niveau de service, abandon et attente en sont calculés (inbound-stats).
       if (line?.companyId && callSid) {
         await InboundCall.updateOne(
@@ -2975,11 +3004,11 @@ class PhoneNumberController {
       }
       // B.1 : l'appel peut être pris (navigateur, file, mobile) : réservation atomique de sa part du solde (4 h au plus, les appels en cours
       // ont déjà la leur) et coupure à l'échéance (couvertes + 5 minutes de grâce). Rien de libre : grâce dès le début.
-      const canRing = line?.companyId && callSid && route.first !== 'voicemail' && minutesState && !noMinutes;
+      const canRing = line?.companyId && callSid && route.first !== 'voicemail' && minutesState && !noMinutes && !zeroGrant;
       if (canRing) await this.startGrace({ callSid, companyId: line.companyId, path: 'inbound', creditFactor: 1 });
       // Filet large de Twilio sur chaque <Dial> de l'appel (navigateurs, file, mobile) : solde TOTAL + 5 min (4 h au plus) ; c'est le
-      // balayeur qui coupe précisément (et prolonge l'appel dès que du solde se libère).
-      const graceLimit = canRing ? graceLimitSeconds(maxSecondsForBalance(minutesState.minutes)) : 0;
+      // balayeur qui coupe précisément (et prolonge l'appel dès que du solde se libère). Appel gratuit à solde nul : la réserve libre à l'arrivée.
+      const graceLimit = canRing ? graceLimitSeconds(maxSecondsForBalance(minutesState.minutes)) : zeroGrant && route.first !== 'voicemail' ? zeroGrant.limitSeconds : 0;
       const where = queueRoute?.kind === 'menu' ? "file d'attente : menu vocal" : route.first === 'browser' ? `sonnerie chez ${identities.length} conseiller(s)${soloPush ? ' (titulaire Nomad, push)' : ''}${route.mobileNext ? ', puis le mobile du titulaire' : ''}` : route.first === 'mobile' ? "aucun navigateur présent : sonnerie du mobile du titulaire" : `aucun conseiller disponible pour l'entreprise de la ligne ${line?.companyId ?? '(ligne inconnue)'} ; présents : ${JSON.stringify(presenceSummary())}`;
       console.log(`📞 Appel entrant sur ${to} depuis ${from} : ${where}`);
       // Aucun navigateur présent (titulaire Nomad composé sans présence compris) : le titulaire est prévenu par notification (elle réveille, elle ne décroche pas l'appel).

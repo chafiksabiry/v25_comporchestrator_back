@@ -27,6 +27,7 @@ import { planCreditCharging } from '../services/creditCoefficient.js';
 import { guardCompanyAccess } from '../middleware/companyGuard.js';
 import { guardAgentSelf } from '../middleware/agentGuard.js';
 import { debitMinutesClamped, releaseForChargedKeys } from '../services/minutesGrace.js';
+import { freeZeroKeys } from '../services/zeroBalanceInbound.js';
 
 const OWNER_ONLY = { ownerOnly: true };
 const OWN_COMPANY_OWNER = { ownerOnly: true, ownCompany: true };
@@ -905,8 +906,10 @@ export async function chargeCallMinutes(companyId, call) {
 
   // Billing rule: any started minute is billed in full (10s → 1 min, 1m02s → 2 min).
   // B.1 : débit atomique et idempotent (chargedCallSids), borné par le solde : jamais sous zéro, la grâce n'est pas facturée.
-  const durationMinutes = Math.ceil(durationSeconds / 60);
-  const done = await debitMinutesClamped({ companyId, keys: [callKey], cost: durationMinutes, seconds: durationSeconds });
+  // Appel entrant gratuit à solde nul (réserve de 5 minutes) : inscrit sans débit, jamais facturé.
+  const free = (await freeZeroKeys([callKey]).catch(() => new Set())).size > 0;
+  const durationMinutes = free ? 0 : Math.ceil(durationSeconds / 60);
+  const done = await debitMinutesClamped({ companyId, keys: [callKey], cost: durationMinutes, seconds: free ? 0 : durationSeconds });
   // B.1 : la réservation de l'appel est rendue au moment de son débit (idempotent).
   if (done?.wallet) await releaseForChargedKeys([callKey]);
   return Boolean(done?.wallet);
@@ -948,6 +951,8 @@ export async function syncMinutesFromCalls(companyId) {
     // Trace du webhook d'abord (même zone que le plafond), sinon reclassement ; forfait ou lignes illisibles : 1 crédit la minute (comme avant, jamais de report).
     const pending = calls.filter((c) => !alreadyCharged.has(String(c.sid || c._id || '')));
     const charging = pending.length ? await planCreditCharging({ companyId, calls: pending }) : { factorOf: () => 1 };
+    // Appels entrants gratuits à solde nul (réserve de 5 minutes) : inscrits sans débit, jamais facturés. Sans base de réserve : aucun.
+    const freeKeys = pending.length ? await freeZeroKeys(pending.map((c) => String(c.sid || c._id || ''))).catch(() => new Set()) : new Set();
 
     // Billing rule: each call is billed at the ceiling of its duration in
     // minutes (10s → 1 min, 1m02s → 2 min). We aggregate the per-call ceiling
@@ -963,6 +968,7 @@ export async function syncMinutesFromCalls(companyId) {
       seen.add(key);
       const secs = Number(c.duration || 0);
       if (secs <= 0) continue;
+      if (freeKeys.has(key)) { newKeys.push(key); continue; }
       addedSeconds += secs;
       // Minute entamée arrondie à la minute supérieure, PUIS multipliée par les crédits de la zone (1 ou N).
       addedMinutes += Math.ceil(secs / 60) * charging.factorOf(c);

@@ -35,6 +35,23 @@ const callGraceDeadlineSchema = new mongoose.Schema({
   releasedAt: { type: Date, default: null },
   /** Jambes enfants vues (appel entrant décroché dans le navigateur) : le portail ne connaît que la sienne. */
   childSids: { type: [String], default: [] },
+  /**
+   * Appel entrant arrivé à solde nul, pris sur la réserve gratuite de 5 minutes (zeroBalanceInbound.js) : jamais débité, coupé quand sa
+   * part de la réserve est consommée. Ces lignes ne réservent rien sur le solde (`reservationStatus` none, `extensible` faux).
+   */
+  zeroReserve: { type: Boolean, default: false },
+  /** pending : démarrage en cours ; held : tranches de la réserve tenues ; released : rendues (une seule fois) ; none : rien tenu. */
+  zeroStatus: { type: String, enum: ['pending', 'held', 'released', 'none'], default: 'none' },
+  /** Secondes de la réserve tenues par cet appel (tranches successives). */
+  zeroAllottedSeconds: { type: Number, default: 0 },
+  /** Secondes décrochées consignées à la fin (au plus les secondes tenues). */
+  zeroUsedSeconds: { type: Number, default: 0 },
+  /** Épisode de la réserve auquel l'appel appartient. */
+  zeroEpisode: { type: String, default: '' },
+  /** Plus aucune tranche à prendre : l'échéance ne sera plus repoussée (le portail avertit à 1 minute de la coupure). */
+  zeroFinal: { type: Boolean, default: false },
+  /** Instant au-delà duquel l'appel ne peut en aucun cas continuer (début + réserve libre au démarrage) : timeLimit des <Dial> suivants. */
+  zeroLimitAt: { type: Date, default: null },
   /** Purge automatique 2 jours après l'échéance. */
   expiresAt: { type: Date, required: true },
 }, { timestamps: true });
@@ -42,6 +59,7 @@ const callGraceDeadlineSchema = new mongoose.Schema({
 callGraceDeadlineSchema.index({ status: 1, deadline: 1 });
 callGraceDeadlineSchema.index({ childSids: 1 });
 callGraceDeadlineSchema.index({ reservationStatus: 1, deadline: 1 });
+callGraceDeadlineSchema.index({ zeroStatus: 1, deadline: 1 });
 callGraceDeadlineSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 const CallGraceDeadline = mongoose.models.CallGraceDeadline || mongoose.model('CallGraceDeadline', callGraceDeadlineSchema);
