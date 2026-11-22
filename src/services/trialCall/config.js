@@ -20,14 +20,22 @@ export const DEFAULT_TRIAL_COUNTRIES = Object.freeze(['FR', 'GB', 'US', 'CA', 'E
 /** Maghreb : pas d'essai pour l'instant (décision du fondateur du 22/11/2026), quelle que soit la configuration. */
 export const CLOSED_TRIAL_COUNTRIES = Object.freeze(['MA', 'DZ', 'TN']);
 /**
- * Durées (marge pour qu'un appel ne soit JAMAIS facturé 2 minutes) : timeLimit du <Dial> = 50 s de conversation ; annonce ~3 s avant la
- * mise en relation ; coupure serveur dure (minuterie + balayeur) à 56 s après le décroché, donc toujours avant 60 s facturées.
+ * Durées (décision du fondateur : « 59 secondes et tu coupes, on ne doit être facturé qu'une minute ») :
+ *  - la jambe vers le proche est facturée dès son décroché ; l'annonce (<Number url>) est jouée SUR cette jambe, avant la mise en
+ *    relation, donc elle est facturée et doit être DÉDUITE ;
+ *  - budget de l'annonce : 7 s (texte le plus long ≈ 5 s à la voix Polly, voir le test) ;
+ *  - timeLimit du <Dial> = 59 − 7 = 52 s, appliqué par Twilio lui-même (coupure principale, sans latence de notre côté). Que Twilio
+ *    compte ce délai depuis le décroché ou depuis la mise en relation, la jambe dure au plus 7 + 52 = 59 s : toujours < 60 s ;
+ *  - filet de secours (minuterie + balayeur) : 58 s après NOTRE horodatage du décroché (reçu après le décroché réel, avec la latence
+ *    du compte rendu Twilio) : s'il devait servir, la coupure resterait sous 60 s facturées ; il ne coupe jamais avant la fin normale
+ *    d'un appel dont l'annonce dure ≤ 6 s.
  */
-export const TRIAL_DIAL_TIME_LIMIT = 50;
-export const TRIAL_ANNOUNCE_SECONDS = 3;
-export const TRIAL_CUT_SECONDS = 56;
-/** Compatibilité : durée maximale côté serveur (coupure dure). */
-export const TRIAL_MAX_SECONDS = TRIAL_CUT_SECONDS;
+export const TRIAL_BILLED_MAX_SECONDS = 59;
+export const TRIAL_ANNOUNCE_BUDGET_SECONDS = 7;
+export const TRIAL_DIAL_TIME_LIMIT = TRIAL_BILLED_MAX_SECONDS - TRIAL_ANNOUNCE_BUDGET_SECONDS;
+export const TRIAL_CUT_SECONDS = 58;
+/** Durée maximale enregistrée d'un essai (secondes facturables de la jambe du proche). */
+export const TRIAL_MAX_SECONDS = TRIAL_BILLED_MAX_SECONDS;
 /** Un essai dont le code a été validé expire s'il n'a pas été utilisé dans les 30 minutes. */
 export const TRIAL_VERIFIED_TTL_MS = 30 * 60 * 1000;
 /** Sonnerie maximale chez le proche. */

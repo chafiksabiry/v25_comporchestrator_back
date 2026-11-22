@@ -50,7 +50,8 @@ export function callbackTokenValid(secret, trialId, t) {
 }
 
 /**
- * Consigne de numérotation : numéro d'essai du pays affiché, sonnerie 25 s, timeLimit 57 s (annonce ~3 s + 57 s = 1 minute), AUCUN
+ * Consigne de numérotation : numéro d'essai du pays affiché, sonnerie 25 s, timeLimit 52 s (budget annonce 7 s + 52 s = 59 s facturées
+ * au plus sur la jambe du proche, voir config.js), AUCUN
  * enregistrement, annonce jouée au proche quand il décroche, compte rendu « décroché / terminé » pour consommer l'essai au décroché.
  */
 export function buildTrialDialTwiml({ callerId, to, baseUrl, trialId, secret }) {

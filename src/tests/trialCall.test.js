@@ -272,7 +272,7 @@ test('destinations : international, surtaxé, gratuit/VoIP, numéro d\'essai ref
 
 // ------------------------------------------------------------------ jeton, webhook, consommation, coupure
 
-test('jeton : 120 s, sans appel entrant, application d\'essai dédiée ; webhook : TwiML timeLimit 50 (marge : jamais 2 minutes facturées), sonnerie 25, numéro d\'essai, sans enregistrement', async () => {
+test('jeton : 120 s, sans appel entrant, application d\'essai dédiée ; webhook : TwiML timeLimit 52 (59 s facturées au plus, annonce comprise), sonnerie 25, numéro d\'essai, sans enregistrement', async () => {
   const c = controller();
   const id = await verified(c);
   const { tk, hook } = await tokenAndDial(c, id);
@@ -282,7 +282,7 @@ test('jeton : 120 s, sans appel entrant, application d\'essai dédiée ; webhook
   assert.equal(decoded.grants.voice.outgoing.application_sid, AP);
   assert.ok(!decoded.grants.voice.incoming?.allow, 'aucun appel entrant');
   assert.equal(tk.body.trialNumber, FR_TRIAL);
-  assert.match(hook.body, new RegExp(`<Dial callerId="\\${FR_TRIAL}" answerOnBridge="true" timeout="25" timeLimit="50"`));
+  assert.match(hook.body, new RegExp(`<Dial callerId="\\${FR_TRIAL}" answerOnBridge="true" timeout="25" timeLimit="52"`));
   assert.match(hook.body, /<Number url="https:\/\/api\.test\/api\/trial-call\/webhooks\/twilio\/trial-call\/announce\?id=/);
   assert.match(hook.body, /statusCallbackEvent="answered completed"/);
   assert.match(hook.body, />\+33698765432<\/Number>/);
@@ -330,7 +330,7 @@ test('webhook signé pour de vrai (X-Twilio-Signature calculée avec le jeton Tw
   assert.match((await call(c.voiceWebhook, req(good))).body, /<Dial/);
 });
 
-test('consommation au décroché + coupure dure à 56 s (minuterie, jamais 60 s facturées) ; rappels signés', async () => {
+test('consommation au décroché + filet de secours à 58 s (minuterie, jamais 60 s facturées) ; rappels signés', async () => {
   const c = controller();
   const id = await verified(c);
   await tokenAndDial(c, id, { callSid: 'CAparent' });
@@ -344,10 +344,10 @@ test('consommation au décroché + coupure dure à 56 s (minuterie, jamais 60 s 
   assert.equal(trial.status, 'in_progress');
   assert.ok(trial.consumedAt);
   assert.equal(timers.length, 1);
-  assert.equal(timers[0].ms, 56_000, 'coupure armée à décroché + 56 s');
+  assert.equal(timers[0].ms, 58_000, 'filet armé à décroché + 58 s');
   const st = await call(c.state, mkReq({ params: { trialId: id } }));
-  assert.equal(st.body.remainingSec, 50);
-  clock += 56_000;
+  assert.equal(st.body.remainingSec, 59);
+  clock += 58_000;
   await timers[0].fn();
   await new Promise((r) => setImmediate(r));
   assert.deepEqual(hangups.map((h) => h.sid).sort(), ['CAchild', 'CAparent']);
@@ -355,20 +355,20 @@ test('consommation au décroché + coupure dure à 56 s (minuterie, jamais 60 s 
   trial = await store.getTrial(id);
   assert.equal(trial.status, 'ended');
   assert.equal(trial.endReason, 'time_limit');
-  assert.equal(trial.durationSec, 56);
+  assert.equal(trial.durationSec, 58);
   assert.ok(trial.durationSec < 60, 'jamais une seconde minute facturée');
   // Essai consommé : plus de jeton, éligibilité « déjà utilisé ».
   assert.equal((await call(c.token, mkReq({ body: { trialId: id } }))).body.code, 'used');
   assert.equal((await call(c.eligibility, mkReq({ query: { country: 'FR', deviceId: DEVICE } }))).body.reason, 'used');
 });
 
-test('balayeur : un appel décroché depuis plus de 56 s est coupé même sans minuterie (redémarrage)', async () => {
+test('balayeur : un appel décroché depuis plus de 58 s est coupé même sans minuterie (redémarrage)', async () => {
   const c = controller();
   const id = await verified(c);
   await tokenAndDial(c, id, { callSid: 'CAp' });
   await call(c.statusWebhook, mkReq({ userId: null, query: { id, t: TW.callbackToken(env.TRIAL_CALL_HASH_SECRET, id) }, body: { CallStatus: 'in-progress', CallSid: 'CAc' } }));
   const fresh = controller(); // nouveau processus : aucune minuterie en mémoire
-  clock += 55_000; await fresh.sweep();
+  clock += 57_000; await fresh.sweep();
   assert.equal(hangups.length, 0);
   clock += 2_000; await fresh.sweep();
   assert.equal((await store.getTrial(id)).status, 'ended');
@@ -546,7 +546,7 @@ test('compte rendu tardif d\'une numérotation précédente : ignoré ; le décr
   const tr = await store.getTrial(id);
   assert.equal(tr.status, 'in_progress');
   assert.ok(tr.consumedAt);
-  assert.equal(timers.at(-1).ms, 56_000);
+  assert.equal(timers.at(-1).ms, 58_000);
 });
 
 // ------------------------------------------------------------------ non-régression de la revue de sécurité (B1, B2, I1, I4)
@@ -717,4 +717,56 @@ test('I1 : les numéros d\'essai ne sont jamais proposés à la vente (inventair
 
 test('mineur : TURNSTILE_ALLOWED_HOSTNAMES obligatoire pour activer', () => {
   assert.deepEqual(C.missingForActivation(C.trialConfig({ ...ENABLED_ENV, TURNSTILE_ALLOWED_HOSTNAMES: '' })), ['TURNSTILE_ALLOWED_HOSTNAMES']);
+});
+
+test('59 s au plus : la durée maximale configurée produit TOUJOURS moins de 60 s facturables (annonce comprise)', async () => {
+  // Pire cas : Twilio compte le timeLimit depuis la mise en relation, après une annonce qui use tout son budget.
+  assert.equal(C.TRIAL_BILLED_MAX_SECONDS, 59);
+  assert.equal(C.TRIAL_ANNOUNCE_BUDGET_SECONDS + C.TRIAL_DIAL_TIME_LIMIT, C.TRIAL_BILLED_MAX_SECONDS);
+  assert.ok(C.TRIAL_ANNOUNCE_BUDGET_SECONDS + C.TRIAL_DIAL_TIME_LIMIT < 60);
+  // Le filet de secours (minuterie, balayeur) coupe avant 60 s, même avec ~1 s de latence du compte rendu « décroché ».
+  assert.ok(C.TRIAL_CUT_SECONDS + 1 < 60);
+  assert.ok(C.TRIAL_MAX_SECONDS < 60);
+  // La consigne envoyée à Twilio porte bien ce timeLimit.
+  const xml = TW.buildTrialDialTwiml({ callerId: FR_TRIAL, to: FRIEND, baseUrl: 'https://api.test', trialId: 'x', secret: 's' });
+  const limit = Number(/timeLimit="(\d+)"/.exec(xml)[1]);
+  assert.equal(limit, C.TRIAL_DIAL_TIME_LIMIT);
+  // Chaque annonce tient dans son budget (estimation prudente : 14 caractères par seconde, débit Polly habituel ≈ 15-18).
+  for (const [lang, text] of Object.entries(TW.TRIAL_ANNOUNCE_TEXTS)) {
+    const seconds = text.length / 14;
+    assert.ok(seconds <= C.TRIAL_ANNOUNCE_BUDGET_SECONDS, `${lang} : ${seconds.toFixed(1)} s > ${C.TRIAL_ANNOUNCE_BUDGET_SECONDS} s`);
+  }
+  // Durée enregistrée plafonnée à 59 s même si Twilio rapporte plus.
+  const c = controller();
+  const id = await verified(c);
+  await tokenAndDial(c, id, { callSid: 'CAz' });
+  const t = TW.callbackToken(env.TRIAL_CALL_HASH_SECRET, id);
+  await call(c.statusWebhook, mkReq({ userId: null, query: { id, t }, body: { CallStatus: 'in-progress', ParentCallSid: 'CAz', CallSid: 'CCz' } }));
+  await call(c.endWebhook, mkReq({ userId: null, query: { id, t }, body: { CallSid: 'CAz', DialCallStatus: 'completed', DialCallDuration: '75' } }));
+  assert.equal((await store.getTrial(id)).durationSec, 59);
+});
+
+test('m1 : validations parallèles du même code -> un seul essai créé', async () => {
+  const c = controller();
+  await call(c.otpSend, mkReq({ body: { phone: ME, country: 'FR', deviceId: DEVICE, turnstileToken: 'tok' } }));
+  const code = /(\d{6})/.exec(sms.at(-1).body)[1];
+  const req = () => mkReq({ body: { phone: ME, code, country: 'FR', deviceId: DEVICE } });
+  const results = await Promise.all([call(c.otpVerify, req()), call(c.otpVerify, req()), call(c.otpVerify, req())]);
+  assert.equal(results.filter((r) => r.code === 200).length, 1, JSON.stringify(results.map((r) => r.body)));
+  assert.equal(store.db.trials.length, 1);
+});
+
+test('m3 : un compteur refusé rend les incréments déjà faits (le téléphone d\'une victime n\'est pas bloqué 24 h)', async () => {
+  const c = controller();
+  // L'attaquant a épuisé sa limite par IP (5 / h) ; il tente ensuite avec le numéro de la victime depuis cette même IP.
+  const hour = Math.floor(clock / 3600000);
+  store.db.counters.set(`sms:ip:${F.fingerprint(env.TRIAL_CALL_HASH_SECRET, 'ip', '203.0.113.66')}:${hour}`, 5);
+  for (let i = 0; i < 5; i += 1) {
+    const r = await call(c.otpSend, mkReq({ userId: `att${i}`, ip: '203.0.113.66', body: { phone: ME, country: 'FR', deviceId: `dev-att-${i}x`, turnstileToken: 'tok' } }));
+    assert.equal(r.body.code, 'too_many_codes');
+  }
+  assert.equal(await store.counter(`sms:phone:${F.fingerprint(env.TRIAL_CALL_HASH_SECRET, 'phone', ME)}:${Math.floor(clock / 86400000)}`), 0, 'compteur du téléphone rendu');
+  // La victime, depuis son appareil et son IP, reçoit bien son code.
+  const ok = await call(c.otpSend, mkReq({ userId: 'victime', ip: '198.51.100.20', body: { phone: ME, country: 'FR', deviceId: 'dev-victime-1', turnstileToken: 'tok' } }));
+  assert.equal(ok.code, 200);
 });

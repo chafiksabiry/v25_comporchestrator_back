@@ -5,7 +5,7 @@ import { clientIp } from '../integrations/clientIp.js';
 import { createRateLimiter } from '../integrations/rateLimit.js';
 import { twilioRequestValid } from '../services/twilioSignature.js';
 import {
-  CLOSED_TRIAL_COUNTRIES, OTP_MAX_ATTEMPTS, OTP_RESEND_AFTER_S, OTP_TTL_MS, TRIAL_ANNOUNCE_SECONDS, TRIAL_CUT_SECONDS, TRIAL_DIAL_TIME_LIMIT,
+  CLOSED_TRIAL_COUNTRIES, OTP_MAX_ATTEMPTS, OTP_RESEND_AFTER_S, OTP_TTL_MS, TRIAL_BILLED_MAX_SECONDS, TRIAL_CUT_SECONDS,
   TRIAL_MAX_DIALS, TRIAL_MAX_SECONDS, TRIAL_TOKEN_TTL_S, TRIAL_VERIFIED_TTL_MS, allTrialNumbers, trialConfig, trialEnabled, trialNumberFor,
 } from '../services/trialCall/config.js';
 import { cleanDeviceId, fingerprint, ipNetwork, normalizeEmail } from '../services/trialCall/fingerprints.js';
@@ -25,7 +25,7 @@ import { sendTrialAlert } from '../services/trialCall/anomaly.js';
  * Parcours : éligibilité -> code SMS (Turnstile vérifié côté serveur, limites, Twilio Lookup « mobile » seulement) -> vérification du code
  * (crée l'essai) -> contrôle de la destination -> jeton vocal (120 s, application TwiML dédiée) + preuve à usage unique -> webhook signé
  * par Twilio qui revérifie tout, prend un VERROU par personne et compose depuis le numéro d'essai DÉDIÉ du pays -> essai consommé au
- * décroché (revérifié), timeLimit 50 s et coupure dure à 56 s (minuterie + balayeur), 3 numérotations au plus.
+ * décroché (revérifié), jambe du proche ≤ 59 s facturées (annonce 7 s + timeLimit 52 s ; filet minuterie + balayeur à 58 s), 3 numérotations au plus.
  * Un seul essai en cours par personne (compte, téléphone, e-mail, appareil) ; un code validé expire au bout de 30 min.
  * Limites persistantes et atomiques (compteurs en base) par compte, téléphone, appareil, IP, réseau (/24, /64), destination, et plafonds
  * GLOBAUX horaires et journaliers de SMS et de Lookup qui mettent l'essai en pause.
@@ -78,7 +78,15 @@ export function createTrialCallController({
   const dayKey = (t) => Math.floor(t / DAY);
   /** Compteurs persistants atomiques : renvoie la première clé dont la limite est atteinte, ou null. */
   async function overLimit(limits) {
-    for (const [key, limit, ttlMs] of limits) if (!(await store.bump(key, limit, new Date(now() + ttlMs)))) return key;
+    const done = [];
+    for (const [key, limit, ttlMs] of limits) {
+      if (!(await store.bump(key, limit, new Date(now() + ttlMs)))) {
+        // Refus : les compteurs déjà incrémentés pour cette demande sont rendus (sinon un tiers pourrait épuiser ceux d'une victime).
+        for (const k of done) await store.unbump(k);
+        return key;
+      }
+      done.push(key);
+    }
     return null;
   }
   /** Plafond GLOBAL horaire et journalier (SMS ou Lookup), en base : dépassé = pause de la carte d'essai + alerte (une seule fois). */
@@ -187,7 +195,7 @@ export function createTrialCallController({
     cutTimers.set(key, setTimer(() => { cutTimers.delete(key); cut(key).catch((e) => console.error('[trial-call] minuterie :', e?.message || e)); }, delay));
   }
 
-  /** Balayeur (toutes les 15 s) : appels décrochés depuis plus de 56 s, numérotations sans nouvelle depuis 2 min, codes validés expirés. */
+  /** Balayeur (toutes les 5 s) : appels décrochés depuis plus de 58 s (filet de secours, après un redémarrage), numérotations sans nouvelle depuis 2 min, codes validés expirés. */
   async function sweep() {
     const t = now();
     for (const trial of await store.findTrials({ status: 'in_progress', answeredAt: { lt: new Date(t - TRIAL_CUT_SECONDS * 1000) } })) await cut(trial.id);
@@ -223,7 +231,7 @@ export function createTrialCallController({
         return res.json({
           eligible: true,
           turnstileSiteKey: cfg.turnstileSiteKey,
-          maxSeconds: TRIAL_DIAL_TIME_LIMIT,
+          maxSeconds: TRIAL_BILLED_MAX_SECONDS,
           maxDials: TRIAL_MAX_DIALS,
           ...(pending && pending.country === country && pending.status === 'verified' && !isExpired(pending) ? { pendingTrial: { trialId: pending.id, attemptsLeft: attemptsLeft(pending) } } : {}),
         });
@@ -348,6 +356,8 @@ export function createTrialCallController({
           if (counted.attempts >= OTP_MAX_ATTEMPTS) { await store.markOtpsUsed(userId, phoneHash); return fail(res, 429, 'otp_locked'); }
           return fail(res, 422, 'otp_invalid', { attemptsLeft: OTP_MAX_ATTEMPTS - counted.attempts });
         }
+        // Usage du code ATOMIQUE : une seule validation parallèle le prend (usedAt posé sous condition), les autres sont refusées.
+        if (!(await store.claimOtp(otp.id))) return fail(res, 410, 'otp_expired');
         await store.markOtpsUsed(userId, phoneHash);
         const person = { userId, emailHash: h.emailHash, deviceHash: h.deviceHash, phoneHash };
         if (await store.findUsed(person)) return fail(res, 409, 'used');
@@ -417,7 +427,7 @@ export function createTrialCallController({
         const appSid = await ensureTrialApp(client(cfg), { req, pinnedSid: cfg.pinnedAppSid, env });
         const token = await createTrialVoiceToken({ client: client(cfg), accountSid: cfg.twilioAccountSid, identity, outgoingApplicationSid: appSid, ttl: TRIAL_TOKEN_TTL_S });
         const ticket = signTrialTicket({ secret: cfg.hashSecret, trialId: trial.id, identity, nonce, now: now() });
-        return res.json({ ok: true, token, params: { TrialId: trial.id, Nonce: nonce, Ticket: ticket }, trialNumber: trial.trialNumber, trialNumberDisplay: display(trial.trialNumber), maxSeconds: TRIAL_DIAL_TIME_LIMIT, attemptsLeft: attemptsLeft(updated) });
+        return res.json({ ok: true, token, params: { TrialId: trial.id, Nonce: nonce, Ticket: ticket }, trialNumber: trial.trialNumber, trialNumberDisplay: display(trial.trialNumber), maxSeconds: TRIAL_BILLED_MAX_SECONDS, attemptsLeft: attemptsLeft(updated) });
       } catch (e) {
         console.error('[trial-call] token :', e?.message || e);
         return fail(res, 500, 'error');
@@ -429,9 +439,9 @@ export function createTrialCallController({
       const trial = await ownedTrial(req, req.params?.trialId).catch(() => null);
       if (!trial) return fail(res, 404, 'trial_not_found');
       const status = trial.status === 'dialing' ? 'ringing' : trial.status;
-      // Secondes de conversation restantes : timeLimit (50 s) compté après l'annonce (~3 s) qui suit le décroché.
-      const talked = trial.answeredAt ? Math.max(0, Math.floor((now() - new Date(trial.answeredAt).getTime()) / 1000) - TRIAL_ANNOUNCE_SECONDS) : 0;
-      const remaining = trial.status === 'in_progress' && trial.answeredAt ? Math.max(0, Math.min(TRIAL_DIAL_TIME_LIMIT, TRIAL_DIAL_TIME_LIMIT - talked)) : null;
+      // Secondes restantes sur les 59 s facturables de la jambe du proche, comptées depuis son décroché (annonce comprise).
+      const elapsed = trial.answeredAt ? Math.max(0, Math.floor((now() - new Date(trial.answeredAt).getTime()) / 1000)) : 0;
+      const remaining = trial.status === 'in_progress' && trial.answeredAt ? Math.max(0, TRIAL_BILLED_MAX_SECONDS - elapsed) : null;
       return res.json({ ok: true, status, remainingSec: remaining, durationSec: trial.durationSec ?? null, attemptsLeft: attemptsLeft(trial), trialNumber: trial.trialNumber, trialNumberDisplay: display(trial.trialNumber) });
     },
 

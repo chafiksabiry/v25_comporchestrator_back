@@ -74,6 +74,8 @@ export const mongoTrialStore = {
   async lastOtpSendAt(userId) { const d = await TrialOtp.findOne({ userId }).sort({ createdAt: -1 }).select('createdAt').lean(); return d?.createdAt || null; },
   async createOtp(doc) { return plain((await TrialOtp.create(doc)).toObject()); },
   async incOtpAttempts(id, max) { return plain(await TrialOtp.findOneAndUpdate({ _id: id, attempts: { $lt: max }, usedAt: null }, { $inc: { attempts: 1 } }, { new: true }).lean()); },
+  /** Prend le code atomiquement (usedAt absent -> posé) ; null s'il a déjà été pris. */
+  async claimOtp(id) { return validId(id) ? plain(await TrialOtp.findOneAndUpdate({ _id: id, usedAt: null }, { $set: { usedAt: new Date() } }, { new: true }).lean()) : null; },
   async markOtpsUsed(userId, phoneHash) { await TrialOtp.updateMany({ userId, phoneHash, usedAt: null }, { $set: { usedAt: new Date() } }); },
   async countTrials(field, value, since) { return value ? TrialCall.countDocuments({ [field]: value, createdAt: { $gte: since } }) : 0; },
   async countDestination(toHash, since) { return toHash ? TrialCall.countDocuments({ toHash, consumedAt: { $gte: since } }) : 0; },

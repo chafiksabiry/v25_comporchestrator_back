@@ -39,6 +39,7 @@ export function createMemoryTrialStore({ email = {} } = {}) {
     async lastOtpSendAt(userId) { const o = [...db.otps].reverse().find((x) => x.userId === userId); return o ? o.createdAt : null; },
     async createOtp(doc) { const d = { ...doc, id: id(), createdAt: doc.createdAt || new Date() }; db.otps.push(d); return d; },
     async incOtpAttempts(oid, max) { const d = db.otps.find((o) => o.id === oid); if (!d || d.usedAt || d.attempts >= max) return null; d.attempts += 1; return { ...d }; },
+    async claimOtp(oid) { const d = db.otps.find((o) => o.id === oid); if (!d || d.usedAt) return null; d.usedAt = new Date(); return { ...d }; },
     async markOtpsUsed(userId, phoneHash) { for (const o of db.otps) if (o.userId === userId && o.phoneHash === phoneHash && !o.usedAt) o.usedAt = new Date(); },
     async countTrials(field, value, since) { return value ? db.trials.filter((d) => d[field] === value && t(d.createdAt) >= t(since)).length : 0; },
     async countDestination(toHash, since) { return toHash ? db.trials.filter((d) => d.toHash === toHash && d.consumedAt && t(d.consumedAt) >= t(since)).length : 0; },
