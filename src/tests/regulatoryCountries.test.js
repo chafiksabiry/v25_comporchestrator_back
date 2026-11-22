@@ -1,7 +1,8 @@
 // Run: node --test src/tests/regulatoryCountries.test.js
 // États-Unis et Canada : Twilio n'exige aucun Regulatory Bundle pour un numéro local (absents de
 // https://www.twilio.com/en-us/guidelines/regulatory). L'API Regulations renvoie pourtant des régulations pour ces pays : elles ne
-// doivent plus bloquer la recherche, la disponibilité Nomad Solo ni le contrôle avant paiement. France et Royaume-Uni : inchangés.
+// doivent plus bloquer le contrôle avant paiement. La RECHERCHE n'est plus soumise au dossier pour aucun pays (règle du fondateur :
+// stock d'abord, puis numéros à acheter chez Twilio) ; le dossier reste exigé à l'achat (initLineCheckout) pour FR et GB.
 // Twilio simulé : aucun appel réel.
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -87,9 +88,10 @@ describe('searchTwilioNumbers', () => {
     assert.deepEqual(twilio.calls.search, ['US', 'CA']);
   });
 
-  it('GB sans dossier configuré : toujours bloqué (REGULATORY_BUNDLE_REQUIRED)', async () => {
-    await assert.rejects(phoneNumberService.searchTwilioNumbers({ countryCode: 'GB' }), (e) => e.code === 'REGULATORY_BUNDLE_REQUIRED' && e.countryCode === 'GB');
-    assert.deepEqual(twilio.calls.search, []);
+  it('GB sans dossier configuré : la recherche a lieu quand même (chercher n’exige pas de dossier, seul l’achat en a besoin)', async () => {
+    const gb = await phoneNumberService.searchTwilioNumbers({ countryCode: 'GB' });
+    assert.deepEqual(gb.map((n) => n.phoneNumber), [SAMPLE.GB]);
+    assert.deepEqual(twilio.calls.search, ['GB']);
   });
 
   it('FR avec dossier approuvé : inchangé', async () => {
@@ -97,17 +99,18 @@ describe('searchTwilioNumbers', () => {
     assert.deepEqual(fr.map((n) => n.phoneNumber), [SAMPLE.FR]);
   });
 
-  it('FR avec dossier non approuvé : toujours bloqué', async () => {
+  it('FR avec dossier non approuvé : la recherche a lieu (le contrôle reste à l’achat)', async () => {
     phoneNumberService.twilioClient = fakeTwilio({ approved: [] }).client;
-    await assert.rejects(phoneNumberService.searchTwilioNumbers({ countryCode: 'FR' }), (e) => e.code === 'REGULATORY_BUNDLE_REQUIRED');
+    const fr = await phoneNumberService.searchTwilioNumbers({ countryCode: 'FR' });
+    assert.deepEqual(fr.map((n) => n.phoneNumber), [SAMPLE.FR]);
   });
 });
 
 describe('disponibilité Nomad Solo (stock vide)', () => {
-  it('US et CA disponibles, GB « regulatory », FR disponible', async () => {
+  it('stock vide : disponible dès que la recherche Twilio trouve des numéros, dossier ou non (US, CA, GB, FR)', async () => {
     assert.deepEqual(await countryAvailability('US', { fresh: true }), { available: true });
     assert.deepEqual(await countryAvailability('CA', { fresh: true }), { available: true });
-    assert.deepEqual(await countryAvailability('GB', { fresh: true }), { available: false, reason: 'regulatory' });
+    assert.deepEqual(await countryAvailability('GB', { fresh: true }), { available: true });
     assert.deepEqual(await countryAvailability('FR', { fresh: true }), { available: true });
   });
 });
