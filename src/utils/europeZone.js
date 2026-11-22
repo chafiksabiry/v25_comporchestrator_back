@@ -1,3 +1,5 @@
+import { sameNumberZone } from './numberZone.js';
+
 /**
  * Zone « Europe » de la règle des numéros : une entreprise située dans l'un de ces pays peut chercher et acheter des numéros dans
  * n'importe lequel des autres (exception réglementaire actée par le propriétaire). Hors de cette zone, seul le pays de l'entreprise
@@ -44,6 +46,8 @@ export function numberCountryAllowed(companyCountry, numberCountry, { identityCo
   if (!company || !number) return false;
   if (company === number) return true;
   if (EUROPE_ZONE.has(company) && EUROPE_ZONE.has(number)) return true;
+  // Indicatif +1 partagé (numberZone.js) : un abonné canadien prend un numéro +1 (classé US) et inversement.
+  if (sameNumberZone(company, number)) return true;
   const id = iso(identityCountry);
-  return Boolean(id) && id === number && IDENTITY_NUMBER_COUNTRIES.includes(id);
+  return Boolean(id) && IDENTITY_NUMBER_COUNTRIES.includes(id) && sameNumberZone(id, number);
 }
