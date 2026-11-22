@@ -45,6 +45,9 @@ import { syncPlanMetadataFromStripe } from './src/services/planMetadataSync.js';
 import { retryFailedAnalyses } from './src/services/voicemailAnalysis.js';
 import { applyMailOwnership } from './src/services/mailOwnershipMigration.js';
 import { startGraceSweeper } from './src/services/minutesGrace.js';
+import { trialCallRoutes, trialCallController } from './src/routes/trialCall.js';
+import { startTrialCallJobs } from './src/services/trialCall/jobs.js';
+import { mongoTrialStore } from './src/services/trialCall/store.js';
 
 const app = express();
 
@@ -137,6 +140,8 @@ app.use('/api/reception', receptionRoutes);
 app.use('/api/secretariat', secretariatToolsRoutes);
 app.use('/api/reach', reachRoutes);
 app.use('/api/company-notifications', companyNotificationRoutes);
+// Appel d'essai gratuit (Nomad Solo, avant paiement) : désactivé par défaut (TRIAL_CALL_ENABLED), voir src/services/trialCall/config.js.
+app.use('/api/trial-call', trialCallRoutes);
 
 // Health check to verify deployment
 app.get('/api/health', (req, res) => {
@@ -228,6 +233,9 @@ startGraceSweeper({
   getClient: async () => (await import('./src/services/phoneNumberService.js')).phoneNumberService.twilioClient,
   isReady: () => mongoose.connection.readyState === 1,
 });
+
+// Appel d'essai gratuit : balayeur (coupure à 60 s) et détection d'anomalie, seulement si l'essai est actif au démarrage.
+startTrialCallJobs({ controller: trialCallController, store: mongoTrialStore, isReady: () => mongoose.connection.readyState === 1 });
 
 // Messages du répondeur dont l'analyse IA a échoué pour une cause transitoire (délai dépassé, réseau, 5xx) : reprise différée, 3 reprises au plus.
 setInterval(() => {
