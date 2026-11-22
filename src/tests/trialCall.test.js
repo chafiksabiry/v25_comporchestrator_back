@@ -527,3 +527,20 @@ test('Lookup facturé : 5 par heure et par IP au plus, même refusé (numéros V
   assert.equal(codes.at(-1), 'too_many_codes');
   assert.equal(sms.length, 0);
 });
+
+test('compte rendu tardif d\'une numérotation précédente : ignoré ; le décroché suivant consomme bien l\'essai', async () => {
+  const c = controller();
+  const id = await verified(c);
+  const t = TW.callbackToken(env.TRIAL_CALL_HASH_SECRET, id);
+  await tokenAndDial(c, id, { callSid: 'CA1' });
+  await call(c.endWebhook, mkReq({ userId: null, query: { id, t }, body: { CallSid: 'CA1', DialCallStatus: 'no-answer' } }));
+  await tokenAndDial(c, id, { callSid: 'CA2' });
+  // « no-answer » tardif de CA1 pendant que CA2 sonne : sans effet.
+  await call(c.statusWebhook, mkReq({ userId: null, query: { id, t }, body: { CallStatus: 'no-answer', ParentCallSid: 'CA1' } }));
+  assert.equal((await store.getTrial(id)).status, 'dialing');
+  await call(c.statusWebhook, mkReq({ userId: null, query: { id, t }, body: { CallStatus: 'in-progress', ParentCallSid: 'CA2', CallSid: 'CAc2' } }));
+  const tr = await store.getTrial(id);
+  assert.equal(tr.status, 'in_progress');
+  assert.ok(tr.consumedAt);
+  assert.equal(timers.at(-1).ms, 60_000);
+});

@@ -107,12 +107,14 @@ export function createTrialCallController({
 
   // ------------------------------------------------------------------ fin d'appel et coupure à 60 s
 
-  async function finish(trialId, { durationSec = null, reason = 'completed' } = {}) {
+  async function finish(trialId, { durationSec = null, reason = 'completed', callSid = '' } = {}) {
     const t = now();
-    const timer = cutTimers.get(String(trialId));
-    if (timer) { clearTimer(timer); cutTimers.delete(String(trialId)); }
     const trial = await store.getTrial(trialId);
     if (!trial) return null;
+    // Compte rendu tardif d'une numérotation précédente : ignoré (il ne doit ni clore ni « libérer » la numérotation en cours).
+    if (callSid && trial.callSid && callSid !== trial.callSid) return trial;
+    const timer = cutTimers.get(String(trialId));
+    if (timer) { clearTimer(timer); cutTimers.delete(String(trialId)); }
     if (trial.status === 'in_progress') {
       const answered = trial.answeredAt ? new Date(trial.answeredAt).getTime() : t;
       const sec = Math.max(0, Math.min(TRIAL_MAX_SECONDS, Number.isFinite(Number(durationSec)) && durationSec !== null ? Number(durationSec) : Math.round((t - answered) / 1000)));
@@ -461,13 +463,15 @@ export function createTrialCallController({
         const status = String(req.body?.CallStatus || '');
         if (status === 'in-progress' || status === 'answered') {
           const t = now();
-          const consumed = await store.updateTrial(trialId, { status: 'dialing', consumedAt: null }, { set: { status: 'in_progress', answeredAt: new Date(t), consumedAt: new Date(t), childCallSid: String(req.body?.CallSid || '') } });
+          const parent = String(req.body?.ParentCallSid || '');
+          // Tout décroché consomme l'essai (même un compte rendu inattendu) : le coût est engagé, la coupure à 60 s est armée.
+          const consumed = await store.updateTrial(trialId, { status: ['dialing', 'verified'], consumedAt: null }, { set: { status: 'in_progress', answeredAt: new Date(t), consumedAt: new Date(t), childCallSid: String(req.body?.CallSid || ''), ...(parent ? { callSid: parent } : {}) } });
           if (consumed) {
             scheduleCut(trialId, t);
             await event('call_answered', { userId: consumed.userId, trialId, country: consumed.country });
           }
         } else if (['completed', 'busy', 'no-answer', 'failed', 'canceled'].includes(status)) {
-          await finish(trialId, { durationSec: req.body?.CallDuration != null ? Number(req.body.CallDuration) : null, reason: status });
+          await finish(trialId, { durationSec: req.body?.CallDuration != null ? Number(req.body.CallDuration) : null, reason: status, callSid: String(req.body?.ParentCallSid || '') });
         }
       } catch (e) {
         console.error('[trial-call] status :', e?.message || e);
@@ -483,7 +487,7 @@ export function createTrialCallController({
       if (!verifyRequest(req, cfg) || !callbackTokenValid(cfg.hashSecret, trialId, req.query?.t)) return send(hangupTwiml(), 403);
       try {
         const dur = req.body?.DialCallDuration != null ? Number(req.body.DialCallDuration) : null;
-        await finish(trialId, { durationSec: dur, reason: String(req.body?.DialCallStatus || 'completed') });
+        await finish(trialId, { durationSec: dur, reason: String(req.body?.DialCallStatus || 'completed'), callSid: String(req.body?.CallSid || '') });
       } catch (e) {
         console.error('[trial-call] end :', e?.message || e);
       }
