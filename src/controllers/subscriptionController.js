@@ -1,4 +1,3 @@
-import { promotionCodesAllowed } from '../services/promotionCode.js';
 import mongoose from 'mongoose';
 import { guardCompanyAccess } from '../middleware/companyGuard.js';
 import { SubscriptionPlan } from '../models/SubscriptionPlan.js';
@@ -152,8 +151,7 @@ export { isCallcenterProduct };
 
 export const subscriptionController = {
   /**
-   * GET /api/subscriptions/launch-offers (public). Grille 2026-11 : plus aucune offre de lancement sur CLOUD et NOMAD (décision du 18/11/2026,
-   * les prix sont présentés comme des « Tarifs de lancement »). La route ne publiait que des offres CLOUD et NOMAD : elle renvoie une liste vide,
+   * GET /api/subscriptions/launch-offers (public). Aucune promotion (décision du fondateur, 22/11/2026) : la route renvoie une liste vide,
    * sans lire les coupons Stripe. Elle reste en place pour les pages déjà chargées qui l'appellent encore.
    */
   getLaunchOffers: async (_req, res) => {
@@ -235,6 +233,13 @@ export const subscriptionController = {
       const access = await guardCompanyAccess(req, res, companyId, { ownerOnly: true });
       if (!access) return;
       if (String(userId) !== String(access.userId)) return res.status(403).json({ error: 'Forbidden', code: 'forbidden' });
+      // Aucune promotion (décision du fondateur, 22/11/2026), toutes offres : un code transmis est refusé avant toute création de paiement.
+      if (promotionCode != null && String(promotionCode).trim() !== '') {
+        return res.status(400).json({
+          error: 'promotion_code_not_allowed',
+          message: 'Aucun code promotionnel n\u2019est accepté : le prix payé est le prix affiché.',
+        });
+      }
 
       let resolved;
       try {
@@ -252,46 +257,12 @@ export const subscriptionController = {
         return res.status(404).json({ error: 'Plan not found for this priceId' });
       }
       const { plan, stripePriceId: effectivePriceId } = resolved;
-      // Offres CLOUD et NOMAD (grille 2026-11, « Tarifs de lancement ») : aucun code promotionnel, ni saisi par le client ni transmis par la page.
-      // Offres TAAS : inchangé (code facultatif). Vérifié avant toute création de paiement.
-      const allowPromotionCodes = promotionCodesAllowed(resolved.productMetadata ?? plan.metadata);
-      const hasPromotionCode = promotionCode != null && String(promotionCode).trim() !== '';
-      if (hasPromotionCode && !allowPromotionCodes) {
-        return res.status(400).json({
-          error: 'promotion_code_not_allowed',
-          message: 'Aucun code promotionnel ne s\u2019applique à cette offre : son prix est déjà un tarif de lancement.',
-        });
-      }
       // Nomad Solo (décision du 19/11) : souscrit seulement là où un numéro est disponible, vérifié ici AVANT toute création de
       // paiement, à partir du profil enregistré (pays de résidence, pays de la pièce FR/GB/US) ; jamais d'après le corps de la requête.
       if (callcenterTierFromMetadata(resolved.productMetadata ?? plan.metadata) === 'nomad_solo') {
         const eligibility = await soloCheckoutEligibility(req, companyId);
         if (!eligibility.ok) return res.status(eligibility.status).json(eligibility.body);
       }
-      // Code promotionnel (offres TAAS) : abonnement Stripe uniquement, résolu avant toute création de paiement.
-      let promotionCodeId = null;
-      let promotionCodeText = null;
-      if (hasPromotionCode) {
-        if (provider !== 'stripe') {
-          return res.status(400).json({
-            error: 'promotion_code_unsupported',
-            message: 'Le code promotionnel n\u2019est disponible que pour le paiement par carte (Stripe).',
-          });
-        }
-        if (!stripeService.isConfigured()) {
-          return res.status(503).json({ error: 'Stripe not configured', message: 'Définissez STRIPE_SECRET_KEY.' });
-        }
-        try {
-          promotionCodeId = await stripeService.resolvePromotionCode(promotionCode);
-          promotionCodeText = String(promotionCode).trim();
-        } catch (err) {
-          if (err?.code === 'invalid_promotion_code') {
-            return res.status(400).json({ error: 'invalid_promotion_code', message: err.message });
-          }
-          throw err;
-        }
-      }
-
       // Devise choisie par le visiteur (mêmes montants en EUR, USD, GBP) si le prix Stripe la propose ; sinon celle du prix.
       const chosenCurrency = pickCurrency(requestedCurrency, resolved.amounts, resolved.currency);
       const amountCents = resolved.amounts?.[chosenCurrency] ?? resolved.amountCents;
@@ -309,8 +280,7 @@ export const subscriptionController = {
           companyId: String(companyId),
           stripePriceId: effectivePriceId,
           planId: plan._id,
-          planName: planName || plan.name,
-          ...(promotionCodeText ? { promotionCode: promotionCodeText } : {})
+          planName: planName || plan.name
         }
       });
 
@@ -358,9 +328,8 @@ export const subscriptionController = {
             userId,
             effectivePriceId,
             metadata,
-            promotionCodeId,
             chosenCurrency,
-            { locale: stripeLocale, allowPromotionCodes }
+            { locale: stripeLocale }
           );
           payment.providerRef = session.id;
           payment.checkoutUrl = '';
@@ -396,9 +365,8 @@ export const subscriptionController = {
           successUrl,
           cancelUrl,
           metadata,
-          promotionCodeId,
           chosenCurrency,
-          { locale: stripeLocale, allowPromotionCodes }
+          { locale: stripeLocale }
         );
         checkoutUrl = session.url;
         payment.providerRef = session.id;
@@ -534,8 +502,6 @@ export const subscriptionController = {
         if (!eligibility.ok) return res.status(eligibility.status).json(eligibility.body);
       }
       console.log(`💳 Creating checkout session for user ${userId}, plan ${planName || 'unknown'}, price ${priceId}`);
-      // Offres CLOUD et NOMAD : pas de champ de code promotionnel (voir initPopupCheckout) ; offres TAAS : inchangé.
-      const allowPromotionCodes = await stripeService.priceAllowsPromotionCodes(priceId);
       const session = await stripeService.createCheckoutSession(
         userId,
         priceId,
@@ -543,8 +509,7 @@ export const subscriptionController = {
         cancelUrl,
         { companyId }, // Pass metadata
         null,
-        null,
-        { locale: stripeLocaleFromRequest(req), allowPromotionCodes }
+        { locale: stripeLocaleFromRequest(req) }
       );
 
       res.json({ 
