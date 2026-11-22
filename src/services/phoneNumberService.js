@@ -2,6 +2,7 @@ import { buildLocalSearchOptions, buildPrefixSearchOptions } from './numberSearc
 import { frenchZoneFor, frenchZonePrefix, zoneOfFrenchNumber } from './frenchZones.js';
 import { addressSidFromAssignments, isRejectedRange, rememberRejectedRange } from './rejectedNumberRanges.js';
 import { countryOfE164 } from '../utils/e164Country.js';
+import { sameNumberZone } from '../utils/numberZone.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { cancelLineSubscription } from './phoneLineSubscription.js';
 import { config } from '../config/env.js';
@@ -12,6 +13,14 @@ import axios from 'axios';
 import FormData from 'form-data';
 import mongoose from 'mongoose';
 import { heldNumbers } from './inventoryHolders.js';
+
+/**
+ * Pays où Twilio n'exige AUCUN dossier réglementaire (Regulatory Bundle) pour acheter un numéro local : ils ne figurent pas dans la
+ * liste des pays à exigences de Twilio (https://www.twilio.com/en-us/guidelines/regulatory, qui liste la France et le Royaume-Uni).
+ * L'API Regulations de Twilio renvoie pourtant des régulations pour ces pays (dossiers facultatifs) : sans cette liste, la recherche,
+ * la disponibilité Nomad Solo et le contrôle avant paiement les bloquaient à tort (« regulatory »). +1 couvre les deux pays.
+ */
+export const NO_LOCAL_BUNDLE_COUNTRIES = Object.freeze(['US', 'CA']);
 
 /** Nom convivial donné par la plateforme aux numéros qu'elle achète : sert à reconnaître l'inventaire proposable. */
 export const INVENTORY_FRIENDLY_PREFIX = 'Gig Number:';
@@ -210,28 +219,12 @@ class PhoneNumberService {
     // (~10) when under-requested, which empties the buy UI after filtering.
     const limit = Math.min(Math.max(parseInt(searchParams.limit, 10) || 50, 50), 100);
     const areaCode = searchParams.areaCode;
-    const numberType = 'local';
 
-    // Countries like FR require an approved Twilio Regulatory Bundle before
-    // any number can be purchased. Skip the Twilio inventory search when we
-    // cannot actually provision — avoids showing numbers the user can pay for
-    // but never activate (Twilio error 21649).
-    const bundleRequired = await this.isRegulatoryBundleRequired(countryCode, numberType);
-    if (bundleRequired) {
-      const bundleSid = this.getBundleSidForCountry(countryCode);
-      const approved = await this.isBundleApproved(bundleSid);
-      if (!approved) {
-        console.log(
-          `⛔ Twilio search skipped for ${countryCode}: regulatory bundle required but not approved (bundle=${bundleSid || 'missing'})`
-        );
-        const err = new Error(
-          `Les numéros ${countryCode} nécessitent un Regulatory Bundle Twilio approuvé. Soumettez vos documents dans la console Twilio ou choisissez un pays sans régulation.`
-        );
-        err.code = 'REGULATORY_BUNDLE_REQUIRED';
-        err.countryCode = countryCode;
-        throw err;
-      }
-    }
+    // Chercher dans le catalogue Twilio n'exige aucun dossier réglementaire : AvailablePhoneNumbers n'a pas de paramètre Bundle
+    // (https://www.twilio.com/docs/phone-numbers/api/availablephonenumberlocal-resource). Le dossier et l'adresse ne servent qu'à
+    // l'ACHAT (IncomingPhoneNumbers : BundleSid / AddressSid, https://www.twilio.com/docs/phone-numbers/api/incomingphonenumber-resource) :
+    // ils sont attachés dans purchaseTwilioNumber, et le contrôle avant paiement (initLineCheckout) reste en place. Règle du fondateur :
+    // proposer les numéros du stock (marqués), puis ceux à acheter chez Twilio.
 
     const mapNumber = (number) => ({
       phoneNumber: number.phoneNumber,
@@ -463,11 +456,14 @@ class PhoneNumberService {
    * True when Twilio mandates regulatory compliance docs for this country/type.
    */
   async isRegulatoryBundleRequired(isoCountry, numberType = 'local') {
+    const cc = String(isoCountry || '').toUpperCase();
+    // États-Unis / Canada : aucun dossier exigé pour un numéro local (voir NO_LOCAL_BUNDLE_COUNTRIES), quelle que soit la réponse de l'API.
+    if (String(numberType || 'local').toLowerCase() === 'local' && NO_LOCAL_BUNDLE_COUNTRIES.includes(cc)) return false;
     try {
       const regulations = await this.twilioClient.numbers.v2.regulatoryCompliance
         .regulations
         .list({
-          isoCountry: String(isoCountry || '').toUpperCase(),
+          isoCountry: cc,
           numberType,
           limit: 1
         });
@@ -691,7 +687,8 @@ class PhoneNumberService {
   async listClaimableInventory({ countryCode, limit = 50 } = {}) {
     const cc = String(countryCode || '').toUpperCase();
     const owned = await this.twilioClient.incomingPhoneNumbers.list({ limit: 1000 });
-    const candidates = owned.filter((n) => this.isInventoryCandidate(n) && this.guessCountryFromE164(n.phoneNumber) === cc);
+    // Zone d'indicatif (numberZone.js) : pour US comme pour CA, tout numéro +1 libre du stock convient (+1 est classé US par e164Country).
+    const candidates = owned.filter((n) => this.isInventoryCandidate(n) && sameNumberZone(this.guessCountryFromE164(n.phoneNumber), cc));
     const free = await this.unassignedAmong(candidates);
     return free.slice(0, limit).map((n) => ({
       phoneNumber: n.phoneNumber,

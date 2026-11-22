@@ -2,6 +2,7 @@ import { phoneNumberService } from './phoneNumberService.js';
 import { checkNumberCountry } from './numberCountry.js';
 import { companyNumberProfile, normalizeCountryCode, ScopeError } from '../middleware/companyScope.js';
 import { IDENTITY_NUMBER_COUNTRIES } from '../utils/europeZone.js';
+import { numberZonePeers } from '../utils/numberZone.js';
 
 /**
  * Disponibilité des numéros dans un pays (décision du 19/11) : Nomad Solo n'est souscrit que là où HARX peut vraiment fournir un
@@ -47,14 +48,25 @@ export async function countryAvailability(countryCode, { service = phoneNumberSe
   if (inventory.length) {
     value = { available: true };
   } else {
-    try {
-      const numbers = await service.searchTwilioNumbers({ countryCode: cc, limit: 50 });
-      value = numbers.length ? { available: true } : { available: false, reason: 'no_inventory' };
-    } catch (err) {
-      if (err?.code === 'REGULATORY_BUNDLE_REQUIRED') value = { available: false, reason: 'regulatory' };
-      else if (isNotServed(err)) value = { available: false, reason: 'no_inventory' };
-      else throw err;
+    // Recherche Twilio dans le pays, puis (indicatif partagé, numberZone.js) dans les autres pays de la zone : CA puis US, US puis CA.
+    // Le premier résultat positif suffit ; sinon la réponse du pays demandé fait foi (une panne n'est levée que si rien n'est trouvé).
+    let first = null;
+    let failure = null;
+    for (const searched of numberZonePeers(cc)) {
+      let outcome;
+      try {
+        const numbers = await service.searchTwilioNumbers({ countryCode: searched, limit: 50 });
+        outcome = numbers.length ? { available: true } : { available: false, reason: 'no_inventory' };
+      } catch (err) {
+        if (err?.code === 'REGULATORY_BUNDLE_REQUIRED') outcome = { available: false, reason: 'regulatory' };
+        else if (isNotServed(err)) outcome = { available: false, reason: 'no_inventory' };
+        else { failure = failure || err; continue; }
+      }
+      if (outcome.available) { first = outcome; failure = null; break; }
+      first = first || outcome;
     }
+    if (failure) throw failure;
+    value = first || { available: false, reason: 'no_inventory' };
   }
   // Inventaire illisible : des numéros déjà possédés peuvent exister. Seul un « disponible » trouvé par la recherche est sûr ;
   // sinon c'est une panne (réessayable, jamais mise en cache), pas « aucun numéro ».
