@@ -34,16 +34,17 @@ __setStripeClientForTests({
   checkout: { sessions: { create: async (body) => { bodies.push(body); return { id: 'cs_fake' }; } } },
 });
 
-// Abonnement (hébergé et intégré) : pas de carte si le total du jour est nul (code promo à 100 %), langue transmise.
-await stripeService.createCheckoutSession('u1', 'price_1', 'https://ok', 'https://ko', {}, 'promo_100', 'gbp', { locale: 'en-US' });
-await stripeService.createEmbeddedSubscriptionSession('u1', 'price_1', {}, 'promo_100', 'gbp', { locale: 'fr' });
+// Abonnement (hébergé et intégré) : carte si montant à payer (if_required), aucune promotion, langue transmise.
+await stripeService.createCheckoutSession('u1', 'price_1', 'https://ok', 'https://ko', {}, 'gbp', { locale: 'en-US' });
+await stripeService.createEmbeddedSubscriptionSession('u1', 'price_1', {}, 'gbp', { locale: 'fr' });
 await stripeService.createCheckoutSession('u1', 'price_1', 'https://ok', 'https://ko');
 await stripeService.createEmbeddedSubscriptionSession('u1', 'price_1');
 for (const b of bodies) {
   assert.equal(b.mode, 'subscription');
   assert.equal(b.payment_method_collection, 'if_required');
+  assert.equal(b.allow_promotion_codes, false);
+  assert.ok(!('discounts' in b));
 }
-assert.deepEqual(bodies[0].discounts, [{ promotion_code: 'promo_100' }]);
 assert.equal(bodies[0].currency, 'gbp');
 assert.equal(bodies[0].locale, 'en');
 assert.equal(bodies[1].locale, 'fr');

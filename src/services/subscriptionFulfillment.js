@@ -37,7 +37,7 @@ export async function resolvePlanByPriceId(priceId) {
   let currency = (plan?.currency || 'eur').toUpperCase();
   /** Montants par devise (mêmes montants en EUR, USD, GBP) ; vide si Stripe n'a pas répondu. */
   let amounts = {};
-  /** Métadonnées du produit Stripe du prix (null si Stripe n'a pas répondu) : servent à refuser les codes promo des offres CLOUD et NOMAD. */
+  /** Métadonnées du produit Stripe du prix (null si Stripe n'a pas répondu) : servent notamment à reconnaître les offres CLOUD et NOMAD. */
   let productMetadata = null;
 
   if (stripeService.isConfigured()) {
