@@ -308,3 +308,64 @@ export function mergeIntoExisting(existing, incoming) {
   if (extra.length && (existing.emails || []).length < MAX_EMAILS) set.emails = [...(existing.emails || []), ...extra].slice(0, MAX_EMAILS);
   return set;
 }
+
+/** Contacts du téléphone fusionnés gardés sur une fiche, au plus (borne la taille du document ; en pratique quelques-uns). */
+export const MAX_PHONE_ORIGINS = 200;
+
+/**
+ * Origines téléphone d'une fiche après la fusion du contact `externalId` de l'appareil `deviceId` : nouvelle liste, ou null si rien ne
+ * change (déjà connue, ou c'est la propre origine de la fiche).
+ */
+export function withPhoneOrigin(existing, deviceId, externalId) {
+  if (!deviceId || !externalId) return null;
+  if (existing.source === PHONE_SOURCE && existing.deviceId === deviceId && existing.externalId === externalId) return null;
+  const list = (existing.phoneOrigins || []).map((o) => ({ deviceId: o.deviceId, externalId: o.externalId }));
+  if (list.some((o) => o.deviceId === deviceId && o.externalId === externalId)) return null;
+  return [...list, { deviceId, externalId }].slice(-MAX_PHONE_ORIGINS);
+}
+
+/**
+ * Traces de suppression à poser pour des fiches supprimées dans le portail : la propre origine d'une fiche venue du téléphone, et chaque
+ * contact du téléphone fusionné dans une fiche (`phoneOrigins`). Sans doublon.
+ */
+export function tombstoneKeys(docs) {
+  const seen = new Map();
+  const add = (deviceId, externalId) => {
+    if (typeof deviceId !== 'string' || typeof externalId !== 'string' || !deviceId || !externalId) return;
+    seen.set(`${deviceId}\u0000${externalId}`, { deviceId, externalId });
+  };
+  for (const d of docs) {
+    if (d.source === PHONE_SOURCE) add(d.deviceId, d.externalId);
+    for (const o of d.phoneOrigins || []) add(o?.deviceId, o?.externalId);
+  }
+  return [...seen.values()];
+}
+
+/** Suppression en masse : 500 identifiants par requête au plus ; « tous les résultats du filtre » : 5 000 fiches au plus. */
+export const MAX_BULK_IDS = 500;
+export const MAX_BULK_FILTER = 5000;
+const OBJECT_ID_RE = /^[0-9a-fA-F]{24}$/;
+
+/**
+ * Corps de POST /contacts/bulk-delete : `{ ids: string[] }` (1 à 500 identifiants valides) OU `{ filter: { q?, source?: 'phone' },
+ * expectedTotal }` (mêmes règles de recherche que la liste). Exactement l'un des deux. Valeur : `{ ids }` ou `{ q, source, expectedTotal }`.
+ */
+export function validateBulkDelete(body = {}) {
+  const b = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  const hasIds = b.ids !== undefined;
+  const hasFilter = b.filter !== undefined;
+  if (hasIds === hasFilter) return { error: 'Envoyez soit des identifiants, soit un filtre.', code: 'CONTACT_BULK_INVALID' };
+  if (hasIds) {
+    if (!Array.isArray(b.ids) || b.ids.length === 0) return { error: 'Liste d’identifiants attendue.', code: 'CONTACT_BULK_INVALID' };
+    if (b.ids.length > MAX_BULK_IDS) return { error: `${MAX_BULK_IDS} contacts par requête au plus.`, code: 'CONTACT_BULK_TOO_MANY' };
+    if (!b.ids.every((id) => typeof id === 'string' && OBJECT_ID_RE.test(id))) return { error: 'Identifiant invalide.', code: 'CONTACT_BULK_INVALID' };
+    return { value: { ids: [...new Set(b.ids.map((id) => id.toLowerCase()))] } };
+  }
+  const f = b.filter;
+  if (!f || typeof f !== 'object' || Array.isArray(f)) return { error: 'Filtre invalide.', code: 'CONTACT_BULK_INVALID' };
+  if (f.q !== undefined && typeof f.q !== 'string') return { error: 'Filtre invalide.', code: 'CONTACT_BULK_INVALID' };
+  if (f.source !== undefined && f.source !== '' && f.source !== PHONE_SOURCE) return { error: 'Filtre invalide.', code: 'CONTACT_BULK_INVALID' };
+  if (!Number.isInteger(b.expectedTotal) || b.expectedTotal < 0) return { error: 'Nombre de contacts attendu manquant.', code: 'CONTACT_BULK_INVALID' };
+  const qy = parseListQuery({ q: f.q, source: f.source });
+  return { value: { q: qy.q, source: qy.source, expectedTotal: b.expectedTotal } };
+}

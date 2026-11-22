@@ -117,6 +117,7 @@ Contact.deleteOne = async (f) => { const i = store.findIndex((d) => matches(d, f
 Contact.deleteMany = async (f) => { const before = store.length; store = store.filter((d) => !matches(d, f)); return { deletedCount: before - store.length }; };
 ContactTombstone.find = (f) => ({ lean: async () => clone(tombs.filter((t) => matches(t, f))) });
 ContactTombstone.updateOne = async (f) => { if (!tombs.some((t) => matches(t, f))) tombs.push(clone(f)); return {}; };
+ContactTombstone.bulkWrite = async (ops) => { for (const op of ops) await ContactTombstone.updateOne(op.updateOne.filter); return {}; };
 ContactTombstone.deleteMany = async (f) => { tombs = tombs.filter((t) => !matches(t, f)); return {}; };
 
 const PLANS = { [C1]: 'nomad_solo', [C2]: 'nomad_solo', [C3]: 'accueil' };
