@@ -36,6 +36,7 @@ import { lineCapacityRoutes } from './src/routes/lineCapacity.js';
 import { purgeExpiredBenchRecordings, migrateAiAgentSettings } from './src/services/aiInbound.js';
 import { companyNotificationRoutes } from './src/routes/companyNotifications.js';
 import { startMessageReminders } from './src/services/messageReminders.js';
+import { purgePhoneContactsAfterCancel } from './src/services/contactsRetention.js';
 import { scanLowResources } from './src/services/companyNotificationService.js';
 import { clearExpiredRetractions } from './src/services/retractionService.js';
 import { resolveExpiredPendingReviews, flagWeeklyAiAudits } from './src/controllers/escrowController.js';
@@ -217,6 +218,8 @@ setInterval(() => {
 // webhook product.updated, pour qu'un webhook manqué ne laisse pas un prix de ligne périmé.
 setTimeout(() => { syncPlanMetadataFromStripe(); }, 30 * 1000);
 setInterval(() => { syncPlanMetadataFromStripe(); }, 6 * 60 * 60 * 1000);
+// Contacts Nomad venus du téléphone : supprimés 90 jours après la résiliation (politique de confidentialité, section 7).
+setInterval(() => { purgePhoneContactsAfterCancel().catch((e) => console.warn('[contacts-retention]', e?.message || e)); }, 6 * 60 * 60 * 1000);
 // Pilote agent IA : purge planifiée des enregistrements du banc d'écoute arrivés à échéance (CNIL, 6 mois au plus).
 setInterval(() => { purgeExpiredBenchRecordings().catch((e) => console.error('[ai-inbound] purge planifiée :', e?.message || e)); }, 6 * 60 * 60 * 1000);
 
