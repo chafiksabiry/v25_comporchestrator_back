@@ -12,6 +12,7 @@ import axios from 'axios';
 import FormData from 'form-data';
 import mongoose from 'mongoose';
 import { heldNumbers } from './inventoryHolders.js';
+import { configuredTrialNumbers } from './trialCall/config.js';
 
 /** Nom convivial donné par la plateforme aux numéros qu'elle achète : sert à reconnaître l'inventaire proposable. */
 export const INVENTORY_FRIENDLY_PREFIX = 'Gig Number:';
@@ -649,6 +650,8 @@ class PhoneNumberService {
     // Garde-fou recette / production (même compte Twilio) : un numéro dont la voice_url pointe vers l'API HARX d'un AUTRE environnement
     // appartient à cet environnement (sa base, pas la nôtre) : il n'est jamais proposé ni pris ici.
     if (foreignHarxHost(n?.voiceUrl)) return false;
+    // Numéros d'essai gratuit (TRIAL_CALL_NUMBERS, quel que soit le drapeau) ou branchés sur le webhook de l'essai : jamais vendus.
+    if (configuredTrialNumbers().includes(e164) || String(n?.voiceUrl || '').includes('/api/trial-call/')) return false;
     return !(config.twilioInventoryExclude || []).includes(e164);
   }
 

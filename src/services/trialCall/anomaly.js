@@ -10,6 +10,7 @@ import { isEmailConfigured, senderEmail, sendMail } from '../emailService.js';
  * Règles (spec § 4) :
  *  - volume : essais décrochés sur l'heure glissante > max(20, 5 × moyenne horaire des 7 derniers jours) ;
  *  - codes SMS en échec > 40 % sur 1 h (au moins 10 saisies) ;
+ *  - codes envoyés mais peu validés : moins de 30 % des codes envoyés sur 1 h sont validés (au moins 15 envois) — pompage de SMS ;
  *  - refus Lookup > 30 % ou refus de destination > 30 % sur 1 h (au moins 10 décisions chacun) ;
  *  - concentration : ≥ 30 % des essais de l'heure sur un même réseau IP (/24, /48) ou un même préfixe appelé (au moins 10 essais).
  */
@@ -17,6 +18,7 @@ export const ANOMALY_INTERVAL_MS = 5 * 60 * 1000;
 export const VOLUME_FLOOR_PER_HOUR = 20;
 export const VOLUME_FACTOR = 5;
 export const MIN_SAMPLE = 10;
+export const OTP_CONVERSION_MIN_SENT = 15;
 const H = 3600 * 1000;
 
 const ratio = (bad, ok) => (bad + ok >= MIN_SAMPLE ? bad / (bad + ok) : 0);
@@ -31,6 +33,8 @@ export async function evaluateAnomaly({ store, now = Date.now() }) {
   const otpOk = await store.countEvents('otp_verified', hourAgo);
   const otpBad = await store.countEvents('otp_verify_failed', hourAgo);
   if (ratio(otpBad, otpOk) > 0.4) reasons.push('otp_failures');
+  const otpSent = await store.countEvents('otp_sent', hourAgo);
+  if (otpSent >= OTP_CONVERSION_MIN_SENT && otpOk / otpSent < 0.3) reasons.push('otp_conversion');
   const lookupOk = await store.countEvents('lookup_ok', hourAgo);
   const lookupBad = await store.countEvents('trial_refused', hourAgo, { 'props.stage': 'lookup' });
   if (ratio(lookupBad, lookupOk) > 0.3) reasons.push('lookup_refusals');
@@ -41,7 +45,7 @@ export async function evaluateAnomaly({ store, now = Date.now() }) {
     if ((await store.topShare('ipNetHash', hourAgo)) / hour >= 0.3) reasons.push('ip_concentration');
     if ((await store.topShare('toPrefix', hourAgo)) / hour >= 0.3) reasons.push('destination_concentration');
   }
-  return { anomalous: reasons.length > 0, reasons, metrics: { hour, threshold: Math.round(threshold * 10) / 10, otpOk, otpBad, lookupOk, lookupBad, destOk, destBad } };
+  return { anomalous: reasons.length > 0, reasons, metrics: { hour, threshold: Math.round(threshold * 10) / 10, otpSent, otpOk, otpBad, lookupOk, lookupBad, destOk, destBad } };
 }
 
 /** Alerte à l'équipe : e-mail (Brevo, si configuré) et Slack (webhook entrant). Aucune donnée personnelle, seulement des compteurs. */

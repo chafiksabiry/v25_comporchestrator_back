@@ -6,7 +6,7 @@ import { parsePhoneNumberFromString } from 'libphonenumber-js/max';
  * DÉSACTIVÉ PAR DÉFAUT. L'essai n'est proposé que si TOUT est réuni :
  *  - TRIAL_CALL_ENABLED vaut exactement « true » ;
  *  - TRIAL_CALL_HASH_SECRET (≥ 32 caractères) : secret des empreintes HMAC et des preuves signées ;
- *  - TURNSTILE_SITE_KEY + TURNSTILE_SECRET_KEY (Cloudflare Turnstile, vérifié côté serveur avant tout SMS) ;
+ *  - TURNSTILE_SITE_KEY + TURNSTILE_SECRET_KEY + TURNSTILE_ALLOWED_HOSTNAMES (Cloudflare Turnstile, vérifié côté serveur avant tout SMS) ;
  *  - TRIAL_CALL_MESSAGING_SERVICE_SID (service de messagerie Twilio « MG… » qui envoie le code SMS) ;
  *  - TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN ;
  *  - pour le pays : un numéro d'essai DÉDIÉ dans TRIAL_CALL_NUMBERS (« FR:+33…,GB:+44… »), jamais un numéro du stock client.
@@ -19,10 +19,17 @@ import { parsePhoneNumberFromString } from 'libphonenumber-js/max';
 export const DEFAULT_TRIAL_COUNTRIES = Object.freeze(['FR', 'GB', 'US', 'CA', 'ES', 'BE', 'DE']);
 /** Maghreb : pas d'essai pour l'instant (décision du fondateur du 22/11/2026), quelle que soit la configuration. */
 export const CLOSED_TRIAL_COUNTRIES = Object.freeze(['MA', 'DZ', 'TN']);
-/** Durée maximale de l'appel d'essai (coupure serveur dure). */
-export const TRIAL_MAX_SECONDS = 60;
-/** timeLimit du <Dial> : annonce (~3 s) + 57 s = une minute facturée. */
-export const TRIAL_DIAL_TIME_LIMIT = 57;
+/**
+ * Durées (marge pour qu'un appel ne soit JAMAIS facturé 2 minutes) : timeLimit du <Dial> = 50 s de conversation ; annonce ~3 s avant la
+ * mise en relation ; coupure serveur dure (minuterie + balayeur) à 56 s après le décroché, donc toujours avant 60 s facturées.
+ */
+export const TRIAL_DIAL_TIME_LIMIT = 50;
+export const TRIAL_ANNOUNCE_SECONDS = 3;
+export const TRIAL_CUT_SECONDS = 56;
+/** Compatibilité : durée maximale côté serveur (coupure dure). */
+export const TRIAL_MAX_SECONDS = TRIAL_CUT_SECONDS;
+/** Un essai dont le code a été validé expire s'il n'a pas été utilisé dans les 30 minutes. */
+export const TRIAL_VERIFIED_TTL_MS = 30 * 60 * 1000;
 /** Sonnerie maximale chez le proche. */
 export const TRIAL_RING_TIMEOUT = 25;
 /** Numérotations au plus par essai (l'essai n'est consommé qu'au décroché). */
@@ -38,6 +45,7 @@ export const RETENTION_SECONDS = 365 * 24 * 3600;
 
 const trimmed = (v) => String(v ?? '').trim();
 const isTrue = (v) => trimmed(v).toLowerCase() === 'true';
+const positive = (v, d) => { const n = Math.floor(Number(trimmed(v))); return Number.isFinite(n) && n > 0 ? n : d; };
 
 /** « FR:+33184800042,GB:+442079460018 » -> { FR: '+33184800042', … } ; une entrée dont le numéro n'est pas de ce pays est ignorée. */
 export function parseTrialNumbers(raw) {
@@ -78,6 +86,11 @@ export function trialConfig(env = process.env) {
     alertEmail: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed(env.TRIAL_CALL_ALERT_EMAIL)) ? trimmed(env.TRIAL_CALL_ALERT_EMAIL) : '',
     alertSlackUrl: /^https:\/\/hooks\.slack\.com\/\S+$/.test(slack) ? slack : '',
     webOtpDomain: /^[a-z0-9.-]+\.[a-z]{2,}$/.test(webOtp) ? webOtp : '',
+    // Plafonds GLOBAUX persistants (en base) : leur dépassement met l'essai en pause et alerte (jamais le paiement).
+    maxSmsPerHour: positive(env.TRIAL_CALL_MAX_SMS_PER_HOUR, 60),
+    maxSmsPerDay: positive(env.TRIAL_CALL_MAX_SMS_PER_DAY, 400),
+    maxLookupsPerHour: positive(env.TRIAL_CALL_MAX_LOOKUPS_PER_HOUR, 100),
+    maxLookupsPerDay: positive(env.TRIAL_CALL_MAX_LOOKUPS_PER_DAY, 800),
   };
 }
 
@@ -88,6 +101,7 @@ export function missingForActivation(cfg) {
   if (cfg.hashSecret.length < 32) missing.push('TRIAL_CALL_HASH_SECRET');
   if (!cfg.turnstileSiteKey) missing.push('TURNSTILE_SITE_KEY');
   if (!cfg.turnstileSecret) missing.push('TURNSTILE_SECRET_KEY');
+  if (!cfg.turnstileHostnames.length) missing.push('TURNSTILE_ALLOWED_HOSTNAMES');
   if (!/^MG[0-9a-f]{32}$/i.test(cfg.messagingServiceSid)) missing.push('TRIAL_CALL_MESSAGING_SERVICE_SID');
   if (!/^AC[0-9a-f]{32}$/i.test(cfg.twilioAccountSid) || !cfg.twilioAuthToken) missing.push('TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN');
   if (!Object.keys(cfg.numbers).some((cc) => cfg.countries.includes(cc))) missing.push('TRIAL_CALL_NUMBERS');
@@ -103,6 +117,12 @@ export function trialNumberFor(cfg, country) {
   if (!trialEnabled(cfg) || CLOSED_TRIAL_COUNTRIES.includes(cc) || !cfg.countries.includes(cc)) return '';
   return cfg.numbers[cc] || '';
 }
+
+/**
+ * Numéros d'essai déclarés dans l'environnement, QUEL QUE SOIT le drapeau : jamais proposés à la vente (inventaire Twilio,
+ * phoneNumberService.isInventoryCandidate), jamais appelables comme destination.
+ */
+export const configuredTrialNumbers = (env = process.env) => Object.values(parseTrialNumbers(env.TRIAL_CALL_NUMBERS));
 
 /** Tous les numéros d'essai configurés (jamais appelables comme destination). */
 export const allTrialNumbers = (cfg) => Object.values(cfg.numbers);

@@ -15,13 +15,25 @@ const t = (d) => (d instanceof Date ? d.getTime() : new Date(d).getTime());
 export function createMemoryTrialStore({ email = {} } = {}) {
   let seq = 0;
   const id = () => (++seq).toString(16).padStart(24, '0');
-  const db = { trials: [], otps: [], lookups: [], events: [], state: { paused: false } };
+  const db = { trials: [], otps: [], lookups: [], events: [], state: { paused: false }, counters: new Map(), locks: new Map() };
+  const person = (d, { userId, emailHash, deviceHash, phoneHash }) => (userId && d.userId === userId) || (emailHash && d.emailHash === emailHash) || (deviceHash && d.deviceHash === deviceHash) || (phoneHash && d.phoneHash === phoneHash);
   const s = {
     db,
-    async findUsed({ userId, emailHash, deviceHash, phoneHash }) {
-      return db.trials.some((d) => (d.consumedAt || USED.includes(d.status))
-        && ((userId && d.userId === userId) || (emailHash && d.emailHash === emailHash) || (deviceHash && d.deviceHash === deviceHash) || (phoneHash && d.phoneHash === phoneHash)));
+    async findUsed(p, { excludeId } = {}) {
+      return db.trials.some((d) => d.id !== excludeId && (d.consumedAt || USED.includes(d.status)) && person(d, p));
     },
+    async findActive(p, since) {
+      return db.trials.some((d) => person(d, p) && (d.status === 'dialing' || (d.status === 'verified' && t(d.createdAt) >= t(since))));
+    },
+    async bump(key, limit) { const n = db.counters.get(key) || 0; if (n >= limit) return false; db.counters.set(key, n + 1); return true; },
+    async unbump(key) { const n = db.counters.get(key) || 0; if (n > 0) db.counters.set(key, n - 1); },
+    async counter(key) { return db.counters.get(key) || 0; },
+    async acquireLock(keys, trialId, expiresAt, now = new Date()) {
+      if (keys.some((k) => { const l = db.locks.get(k); return l && l.trialId !== trialId && t(l.expiresAt) >= t(now); })) return false;
+      for (const k of keys) db.locks.set(k, { trialId, expiresAt });
+      return true;
+    },
+    async releaseLock(keys, trialId) { for (const k of keys) if (db.locks.get(k)?.trialId === trialId) db.locks.delete(k); },
     async countOtpSends(field, value, since) { return value ? db.otps.filter((o) => o[field] === value && t(o.createdAt) >= t(since)).length : 0; },
     async lastOtp(userId, phoneHash) { return [...db.otps].reverse().find((o) => o.userId === userId && o.phoneHash === phoneHash && !o.usedAt) || null; },
     async lastOtpSendAt(userId) { const o = [...db.otps].reverse().find((x) => x.userId === userId); return o ? o.createdAt : null; },

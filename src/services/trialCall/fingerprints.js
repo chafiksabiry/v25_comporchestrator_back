@@ -24,7 +24,7 @@ export function normalizeEmail(raw) {
   return local ? `${local}@${domain}` : '';
 }
 
-/** Réseau de l'adresse IP : /24 en IPv4, /48 en IPv6 (concentration des essais sur un même réseau). '' si illisible. */
+/** Réseau de l'adresse IP : /24 en IPv4, /64 en IPv6 (un abonné IPv6 reçoit au moins un /64 : limites et concentration par réseau). '' si illisible. */
 export function ipNetwork(ip) {
   let s = String(ip ?? '').trim();
   if (s.startsWith('::ffff:') && net.isIPv4(s.slice(7))) s = s.slice(7);
@@ -34,7 +34,7 @@ export function ipNetwork(ip) {
     const h = head ? head.split(':') : [];
     const t = tail ? tail.split(':') : [];
     const full = [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t];
-    return `${full.slice(0, 3).map((x) => x.toLowerCase().replace(/^0+(?=.)/, '')).join(':')}::/48`;
+    return `${full.slice(0, 4).map((x) => x.toLowerCase().replace(/^0+(?=.)/, '')).join(':')}::/64`;
   }
   return '';
 }

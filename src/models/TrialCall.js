@@ -36,7 +36,7 @@ const trialCallSchema = new mongoose.Schema({
   costUsd: Number,
   paidAt: Date,
   createdAt: { type: Date, default: Date.now },
-}, { collection: 'trial_calls', versionKey: false });
+}, { collection: 'trial_calls', versionKey: false, autoIndex: false, autoCreate: false });
 trialCallSchema.index({ createdAt: 1 }, { expireAfterSeconds: RETENTION });
 
 /** Envois de code SMS : un document par envoi (limites par téléphone / IP / appareil), effacé 24 h après. */
@@ -50,7 +50,7 @@ const trialOtpSchema = new mongoose.Schema({
   expiresAt: Date,
   usedAt: Date,
   createdAt: { type: Date, default: Date.now },
-}, { collection: 'trial_call_otps', versionKey: false });
+}, { collection: 'trial_call_otps', versionKey: false, autoIndex: false, autoCreate: false });
 trialOtpSchema.index({ createdAt: 1 }, { expireAfterSeconds: 24 * 3600 });
 
 /** Résultat Lookup mis en cache par empreinte de téléphone (type de ligne seulement), 30 jours. */
@@ -59,7 +59,7 @@ const trialLookupSchema = new mongoose.Schema({
   lineType: String,
   countryCode: String,
   createdAt: { type: Date, default: Date.now },
-}, { collection: 'trial_call_lookups', versionKey: false });
+}, { collection: 'trial_call_lookups', versionKey: false, autoIndex: false, autoCreate: false });
 trialLookupSchema.index({ createdAt: 1 }, { expireAfterSeconds: 30 * 24 * 3600 });
 
 /** Évènements du parcours d'inscription (mesure avant/après), 12 mois. */
@@ -71,7 +71,7 @@ const trialEventSchema = new mongoose.Schema({
   lang: String,
   props: { type: mongoose.Schema.Types.Mixed },
   at: { type: Date, default: Date.now },
-}, { collection: 'trial_call_events', versionKey: false });
+}, { collection: 'trial_call_events', versionKey: false, autoIndex: false, autoCreate: false });
 trialEventSchema.index({ at: 1 }, { expireAfterSeconds: RETENTION });
 
 /** État global : pause automatique de la carte d'essai (détection d'anomalie), reprise manuelle. */
@@ -81,11 +81,34 @@ const trialStateSchema = new mongoose.Schema({
   reason: String,
   pausedAt: Date,
   resumedAt: Date,
-}, { collection: 'trial_call_state', versionKey: false });
+}, { collection: 'trial_call_state', versionKey: false, autoIndex: false, autoCreate: false });
 
+/**
+ * Compteurs atomiques persistants (limites SMS / Lookup / essais par compte, téléphone, appareil, IP, réseau, destination, plafonds
+ * globaux) : un document par clé et par fenêtre, incrémenté seulement sous la limite (voir store.bump), effacé à échéance.
+ */
+const trialCounterSchema = new mongoose.Schema({
+  _id: String,
+  n: { type: Number, default: 0 },
+  expiresAt: Date,
+}, { collection: 'trial_call_counters', versionKey: false, autoIndex: false, autoCreate: false });
+trialCounterSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+/** Verrou par personne (compte, téléphone, e-mail, appareil) pendant une numérotation : un seul appel d'essai à la fois. */
+const trialLockSchema = new mongoose.Schema({
+  _id: String,
+  trialId: String,
+  expiresAt: Date,
+}, { collection: 'trial_call_locks', versionKey: false, autoIndex: false, autoCreate: false });
+trialLockSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+// Ni collection ni index créés au chargement (autoIndex / autoCreate désactivés) : ils ne le sont qu'au démarrage d'un essai actif
+// (ou de la mesure), par ensureTrialIndexes (services/trialCall/jobs.js). Drapeau OFF : rien n'est créé en base.
 const model = (name, schema) => mongoose.models[name] || mongoose.model(name, schema);
 export const TrialCall = model('TrialCall', trialCallSchema);
 export const TrialOtp = model('TrialOtp', trialOtpSchema);
 export const TrialLookup = model('TrialLookup', trialLookupSchema);
 export const TrialEvent = model('TrialEvent', trialEventSchema);
 export const TrialState = model('TrialState', trialStateSchema);
+export const TrialCounter = model('TrialCounter', trialCounterSchema);
+export const TrialLock = model('TrialLock', trialLockSchema);

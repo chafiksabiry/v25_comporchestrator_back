@@ -9,6 +9,10 @@ import twilio from 'twilio';
 import jwt from 'jsonwebtoken';
 
 process.env.JWT_SECRET = process.env.JWT_SECRET || 't';
+// Chargement de phoneNumberService (test I1) : identifiants factices, jamais utilisés.
+process.env.TELNYX_API_KEY = process.env.TELNYX_API_KEY || 'x';
+process.env.TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || 'ACtest';
+process.env.TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || 'x';
 
 const { createTrialCallController, CLIENT_EVENTS } = await import('../controllers/trialCallController.js');
 const { createMemoryTrialStore } = await import('./trialCallMemoryStore.js');
@@ -39,6 +43,7 @@ const ENABLED_ENV = {
   TWILIO_ACCOUNT_SID: AC,
   TWILIO_AUTH_TOKEN: 'auth-token-test',
   TRIAL_CALL_TWIML_APP_SID: AP,
+  TURNSTILE_ALLOWED_HOSTNAMES: 'portal.test',
   TRIAL_CALL_NUMBERS: `FR:${FR_TRIAL},GB:${GB_TRIAL},MA:+212522000000`,
   TRIAL_CALL_COUNTRIES: 'FR,GB,US,MA',
 };
@@ -112,7 +117,9 @@ test('drapeau absent : essai désactivé, aucune route active, aucune tâche de 
     assert.doesNotMatch(hook.body, /<Dial/);
     const ev = await call(c.events, mkReq({ body: { name: 'offer_viewed' } }));
     assert.equal(ev.code, 204);
-    const jobs = J.startTrialCallJobs({ controller: c, store, env: e, log: { log() {}, warn() {}, error() {} } });
+    let indexed = false;
+    const jobs = J.startTrialCallJobs({ controller: c, store, env: e, log: { log() {}, warn() {}, error() {} }, ensureIndexes: async () => { indexed = true; } });
+    assert.equal(indexed, false, 'aucun index créé drapeau OFF');
     assert.equal(jobs.started, false);
   }
   assert.equal(sms.length, 0);
@@ -265,7 +272,7 @@ test('destinations : international, surtaxé, gratuit/VoIP, numéro d\'essai ref
 
 // ------------------------------------------------------------------ jeton, webhook, consommation, coupure
 
-test('jeton : 120 s, sans appel entrant, application d\'essai dédiée ; webhook : TwiML timeLimit 57, sonnerie 25, numéro d\'essai, sans enregistrement', async () => {
+test('jeton : 120 s, sans appel entrant, application d\'essai dédiée ; webhook : TwiML timeLimit 50 (marge : jamais 2 minutes facturées), sonnerie 25, numéro d\'essai, sans enregistrement', async () => {
   const c = controller();
   const id = await verified(c);
   const { tk, hook } = await tokenAndDial(c, id);
@@ -275,7 +282,7 @@ test('jeton : 120 s, sans appel entrant, application d\'essai dédiée ; webhook
   assert.equal(decoded.grants.voice.outgoing.application_sid, AP);
   assert.ok(!decoded.grants.voice.incoming?.allow, 'aucun appel entrant');
   assert.equal(tk.body.trialNumber, FR_TRIAL);
-  assert.match(hook.body, new RegExp(`<Dial callerId="\\${FR_TRIAL}" answerOnBridge="true" timeout="25" timeLimit="57"`));
+  assert.match(hook.body, new RegExp(`<Dial callerId="\\${FR_TRIAL}" answerOnBridge="true" timeout="25" timeLimit="50"`));
   assert.match(hook.body, /<Number url="https:\/\/api\.test\/api\/trial-call\/webhooks\/twilio\/trial-call\/announce\?id=/);
   assert.match(hook.body, /statusCallbackEvent="answered completed"/);
   assert.match(hook.body, />\+33698765432<\/Number>/);
@@ -323,7 +330,7 @@ test('webhook signé pour de vrai (X-Twilio-Signature calculée avec le jeton Tw
   assert.match((await call(c.voiceWebhook, req(good))).body, /<Dial/);
 });
 
-test('consommation au décroché + coupure dure à 60 s (minuterie) ; rappels signés', async () => {
+test('consommation au décroché + coupure dure à 56 s (minuterie, jamais 60 s facturées) ; rappels signés', async () => {
   const c = controller();
   const id = await verified(c);
   await tokenAndDial(c, id, { callSid: 'CAparent' });
@@ -337,10 +344,10 @@ test('consommation au décroché + coupure dure à 60 s (minuterie) ; rappels si
   assert.equal(trial.status, 'in_progress');
   assert.ok(trial.consumedAt);
   assert.equal(timers.length, 1);
-  assert.equal(timers[0].ms, 60_000, 'coupure armée à décroché + 60 s');
+  assert.equal(timers[0].ms, 56_000, 'coupure armée à décroché + 56 s');
   const st = await call(c.state, mkReq({ params: { trialId: id } }));
-  assert.equal(st.body.remainingSec, 60);
-  clock += 60_000;
+  assert.equal(st.body.remainingSec, 50);
+  clock += 56_000;
   await timers[0].fn();
   await new Promise((r) => setImmediate(r));
   assert.deepEqual(hangups.map((h) => h.sid).sort(), ['CAchild', 'CAparent']);
@@ -348,19 +355,20 @@ test('consommation au décroché + coupure dure à 60 s (minuterie) ; rappels si
   trial = await store.getTrial(id);
   assert.equal(trial.status, 'ended');
   assert.equal(trial.endReason, 'time_limit');
-  assert.equal(trial.durationSec, 60);
+  assert.equal(trial.durationSec, 56);
+  assert.ok(trial.durationSec < 60, 'jamais une seconde minute facturée');
   // Essai consommé : plus de jeton, éligibilité « déjà utilisé ».
   assert.equal((await call(c.token, mkReq({ body: { trialId: id } }))).body.code, 'used');
   assert.equal((await call(c.eligibility, mkReq({ query: { country: 'FR', deviceId: DEVICE } }))).body.reason, 'used');
 });
 
-test('balayeur : un appel décroché depuis plus de 60 s est coupé même sans minuterie (redémarrage)', async () => {
+test('balayeur : un appel décroché depuis plus de 56 s est coupé même sans minuterie (redémarrage)', async () => {
   const c = controller();
   const id = await verified(c);
   await tokenAndDial(c, id, { callSid: 'CAp' });
   await call(c.statusWebhook, mkReq({ userId: null, query: { id, t: TW.callbackToken(env.TRIAL_CALL_HASH_SECRET, id) }, body: { CallStatus: 'in-progress', CallSid: 'CAc' } }));
   const fresh = controller(); // nouveau processus : aucune minuterie en mémoire
-  clock += 59_000; await fresh.sweep();
+  clock += 55_000; await fresh.sweep();
   assert.equal(hangups.length, 0);
   clock += 2_000; await fresh.sweep();
   assert.equal((await store.getTrial(id)).status, 'ended');
@@ -482,10 +490,11 @@ test('évènements du parcours : journalisés seulement avec TRIAL_FUNNEL_EVENTS
   assert.ok(CLIENT_EVENTS.includes('subscription_paid'));
 });
 
-test('empreintes : réseau IP /24 et /48, identifiant d\'appareil filtré', () => {
+test('empreintes : réseau IP /24 et /64, identifiant d\'appareil filtré', () => {
   assert.equal(F.ipNetwork('203.0.113.77'), '203.0.113.0/24');
   assert.equal(F.ipNetwork('::ffff:203.0.113.77'), '203.0.113.0/24');
-  assert.equal(F.ipNetwork('2001:db8:abcd:12::1'), '2001:db8:abcd::/48');
+  assert.equal(F.ipNetwork('2001:db8:abcd:12::1'), '2001:db8:abcd:12::/64');
+  assert.equal(F.ipNetwork('2001:db8:abcd:12:aaaa:bbbb:cccc:dddd'), F.ipNetwork('2001:db8:abcd:12::ffff'));
   assert.equal(F.cleanDeviceId('<script>'), '');
   assert.notEqual(F.fingerprint('s', 'phone', ME), F.fingerprint('s', 'email', ME));
 });
@@ -499,19 +508,14 @@ test('affichage : numéro d\'essai et numéro du proche au format international 
   assert.equal(tk.body.trialNumberDisplay, '+33 1 84 80 00 42');
 });
 
-test('deux codes validés ne donnent pas deux minutes : le second essai est refusé au jeton et au webhook', async () => {
+test('deux codes validés ne donnent pas deux minutes : second code refusé tant qu\'un essai est en cours', async () => {
   const c = controller();
-  const a = await verified(c);
+  await verified(c);
   clock += 31_000;
-  const b = await verified(c);
-  const tkB = await call(c.token, mkReq({ body: { trialId: b } }));
-  assert.equal(tkB.code, 200);
-  await tokenAndDial(c, a, { callSid: 'CAa' });
-  await call(c.statusWebhook, mkReq({ userId: null, query: { id: a, t: TW.callbackToken(env.TRIAL_CALL_HASH_SECRET, a) }, body: { CallStatus: 'in-progress' } }));
-  // Jeton déjà délivré pour B avant la consommation de A : le webhook refuse quand même.
-  const hook = await call(c.voiceWebhook, mkReq({ userId: null, body: { To: FRIEND, From: `client:trial-${b}`, CallSid: 'CAb', ...tkB.body.params } }));
-  assert.doesNotMatch(hook.body, /<Dial/);
-  assert.equal((await call(c.token, mkReq({ body: { trialId: b } }))).body.code, 'used');
+  const s2 = await call(c.otpSend, mkReq({ body: { phone: ME, country: 'FR', deviceId: DEVICE, turnstileToken: 'tok' } }));
+  assert.equal(s2.code, 409);
+  assert.equal(s2.body.code, 'trial_pending');
+  assert.equal(sms.length, 1);
 });
 
 test('Lookup facturé : 5 par heure et par IP au plus, même refusé (numéros VoIP différents)', async () => {
@@ -542,5 +546,175 @@ test('compte rendu tardif d\'une numérotation précédente : ignoré ; le décr
   const tr = await store.getTrial(id);
   assert.equal(tr.status, 'in_progress');
   assert.ok(tr.consumedAt);
-  assert.equal(timers.at(-1).ms, 60_000);
+  assert.equal(timers.at(-1).ms, 56_000);
+});
+
+// ------------------------------------------------------------------ non-régression de la revue de sécurité (B1, B2, I1, I4)
+
+/** Essai « vérifié » injecté directement (comme si des codes avaient été validés avant le correctif, ou par une course). */
+function injectVerified(id, { userId = 'u1', phoneHash = 'ph', deviceHash = 'dh', emailHash = 'eh' } = {}) {
+  store.db.trials.push({ id, userId, phoneHash, deviceHash, emailHash, ipHash: 'ip', ipNetHash: 'net', country: 'FR', trialNumber: FR_TRIAL, status: 'verified', dialAttempts: 0, createdAt: new Date(clock) });
+}
+async function dialRaw(c, id, { to = FRIEND, callSid = `CA-${id}` } = {}) {
+  const tk = await call(c.token, mkReq({ userId: store.db.trials.find((t) => t.id === id).userId, body: { trialId: id } }));
+  if (tk.code !== 200) return { dialed: false, code: tk.body.code };
+  const hook = await call(c.voiceWebhook, mkReq({ userId: null, body: { To: to, From: `client:trial-${id}`, CallSid: callSid, ...tk.body.params } }));
+  return { dialed: /<Dial/.test(hook.body), callSid };
+}
+
+test('B1 (revue) : 3 essais du même compte lancés en parallèle -> un seul appel, une seule minute', async () => {
+  const c = controller();
+  // Par le parcours normal, le 2e code est refusé (essai en cours) :
+  await verified(c);
+  clock += 31_000;
+  assert.equal((await call(c.otpSend, mkReq({ body: { phone: ME, country: 'FR', deviceId: DEVICE, turnstileToken: 'tok' } }))).body.code, 'trial_pending');
+  // Et même avec 3 essais vérifiés en stock (course, données anciennes), le verrou par personne n'en laisse composer qu'un :
+  store.db.trials.length = 0;
+  for (const id of ['a00000000000000000000001', 'a00000000000000000000002', 'a00000000000000000000003']) injectVerified(id);
+  const tokens = [];
+  for (const id of ['a00000000000000000000001', 'a00000000000000000000002', 'a00000000000000000000003']) tokens.push(await call(c.token, mkReq({ body: { trialId: id } })));
+  const hooks = [];
+  for (const [i, id] of ['a00000000000000000000001', 'a00000000000000000000002', 'a00000000000000000000003'].entries()) {
+    hooks.push(await call(c.voiceWebhook, mkReq({ userId: null, body: { To: ['+33698765432', '+33698765433', '+33698765434'][i], From: `client:trial-${id}`, CallSid: `CA${i}`, ...tokens[i].body.params } })));
+  }
+  assert.deepEqual(hooks.map((h) => /<Dial/.test(h.body)), [true, false, false]);
+  for (const [i, id] of ['a00000000000000000000001', 'a00000000000000000000002', 'a00000000000000000000003'].entries()) {
+    await call(c.statusWebhook, mkReq({ userId: null, query: { id, t: TW.callbackToken(env.TRIAL_CALL_HASH_SECRET, id) }, body: { CallStatus: 'in-progress', ParentCallSid: `CA${i}`, CallSid: `CC${i}` } }));
+  }
+  // Un décroché inattendu sur un essai non composé est quand même consommé PUIS coupé aussitôt (revérification au décroché).
+  const statuses = store.db.trials.map((t) => t.status);
+  assert.equal(statuses.filter((x) => x === 'in_progress').length, 1, `statuts : ${statuses}`);
+  assert.ok(hangups.some((h) => h.sid === 'CA1' || h.sid === 'CC1'), 'appel en double coupé');
+});
+
+test('B1 (revue) : accumulation sur 4 jours (même téléphone, compte, appareil) -> jamais plus d\'un essai utilisable', async () => {
+  const c = controller();
+  const ids = [];
+  for (let d = 0; d < 4; d += 1) {
+    for (let i = 0; i < 3; i += 1) {
+      const s = await call(c.otpSend, mkReq({ body: { phone: ME, country: 'FR', deviceId: DEVICE, turnstileToken: 'tok' } }));
+      if (s.code === 200) {
+        const code = /(\d{6})/.exec(sms.at(-1).body)[1];
+        const v = await call(c.otpVerify, mkReq({ body: { phone: ME, code, country: 'FR', deviceId: DEVICE } }));
+        if (v.code === 200) ids.push(v.body.trialId);
+      }
+      clock += 31_000;
+    }
+    clock += 24 * 3600 * 1000;
+  }
+  // Les codes validés les jours précédents ont expiré (30 min) : seul le dernier peut servir.
+  const dials = [];
+  for (const [i, id] of ids.entries()) dials.push((await dialRaw(c, id, { to: `+336987654${String(10 + i)}`, callSid: `CX${i}` })).dialed);
+  for (const [i, id] of ids.entries()) await call(c.statusWebhook, mkReq({ userId: null, query: { id, t: TW.callbackToken(env.TRIAL_CALL_HASH_SECRET, id) }, body: { CallStatus: 'in-progress', ParentCallSid: `CX${i}`, CallSid: `CY${i}` } }));
+  assert.ok(dials.filter(Boolean).length <= 1, `numérotations acceptées : ${dials.filter(Boolean).length}`);
+  const live = store.db.trials.filter((t) => t.status === 'in_progress').length;
+  assert.ok(live <= 1, `essais consommés en cours : ${live}`);
+});
+
+test('B1 : un code validé expire au bout de 30 min (jeton refusé), un nouveau code est alors possible', async () => {
+  const c = controller();
+  const id = await verified(c);
+  clock += 31 * 60 * 1000;
+  assert.equal((await call(c.token, mkReq({ body: { trialId: id } }))).body.code, 'trial_expired');
+  assert.equal((await store.getTrial(id)).status, 'expired');
+  assert.ok((await verified(c)));
+});
+
+test('B1 : destination réservée atomiquement — deux personnes, un même numéro déjà appelé une fois : un seul appel passe', async () => {
+  const c = controller();
+  store.db.counters.set(`dest:${F.fingerprint(env.TRIAL_CALL_HASH_SECRET, 'to', FRIEND)}`, 1);
+  injectVerified('b00000000000000000000001', { userId: 'p1', phoneHash: 'p1', deviceHash: 'd1', emailHash: 'e1' });
+  injectVerified('b00000000000000000000002', { userId: 'p2', phoneHash: 'p2', deviceHash: 'd2', emailHash: 'e2' });
+  const r = [await dialRaw(c, 'b00000000000000000000001'), await dialRaw(c, 'b00000000000000000000002')];
+  assert.deepEqual(r.map((x) => x.dialed), [true, false]);
+  // Personne ne décroche : la réservation est rendue.
+  await call(c.endWebhook, mkReq({ userId: null, query: { id: 'b00000000000000000000001', t: TW.callbackToken(env.TRIAL_CALL_HASH_SECRET, 'b00000000000000000000001') }, body: { CallSid: r[0].callSid, DialCallStatus: 'no-answer' } }));
+  assert.equal(await store.counter(`dest:${F.fingerprint(env.TRIAL_CALL_HASH_SECRET, 'to', FRIEND)}`), 1);
+  assert.equal(store.db.locks.size, 0, 'verrou libéré');
+});
+
+test('B2 (revue) : un compte qui change d\'IP, d\'appareil et de téléphone toutes les 31 s -> 3 SMS au plus, Lookup bornés', async () => {
+  const c = controller();
+  let ok = 0;
+  for (let i = 0; i < 40; i += 1) {
+    clock += 31_000;
+    const r = await call(c.otpSend, mkReq({ ip: `198.51.${i}.9`, body: { phone: `+3361234${String(5000 + i)}`, country: 'FR', deviceId: `devrot-${i}-xxxx`, turnstileToken: 'tok' } }));
+    if (r.code === 200) ok += 1;
+  }
+  assert.equal(ok, 3);
+  assert.equal(sms.length, 3);
+  assert.ok(lookups.length <= 3, `Lookup : ${lookups.length}`);
+});
+
+test('B2 : réseau IPv6 /64 — adresses différentes du même /64 limitées ensemble (10 / h)', async () => {
+  const c = controller();
+  let ok = 0;
+  for (let i = 0; i < 12; i += 1) {
+    const r = await call(c.otpSend, mkReq({ userId: `n${i}`, ip: `2001:db8:1:2::${(i + 1).toString(16)}`, body: { phone: `+336123460${String(10 + i)}`, country: 'FR', deviceId: `dev6-${i}-xxxx`, turnstileToken: 'tok' } }));
+    if (r.code === 200) ok += 1;
+  }
+  assert.equal(ok, 10);
+});
+
+test('B2 : plafonds GLOBAUX persistants de SMS et de Lookup -> pause de l\'essai + alerte, puis plus aucun SMS', async () => {
+  const alerts = [];
+  const e = { ...env, TRIAL_CALL_MAX_SMS_PER_HOUR: '4', TRIAL_CALL_MAX_LOOKUPS_PER_HOUR: '50' };
+  const mk = () => createTrialCallController({ store, env: e, now: () => clock, twilioClient: fakeClient(), http: fakeHttp, setTimer: () => ({}), clearTimer() {}, verifyRequest: () => true, alert: async (cfg, r) => { alerts.push(r.reasons); } });
+  let ok = 0;
+  for (let i = 0; i < 8; i += 1) {
+    // Un nouveau contrôleur à chaque fois (redémarrage) : les compteurs sont en base, pas en mémoire.
+    const r = await call(mk().otpSend, mkReq({ userId: `g${i}`, ip: `192.0.2.${i + 1}`, body: { phone: `+336123470${String(10 + i)}`, country: 'FR', deviceId: `devg-${i}-xxxx`, turnstileToken: 'tok' } }));
+    if (r.code === 200) ok += 1;
+  }
+  assert.equal(ok, 4);
+  assert.equal(sms.length, 4);
+  assert.deepEqual(alerts, [['global_sms_hour_cap']]);
+  assert.equal((await store.getState()).paused, true);
+  assert.equal((await call(mk().eligibility, mkReq({ userId: 'zz', query: { country: 'FR', deviceId: 'dev-zz-1234' } }))).body.reason, 'paused');
+  // Plafond Lookup : même mécanisme.
+  await store.resume();
+  const e2 = { ...env, TRIAL_CALL_MAX_LOOKUPS_PER_HOUR: String(await store.counter(`global:lookup:h:${Math.floor(clock / 3600000)}`) + 2) };
+  lineType = 'nonFixedVoip';
+  const c2 = createTrialCallController({ store, env: e2, now: () => clock, twilioClient: fakeClient(), http: fakeHttp, setTimer: () => ({}), clearTimer() {}, verifyRequest: () => true, alert: async (cfg, r) => { alerts.push(r.reasons); } });
+  const before = lookups.length;
+  for (let i = 0; i < 4; i += 1) await call(c2.otpSend, mkReq({ userId: `l${i}`, ip: `192.0.3.${i + 1}`, body: { phone: `+336123480${String(10 + i)}`, country: 'FR', deviceId: `devl-${i}-xxxx`, turnstileToken: 'tok' } }));
+  assert.equal(lookups.length - before, 2);
+  assert.deepEqual(alerts.at(-1), ['global_lookup_hour_cap']);
+});
+
+test('B2 : limite de Lookup persistante (survit à un redémarrage du processus)', async () => {
+  lineType = 'nonFixedVoip';
+  for (let i = 0; i < 7; i += 1) {
+    const fresh = controller();
+    await call(fresh.otpSend, mkReq({ userId: `r${i}`, body: { phone: `+336123490${String(10 + i)}`, country: 'FR', deviceId: `devr-${i}-xxxx`, turnstileToken: 'tok' } }));
+  }
+  assert.equal(lookups.length, 5, 'Lookup : 5 / h par IP, en base');
+});
+
+test('B2 : règle d\'anomalie « codes envoyés / codes validés »', async () => {
+  for (let i = 0; i < 20; i += 1) store.db.events.push({ name: 'otp_sent', at: new Date(clock - 60_000) });
+  for (let i = 0; i < 2; i += 1) store.db.events.push({ name: 'otp_verified', at: new Date(clock - 60_000) });
+  const r = await A.evaluateAnomaly({ store, now: clock });
+  assert.ok(r.reasons.includes('otp_conversion'), JSON.stringify(r.reasons));
+  store.db.events.length = 0;
+  for (let i = 0; i < 20; i += 1) store.db.events.push({ name: 'otp_sent', at: new Date(clock - 60_000) });
+  for (let i = 0; i < 12; i += 1) store.db.events.push({ name: 'otp_verified', at: new Date(clock - 60_000) });
+  assert.equal((await A.evaluateAnomaly({ store, now: clock })).reasons.includes('otp_conversion'), false);
+});
+
+test('I1 : les numéros d\'essai ne sont jamais proposés à la vente (inventaire Twilio), drapeau ON ou OFF', async () => {
+  const { phoneNumberService } = await import('../services/phoneNumberService.js');
+  const saved = process.env.TRIAL_CALL_NUMBERS;
+  try {
+    process.env.TRIAL_CALL_NUMBERS = `FR:${FR_TRIAL}`;
+    assert.equal(phoneNumberService.isInventoryCandidate({ phoneNumber: FR_TRIAL, capabilities: { voice: true } }), false);
+    assert.equal(phoneNumberService.isInventoryCandidate({ phoneNumber: '+33184800099', capabilities: { voice: true }, voiceUrl: 'https://api.test/api/trial-call/webhooks/twilio/trial-inbound' }), false);
+    assert.equal(phoneNumberService.isInventoryCandidate({ phoneNumber: '+33184800099', capabilities: { voice: true } }), true);
+  } finally {
+    if (saved === undefined) delete process.env.TRIAL_CALL_NUMBERS; else process.env.TRIAL_CALL_NUMBERS = saved;
+  }
+});
+
+test('mineur : TURNSTILE_ALLOWED_HOSTNAMES obligatoire pour activer', () => {
+  assert.deepEqual(C.missingForActivation(C.trialConfig({ ...ENABLED_ENV, TURNSTILE_ALLOWED_HOSTNAMES: '' })), ['TURNSTILE_ALLOWED_HOSTNAMES']);
 });

@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { TrialCall, TrialOtp, TrialLookup, TrialEvent, TrialState } from '../../models/TrialCall.js';
+import { TrialCall, TrialOtp, TrialLookup, TrialEvent, TrialState, TrialCounter, TrialLock } from '../../models/TrialCall.js';
 
 /**
  * Accès aux données de l'essai. Les conditions de mise à jour sont un petit langage commun avec le magasin en mémoire des tests
@@ -14,17 +14,61 @@ const validId = (id) => mongoose.Types.ObjectId.isValid(String(id || '')) && /^[
 const plain = (d) => (d ? { ...d, id: String(d._id) } : null);
 /** Essai « utilisé » : décroché (consommé) ou 3 numérotations sans réponse. */
 export const USED_STATUSES = ['in_progress', 'ended', 'exhausted'];
+/** Essai « en cours » : code validé (non expiré) ou numérotation en cours. */
+export const ACTIVE_STATUSES = ['verified', 'dialing'];
+const personOr = ({ userId, emailHash, deviceHash, phoneHash }) => {
+  const or = [];
+  if (userId) or.push({ userId });
+  if (emailHash) or.push({ emailHash });
+  if (deviceHash) or.push({ deviceHash });
+  if (phoneHash) or.push({ phoneHash });
+  return or;
+};
+const isDup = (e) => e?.code === 11000;
 
 export const mongoTrialStore = {
-  async findUsed({ userId, emailHash, deviceHash, phoneHash }) {
-    const or = [];
-    if (userId) or.push({ userId });
-    if (emailHash) or.push({ emailHash });
-    if (deviceHash) or.push({ deviceHash });
-    if (phoneHash) or.push({ phoneHash });
+  /** Un essai consommé ou épuisé existe-t-il pour cette personne (hors `excludeId`) ? */
+  async findUsed(person, { excludeId } = {}) {
+    const or = personOr(person);
     if (!or.length) return false;
-    return Boolean(await TrialCall.exists({ $and: [{ $or: or }, { $or: [{ consumedAt: { $ne: null } }, { status: { $in: USED_STATUSES } }] }] }));
+    const and = [{ $or: or }, { $or: [{ consumedAt: { $ne: null } }, { status: { $in: USED_STATUSES } }] }];
+    if (excludeId && validId(excludeId)) and.push({ _id: { $ne: new mongoose.Types.ObjectId(String(excludeId)) } });
+    return Boolean(await TrialCall.exists({ $and: and }));
   },
+  /** Un essai en cours (code validé depuis `since`, ou numérotation) existe-t-il pour cette personne ? */
+  async findActive(person, since) {
+    const or = personOr(person);
+    if (!or.length) return false;
+    return Boolean(await TrialCall.exists({ $and: [{ $or: or }, { $or: [{ status: 'dialing' }, { status: 'verified', createdAt: { $gte: since } }] }] }));
+  },
+  /** Compteur atomique : +1 seulement si la valeur est sous `limit` ; false si la limite est atteinte. */
+  async bump(key, limit, expiresAt) {
+    try {
+      const d = await TrialCounter.findOneAndUpdate({ _id: key, n: { $lt: limit } }, { $inc: { n: 1 }, $setOnInsert: { expiresAt } }, { upsert: true, new: true }).lean();
+      return Boolean(d);
+    } catch (e) {
+      if (isDup(e)) return false;
+      throw e;
+    }
+  },
+  async unbump(key) { await TrialCounter.updateOne({ _id: key, n: { $gt: 0 } }, { $inc: { n: -1 } }); },
+  async counter(key) { return (await TrialCounter.findById(key).lean())?.n || 0; },
+  /** Verrou atomique par personne : toutes les clés prises par `trialId`, ou aucune (une clé tenue par un autre essai non échu = échec). */
+  async acquireLock(keys, trialId, expiresAt, now = new Date()) {
+    const taken = [];
+    for (const key of keys) {
+      try {
+        await TrialLock.findOneAndUpdate({ _id: key, $or: [{ trialId }, { expiresAt: { $lt: now } }] }, { $set: { trialId, expiresAt } }, { upsert: true });
+        taken.push(key);
+      } catch (e) {
+        if (!isDup(e)) throw e;
+        if (taken.length) await TrialLock.deleteMany({ _id: { $in: taken }, trialId });
+        return false;
+      }
+    }
+    return true;
+  },
+  async releaseLock(keys, trialId) { await TrialLock.deleteMany({ _id: { $in: keys }, trialId }); },
   async countOtpSends(field, value, since) { return value ? TrialOtp.countDocuments({ [field]: value, createdAt: { $gte: since } }) : 0; },
   async lastOtp(userId, phoneHash) { return plain(await TrialOtp.findOne({ userId, phoneHash, usedAt: null }).sort({ createdAt: -1 }).lean()); },
   async lastOtpSendAt(userId) { const d = await TrialOtp.findOne({ userId }).sort({ createdAt: -1 }).select('createdAt').lean(); return d?.createdAt || null; },
