@@ -19,7 +19,8 @@ try { import.meta.resolve('web-push'); } catch {
 
 const { clearCompanyCache, identityCountryOf, companyNumberProfile } = await import('../middleware/companyScope.js');
 const { checkNumberCountry } = await import('../services/numberCountry.js');
-const { numberCountryAllowed, IDENTITY_NUMBER_COUNTRIES } = await import('../utils/europeZone.js');
+const europeZone = await import('../utils/europeZone.js');
+const { numberCountryAllowed } = europeZone;
 const { countryAvailability, availabilityFor, clearAvailabilityCache, AVAILABLE_TTL_MS, UNAVAILABLE_TTL_MS } = await import('../services/numberAvailability.js');
 const { phoneNumberService } = await import('../services/phoneNumberService.js');
 const { phoneNumberRoutes } = await import('../routes/phoneNumber.js');
@@ -88,14 +89,16 @@ const fakeTwilio = ({ inv = {}, search = {} } = {}) => {
 };
 const err = (props) => Object.assign(new Error('x'), props);
 
-describe('pièce d’identité FR/GB/US d’un abonné Solo hors d’Europe (numberCountryAllowed)', () => {
-  it('numéro du pays de la pièce, seulement pour FR, GB, US', () => {
-    assert.deepEqual([...IDENTITY_NUMBER_COUNTRIES], ['FR', 'GB', 'US']);
+describe('pièce d’identité d’un abonné Solo hors d’Europe (numberCountryAllowed)', () => {
+  it('numéro du pays de la pièce, quel que soit ce pays (décision du 22/11), jamais un autre', () => {
+    assert.equal(europeZone.IDENTITY_NUMBER_COUNTRIES, undefined, 'plus de liste FR/GB/US');
     assert.equal(numberCountryAllowed('MA', 'FR', { identityCountry: 'FR' }), true);
     assert.equal(numberCountryAllowed('JP', 'US', { identityCountry: 'us' }), true);
     assert.equal(numberCountryAllowed('JP', 'GB', { identityCountry: 'UK' }), true);
     assert.equal(numberCountryAllowed('MA', 'GB', { identityCountry: 'FR' }), false, 'pas un autre pays que celui de la pièce');
-    assert.equal(numberCountryAllowed('MA', 'DE', { identityCountry: 'DE' }), false, 'pièce allemande : pas d’exception');
+    assert.equal(numberCountryAllowed('MA', 'DE', { identityCountry: 'DE' }), true, 'pièce allemande : numéro allemand');
+    assert.equal(numberCountryAllowed('MA', 'US', { identityCountry: 'FR' }), false, 'Français au Maroc : pas les USA');
+    assert.equal(numberCountryAllowed('MA', 'JP', { identityCountry: 'OTHER' }), false, 'pièce illisible : rien');
     assert.equal(numberCountryAllowed('MA', 'FR'), false, 'sans pièce déclarée : règle inchangée');
     assert.equal(numberCountryAllowed('MA', 'MA', { identityCountry: 'FR' }), true, 'son pays reste autorisé');
     assert.equal(numberCountryAllowed('BE', 'GB'), true, 'zone Europe inchangée');
@@ -120,13 +123,15 @@ describe('checkNumberCountry : pièce enregistrée côté serveur, jamais une va
     assert.equal((await checkNumberCountry(fakeReq('ma'), MA_CO, { phoneNumber: '+33142000000' })).ok, true);
     assert.equal((await checkNumberCountry(fakeReq('ma'), MA_CO, { countryCode: 'GB' })).status, 403);
   });
-  it('Japon + pièce japonaise : un pays FR/GB/US envoyé par le client ne change rien', async () => {
+  it('Japon + pièce japonaise : un pays envoyé par le client ne change rien', async () => {
     const req = fakeReq('jp');
     req.query.identityCountry = 'US';
     req.body.identityCountry = 'US';
     assert.equal((await checkNumberCountry(req, JP_CO, { countryCode: 'US' })).status, 403);
     assert.equal((await checkNumberCountry(fakeReq('jpus'), JPUS_CO, { countryCode: 'US' })).ok, true);
-    assert.equal((await checkNumberCountry(fakeReq('made'), MADE_CO, { countryCode: 'DE' })).status, 403);
+    // Pièce allemande enregistrée : l'Allemagne est ouverte (décision du 22/11), pas un autre pays.
+    assert.equal((await checkNumberCountry(fakeReq('made'), MADE_CO, { countryCode: 'DE' })).ok, true);
+    assert.equal((await checkNumberCountry(fakeReq('made'), MADE_CO, { countryCode: 'FR' })).status, 403);
   });
 });
 

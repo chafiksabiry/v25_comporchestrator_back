@@ -1,7 +1,6 @@
 import { phoneNumberService } from './phoneNumberService.js';
 import { checkNumberCountry } from './numberCountry.js';
 import { companyNumberProfile, normalizeCountryCode, ScopeError } from '../middleware/companyScope.js';
-import { IDENTITY_NUMBER_COUNTRIES } from '../utils/europeZone.js';
 
 /**
  * Disponibilité des numéros dans un pays (décision du 19/11) : Nomad Solo n'est souscrit que là où HARX peut vraiment fournir un
@@ -69,7 +68,7 @@ export async function countryAvailability(countryCode, { service = phoneNumberSe
 
 /**
  * Disponibilité pour l'appelant. Avec `companyId` (abonné connu), le pays doit aussi être autorisé à cette entreprise (pays de
- * l'entreprise, zone Europe, ou pays de la pièce d'identité enregistrée pour FR/GB/US) : sinon `not_allowed`.
+ * l'entreprise, zone Europe, ou pays de la pièce d'identité enregistrée) : sinon `not_allowed`.
  * @returns {Promise<{status: number, body: object}>}
  */
 export async function availabilityFor(req, { countryCode, companyId } = {}, deps = {}) {
@@ -94,7 +93,7 @@ export const AVAILABILITY_UNAVAILABLE = 'AVAILABILITY_UNAVAILABLE';
  * Éligibilité Nomad Solo AVANT paiement (décisions du 19/11), calculée côté serveur à partir du profil ENREGISTRÉ seulement
  * (service d'inscription : `company.profile.country` et `company.profile.identityCountry`, sinon `issuingCountry` du justificatif
  * « identity ») ; aucune valeur de la requête n'est lue. Éligible si le pays de résidence a des numéros, ou si le pays de la pièce
- * d'identité est FR, GB ou US et a des numéros.
+ * d'identité (quel qu'il soit, décision du 22/11) a des numéros.
  *  - pays de résidence non enregistré : 409 RESIDENCE_COUNTRY_REQUIRED (le front doit l'enregistrer avant le paiement) ;
  *  - aucun numéro : 409 NO_NUMBERS_IN_COUNTRY ;
  *  - lecture du profil ou de la disponibilité impossible : 503 AVAILABILITY_UNAVAILABLE (`retryable: true`), jamais « éligible ».
@@ -126,7 +125,7 @@ export async function soloCheckoutEligibility(req, companyId, deps = {}) {
     };
   }
   const candidates = [residence];
-  if (IDENTITY_NUMBER_COUNTRIES.includes(identity) && identity !== residence) candidates.push(identity);
+  if (/^[A-Z]{2}$/.test(identity) && identity !== residence) candidates.push(identity);
   let failed = false;
   const reasons = {};
   for (const cc of candidates) {

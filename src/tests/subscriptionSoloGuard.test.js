@@ -103,9 +103,14 @@ for (const [path, body, okCode] of [['/checkout/init', INIT, 201], ['/checkout',
     assert.equal((await post(path, body())).code, okCode);
   });
 
-  test(`${path} Nomad Solo : pièce d'un autre pays (DE) ou pays de la pièce sans numéro -> 409`, async () => {
+  test(`${path} Nomad Solo : pièce de n'importe quel pays (DE) avec numéros -> autorisé ; pays sans numéro -> 409`, async () => {
     profile = storedProfile({ country: 'MA', identityCountry: 'DE' });
     stock = { DE: true };
+    assert.equal((await post(path, body())).code, okCode);
+    clearCompanyCache(); clearAvailabilityCache(); calls.sessions = 0; calls.payments = 0;
+    // Français vivant au Maroc : seuls MA et FR comptent, jamais les USA même s'ils ont des numéros.
+    profile = storedProfile({ country: 'MA', identityCountry: 'FR' });
+    stock = { US: true, GB: true };
     assert.equal((await post(path, body())).code, 409);
     clearCompanyCache(); clearAvailabilityCache();
     profile = storedProfile({ country: 'MA', identityCountry: 'FR' });
