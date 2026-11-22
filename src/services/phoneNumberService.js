@@ -2,6 +2,7 @@ import { buildLocalSearchOptions, buildPrefixSearchOptions } from './numberSearc
 import { frenchZoneFor, frenchZonePrefix, zoneOfFrenchNumber } from './frenchZones.js';
 import { addressSidFromAssignments, isRejectedRange, rememberRejectedRange } from './rejectedNumberRanges.js';
 import { countryOfE164 } from '../utils/e164Country.js';
+import { sameNumberZone } from '../utils/numberZone.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { cancelLineSubscription } from './phoneLineSubscription.js';
 import { config } from '../config/env.js';
@@ -702,7 +703,8 @@ class PhoneNumberService {
   async listClaimableInventory({ countryCode, limit = 50 } = {}) {
     const cc = String(countryCode || '').toUpperCase();
     const owned = await this.twilioClient.incomingPhoneNumbers.list({ limit: 1000 });
-    const candidates = owned.filter((n) => this.isInventoryCandidate(n) && this.guessCountryFromE164(n.phoneNumber) === cc);
+    // Zone d'indicatif (numberZone.js) : pour US comme pour CA, tout numéro +1 libre du stock convient (+1 est classé US par e164Country).
+    const candidates = owned.filter((n) => this.isInventoryCandidate(n) && sameNumberZone(this.guessCountryFromE164(n.phoneNumber), cc));
     const free = await this.unassignedAmong(candidates);
     return free.slice(0, limit).map((n) => ({
       phoneNumber: n.phoneNumber,
