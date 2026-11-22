@@ -2,6 +2,7 @@ import Stripe from 'stripe';
 import { config } from '../config/env.js';
 import { withoutPromotion } from './checkoutNoPromotion.js';
 import { resolveStripeLocale } from './stripeLocale.js';
+import { priceAmounts } from './currency.js';
 
 let stripeOverride = null;
 /** Réservé aux tests : injecte un faux client Stripe (null pour revenir au vrai). */
@@ -122,6 +123,28 @@ function buildPhoneLineSubscriptionParams({ customerId, productId, amountCents, 
 }
 
 let phoneLineProductIdCache = null;
+/** Montants par devise du prix STRIPE_PRICE_PHONE_LINE (lecture seule, mis en cache 10 minutes) : `currency_options` comprises. */
+let phoneLinePriceAmountsCache = null;
+const PHONE_LINE_PRICE_CACHE_MS = 10 * 60 * 1000;
+
+/**
+ * Montants (centimes) du prix Stripe de la ligne, par devise prise en charge, ex. { eur: 1499, usd: 1499, gbp: 1499, cad: 2150 }.
+ * Prix non configuré (absent ou valeur factice) : {}. Lève si Stripe ne répond pas.
+ */
+async function getPhoneLinePriceAmounts({ now = Date.now() } = {}) {
+  const priceId = String(config.stripePricePhoneLine || '').trim();
+  if (!priceId.startsWith('price_') || priceId.includes('placeholder')) return {};
+  if (phoneLinePriceAmountsCache && phoneLinePriceAmountsCache.priceId === priceId && now - phoneLinePriceAmountsCache.at < PHONE_LINE_PRICE_CACHE_MS) {
+    return phoneLinePriceAmountsCache.amounts;
+  }
+  const price = await getStripe().prices.retrieve(priceId, { expand: ['currency_options'] });
+  const amounts = priceAmounts(price);
+  phoneLinePriceAmountsCache = { priceId, amounts, at: now };
+  return amounts;
+}
+
+/** Pour les tests : oublie les montants du prix de la ligne. */
+function resetPhoneLinePriceAmountsCache() { phoneLinePriceAmountsCache = null; }
 
 /** Produit Stripe de la ligne : STRIPE_PRODUCT_PHONE_LINE, sinon le produit du prix STRIPE_PRICE_PHONE_LINE existant. */
 async function resolvePhoneLineProductId() {
@@ -558,7 +581,7 @@ export const stripeService = {
           },
         ],
         mode: 'subscription',
-        // Prix multi-devises : la devise choisie (mêmes montants en EUR, USD, GBP).
+        // Prix multi-devises : la devise choisie (montant de cette devise dans currency_options, ex. CAD 29,99 pour Nomad Solo).
         ...(currency ? { currency: String(currency).toLowerCase() } : {}),
         locale: resolveStripeLocale(locale),
         // Pas d'essai : la carte est demandée dès qu'il y a un montant à payer (prix du catalogue, sans remise).
@@ -666,13 +689,13 @@ export const stripeService = {
 
       // Re-fetch each product so marketing_features + description are complete
       // (expand on prices.list can omit Catalog marketing fields).
-      const productCache = new Map();
+      // Lectures EN PARALLÈLE (une par produit) : lues l'une après l'autre, elles faisaient attendre environ 2 s chaque appel de
+      // GET /api/subscriptions/plans, donc l'affichage du prix et de la devise sur les pages publiques (Nomad, Cloud).
+      const productIds = [...new Set(active.map((price) => price.product.id))];
+      const products = await Promise.all(productIds.map((id) => stripe.products.retrieve(id)));
+      const productCache = new Map(productIds.map((id, i) => [id, products[i]]));
       for (const price of active) {
-        const productId = price.product.id;
-        if (!productCache.has(productId)) {
-          productCache.set(productId, await stripe.products.retrieve(productId));
-        }
-        price.product = productCache.get(productId);
+        price.product = productCache.get(price.product.id);
       }
 
       return active;
@@ -755,6 +778,9 @@ export const stripeService = {
    * décalé à `firstCycleAt` (le 1er mois est déjà payé à l'achat) sans prorata. `error_if_incomplete` : Stripe lève si
    * le client ne peut pas être débité plus tard ; la clé d'idempotence évite tout doublon en cas de nouvel essai.
    */
+  getPhoneLinePriceAmounts,
+  resetPhoneLinePriceAmountsCache,
+
   createPhoneLineSubscription: async ({ customerId, amountCents, currency, firstCycleAt, metadata = {}, idempotencyKey }) => {
     const productId = await resolvePhoneLineProductId();
     return getStripe().subscriptions.create(

@@ -35,7 +35,7 @@ export async function resolvePlanByPriceId(priceId) {
 
   let amountCents = plan ? Math.round(Number(plan.price) * 100) : null;
   let currency = (plan?.currency || 'eur').toUpperCase();
-  /** Montants par devise (mêmes montants en EUR, USD, GBP) ; vide si Stripe n'a pas répondu. */
+  /** Montants par devise (EUR, USD, GBP, CAD : ceux du prix Stripe, devise par devise) ; vide si Stripe n'a pas répondu. */
   let amounts = {};
   /** Métadonnées du produit Stripe du prix (null si Stripe n'a pas répondu) : servent notamment à reconnaître les offres CLOUD et NOMAD. */
   let productMetadata = null;
