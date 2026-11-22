@@ -37,6 +37,7 @@ import { purgeExpiredBenchRecordings, migrateAiAgentSettings } from './src/servi
 import { companyNotificationRoutes } from './src/routes/companyNotifications.js';
 import { startMessageReminders } from './src/services/messageReminders.js';
 import { purgePhoneContactsAfterCancel } from './src/services/contactsRetention.js';
+import { removeTombstoneExpiry } from './src/models/ContactTombstone.js';
 import { scanLowResources } from './src/services/companyNotificationService.js';
 import { clearExpiredRetractions } from './src/services/retractionService.js';
 import { resolveExpiredPendingReviews, flagWeeklyAiAudits } from './src/controllers/escrowController.js';
@@ -64,6 +65,10 @@ mongoose.connect(config.mongodbUri, {
   applyMailOwnership();
   // Pilote agent IA : réglages d'avant (niveau / déclencheurs) → horaires + priorité (idempotent).
   migrateAiAgentSettings().catch((e) => console.error('[ai-inbound] migration des réglages :', e?.message || e));
+  // Traces de suppression des contacts du téléphone : elles n'expirent plus (ancien index TTL 180 jours retiré, idempotent).
+  removeTombstoneExpiry()
+    .then((r) => { if (r.dropped.length) console.log('[contacts] index d’expiration des traces retiré :', r.dropped.join(', ')); })
+    .catch((e) => console.error('[contacts] migration des traces :', e?.message || e));
   // Branchement des numéros : avec INBOUND_WEBHOOK_RESYNC=1, chaque ligne Twilio active de CETTE base est rebranchée sur l'API de CET
   // environnement (recette et production partagent le compte Twilio). Sans la variable : rien.
   if (String(process.env.INBOUND_WEBHOOK_RESYNC || '').trim() === '1') {

@@ -6,8 +6,9 @@ import { callerAccess, scopeToCompany, ScopeError } from '../middleware/companyS
 import { loadUserName } from '../services/followUpDirectory.js';
 import { canManage, canUse } from '../services/followUps.js';
 import {
-  LEGACY_CALLING_CODE, MAX_CALLS_PER_CONTACT, PHONE_SOURCE, displayName, mergeIntoExisting, normalizePhone, parseListQuery, phoneUpdate,
-  searchFilter, sortSpec, toContact, validateCallLink, validateCreate, validateLookup, validatePatch, validateSyncBatch,
+  LEGACY_CALLING_CODE, MAX_BULK_FILTER, MAX_CALLS_PER_CONTACT, PHONE_SOURCE, displayName, mergeIntoExisting, normalizePhone, parseListQuery,
+  phoneUpdate, searchFilter, sortSpec, toContact, tombstoneKeys, validateBulkDelete, validateCallLink, validateCreate, validateLookup,
+  validatePatch, validateSyncBatch, withPhoneOrigin,
 } from '../services/contacts.js';
 
 const validId = (v) => typeof v === 'string' && /^[0-9a-fA-F]{24}$/.test(v) && mongoose.Types.ObjectId.isValid(v);
@@ -69,6 +70,29 @@ async function syncContext(req, res) {
 
 
 const scope = (access, extra = {}) => ({ companyId: new mongoose.Types.ObjectId(access.companyId), ...extra });
+
+const BULK_CHUNK = 500;
+const chunks = (list, size = BULK_CHUNK) => Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, (i + 1) * size));
+const duplicateOnly = (e) => e?.code === 11000 || (Array.isArray(e?.writeErrors) && e.writeErrors.length > 0 && e.writeErrors.every((w) => (w?.code ?? w?.err?.code) === 11000));
+
+/**
+ * Traces de suppression (contacts du téléphone supprimés dans le portail) pour ces fiches, AVANT de les supprimer : leur propre origine
+ * téléphone et chaque contact du téléphone fusionné dedans. Idempotent (upsert sur la clé unique ; une trace déjà posée en parallèle
+ * n'est pas une erreur).
+ */
+async function writeTombstones(companyId, docs) {
+  const keys = tombstoneKeys(docs);
+  for (const part of chunks(keys)) {
+    try {
+      await ContactTombstone.bulkWrite(part.map((k) => ({
+        updateOne: { filter: { companyId, deviceId: k.deviceId, externalId: k.externalId }, update: { $setOnInsert: { createdAt: new Date() } }, upsert: true },
+      })), { ordered: false });
+    } catch (e) {
+      if (!duplicateOnly(e)) throw e;
+    }
+  }
+  return keys.length;
+}
 
 export const contactController = {
   /**
@@ -217,20 +241,62 @@ export const contactController = {
       if (!validId(req.params.id)) return fail(res, 400, 'Identifiant invalide.');
       const doc = await Contact.findOne(scope(access, { _id: req.params.id }));
       if (!doc) return fail(res, 404, 'Contact introuvable.');
-      // Contact du téléphone supprimé dans le portail : une trace empêche la synchronisation suivante de le recréer.
-      if (doc.source === PHONE_SOURCE && doc.deviceId && doc.externalId) {
-        await ContactTombstone.updateOne(
-          { companyId: doc.companyId, deviceId: doc.deviceId, externalId: doc.externalId },
-          { $setOnInsert: { createdAt: new Date() } },
-          { upsert: true }
-        );
-      }
+      // Contact du téléphone supprimé dans le portail (ou fiche dans laquelle des contacts du téléphone ont été fusionnés) : des traces
+      // empêchent la synchronisation suivante de les recréer.
+      await writeTombstones(doc.companyId, [typeof doc.toObject === 'function' ? doc.toObject() : doc]);
       const r = await Contact.deleteOne(scope(access, { _id: doc._id }));
       if (!r.deletedCount) return fail(res, 404, 'Contact introuvable.');
       res.json({ success: true });
     } catch (e) {
       console.error('[contacts] remove failed:', e?.message);
       fail(res, 500, 'Suppression du contact impossible.');
+    }
+  },
+
+  /**
+   * POST /contacts/bulk-delete : suppression en masse, mêmes droits que la suppression unitaire (titulaire et membres de la société ;
+   * un agent ne supprime pas de fiche). Corps : `{ ids: string[] }` (1 à 500) OU `{ filter: { q?, source?: 'phone' }, expectedTotal }`
+   * = tous les résultats de ce filtre (mêmes règles que GET /contacts, 5 000 au plus). Filtre : si le nombre réel diffère de
+   * `expectedTotal`, rien n'est supprimé (409 `TOTAL_CHANGED` avec le nouveau `total`). Des identifiants d'une autre société ou déjà
+   * supprimés sont ignorés sans le révéler. Les traces de suppression sont posées avant. Rien n'est jamais écrit dans le téléphone.
+   * Réponse : `{ success, deleted }`.
+   */
+  async bulkDelete(req, res) {
+    try {
+      const access = await context(req, res);
+      if (!access) return;
+      if (!canManage(access)) return fail(res, 403, NOT_ALLOWED);
+      const v = validateBulkDelete(req.body);
+      if (v.error) return fail(res, 400, v.error, v.code);
+      let filter;
+      if (v.value.ids) {
+        filter = scope(access, { _id: { $in: v.value.ids.map((id) => new mongoose.Types.ObjectId(id)) } });
+      } else {
+        const { q, source } = v.value;
+        filter = scope(access, { ...(searchFilter(q, await callingCodeOf(access)) || {}), ...(source ? { source } : {}) });
+      }
+      const docs = await Contact.find(filter).select({ _id: 1, source: 1, deviceId: 1, externalId: 1, phoneOrigins: 1 }).limit(MAX_BULK_FILTER + 1).lean();
+      if (!v.value.ids) {
+        if (docs.length > MAX_BULK_FILTER) {
+          const total = await Contact.countDocuments(filter);
+          return res.status(400).json({ success: false, error: `${MAX_BULK_FILTER} contacts au plus : précisez la recherche.`, message: `${MAX_BULK_FILTER} contacts au plus : précisez la recherche.`, code: 'CONTACT_BULK_TOO_MANY', total });
+        }
+        if (docs.length !== v.value.expectedTotal) {
+          return res.status(409).json({ success: false, error: 'Le nombre de contacts a changé.', message: 'Le nombre de contacts a changé.', code: 'TOTAL_CHANGED', total: docs.length });
+        }
+      }
+      const companyId = new mongoose.Types.ObjectId(access.companyId);
+      const tombstones = await writeTombstones(companyId, docs);
+      let deleted = 0;
+      for (const part of chunks(docs.map((d) => d._id))) {
+        const r = await Contact.deleteMany(scope(access, { _id: { $in: part } }));
+        deleted += r?.deletedCount || 0;
+      }
+      console.log('[contacts] bulk-delete', JSON.stringify({ companyId: String(companyId), userId: String(access.userId || ''), mode: v.value.ids ? 'ids' : 'filter', asked: v.value.ids ? v.value.ids.length : v.value.expectedTotal, deleted, tombstones }));
+      res.json({ success: true, deleted });
+    } catch (e) {
+      console.error('[contacts] bulk-delete failed:', e?.message);
+      fail(res, 500, 'Suppression des contacts impossible.');
     }
   },
 
@@ -274,11 +340,14 @@ export const contactController = {
         }
         const other = await Contact.findOne({ companyId, 'phones.number': { $in: numbers } });
         if (other) {
+          // La fiche se souvient du contact du téléphone fusionné : si on la supprime dans le portail, il ne reviendra pas.
+          const origins = withPhoneOrigin(other, deviceId, c.externalId);
+          const extra = origins ? { phoneOrigins: origins } : {};
           if (other.source === PHONE_SOURCE && !other.editedInPortal) {
             // Même numéro qu'un autre contact du téléphone : on le garde sur la première fiche, on marque le passage.
-            other.set({ lastSyncRunId: runId, lastSyncedAt: now, ...mergeIntoExisting(other, c) });
+            other.set({ lastSyncRunId: runId, lastSyncedAt: now, ...mergeIntoExisting(other, c), ...extra });
           } else {
-            other.set(mergeIntoExisting(other, c));
+            other.set({ ...mergeIntoExisting(other, c), ...extra });
           }
           await other.save();
           stats.merged += 1;
