@@ -12,6 +12,8 @@ router.post('/lookup', authenticate, c.lookup);
 router.get('/sync', authenticate, c.syncStatus);
 router.post('/sync', authenticate, c.sync);
 router.delete('/sync', authenticate, c.disableSync);
+// Suppression en masse (identifiants ou tous les résultats d'un filtre) : mêmes droits que DELETE /:id (contrôlés par le contrôleur).
+router.post('/bulk-delete', authenticate, c.bulkDelete);
 router.post('/', authenticate, c.create);
 router.patch('/:id', authenticate, c.patch);
 router.post('/:id/calls', authenticate, c.linkCall);
