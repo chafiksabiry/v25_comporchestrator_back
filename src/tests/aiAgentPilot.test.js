@@ -37,7 +37,22 @@ const EVENING = Date.parse('2026-11-03T19:00:00Z'); const MORNING = Date.parse('
 // ================================================================ réglages
 const d = S.toPublicSettings(null);
 assert.equal(d.enabled, false); assert.equal(d.level, undefined, 'plus de niveau'); assert.equal(d.triggers, undefined, 'plus de déclencheurs'); assert.equal(d.priority, 'after_humans'); assert.deepEqual(d.schedule, { always: false, timeZone: 'Europe/Paris', slots: [] }); assert.equal(d.maxCallMinutes, 8); assert.equal(d.addressForm, 'vous');
-assert.equal(d.voice, 'female'); assert.deepEqual(d.languages, ['fr-FR']); assert.deepEqual(d.skills, []); assert.equal(d.monthlyMinutesCap, 200);
+assert.equal(d.voice, 'female'); assert.deepEqual(d.languages, ['en-US'], 'aucune ligne connue : anglais');
+// Langue par défaut de l'agent : celle de la ligne (fr-FR, en-GB pour +44, en-US sinon) ; un réglage explicite reste prioritaire.
+assert.deepEqual(S.toPublicSettings(null, { linePhone: '+33188732537' }).languages, ['fr-FR'], '+33');
+assert.deepEqual(S.toPublicSettings(null, { linePhone: '+212522000000' }).languages, ['fr-FR'], '+212 (Maroc) : français');
+assert.deepEqual(S.toPublicSettings(null, { linePhone: '+442046522552' }).languages, ['en-GB'], '+44');
+assert.deepEqual(S.toPublicSettings(null, { linePhone: '+12025550123' }).languages, ['en-US'], '+1');
+assert.deepEqual(S.toPublicSettings(null, { linePhone: '+34910000000' }).languages, ['en-US'], 'espagnol non parlé par l’agent : anglais');
+assert.deepEqual(S.toPublicSettings({}, { linePhone: 'nope' }).languages, ['en-US'], 'ligne illisible : anglais');
+assert.deepEqual(S.toPublicSettings({ languages: [] }, { linePhone: '+33188732537' }).languages, ['fr-FR'], 'liste vide = rien réglé');
+assert.deepEqual(S.toPublicSettings({ languages: ['en-GB', 'fr-FR'] }, { linePhone: '+33188732537' }).languages, ['en-GB', 'fr-FR'], 'réglage explicite prioritaire');
+assert.deepEqual(S.toPublicSettings({ languages: ['fr-FR'] }, { linePhone: '+442046522552' }).languages, ['fr-FR'], 'réglage explicite prioritaire (+44)');
+assert.equal(S.greetingLanguage({}, { linePhone: '+442046522552' }), 'en-GB');
+assert.equal(S.greetingLanguage({ languages: ['xx-XX'] }, { linePhone: '+33188732537' }), 'fr-FR', 'langue réglée invalide : ligne');
+assert.equal(S.greetingLanguage(null), 'en-US', 'rien de connu : anglais');
+assert.equal(S.greetingLanguage({ languages: ['en-US'] }, { linePhone: '+33188732537' }), 'en-US');
+ assert.deepEqual(d.skills, []); assert.equal(d.monthlyMinutesCap, 200);
 assert.equal(S.toPublicSettings(null, { companyNameFallback: 'Cabinet Martin' }).companyName, 'Cabinet Martin', 'nom de l’annuaire par défaut');
 let v = S.validateSettingsUpdate({ maxCallMinutes: 2 }); assert.equal(v.ok, false); assert.equal(v.issues[0].code, 'out_of_range'); assert.equal(v.issues[0].min, 3);
 assert.equal(S.validateSettingsUpdate({ maxCallMinutes: 16 }).ok, false);
@@ -75,7 +90,7 @@ assert.equal(S.pilotAvailability(B, { AI_INBOUND_ENABLED: 'true', AI_INBOUND_COM
 // ================================================================ horaires, compétences, priorité
 const open = { available: true };
 const EVENINGS = [1, 2, 3, 4, 5].map((day) => ({ day, start: '18:00', end: '24:00' }));
-const on = { ...d, enabled: true, schedule: { always: false, timeZone: 'Europe/Paris', slots: EVENINGS } };
+const on = { ...d, languages: ['fr-FR'], enabled: true, schedule: { always: false, timeZone: 'Europe/Paris', slots: EVENINGS } };
 assert.equal(S.isWithinBusinessHours(d.businessHours, MORNING), true);
 assert.equal(S.isWithinBusinessHours(d.businessHours, EVENING), false);
 assert.equal(S.isOnSchedule(on.schedule, EVENING), true); assert.equal(S.isOnSchedule(on.schedule, MORNING), false);
@@ -511,11 +526,27 @@ globalThis.fetch = async (url) => { const id = new URL(url).searchParams.get('us
 const asUser = (id, extra) => ({ user: { userId: id }, headers: { authorization: `Bearer ${userTok(id)}` }, ...extra });
 clearCompanyCache?.();
 reset();
+// Rien de réglé : la langue par défaut de l'écran vient de la plus ancienne ligne de l'entreprise (lecture seule).
+const lineLookups = [];
+AI.setAiInboundDeps({ companyLinePhone: async (c) => { lineLookups.push(S2(c)); return '+33150000001'; } });
 r = res(); await ctl.getSettings(asUser('member1', { query: { companyId: A } }), r); assert.equal(r.code, 403, 'membre : pas les réglages');
 r = res(); await ctl.getSettings(asUser('owner1', { query: { companyId: B } }), r); assert.equal(r.code, 403, 'autre entreprise');
 r = res(); await ctl.getSettings(asUser('owner1', { query: { companyId: A } }), r);
 assert.equal(r.code, 200); assert.equal(r.body.data.availability.available, true); assert.equal(r.body.data.engines.primary, 'gemini'); assert.equal(r.body.data.engines.fallback, 'openai');
 assert.match(r.body.data.announcement['fr-FR'], /intelligence artificielle/);
+assert.deepEqual(r.body.data.settings.languages, ['fr-FR'], 'ligne +33 : français par défaut');
+assert.ok(lineLookups.includes(A), 'ligne de l’entreprise lue');
+AI.setAiInboundDeps({ companyLinePhone: async () => '+442046522552' });
+r = res(); await ctl.getSettings(asUser('owner1', { query: { companyId: A } }), r);
+assert.deepEqual(r.body.data.settings.languages, ['en-GB'], 'ligne +44 : anglais par défaut');
+assert.match(r.body.data.announcement['en-GB'], /artificial intelligence/);
+AI.setAiInboundDeps({ companyLinePhone: async () => '' });
+r = res(); await ctl.getSettings(asUser('owner1', { query: { companyId: A } }), r);
+assert.deepEqual(r.body.data.settings.languages, ['en-US'], 'aucune ligne : anglais');
+AI.setAiInboundDeps({ companyLinePhone: async () => { throw new Error('db down'); } });
+r = res(); await ctl.getSettings(asUser('owner1', { query: { companyId: A } }), r);
+assert.equal(r.code, 200); assert.deepEqual(r.body.data.settings.languages, ['en-US'], 'ligne illisible : anglais, écran toujours lisible');
+AI.setAiInboundDeps({ companyLinePhone: async () => '+33150000001' });
 r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, level: 'total', triggers: { allBusy: true } } }), r); assert.equal(r.code, 200, 'level / triggers ignorés sans erreur'); assert.equal(r.body.data.settings.level, undefined); assert.equal(r.body.data.settings.triggers, undefined);
 r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, maxCallMinutes: 20 } }), r); assert.equal(r.code, 400); assert.equal(r.body.code, 'AI_SETTINGS_INVALID'); assert.equal(r.body.issues[0].field, 'maxCallMinutes');
 r = res(); await ctl.putSettings(asUser('owner1', { body: { companyId: A, transferTargets: [E2] } }), r); assert.equal(r.body.code, 'TRANSFER_TARGET_UNKNOWN');

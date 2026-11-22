@@ -53,6 +53,7 @@ import { decideInboundRoute, mobileTarget, shouldRingMobileAfter } from '../serv
 import { callPayload, notifyOwners, voicemailPayload } from '../services/webPush.js';
 import { blockedCallBody } from '../services/blockedCallers.js';
 import { languageForPhone } from '../services/companyLanguage.js';
+import { buildTestCallGatherTwiml, buildTestCallTwiml, inboundTestSuccessBody, telnyxTestSpeak, testCallLanguageForLine, testCallLanguageParam, withTestCallLanguage } from '../services/testCallTwiml.js';
 import { staffTexts } from '../services/staffTexts.js';
 import { getInboundTest, needsInboundTestProof, realCallProof, receiveInboundCall, startInboundTest as startInboundTestSession } from '../services/inboundTestService.js';
 import { stripeLocaleFromRequest } from '../services/stripeLocale.js';
@@ -2047,6 +2048,8 @@ class PhoneNumberController {
       ).toLowerCase();
 
       console.log(`📞 Testing call via ${provider || 'unknown'} from ${fromE164} to ${destE164}`);
+      // Phrases du test dans la langue du pays de la LIGNE émettrice (+44 -> anglais, +33 -> français), jamais codées en dur.
+      const language = testCallLanguageForLine(fromE164);
 
       if (provider === 'twilio' || line.twilioId) {
         if (!config.twilioAccountSid || !config.twilioAuthToken) {
@@ -2058,7 +2061,7 @@ class PhoneNumberController {
         }
         const publicBase = `https://${req.get('host')}`;
         const statusCallback = `${publicBase}/api/phone-numbers/webhooks/twilio/call-status`;
-        const twimlUrl = `${publicBase}/api/phone-numbers/webhooks/twilio/test-call-twiml`;
+        const twimlUrl = withTestCallLanguage(`${publicBase}/api/phone-numbers/webhooks/twilio/test-call-twiml`, language);
         const call = await phoneNumberService.twilioClient.calls.create({
           to: destE164,
           from: fromE164,
@@ -2087,6 +2090,7 @@ class PhoneNumberController {
           humanConfirmed: false,
           from: fromE164,
           to: destE164,
+          language,
         });
         return res.json({
           success: true,
@@ -2140,6 +2144,7 @@ class PhoneNumberController {
         rawStatus: 'initiated',
         from: fromE164,
         to: destE164,
+        language,
       });
       res.json({
         success: true,
@@ -2351,15 +2356,8 @@ class PhoneNumberController {
         });
       }
       const gatherAction = `https://${req.get('host')}/api/phone-numbers/webhooks/twilio/test-call-gather`;
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say language="fr-FR" voice="Polly.Lea-Generative">Bonjour, ceci est un appel de test depuis la plateforme Harx. Appuyez sur la touche 1 pour confirmer que vous avez bien reçu cet appel.</Say>
-  <Gather numDigits="1" timeout="20" action="${gatherAction}" method="POST">
-    <Say language="fr-FR" voice="Polly.Lea-Generative">Je répète : appuyez sur 1 maintenant pour confirmer.</Say>
-  </Gather>
-  <Say language="fr-FR" voice="Polly.Lea-Generative">Aucune confirmation reçue. Au revoir.</Say>
-  <Hangup/>
-</Response>`;
+      // Langue fixée au lancement (`?l=`, pays de la ligne émettrice) ; absente ou inconnue : anglais.
+      const twiml = buildTestCallTwiml({ language: testCallLanguageParam(req.query?.l), gatherAction });
       res.type('text/xml').status(200).send(twiml);
     } catch (error) {
       console.error('Error in handleTwilioTestCallTwiml:', error);
@@ -2904,7 +2902,7 @@ class PhoneNumberController {
       const to = toE164(req.body?.To);
       const from = String(req.body?.From || '').trim();
       const callSid = String(req.body?.CallSid || '').trim();
-      // Langue des textes de l'entreprise dits à l'appelant : pays de la ligne appelée (français sans numéro lisible).
+      // Langue des phrases système dites à l'appelant : pays de la ligne appelée (anglais sans numéro lisible).
       const language = languageForPhone(to);
       const received = to ? receiveInboundCall(to, { from, callSid }) : null;
       if (!received) console.log(`📞 Appel entrant sur ${to || '(numéro illisible)'} depuis ${from} : aucun test en attente (état : ${JSON.stringify(to ? getInboundTest(to) : null)})`);
@@ -2914,7 +2912,7 @@ class PhoneNumberController {
           { $set: { 'metadata.inboundTest': { testedAt: new Date(received.receivedAt).toISOString(), from, callSid } } }
         );
         console.log(`✅ Test d'appel entrant reçu sur ${to} depuis ${from}`);
-        return reply('<Say language="fr-FR" voice="Polly.Lea-Generative">Test d\'appel entrant réussi. Votre ligne reçoit bien les appels. Au revoir.</Say><Hangup/>');
+        return reply(inboundTestSuccessBody(language));
       }
       // Appel réel : on fait sonner les conseillers disponibles de l'entreprise propriétaire de la ligne.
       const line = to
@@ -3333,17 +3331,7 @@ class PhoneNumberController {
           });
         }
       }
-      const twiml = confirmed
-        ? `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say language="fr-FR" voice="Polly.Lea-Generative">Merci. Confirmation reçue. Votre ligne fonctionne correctement. Au revoir.</Say>
-  <Hangup/>
-</Response>`
-        : `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say language="fr-FR" voice="Polly.Lea-Generative">Confirmation invalide. Au revoir.</Say>
-  <Hangup/>
-</Response>`;
+      const twiml = buildTestCallGatherTwiml({ language: testCallLanguageParam(req.query?.l), confirmed });
       res.type('text/xml').status(200).send(twiml);
     } catch (error) {
       console.error('Error in handleTwilioTestCallGather:', error);
@@ -3398,12 +3386,8 @@ class PhoneNumberController {
                 Accept: 'application/json',
                 Authorization: `Bearer ${config.telnyxApiKey}`,
               },
-              body: JSON.stringify({
-                payload:
-                  'Bonjour. Ceci est un appel de test depuis la plateforme Harx. Votre ligne est parfaitement configurée. Au revoir !',
-                voice: 'female',
-                language: 'fr-FR',
-              }),
+              // Langue de la ligne émettrice, retenue au lancement du test (repli : numéro appelant de l'événement).
+              body: JSON.stringify(telnyxTestSpeak(testCallSessions.get(callControlId)?.language || testCallLanguageForLine(event.payload?.from))),
             });
             console.log(`🗣️ Sent speak command to call ${callControlId}`);
           } catch (err) {
