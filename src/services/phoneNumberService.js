@@ -13,6 +13,14 @@ import FormData from 'form-data';
 import mongoose from 'mongoose';
 import { heldNumbers } from './inventoryHolders.js';
 
+/**
+ * Pays où Twilio n'exige AUCUN dossier réglementaire (Regulatory Bundle) pour acheter un numéro local : ils ne figurent pas dans la
+ * liste des pays à exigences de Twilio (https://www.twilio.com/en-us/guidelines/regulatory, qui liste la France et le Royaume-Uni).
+ * L'API Regulations de Twilio renvoie pourtant des régulations pour ces pays (dossiers facultatifs) : sans cette liste, la recherche,
+ * la disponibilité Nomad Solo et le contrôle avant paiement les bloquaient à tort (« regulatory »). +1 couvre les deux pays.
+ */
+export const NO_LOCAL_BUNDLE_COUNTRIES = Object.freeze(['US', 'CA']);
+
 /** Nom convivial donné par la plateforme aux numéros qu'elle achète : sert à reconnaître l'inventaire proposable. */
 export const INVENTORY_FRIENDLY_PREFIX = 'Gig Number:';
 
@@ -463,11 +471,14 @@ class PhoneNumberService {
    * True when Twilio mandates regulatory compliance docs for this country/type.
    */
   async isRegulatoryBundleRequired(isoCountry, numberType = 'local') {
+    const cc = String(isoCountry || '').toUpperCase();
+    // États-Unis / Canada : aucun dossier exigé pour un numéro local (voir NO_LOCAL_BUNDLE_COUNTRIES), quelle que soit la réponse de l'API.
+    if (String(numberType || 'local').toLowerCase() === 'local' && NO_LOCAL_BUNDLE_COUNTRIES.includes(cc)) return false;
     try {
       const regulations = await this.twilioClient.numbers.v2.regulatoryCompliance
         .regulations
         .list({
-          isoCountry: String(isoCountry || '').toUpperCase(),
+          isoCountry: cc,
           numberType,
           limit: 1
         });
