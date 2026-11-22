@@ -24,6 +24,10 @@ test('tous les autres pays -> EUR', async () => {
   }
 });
 
+test('Canada : packs de minutes et de jetons en EUR (aucun montant CAD décidé, repli explicite)', async () => {
+  assert.equal(await purchaseCurrency(authed(), COMPANY, { lookup: countryIs('CA') }), 'EUR');
+});
+
 test('repli EUR : lecture du pays impossible, appelant inconnu ou sans entreprise', async () => {
   const failing = async () => { throw Object.assign(new Error('down'), { status: 503 }); };
   assert.equal(await purchaseCurrency(authed(), COMPANY, { lookup: failing }), 'EUR');
@@ -51,4 +55,6 @@ test('symboles et libellés', () => {
   assert.equal(formatAmountLabel(999, 'EUR'), '9.99 €');
   assert.equal(formatAmountLabel(999, 'GBP'), '£9.99');
   assert.equal(formatAmountLabel(1000, 'USD'), '$10.00');
+  assert.equal(currencySymbol('cad'), 'CA$');
+  assert.equal(formatAmountLabel(2150, 'CAD'), 'CA$21.50');
 });

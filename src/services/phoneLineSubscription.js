@@ -2,6 +2,7 @@ import { PhoneNumber } from '../models/PhoneNumber.js';
 import { Subscription } from '../models/Subscription.js';
 import { config } from '../config/env.js';
 import { stripeService } from './stripeService.js';
+import { SAME_AMOUNT_CURRENCIES } from './currency.js';
 
 /**
  * Abonnement mensuel par ligne (offres Call Centre) : un abonnement Stripe PAR LIGNE, sur le client Stripe de l'abonnement
@@ -94,6 +95,31 @@ export function phoneLinePriceCentsFromMetadata(metadata) {
   }
   const cents = Number(raw);
   return cents > 0 ? cents : null;
+}
+
+/**
+ * Montant (centimes) d'une ligne mensuelle dans `currency` :
+ *  - EUR, USD, GBP (SAME_AMOUNT_CURRENCIES) : `sameAmountCents`, le prix de ligne de l'offre (`phone_line_price_cents`), inchangé ;
+ *  - autre devise (CAD) : l'option de cette devise du prix Stripe de la ligne (STRIPE_PRICE_PHONE_LINE, `currency_options`), ex. 2150
+ *    pour 21,50 $ CA (prix du fondateur, 22/11/2026). Jamais le montant en euros recopié dans une autre devise.
+ * Renvoie null si cette devise n'a pas de montant dans Stripe (ou si Stripe ne répond pas) : l'achat est alors refusé AVANT tout paiement.
+ * @param {string} currency
+ * @param {number} sameAmountCents
+ * @param {{amounts?: Function}} [opts] `amounts` remplace stripeService.getPhoneLinePriceAmounts (tests)
+ * @returns {Promise<number|null>}
+ */
+export async function phoneLineAmountForCurrency(currency, sameAmountCents, { amounts = () => stripeService.getPhoneLinePriceAmounts() } = {}) {
+  const code = String(currency || 'EUR').trim().toLowerCase();
+  if (SAME_AMOUNT_CURRENCIES.includes(code)) return sameAmountCents;
+  try {
+    const cents = (await amounts())?.[code];
+    if (Number.isInteger(cents) && cents > 0) return cents;
+    console.warn(JSON.stringify({ event: 'phone_line_amount_missing', currency: code }));
+    return null;
+  } catch (error) {
+    console.warn(JSON.stringify({ event: 'phone_line_amount_unreadable', currency: code, reason: error?.message || 'error' }));
+    return null;
+  }
 }
 
 /** Date + n mois calendaires (le 31 janvier + 1 mois = fin février, comme Stripe). */
