@@ -163,3 +163,17 @@ test('avec sharp (si installé) : image réduite à 2000 px, JPEG, sans EXIF', a
   assert.equal(Math.max(m.width, m.height), 2000);
   assert.equal(m.exif, undefined);
 });
+
+// Défaut recette 23/11 : relu avec `.lean()`, MongoDB rend des `Binary` BSON et non des Buffers.
+// `Buffer.from(binary)` donnait 0 octet → ERR_CRYPTO_INVALID_IV → dossier en revue. Le déchiffrement doit lire les vrais octets.
+test('decryptBuffer déchiffre des champs relus en Binary BSON (lean)', async () => {
+  const { Binary } = await import('mongodb');
+  const crypto = await import('node:crypto');
+  const { encryptBuffer, decryptBuffer } = await import('../services/identity/files.js');
+  const key = crypto.randomBytes(32);
+  const clear = Buffer.from('contenu de test');
+  const enc = encryptBuffer(clear, key, 'identity:c1:f1');
+  const asLean = { ciphertext: new Binary(enc.ciphertext), iv: new Binary(enc.iv), tag: new Binary(enc.tag) };
+  assert.deepEqual(decryptBuffer(asLean, key, 'identity:c1:f1'), clear);
+  assert.deepEqual(decryptBuffer(enc, key, 'identity:c1:f1'), clear);
+});
