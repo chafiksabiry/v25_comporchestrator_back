@@ -323,11 +323,23 @@ export function encryptBuffer(data, key, context) {
   return { ciphertext, iv, tag: cipher.getAuthTag() };
 }
 
+/**
+ * Octets d'un champ binaire relu de la base. Avec `.lean()`, MongoDB rend un `Binary` BSON et non un Buffer :
+ * `Buffer.from(binary)` donne alors 0 octet (IV invalide). On lit ses octets réels (`binary.buffer`).
+ */
+export function toBytes(value) {
+  if (Buffer.isBuffer(value)) return value;
+  if (value && value._bsontype === 'Binary' && value.buffer) return Buffer.from(value.buffer);
+  if (value instanceof Uint8Array || value instanceof ArrayBuffer) return Buffer.from(value);
+  if (value && typeof value === 'object' && value.type === 'Buffer' && Array.isArray(value.data)) return Buffer.from(value.data);
+  return Buffer.from(value);
+}
+
 export function decryptBuffer({ ciphertext, iv, tag }, key, context) {
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(iv));
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, toBytes(iv));
   decipher.setAAD(Buffer.from(String(context)));
-  decipher.setAuthTag(Buffer.from(tag));
-  return Buffer.concat([decipher.update(Buffer.from(ciphertext)), decipher.final()]);
+  decipher.setAuthTag(toBytes(tag));
+  return Buffer.concat([decipher.update(toBytes(ciphertext)), decipher.final()]);
 }
 
 /** Empreinte HMAC-SHA256 (clé serveur) : repère une même pièce sur plusieurs comptes sans stocker le numéro. */
