@@ -102,13 +102,41 @@ test('paiement Nomad Solo vérifié : pays vérifiés (toute nationalité) ; pay
   assert.equal(changed.body.code, 'IDENTITY_REVERIFICATION_REQUIRED');
 });
 
-test('paiement Nomad Solo, drapeau désactivé : règle déclarée de #249 (résidence + pièce de n’importe quel pays enregistrées)', async () => {
-  const r = await soloCheckoutEligibility(req, C, { identityConfig: OFF, service: stockOf({ MA: true }) });
+test('défaut 5 (#618) : paiement Nomad Solo, drapeau DÉSACTIVÉ et aucune vérification validée -> 409 IDENTITY_VERIFICATION_UNAVAILABLE (plus de paiement sur simple déclaration)', async () => {
+  const r = await soloCheckoutEligibility(req, C, { identityConfig: OFF, verifiedCountries: none, service: stockOf({ MA: true, FR: true }) });
+  assert.deepEqual([r.ok, r.status, r.body.code], [false, 409, 'IDENTITY_VERIFICATION_UNAVAILABLE']);
+});
+
+test('défaut 5 (#618) : paiement Nomad Solo, drapeau désactivé mais vérification validée -> pays VÉRIFIÉS seulement', async () => {
+  const r = await soloCheckoutEligibility(req, C, { identityConfig: OFF, verifiedCountries: verified('FR', 'MA'), service: stockOf({ MA: true }) });
   assert.deepEqual(r, { ok: true, numberCountry: 'MA' });
   clearAvailabilityCache();
-  const none = await soloCheckoutEligibility(req, C, { identityConfig: OFF, service: stockOf({ US: true }) });
-  assert.equal(none.status, 409);
-  assert.equal(none.body.code, 'NO_NUMBERS_IN_COUNTRY');
+  const none_ = await soloCheckoutEligibility(req, C, { identityConfig: OFF, verifiedCountries: verified('FR', 'MA'), service: stockOf({ US: true }) });
+  assert.equal(none_.status, 409);
+  assert.equal(none_.body.code, 'NO_NUMBERS_IN_COUNTRY');
+});
+
+test('défaut 5 (#618) : achat d’un numéro par un abonné Nomad Solo, drapeau DÉSACTIVÉ -> refusé sans vérification validée ; autres offres inchangées', async () => {
+  const { nomadPurchaseIdentityGate, IDENTITY_VERIFICATION_UNAVAILABLE } = await import('../services/numberCountry.js');
+  const NOMAD_LIMITS = { product: 'callcenter', callcenterTier: 'nomad_solo' };
+  let r = await nomadPurchaseIdentityGate(C, NOMAD_LIMITS, { phoneNumber: '+33612345678' }, { identityConfig: OFF, verifiedCountries: none });
+  assert.deepEqual([r.ok, r.status, r.body.code], [false, 403, IDENTITY_VERIFICATION_UNAVAILABLE]);
+  r = await nomadPurchaseIdentityGate(C, NOMAD_LIMITS, { phoneNumber: '+33612345678' }, { identityConfig: OFF, verifiedCountries: verified('FR', 'MA') });
+  assert.equal(r.ok, true);
+  r = await nomadPurchaseIdentityGate(C, NOMAD_LIMITS, { phoneNumber: '+4915112345678' }, { identityConfig: OFF, verifiedCountries: verified('FR', 'MA') });
+  assert.deepEqual([r.status, r.body.code], [403, 'COUNTRY_NOT_ALLOWED']);
+  r = await nomadPurchaseIdentityGate(C, NOMAD_LIMITS, { phoneNumber: '+33612345678' }, { identityConfig: OFF, verifiedCountries: async () => { throw new Error('db down'); } });
+  assert.equal(r.status, 503);
+  // Drapeau activé : déjà contrôlé par checkNumberCountry (soloIdentityGate), rien de plus ici.
+  let looked = false;
+  r = await nomadPurchaseIdentityGate(C, NOMAD_LIMITS, { phoneNumber: '+33612345678' }, { identityConfig: ON, verifiedCountries: async () => { looked = true; return { verified: false }; } });
+  assert.deepEqual([r.ok, looked], [true, false]);
+  // Autres offres (CLOUD, TaaS, aucun forfait) : jamais lu.
+  for (const limits of [null, { product: 'callcenter', callcenterTier: 'accueil' }, { product: null }]) {
+    r = await nomadPurchaseIdentityGate(C, limits, { phoneNumber: '+33612345678' }, { identityConfig: OFF, verifiedCountries: async () => { looked = true; return { verified: false }; } });
+    assert.equal(r.ok, true);
+  }
+  assert.equal(looked, false);
 });
 
 test('23/11 validé pour la résidence seule (nationalité en revue) : numéro du pays de résidence seulement, puis nationalité ajoutée par l’équipe', async () => {

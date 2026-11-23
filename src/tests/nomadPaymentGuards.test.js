@@ -144,11 +144,15 @@ test('essai : désactivé, pays fermé (Maghreb) ou sans numéro d’essai, essa
   assert.deepEqual(await G.trialPaymentGate({ userId: 'u1', country: 'FR' }, { env: TRIAL_ENV, store }), { ok: true, reason: 'paused' });
 });
 
-test('essai : pas fait ou EN COURS -> refus ; terminé (décroché) -> accepté ; « déjà utilisé » constaté -> accepté', async () => {
+test('essai : pas fait ou qui sonne encore -> refus ; décroché (en cours ou terminé) -> accepté ; « déjà utilisé » constaté -> accepté', async () => {
   const store = createMemoryTrialStore({});
   assert.deepEqual(await G.trialPaymentGate({ userId: 'u1', country: 'FR' }, { env: TRIAL_ENV, store }), { ok: false });
-  const t = await store.createTrial({ userId: 'u1', country: 'FR', status: 'in_progress', consumedAt: new Date(), createdAt: new Date() });
-  assert.deepEqual(await G.trialPaymentGate({ userId: 'u1', country: 'FR' }, { env: TRIAL_ENV, store }), { ok: false });
+  const ringing = await store.createTrial({ userId: 'u1', country: 'FR', status: 'dialing', createdAt: new Date() });
+  assert.deepEqual(await G.trialPaymentGate({ userId: 'u1', country: 'FR' }, { env: TRIAL_ENV, store }), { ok: false }, 'essai qui sonne : pas encore fait');
+  await store.updateTrial(ringing.id, { status: 'dialing' }, { set: { status: 'expired' } });
+  // Défaut 7 (audit #618) : décroché, appel encore en cours (59 s au plus) -> fait pour le paiement (plus de 409 TRIAL_REQUIRED).
+  const t = await store.createTrial({ userId: 'u1', country: 'FR', status: 'in_progress', answeredAt: new Date(), consumedAt: new Date(), createdAt: new Date() });
+  assert.deepEqual(await G.trialPaymentGate({ userId: 'u1', country: 'FR' }, { env: TRIAL_ENV, store }), { ok: true, reason: 'answered' });
   await store.updateTrial(t.id, { status: 'in_progress' }, { set: { status: 'ended' } });
   assert.deepEqual(await G.trialPaymentGate({ userId: 'u1', country: 'FR' }, { env: TRIAL_ENV, store }), { ok: true, reason: 'done' });
   const other = createMemoryTrialStore({});
@@ -212,7 +216,7 @@ test('achat déclenché par la confirmation du paiement : une seule fois (confir
   silence();
   const Model = fakePaymentModel(PAYMENT);
   const bought = [];
-  const deps = { Model, identityConfig: () => ({ enabled: false }), purchase: async (p) => { bought.push(p); return { status: 200, body: { _id: 'pn1' } }; } };
+  const deps = { Model, verifiedCountries: VERIFIED(['FR']), purchase: async (p) => { bought.push(p); return { status: 200, body: { _id: 'pn1' } }; } };
   const first = await N.purchaseChosenNumberAfterPayment(PAYMENT, deps);
   assert.equal(first.status, 'purchased');
   assert.deepEqual(bought, [{ phoneNumber: '+33142000001', companyId: 'c1', currency: 'EUR' }]);
@@ -223,19 +227,109 @@ test('achat déclenché par la confirmation du paiement : une seule fois (confir
 
 test('achat : numéro pris entre la revérification et l’achat -> « taken » (paiement conservé) ; autre refus -> « failed »', async () => {
   silence();
-  let r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: fakePaymentModel(PAYMENT), identityConfig: () => ({ enabled: false }), purchase: async () => ({ status: 410, body: { code: 'NUMBER_NO_LONGER_AVAILABLE' } }) });
+  let r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: fakePaymentModel(PAYMENT), verifiedCountries: VERIFIED(['FR']), purchase: async () => ({ status: 410, body: { code: 'NUMBER_NO_LONGER_AVAILABLE' } }) });
   assert.equal(r.status, 'taken');
-  r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: fakePaymentModel(PAYMENT), identityConfig: () => ({ enabled: false }), purchase: async () => ({ status: 500, body: { code: 'NUMBER_PROVISION_FAILED' } }) });
+  r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: fakePaymentModel(PAYMENT), verifiedCountries: VERIFIED(['FR']), purchase: async () => ({ status: 500, body: { code: 'NUMBER_PROVISION_FAILED' } }) });
   assert.deepEqual([r.status, r.code], ['failed', 'NUMBER_PROVISION_FAILED']);
-  r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: fakePaymentModel(PAYMENT), identityConfig: () => ({ enabled: false }), purchase: async () => { throw new Error('twilio down'); } });
+  r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: fakePaymentModel(PAYMENT), verifiedCountries: VERIFIED(['FR']), purchase: async () => { throw new Error('twilio down'); } });
   assert.equal(r.status, 'failed');
 });
 
-test('achat : vérification activée -> pays revérifié sans jeton (pays vérifiés) ; hors pays vérifiés, rien n’est acheté', async () => {
+test('achat : pays revérifié sans jeton (pays vérifiés) ; hors pays vérifiés, rien n’est acheté', async () => {
   silence();
   let called = 0;
-  const r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: fakePaymentModel(PAYMENT), identityConfig: () => ({ enabled: true }), verifiedCountries: VERIFIED(['CA']), purchase: async () => { called += 1; return { status: 200, body: {} }; } });
+  const r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: fakePaymentModel(PAYMENT), verifiedCountries: VERIFIED(['CA']), purchase: async () => { called += 1; return { status: 200, body: {} }; } });
   assert.deepEqual([r.status, r.code, called], ['failed', 'COUNTRY_NOT_ALLOWED', 0]);
+});
+
+test('défaut 5 : achat après paiement SANS vérification validée -> rien n’est acheté, même drapeau éteint (IDENTITY_VERIFICATION_ENABLED absent)', async () => {
+  silence();
+  const saved = process.env.IDENTITY_VERIFICATION_ENABLED;
+  delete process.env.IDENTITY_VERIFICATION_ENABLED;
+  let called = 0;
+  try {
+    const r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: fakePaymentModel(PAYMENT), verifiedCountries: async () => ({ verified: false, countries: [] }), purchase: async () => { called += 1; return { status: 200, body: {} }; } });
+    assert.deepEqual([r.status, r.code, called], ['failed', 'IDENTITY_NOT_VERIFIED', 0]);
+  } finally { if (saved !== undefined) process.env.IDENTITY_VERIFICATION_ENABLED = saved; }
+});
+
+// ------------------------------------------------------------------ défaut 8 : achat resté « buying »
+
+function staleModel(numberPurchase) {
+  const db = { doc: { _id: 'pay1', meta: { companyId: 'c1', chosenNumber: PAYMENT.meta.chosenNumber, numberPurchase } } };
+  return {
+    db,
+    findOneAndUpdate: async (filter, update) => {
+      const np = db.doc.meta.numberPurchase || {};
+      const want = filter['meta.numberPurchase.status'];
+      if (want && typeof want === 'object' && want.$nin) { if (want.$nin.includes(np.status)) return null; db.doc.meta.numberPurchase = update.$set['meta.numberPurchase']; return db.doc; }
+      if (np.status !== want || !(new Date(np.at) < filter['meta.numberPurchase.at'].$lt)) return null;
+      db.doc.meta.numberPurchase = { ...np, at: update.$set['meta.numberPurchase.at'] };
+      return db.doc;
+    },
+    findById: () => ({ lean: async () => db.doc }),
+    updateOne: async (f, u) => { db.doc.meta.numberPurchase = u.$set['meta.numberPurchase']; },
+  };
+}
+const T0 = Date.parse('2026-11-23T10:00:00Z');
+const BUYING = (agoMs) => ({ status: 'buying', phoneNumber: '+33142000001', at: new Date(T0 - agoMs) });
+
+test('défaut 8 : « buying » récent -> relu tel quel, Twilio jamais consulté, aucun achat', async () => {
+  silence();
+  let looked = 0;
+  const r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: staleModel(BUYING(30_000)), now: () => T0, inventory: async () => { looked += 1; return null; }, findHeldNumber: async () => { looked += 1; return null; }, purchase: async () => { throw new Error('jamais'); } });
+  assert.deepEqual([r.status, looked], ['buying', 0]);
+});
+
+test('défaut 8 : « buying » de plus de 2 min, numéro détenu par la société -> purchased, aucun second achat', async () => {
+  silence();
+  const Model = staleModel(BUYING(3 * 60_000));
+  const r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model, now: () => T0, findHeldNumber: async () => ({ _id: 'pn9' }), purchase: async () => { throw new Error('jamais'); } });
+  assert.deepEqual([r.status, r.phoneNumberId], ['purchased', 'pn9']);
+  assert.equal(Model.db.doc.meta.numberPurchase.status, 'purchased');
+});
+
+test('défaut 8 : « buying » de plus de 2 min, numéro absent du compte Twilio -> failed (rien acheté, l’abonné en choisit un autre)', async () => {
+  silence();
+  const r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: staleModel(BUYING(3 * 60_000)), now: () => T0, findHeldNumber: async () => null, inventory: async () => ({ owned: false, claimable: false }), purchase: async () => { throw new Error('jamais'); } });
+  assert.deepEqual([r.status, r.code], ['failed', 'NUMBER_PURCHASE_STALE']);
+});
+
+test('défaut 8 : « buying » de plus de 2 min, numéro au compte mais non rattaché -> achat relancé depuis le stock ; détenu par une autre société -> taken', async () => {
+  silence();
+  const bought = [];
+  let r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: staleModel(BUYING(3 * 60_000)), now: () => T0, findHeldNumber: async () => null, inventory: async () => ({ owned: true, claimable: true }), verifiedCountries: VERIFIED(['FR']), purchase: async (p) => { bought.push(p.phoneNumber); return { status: 200, body: { _id: 'pn2' } }; } });
+  assert.deepEqual([r.status, bought], ['purchased', ['+33142000001']]);
+  r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: staleModel(BUYING(3 * 60_000)), now: () => T0, findHeldNumber: async () => null, inventory: async () => ({ owned: true, claimable: false }), purchase: async () => { throw new Error('jamais'); } });
+  assert.equal(r.status, 'taken');
+});
+
+test('défaut 8 : « buying » de plus de 2 min, Twilio illisible -> reste « buying » (jamais une issue devinée)', async () => {
+  silence();
+  const r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: staleModel(BUYING(3 * 60_000)), now: () => T0, findHeldNumber: async () => null, inventory: async () => null, purchase: async () => { throw new Error('jamais'); } });
+  assert.equal(r.status, 'buying');
+});
+
+test('défaut 8 : deux résolutions simultanées -> une seule reprend l’achat', async () => {
+  silence();
+  const Model = staleModel(BUYING(3 * 60_000));
+  let held = 0;
+  const deps = { Model, now: () => T0, findHeldNumber: async () => { held += 1; return { _id: 'pn9' }; } };
+  const [a, b] = await Promise.all([N.purchaseChosenNumberAfterPayment(PAYMENT, deps), N.purchaseChosenNumberAfterPayment(PAYMENT, deps)]);
+  assert.equal(held, 1);
+  assert.ok([a.status, b.status].includes('purchased'));
+});
+
+test('défaut 8 : GET /subscriptions/current expose l’achat encore en cours (le portail attend) ; resté en cours > 2 min -> résolu ; aucun -> null', async () => {
+  silence();
+  const withFind = (m, found) => Object.assign(m, { findOne: (q) => { m.query = q; return { sort: async () => (found ? m.db.doc : null) }; } });
+  let Model = withFind(staleModel(BUYING(20_000)), true);
+  assert.deepEqual(await N.nomadPendingNumberPurchase('c1', { Model, now: () => T0 }), { status: 'buying', phoneNumber: '+33142000001' });
+  assert.deepEqual(Model.query, { 'meta.companyId': 'c1', purpose: 'subscription_upgrade', 'meta.numberPurchase.status': 'buying' });
+  Model = withFind(staleModel(BUYING(3 * 60_000)), true);
+  const r = await N.nomadPendingNumberPurchase('c1', { Model, now: () => T0, findHeldNumber: async () => null, inventory: async () => ({ owned: false }) });
+  assert.deepEqual([r.status, r.code], ['failed', 'NUMBER_PURCHASE_STALE']);
+  assert.equal(await N.nomadPendingNumberPurchase('c1', { Model: withFind(staleModel(undefined), false) }), null);
 });
 
 test('achat : paiement sans numéro choisi (autres offres) -> rien', async () => {

@@ -105,6 +105,8 @@ export const AVAILABILITY_UNAVAILABLE = 'AVAILABILITY_UNAVAILABLE';
 /** Vérification d'identité activée : paiement Nomad Solo refusé tant que les documents ne sont pas validés (spec §8.1). */
 export const IDENTITY_NOT_VERIFIED = 'IDENTITY_NOT_VERIFIED';
 export const IDENTITY_REVERIFICATION_REQUIRED = 'IDENTITY_REVERIFICATION_REQUIRED';
+/** Vérification d'identité désactivée côté serveur (IDENTITY_VERIFICATION_ENABLED absent) et aucune vérification validée : aucun paiement. */
+export const IDENTITY_VERIFICATION_UNAVAILABLE = 'IDENTITY_VERIFICATION_UNAVAILABLE';
 
 async function defaultVerifiedCountries(companyId) {
   const { identityService } = await import('./identity/service.js');
@@ -148,9 +150,12 @@ export async function soloCheckoutEligibility(req, companyId, deps = {}) {
   }
   let candidates = [residence];
   if (/^[A-Z]{2}$/.test(identity) && identity !== residence) candidates.push(identity);
-  if ((deps.identityConfig || getIdentityConfig)().enabled) {
-    // Vérification d'identité activée : seuls les pays VÉRIFIÉS côté serveur comptent (résidence OU nationalité, toute nationalité ;
-    // plus de liste FR/GB/US). Aucune vérification validée : 409 IDENTITY_NOT_VERIFIED, aucun paiement.
+  {
+    // Seuls les pays VÉRIFIÉS côté serveur comptent (résidence OU nationalité, toute nationalité ; plus de liste FR/GB/US). Règle du
+    // fondateur (défaut 5 de l'audit #618) : aucun numéro sans documents contrôlés, MÊME si IDENTITY_VERIFICATION_ENABLED est absent.
+    // Aucune vérification validée : 409 IDENTITY_NOT_VERIFIED (vérification activée) ou IDENTITY_VERIFICATION_UNAVAILABLE (désactivée :
+    // l'abonné ne peut pas encore la faire), aucun paiement.
+    const enabled = (deps.identityConfig || getIdentityConfig)().enabled;
     let verified;
     try {
       verified = await (deps.verifiedCountries || defaultVerifiedCountries)(companyId);
@@ -158,7 +163,9 @@ export async function soloCheckoutEligibility(req, companyId, deps = {}) {
       return unavailable();
     }
     if (!verified?.verified) {
-      return { ok: false, status: 409, body: { error: 'Identity documents are not verified', code: IDENTITY_NOT_VERIFIED } };
+      return enabled
+        ? { ok: false, status: 409, body: { error: 'Identity documents are not verified', code: IDENTITY_NOT_VERIFIED } }
+        : { ok: false, status: 409, body: { error: 'Identity verification is unavailable', code: IDENTITY_VERIFICATION_UNAVAILABLE } };
     }
     const changed = (a, b) => normalizeCountryCode(a || '') !== normalizeCountryCode(b || '');
     if (verified.declared && (changed(verified.declared.residence, residence) || changed(verified.declared.nationality, identity))) {

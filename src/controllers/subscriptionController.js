@@ -19,7 +19,7 @@ import { currencyForCountry, pickCurrency } from '../services/currency.js';
 import { stripeLocaleFromRequest } from '../services/stripeLocale.js';
 import { callcenterTierFromMetadata } from '../services/callcenterTier.js';
 import { soloCheckoutEligibility } from '../services/numberAvailability.js';
-import { nomadSoloPaymentGate, purchaseChosenNumberAfterPayment } from '../services/nomadSoloPayment.js';
+import { existingNomadSubscriptionGate, nomadPendingNumberPurchase, nomadSoloPaymentGate, purchaseChosenNumberAfterPayment } from '../services/nomadSoloPayment.js';
 
 function numberOrNull(value) {
   const n = Number(value);
@@ -198,7 +198,13 @@ export const subscriptionController = {
         if (limits.aiTokensIncluded != null) payload.planId.aiTokensIncluded = limits.aiTokensIncluded;
         if (limits.metadata) payload.planId.metadata = limits.metadata;
       }
-      res.json({ success: true, data: payload, limits });
+      // NOMAD (défaut 8, #618) : achat du numéro choisi encore en cours après le paiement -> `pendingNumberPurchase` (le portail attend
+      // au lieu de proposer un autre numéro ; un achat resté en cours plus de 2 min est résolu ici, comme à la confirmation).
+      let pendingNumberPurchase = null;
+      if (callcenterTierFromMetadata(metadataObject(payload.planId?.metadata)) === 'nomad_solo') {
+        pendingNumberPurchase = await nomadPendingNumberPurchase(companyId).catch(() => null);
+      }
+      res.json({ success: true, data: payload, limits, ...(pendingNumberPurchase ? { pendingNumberPurchase } : {}) });
     } catch (error) {
       res.status(500).json({ error: 'Error fetching subscription' });
     }
@@ -265,6 +271,10 @@ export const subscriptionController = {
       // pour être acheté à la confirmation.
       let nomadChosenNumber = null;
       if (callcenterTierFromMetadata(resolved.productMetadata ?? plan.metadata) === 'nomad_solo') {
+        // Jamais un second abonnement NOMAD (défaut 2, #618) : actif ou impayé -> 409 NOMAD_SUBSCRIPTION_EXISTS (régularisation par le
+        // portail client Stripe pour un impayé), avant toute autre vérification et tout paiement.
+        const existing = await existingNomadSubscriptionGate(companyId);
+        if (!existing.ok) return res.status(existing.status).json(existing.body);
         const eligibility = await soloCheckoutEligibility(req, companyId);
         if (!eligibility.ok) return res.status(eligibility.status).json(eligibility.body);
         const nomadGate = await nomadSoloPaymentGate(req, { companyId, userId: access.userId, chosenNumber: req.body?.chosenNumber });
@@ -512,6 +522,8 @@ export const subscriptionController = {
         return res.status(503).json({ error: 'Price details unavailable', code: 'AVAILABILITY_UNAVAILABLE', retryable: true });
       }
       if (callcenterTierFromMetadata(priceMetadata) === 'nomad_solo') {
+        const existing = await existingNomadSubscriptionGate(companyId);
+        if (!existing.ok) return res.status(existing.status).json(existing.body);
         const eligibility = await soloCheckoutEligibility(req, companyId);
         if (!eligibility.ok) return res.status(eligibility.status).json(eligibility.body);
         // Même garde Nomad que /checkout/init : essai et numéro choisi. Cette route ancienne n'enregistre pas le numéro choisi pour

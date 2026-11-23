@@ -461,6 +461,10 @@ function minimize(id, proof, facts) {
 }
 
 let shared = null;
+/** Tests seulement : remplace le service partagé (aucune base). `null` revient au service réel. */
+export function setIdentityServiceForTests(svc) {
+  shared = svc;
+}
 /** Service partagé de l'application (base Mongo), créé à la première utilisation. */
 export async function identityService() {
   if (!shared) {

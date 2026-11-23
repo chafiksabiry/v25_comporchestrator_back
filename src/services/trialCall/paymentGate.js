@@ -11,7 +11,10 @@ import { mongoTrialStore } from './store.js';
  *  - `paused`         : essai en pause après une anomalie (plafonds globaux) ;
  *  - `used`           : essai déjà utilisé (compte ou e-mail), ou refusé « déjà utilisé » par /eligibility, /otp/send, /otp/verify
  *                       (appareil ou téléphone déjà utilisés par une autre personne) : marque posée par le contrôleur de l'essai.
- * Un essai EN COURS ne suffit pas (il faut qu'il soit fini).
+ * Essai DÉCROCHÉ encore en cours (défaut 7 de l'audit #618) : il compte comme fait dès le décroché. Le statut `in_progress` n'est posé
+ * qu'au décroché (contrôleur de l'essai : `answeredAt` et `consumedAt`), l'essai est alors consommé et ne peut plus être rejoué ;
+ * /eligibility répond déjà `used`. Exiger la fin de l'appel ouvrait un refus 409 TRIAL_REQUIRED pendant 59 s au plus alors que
+ * l'écran montrait l'essai fait. Un essai qui sonne encore (`dialing`, `verified`) ne suffit toujours pas.
  */
 export const TRIAL_REQUIRED = 'TRIAL_REQUIRED';
 /** Marque « essai déjà utilisé constaté » (compteur en base, 30 jours) : posée par le contrôleur de l'essai. */
@@ -20,7 +23,7 @@ export const USED_SEEN_TTL_MS = 30 * 24 * 3600 * 1000;
 
 /**
  * @param {{userId: string, country: string}} who  utilisateur (jeton) et pays du numéro choisi
- * @returns {Promise<{ok: true, reason: 'done'|'used'|'disabled'|'country_closed'|'paused'} | {ok: false}>}
+ * @returns {Promise<{ok: true, reason: 'done'|'answered'|'used'|'disabled'|'country_closed'|'paused'} | {ok: false}>}
  */
 export async function trialPaymentGate({ userId, country }, { env = process.env, store = mongoTrialStore } = {}) {
   const cfg = trialConfig(env);
@@ -30,9 +33,10 @@ export async function trialPaymentGate({ userId, country }, { env = process.env,
   if (state?.paused) return { ok: true, reason: 'paused' };
   const uid = String(userId || '');
   if (!uid) return { ok: false };
-  // Essais de ce compte : un essai décroché puis clos = fait ; un essai encore en cours = pas encore (il faut qu'il soit fini).
+  // Essais de ce compte : un essai décroché (clos ou encore en cours) = fait ; un essai qui n'a pas été décroché = pas encore.
   const mine = await store.findTrials({ userId: uid }, 50);
   if (mine.some((t) => t.status === 'ended')) return { ok: true, reason: 'done' };
+  if (mine.some((t) => t.status === 'in_progress' && (t.answeredAt || t.consumedAt))) return { ok: true, reason: 'answered' };
   if (mine.some((t) => t.status === 'in_progress')) return { ok: false };
   // Essai épuisé (3 numérotations sans réponse) ou consommé par la même personne (e-mail) : impossible, paiement possible.
   const email = normalizeEmail(await store.userEmail(uid).catch(() => ''));
