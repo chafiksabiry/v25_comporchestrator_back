@@ -840,7 +840,9 @@ class PhoneNumberController {
       }
 
       // Le numéro doit être du pays de l'entreprise (ou d'Europe pour une entreprise européenne).
-      const countryGate = await checkNumberCountry(req, companyId, { phoneNumber });
+      // Achat lancé par le serveur après un paiement Nomad confirmé (contexte interne, jamais posé par HTTP) : pas de session client ;
+      // pays contrôlé au paiement et revérifié par purchaseChosenNumberAfterPayment. Sans cela : 401 (recette 23/11).
+      const countryGate = req.harxPaidNomadChoice ? { ok: true } : await checkNumberCountry(req, companyId, { phoneNumber });
       if (!countryGate.ok) return res.status(countryGate.status).json(countryGate.body);
 
       // ──────────────────────────────────────────────────────────────────
@@ -933,7 +935,7 @@ class PhoneNumberController {
       const paidPrice = !isTrial && payment?.amount > 0 ? payment.amount / 100 : 0;
       const trialExpiresAt = isTrial ? new Date(Date.now() + linePricing.trialDurationMs) : null;
 
-      const purchaseCurrencyCode = !isTrial && payment?.currency ? payment.currency : await purchaseCurrency(req, companyId);
+      const purchaseCurrencyCode = !isTrial && payment?.currency ? payment.currency : (req.harxPaidNomadChoice?.currency ? String(req.harxPaidNomadChoice.currency).toUpperCase() : await purchaseCurrency(req, companyId));
       const purchased = await purchaseUnderAssignment({
         companyId, assignment, assignCtx, db: mongoose.connection.db,
         run: (a) => phoneNumberService.purchaseTwilioNumber(
