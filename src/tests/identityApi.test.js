@@ -144,10 +144,41 @@ test('isolation : une autre société ne peut ni retirer ni voir le fichier', as
   assert.equal((await call('DELETE', `/api/identity-verification/files/${up.body.fileId}`)).status, 200);
 });
 
-test('fichiers refusés : HEIC, HTML déguisé, PDF pour une pièce ; type réel lu dans les octets', async () => {
+test('fichiers refusés : HEIC, HTML déguisé ; type réel lu dans les octets', async () => {
   assert.equal((await uploadFile('passport', Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypheic0000', 'latin1')]))).body.code, 'FILE_HEIC');
   assert.equal((await uploadFile('passport', Buffer.from('<html>specimen</html>.......'), { mime: 'image/jpeg' })).body.code, 'FILE_TYPE_NOT_ALLOWED');
-  assert.equal((await uploadFile('passport', fakePdf(), { mime: 'application/pdf' })).body.code, 'FILE_TYPE_NOT_ALLOWED');
+});
+
+test('PDF : passeport en PDF accepté ; PDF à mot de passe refusé ; PDF chiffré sans mot de passe d’ouverture lu par l’IA en images ; admin voit chaque page', async () => {
+  const pass = await uploadFile('passport', fakePdf({ color: [0, 0, 1] }), { mime: 'application/pdf' });
+  assert.equal(pass.status, 201);
+  assert.equal(pass.body.mime, 'image/jpeg');
+  const locked = await uploadFile('address_proof', fakePdf({ encrypt: { userPassword: 'secret-specimen' } }), { mime: 'application/pdf' });
+  assert.equal(locked.status, 400);
+  assert.equal(locked.body.code, 'PDF_PASSWORD_REQUIRED');
+  const proof = await uploadFile('address_proof', fakePdf({ pages: 2, encrypt: { userPassword: '' }, js: true }), { mime: 'application/pdf' });
+  assert.equal(proof.status, 201);
+  // Aucun octet du PDF d'origine n'est stocké : seulement des JPEG (chiffrés).
+  assert.equal([...store._files.values()].every((f) => f.mime === 'image/jpeg'), true);
+  declared = { ...DECLARED, fullName: 'Paul Martin' };
+  const sub = await call('POST', '/api/identity-verification/submit', { body: {} });
+  assert.equal(sub.status, 202, JSON.stringify(sub.body));
+  await runQueue();
+  assert.equal((await status()).status, 'review');
+  assert.equal(sdk.calls.length, 2);
+  const blocks = sdk.calls.map((c) => c.messages[0].content.filter((b) => b.type !== 'text'));
+  for (const list of blocks) for (const b of list) { assert.equal(b.type, 'image'); assert.equal(b.source.media_type, 'image/jpeg'); }
+  assert.deepEqual(blocks.map((l) => l.length).sort(), [1, 2], 'pièce : 1 image ; justificatif : 2 images (une par page)');
+  const adminTok = token('adm1', { typeUser: 'admin', email: 'admin@harx.test' });
+  const id = (await call('GET', '/admin/identity/verifications?status=review', { auth: adminTok })).body.verifications[0].id;
+  const detail = await call('GET', `/admin/identity/verifications/${id}`, { auth: adminTok });
+  const proofFile = detail.body.files.find((f) => f.kind === 'address_proof');
+  assert.equal(proofFile.meta.pages, 2);
+  const p0 = await call('GET', `/admin/identity/verifications/${id}/files/${proofFile.fileId}?page=0`, { auth: adminTok });
+  const p1 = await call('GET', `/admin/identity/verifications/${id}/files/${proofFile.fileId}?page=1`, { auth: adminTok });
+  assert.equal(sniff(p0.body), 'jpeg');
+  assert.equal(sniff(p1.body), 'jpeg');
+  assert.equal(p0.body.length + p1.body.length, proofFile.size);
 });
 
 test('envoi incomplet : FILES_MISSING ; déclaration incomplète : DECLARATION_INCOMPLETE', async () => {

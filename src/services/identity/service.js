@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import { getIdentityConfig, loadFilesKey, deriveKeys } from './config.js';
 import { decide, OUTCOMES, REJECT_CODES } from './decision.js';
 import { extractDocument } from './extract.js';
-import { decryptBuffer, encryptBuffer, fingerprint, prepareUpload } from './files.js';
+import { decryptBuffer, encryptBuffer, fingerprint, prepareUpload, splitPages } from './files.js';
 import { loadDeclaration as defaultLoadDeclaration } from './declaration.js';
 import { normalizeIso2 } from './countries.js';
 
@@ -197,14 +197,15 @@ export function createIdentityService({
     const c = cfg();
     const k = keys();
     const files = await store.listFiles(v._id);
-    const clear = (f) => ({ mime: f.mime, data: decryptBuffer(f, k.enc, `identity:${v.companyId}:${f._id}`) });
+    // Un PDF rendu en plusieurs pages est envoyé à l'IA en autant d'images (une par page).
+    const clear = (f) => splitPages({ mime: f.mime, meta: f.meta, data: decryptBuffer(f, k.enc, `identity:${v.companyId}:${f._id}`) });
     const order = ['passport', 'id_front', 'id_back'];
     const idFiles = files.filter((f) => order.includes(f.kind)).sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
     const proofFile = files.find((f) => f.kind === 'address_proof');
     const deps = { cfg: c, claude: claudeClient };
     const [idRes, proofRes] = await Promise.all([
-      idFiles.length ? extract('identity', idFiles.map(clear), deps) : { ok: false, error: 'invalid_output', model: c.model },
-      proofFile ? extract('proof', [clear(proofFile)], deps) : { ok: false, error: 'invalid_output', model: c.model },
+      idFiles.length ? extract('identity', idFiles.flatMap(clear), deps) : { ok: false, error: 'invalid_output', model: c.model },
+      proofFile ? extract('proof', clear(proofFile), deps) : { ok: false, error: 'invalid_output', model: c.model },
     ]);
     const aiCalled = [idRes, proofRes].some((r) => r.ok || !['not_configured'].includes(r.error));
 
@@ -333,13 +334,15 @@ export function createIdentityService({
     };
   }
 
-  async function adminFile(id, fileId, adminId) {
+  async function adminFile(id, fileId, adminId, page = 0) {
     const v = await store.getVerification(id);
     if (!v) throw new IdentityError(404, 'NOT_FOUND');
     const f = await store.getFile(v.companyId, fileId);
     if (!f || f.verificationId !== String(v._id)) throw new IdentityError(404, 'FILE_NOT_FOUND');
     await store.updateVerification(v._id, {}, { push: { accessLog: { adminId: String(adminId), action: 'view_file', fileId: String(fileId), at: now() } } });
-    return { mime: f.mime, data: decryptBuffer(f, keys().enc, `identity:${v.companyId}:${f._id}`) };
+    const pages = splitPages({ mime: f.mime, meta: f.meta, data: decryptBuffer(f, keys().enc, `identity:${v.companyId}:${f._id}`) });
+    const n = Number.parseInt(page, 10);
+    return pages[Number.isInteger(n) && n >= 0 && n < pages.length ? n : 0];
   }
 
   async function adminDecide(id, adminId, body = {}) {

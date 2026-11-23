@@ -129,7 +129,7 @@ export function createIdentityAdminRoutes({ service = null, config = getIdentity
   });
   router.get('/verifications/:id/files/:fileId', admin, async (req, res) => {
     try {
-      const f = await (await svc()).adminFile(req.params.id, req.params.fileId, req.identityAdmin);
+      const f = await (await svc()).adminFile(req.params.id, req.params.fileId, req.identityAdmin, req.query.page);
       res.set({ 'Content-Type': f.mime, 'Content-Disposition': 'inline', 'X-Content-Type-Options': 'nosniff' });
       return res.send(f.data);
     } catch (e) { return sendError(res, e); }
