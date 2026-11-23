@@ -280,6 +280,9 @@ export function createIdentityService({
     }, { push: { ai } });
     await afterDecision(updated, result.outcome);
     logger.log?.(`[identity] décision ${result.outcome} (${result.reasonCodes.join(',') || '-'}) jetons ${ai.reduce((s, a) => s + a.input + a.output, 0)}`);
+    // Diagnostic : contrôles non passés (code, résultat, type de document), sans nom ni numéro de pièce.
+    const notPassed = (result.checks || []).filter((c) => c.result !== 'pass').map((c) => `${c.code}:${c.result}:${c.reason || '-'}${c.code === 'ID_TYPE' || c.code === 'PROOF_TYPE' ? `:${String(c.detail || '').split(':').pop().trim()}` : ''}`);
+    if (notPassed.length) logger.log?.(`[identity] contrôles non passés : ${notPassed.join(' | ')}`);
     return { outcome: result.outcome, reasonCodes: result.reasonCodes };
   }
 
