@@ -19,6 +19,11 @@ const { default: CompanyPayment } = await import('../models/CompanyPayment.js');
 const { clearCompanyCache } = await import('../middleware/companyScope.js');
 const { phoneNumberService } = await import('../services/phoneNumberService.js');
 const { clearAvailabilityCache } = await import('../services/numberAvailability.js');
+const { setIdentityServiceForTests } = await import('../services/identity/service.js');
+const { Subscription } = await import('../models/Subscription.js');
+// Nomad Solo (défaut 5, #618) : vérification d'identité exigée même drapeau éteint ; ici, le profil FR est vérifié. Aucun abonnement existant.
+setIdentityServiceForTests({ verifiedCountriesFor: async () => ({ verified: true, countries: ['FR'], residence: 'FR', nationality: 'FR', declared: null }) });
+Subscription.find = () => ({ populate: async () => [] });
 
 const C1 = '64b0000000000000000000c1';
 const CLOUD = { harx_product: 'callcenter', callcenter_tier: 'accueil', offer_version: '2026-11' };
@@ -86,7 +91,7 @@ beforeEach(() => {
     : { ok: true, json: async () => ({ success: true, data: { companyId: C1, isOwner: true } }) });
 });
 const origPhone = { ...phoneNumberService };
-after(() => { Object.assign(console, saved); Object.assign(stripeService, orig); Object.assign(phoneNumberService, origPhone); });
+after(() => { Object.assign(console, saved); Object.assign(stripeService, orig); Object.assign(phoneNumberService, origPhone); setIdentityServiceForTests(null); });
 
 async function call(method, path, body = {}) {
   const layer = subscriptionRoutes.stack.find((l) => l.route && l.route.path === path && l.route.methods[method]);

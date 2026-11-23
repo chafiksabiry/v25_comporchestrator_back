@@ -15,6 +15,8 @@ import { getIdentityConfig } from './identity/config.js';
 export const COUNTRY_NOT_ALLOWED = 'COUNTRY_NOT_ALLOWED';
 /** Nomad Solo, vérification d'identité activée : aucun pays vérifié côté serveur (abonné existant sans documents, D14 option A). */
 export const IDENTITY_VERIFICATION_REQUIRED = 'IDENTITY_VERIFICATION_REQUIRED';
+/** Nomad Solo, vérification d'identité DÉSACTIVÉE côté serveur et aucune vérification validée : aucun nouvel achat (défaut 5, #618). */
+export const IDENTITY_VERIFICATION_UNAVAILABLE = 'IDENTITY_VERIFICATION_UNAVAILABLE';
 /** Nomad Solo : le pays de résidence ou de nationalité déclaré a changé depuis la validation (revérification, D12). */
 export const IDENTITY_REVERIFICATION_REQUIRED = 'IDENTITY_REVERIFICATION_REQUIRED';
 
@@ -90,6 +92,37 @@ async function soloIdentityGate(companyId, scope, { countryCode, phoneNumber, al
   }
   if (!country) return refuse('aucun pays vérifié');
   return { ok: true, country, companyCountry: scope.country || DEFAULT_COMPANY_COUNTRY, allowedCountries: allowedSet, identityVerified: true };
+}
+
+/**
+ * Achat d'un numéro par un abonné NOMAD Solo (routes d'achat HTTP), drapeau IDENTITY_VERIFICATION_ENABLED ÉTEINT (défaut 5 de
+ * l'audit #618, règle du fondateur : aucun numéro sans documents contrôlés). Drapeau activé : soloIdentityGate (checkNumberCountry)
+ * a déjà contrôlé les pays vérifiés, rien à refaire ici. Ne concerne qu'un NOUVEL achat : un numéro déjà détenu (abonné d'avant la
+ * vérification, défaut 6) reste à son titulaire, aucune autre route ne lit la vérification.
+ *  - autre forfait que Nomad Solo : rien ne change ;
+ *  - aucune vérification validée : 403 IDENTITY_VERIFICATION_UNAVAILABLE ;
+ *  - numéro hors des pays vérifiés : 403 COUNTRY_NOT_ALLOWED ;
+ *  - lecture impossible : 503 réessayable, jamais « autorisé ».
+ * @param {object|null} limits forfait de la société (loadCompanyPlanLimits), déjà lu par la route d'achat
+ * @returns {Promise<{ok: true} | {ok: false, status: number, body: object}>}
+ */
+export async function nomadPurchaseIdentityGate(companyId, limits, { phoneNumber } = {}, deps = {}) {
+  if (!(limits?.product === 'callcenter' && limits?.callcenterTier === 'nomad_solo')) return { ok: true };
+  if ((deps.identityConfig || getIdentityConfig)().enabled) return { ok: true };
+  let verified;
+  try {
+    verified = await (deps.verifiedCountries || defaultVerifiedCountries)(companyId);
+  } catch {
+    return { ok: false, status: 503, body: { error: 'Identity verification lookup failed', code: 'IDENTITY_LOOKUP_FAILED', retryable: true } };
+  }
+  if (!verified?.verified) {
+    return { ok: false, status: 403, body: { error: 'Identity verification is unavailable', code: IDENTITY_VERIFICATION_UNAVAILABLE, message: 'La vérification d’identité est momentanément indisponible : aucun numéro ne peut être acheté sans documents contrôlés.' } };
+  }
+  const of = countryOfE164(phoneNumber);
+  if (!of || !coveredByVerified(verified.countries, of)) {
+    return { ok: false, status: 403, body: { error: 'Country not allowed', code: COUNTRY_NOT_ALLOWED, allowedCountries: verified.countries || [], message: `Les numéros ne sont disponibles que dans vos pays vérifiés (${(verified.countries || []).join(', ') || 'aucun'}).` } };
+  }
+  return { ok: true };
 }
 
 /**
