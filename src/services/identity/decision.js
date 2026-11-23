@@ -153,7 +153,8 @@ export function decide({ declared, id, idError = null, proof, proofError = null,
       if (visualIssuing && iso3ToIso2(mrz.issuingState) && visualIssuing !== iso3ToIso2(mrz.issuingState)) diffs.push('pays émetteur');
       if (visualNames.lastName && compareNames(mrzNames, visualNames) === 'mismatch') diffs.push('nom');
       if (visualBirth && !sameDay(visualBirth, mrzBirth)) diffs.push('date de naissance');
-      if (visualExpiry && !sameDay(visualExpiry, mrzExpiry)) diffs.push('date d’expiration');
+      // Ancienne CNI française : pas de date d'expiration dans la MRZ, la date visuelle sert seule.
+      if (visualExpiry && mrz.expiryDate && !sameDay(visualExpiry, mrzExpiry)) diffs.push('date d’expiration');
       if (diffs.length) add('MRZ_VISUAL', 'review', `Désaccord MRZ / visuel : ${diffs.join(', ')}`, { reason: 'MRZ_VISUAL_MISMATCH' });
       else add('MRZ_VISUAL', 'pass', 'MRZ et visuel concordent');
       const kindFromMrz = mrzDocumentKind(mrz.documentCode);
