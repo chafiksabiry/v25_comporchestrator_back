@@ -110,3 +110,19 @@ test('paiement Nomad Solo, drapeau désactivé : règle déclarée de #249 (rés
   assert.equal(none.status, 409);
   assert.equal(none.body.code, 'NO_NUMBERS_IN_COUNTRY');
 });
+
+test('23/11 validé pour la résidence seule (nationalité en revue) : numéro du pays de résidence seulement, puis nationalité ajoutée par l’équipe', async () => {
+  const { createIdentityService } = await import('../services/identity/service.js');
+  const { createMemoryStore } = await import('../services/identity/store.js');
+  const store = createMemoryStore();
+  const v = await store.createVerification({ companyId: C, status: 'approved', declared: { fullName: 'Anna Eriksson', residence: 'FR', nationality: 'MA' }, verifiedCountries: { residence: 'FR', nationality: null }, pendingCountries: ['nationality'] });
+  const svc = createIdentityService({ store, config: () => ({ enabled: true }), logger: { log() {}, error() {} } });
+  const deps = { identityConfig: ON, isSolo: async () => true, verifiedCountries: (id) => svc.verifiedCountriesFor(id) };
+  assert.deepEqual((await svc.verifiedCountriesFor(C)).countries, ['FR']);
+  assert.equal((await checkNumberCountry(req, C, { phoneNumber: '+33612345678' }, deps)).ok, true);
+  const ma = await checkNumberCountry(req, C, { phoneNumber: '+212612345678' }, deps);
+  assert.equal(ma.status, 403);
+  assert.deepEqual(ma.body.allowedCountries, ['FR']);
+  await svc.adminDecide(v._id, 'adm1', { outcome: 'approved', nationality: 'MA' });
+  assert.equal((await checkNumberCountry(req, C, { phoneNumber: '+212612345678' }, deps)).ok, true);
+});

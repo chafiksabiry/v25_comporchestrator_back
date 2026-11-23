@@ -25,7 +25,7 @@ table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid var(--li
 .actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:12px;border-bottom:1px solid var(--line)}
 #login{padding:24px;display:flex;gap:8px;justify-content:center}
 </style></head><body>
-<header><h1>Revue des pièces · admin HARX</h1><select id="st"><option value="review">À revoir</option><option value="rejected">Refusées</option><option value="approved">Validées</option></select><button id="refresh" type="button">Actualiser</button><button id="logout" type="button">Changer de jeton</button></header>
+<header><h1>Revue des pièces · admin HARX</h1><select id="st"><option value="review">À revoir</option><option value="pending">Validées, un pays à revoir</option><option value="rejected">Refusées</option><option value="approved">Validées</option></select><button id="refresh" type="button">Actualiser</button><button id="logout" type="button">Changer de jeton</button></header>
 <div id="login" hidden><input id="tok" type="password" placeholder="Jeton admin du tableau de bord" autocomplete="off"><button id="go" type="button">Ouvrir</button></div>
 <main id="app" hidden><section id="list" aria-label="Vérifications"></section><section id="detail" aria-label="Détail"></section></main>
 <script>
@@ -40,7 +40,7 @@ function fmt(d){try{return new Date(d).toLocaleString('fr-FR')}catch(e){return '
 function show(){var k=!!tok();$('login').hidden=k;$('app').hidden=!k;if(k){try{who=JSON.parse(atob(tok().split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))).email||'admin'}catch(e){who='admin'}load()}}
 function load(){json('/admin/identity/verifications?status='+encodeURIComponent($('st').value)).then(function(d){var l=$('list');l.textContent='';
  l.appendChild(el('div','row mut',d.verifications.length+' vérification(s), plus anciennes d’abord'));
- d.verifications.forEach(function(v){var r=el('div','row');r.appendChild(el('b','',v.name||'(sans nom)'));r.appendChild(el('div','mut','il y a '+v.ageHours+' h · '+v.docType+(v.reviewRequested?' · revue demandée':'')+(v.overdue?' · plus de 72 h':'')));
+ d.verifications.forEach(function(v){var r=el('div','row');r.appendChild(el('b','',v.name||'(sans nom)'));r.appendChild(el('div','mut','il y a '+v.ageHours+' h · '+v.docType+(v.reviewRequested?' · revue demandée':'')+(v.pendingCountries&&v.pendingCountries.length?' · à revoir : '+v.pendingCountries.join(', '):'')+(v.overdue?' · plus de 72 h':'')));
   v.reasons.forEach(function(x){r.appendChild(el('span','badge',x))});r.onclick=function(){Array.prototype.forEach.call(l.children,function(x){x.classList.remove('sel')});r.classList.add('sel');open(v.id)};l.appendChild(r)})}).catch(function(){})}
 function drawFile(id,f,box,pg){var n=f.meta&&f.meta.pageBytes&&f.meta.pageBytes.length||0;if(pg==null&&n>1){for(var i=0;i<n;i++)drawFile(id,f,box,i);return}var q=pg==null?'':'?page='+pg;var c=el('canvas');c.oncontextmenu=function(e){e.preventDefault()};c.ondragstart=function(e){e.preventDefault()};box.appendChild(c);
  if(f.mime==='application/pdf'){var p=el('p','mut','PDF ('+(f.meta&&f.meta.pages||1)+' page(s)) : ');var b=el('button','', 'Ouvrir le PDF (journalisé)');b.onclick=function(){api('/admin/identity/verifications/'+id+'/files/'+f.fileId).then(function(r){return r.blob()}).then(function(bl){window.open(URL.createObjectURL(bl),'_blank','noopener')})};p.appendChild(b);box.replaceChild(p,c);return}
@@ -48,13 +48,15 @@ function drawFile(id,f,box,pg){var n=f.meta&&f.meta.pageBytes&&f.meta.pageBytes.
   var s='HARX — revue — '+new Date().toLocaleDateString('fr-FR')+' — '+who;g.save();g.globalAlpha=.35;g.fillStyle='#ffd666';g.font='bold '+Math.round(c.width/28)+'px sans-serif';g.translate(c.width/2,c.height/2);g.rotate(-0.28);for(var y=-c.height;y<c.height;y+=c.height/4){g.fillText(s,-c.width/2,y)}g.restore()};img.src=u})}
 function open(id){json('/admin/identity/verifications/'+id).then(function(d){var p=$('detail');p.textContent='';
  var a=el('div','actions');a.appendChild(el('b','',(d.declared&&d.declared.fullName)||''));a.appendChild(el('span','mut','n° '+d.attempt+' · '+fmt(d.createdAt)+' · '+d.status));
- if(d.status==='review'){
-  var res=el('label','',' ');var cr=el('input');cr.type='checkbox';cr.checked=true;res.appendChild(cr);res.appendChild(document.createTextNode(' Résidence '+((d.declared&&d.declared.residence)||'?')));
-  var nat=el('label','',' ');var cn=el('input');cn.type='checkbox';cn.checked=d.docType!=='residence_permit';nat.appendChild(cn);nat.appendChild(document.createTextNode(' Nationalité '+((d.declared&&d.declared.nationality)||'?')));
-  var ok=el('button','primary','Valider');ok.onclick=function(){decide(id,{outcome:'approved',residence:cr.checked?d.declared.residence:null,nationality:cn.checked?d.declared.nationality:null})};
+ var pend=(d.status==='approved'&&d.pendingCountries)||[];
+ if(pend.length){var vc=d.verifiedCountries||{};a.appendChild(el('span','ok','Déjà validé : '+[vc.residence?'résidence '+vc.residence:'',vc.nationality?'nationalité '+vc.nationality:''].filter(Boolean).join(', ')+'. À revoir : '+pend.join(', ')+' (le pays déjà validé reste ouvert).'))}
+ if(d.status==='review'||pend.length){
+  var res=el('label','',' ');var cr=el('input');cr.type='checkbox';cr.checked=pend.length?pend.indexOf('residence')>=0:true;if(pend.length&&pend.indexOf('residence')<0){cr.disabled=true}res.appendChild(cr);res.appendChild(document.createTextNode(' Résidence '+((d.declared&&d.declared.residence)||'?')));
+  var nat=el('label','',' ');var cn=el('input');cn.type='checkbox';cn.checked=pend.length?pend.indexOf('nationality')>=0:d.docType!=='residence_permit';if(pend.length&&pend.indexOf('nationality')<0){cn.disabled=true}nat.appendChild(cn);nat.appendChild(document.createTextNode(' Nationalité '+((d.declared&&d.declared.nationality)||'?')));
+  var ok=el('button','primary',pend.length?'Valider ce pays aussi':'Valider');ok.onclick=function(){decide(id,{outcome:'approved',residence:cr.checked?d.declared.residence:null,nationality:cn.checked?d.declared.nationality:null})};
   var sel=el('select');['NAME_MISMATCH','COUNTRY_MISMATCH_NATIONALITY','COUNTRY_MISMATCH_RESIDENCE','PROOF_TOO_OLD','ID_EXPIRED','UNREADABLE','DOCUMENT_TYPE_NOT_ACCEPTED','UNDERAGE','PROOF_HOLDER_OTHER','DOCUMENT_SUSPECTED'].forEach(function(x){var o=el('option','',x);o.value=x;sel.appendChild(o)});
   var note=el('input');note.placeholder='Note (facultatif)';note.maxLength=500;
-  var ko=el('button','danger','Refuser');ko.onclick=function(){decide(id,{outcome:'rejected',reasonCode:sel.value,note:note.value})};
+  var ko=el('button','danger',pend.length?'Ne pas ouvrir ce pays':'Refuser');ko.onclick=function(){decide(id,{outcome:'rejected',reasonCode:sel.value,note:note.value})};
   var rs=el('button','','Demander un autre document');rs.onclick=function(){decide(id,{outcome:'resubmit',note:note.value})};
   [res,nat,ok,sel,note,ko,rs].forEach(function(x){a.appendChild(x)})}
  p.appendChild(a);

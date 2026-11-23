@@ -24,6 +24,8 @@ const schema = new mongoose.Schema({
     outcome: String, reasonCodes: [String], by: String, at: Date, note: String,
   },
   verifiedCountries: { nationality: { type: String, default: null }, residence: { type: String, default: null } },
+  /** Validé pour un pays (« résidence OU nationalité ») : l'autre pays déclaré attend la revue de l'équipe ('nationality' | 'residence'). */
+  pendingCountries: { type: [String], default: [] },
   fingerprints: {
     document: { type: String, default: null, index: true },
     files: { type: [String], default: [], index: true },

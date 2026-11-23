@@ -19,7 +19,7 @@ export function createMemoryStore() {
     _verifications: verifications,
     _files: files,
     async createVerification(doc) {
-      const v = { _id: id(), status: 'draft', checks: [], ai: [], accessLog: [], fingerprints: { document: null, files: [] }, verifiedCountries: { nationality: null, residence: null }, createdAt: now(), updatedAt: now(), ...clone(doc), _seq: ++seq };
+      const v = { _id: id(), status: 'draft', checks: [], ai: [], accessLog: [], fingerprints: { document: null, files: [] }, verifiedCountries: { nationality: null, residence: null }, pendingCountries: [], createdAt: now(), updatedAt: now(), ...clone(doc), _seq: ++seq };
       verifications.set(v._id, v);
       return clone(v);
     },
@@ -36,7 +36,8 @@ export function createMemoryStore() {
       return [...verifications.values()].filter((v) => v.companyId === String(companyId)).sort((a, b) => b._seq - a._seq).map(clone);
     },
     async listByStatus(status) {
-      return [...verifications.values()].filter((v) => v.status === status).sort((a, b) => a._seq - b._seq).map(clone);
+      const match = status === 'pending' ? (v) => v.status === 'approved' && (v.pendingCountries || []).length > 0 : (v) => v.status === status;
+      return [...verifications.values()].filter(match).sort((a, b) => a._seq - b._seq).map(clone);
     },
     async supersedeOthers(companyId, keepId, statuses) {
       for (const v of verifications.values()) if (v.companyId === String(companyId) && v._id !== String(keepId) && statuses.includes(v.status)) v.status = 'superseded';
@@ -97,7 +98,10 @@ export async function createMongoStore() {
       return plain(await V.findByIdAndUpdate(vid, update, { new: true }).lean());
     },
     async listForCompany(companyId) { return (await V.find({ companyId: String(companyId) }).sort({ createdAt: -1 }).limit(50).lean()).map(plain); },
-    async listByStatus(status) { return (await V.find({ status }).sort({ createdAt: 1 }).limit(200).lean()).map(plain); },
+    async listByStatus(status) {
+      const q = status === 'pending' ? { status: 'approved', 'pendingCountries.0': { $exists: true } } : { status };
+      return (await V.find(q).sort({ createdAt: 1 }).limit(200).lean()).map(plain);
+    },
     async supersedeOthers(companyId, keepId, statuses) {
       await V.updateMany({ companyId: String(companyId), _id: { $ne: keepId }, status: { $in: statuses } }, { $set: { status: 'superseded' } });
     },
