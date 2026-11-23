@@ -32,6 +32,9 @@ export function getIdentityConfig(env = process.env) {
     maxAiAttemptsTotal: 6,
     maxFileBytes: 10 * 1024 * 1024,
     maxPdfPages: 3,
+    /** Rendu d'un PDF en images : délai maximal et taille maximale d'une image interne (pixels), contre les PDF piégés. */
+    pdfRenderTimeoutMs: int(env.IDENTITY_PDF_RENDER_TIMEOUT_MS, 20_000),
+    pdfMaxImagePixels: 50_000_000,
     minImageLongSide: 1000,
     normalizeLongSide: 2000,
     /** Durée de vie maximale d'une image, quoi qu'il arrive (index TTL). */
