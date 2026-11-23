@@ -44,6 +44,7 @@ function fakeSdk() {
         const isId = params.output_config.format.schema === IDENTITY_DOCUMENT_SCHEMA;
         const d = isId ? idData : proofData;
         if (d === 'refusal') return { stop_reason: 'refusal', content: [], usage: {} };
+        if (d === 'api_error') throw Object.assign(new Error('invalid x-api-key'), { status: 401 });
         return { id: `msg_${calls.length}`, stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(d) }], usage: { input_tokens: 4000, output_tokens: 300 } };
       },
     },
@@ -312,6 +313,112 @@ test('limite par adresse IP sur les envois : 429 au-delà', async () => {
   const codes = [];
   for (let i = 0; i < 3; i += 1) codes.push((await call('POST', '/limited/identity-verification/submit', { body: {} })).status);
   assert.equal(codes[2], 429);
+});
+
+test('limites : un essai en échec technique de notre côté (IA indisponible, erreur interne, 0 jeton) n’est jamais compté', async () => {
+  idData = 'api_error';
+  for (let i = 0; i < 4; i += 1) await fullSubmit();
+  let s = await status();
+  assert.equal(s.status, 'review');
+  assert.ok(s.reasons.includes('AI_UNAVAILABLE'));
+  assert.equal(s.attemptsLeftToday, 3, 'clé invalide : non compté');
+  assert.equal(s.attemptsLeftTotal, 6);
+  // Dossiers déjà enregistrés avant la correction (marqués « comptés ») : recalculés à la lecture, sans toucher à la base.
+  const legacy = (over) => store.createVerification({ companyId: A, status: 'review', aiCounted: true, aiAt: clock, ...over });
+  await legacy({ decision: { outcome: 'review', reasonCodes: ['PROCESSING_ERROR'] } });
+  await legacy({ decision: { outcome: 'review', reasonCodes: ['AI_UNAVAILABLE'] }, ai: [{ doc: 'identity', error: 'api_error', input: 0, output: 0 }, { doc: 'proof', error: 'api_error', input: 0, output: 0 }] });
+  await legacy({ decision: { outcome: 'review', reasonCodes: ['NO_MRZ'] }, ai: [{ doc: 'identity', error: null, input: 0, output: 0 }, { doc: 'proof', error: null, input: 0, output: 0 }] });
+  await legacy({ decision: { outcome: 'review', reasonCodes: ['AI_INVALID_OUTPUT'] }, ai: [{ doc: 'identity', error: 'timeout', input: 0, output: 0 }, { doc: 'proof', error: null, input: 3000, output: 200 }] });
+  s = await status();
+  assert.equal(s.attemptsLeftToday, 3);
+  // Un vrai essai lu par l'IA compte, qu'il finisse en refus ou en revue.
+  idData = idExtraction();
+  proofData = proofExtraction({ issue_date: '2026-05-12' });
+  await fullSubmit();
+  assert.equal((await status()).status, 'rejected');
+  assert.equal((await status()).attemptsLeftToday, 2, 'refus : compté');
+  proofData = proofExtraction();
+  declared = { ...DECLARED, fullName: 'Paul Martin' };
+  await fullSubmit();
+  s = await status();
+  assert.equal(s.status, 'review');
+  assert.equal(s.attemptsLeftToday, 1, 'revue après lecture : comptée');
+  // Refus du modèle (jetons consommés, document en cause) : compté.
+  idData = 'refusal';
+  await fullSubmit();
+  assert.equal((await status()).attemptsLeftToday, 0);
+});
+
+test('limites réglables : IDENTITY_MAX_AI_ATTEMPTS_PER_DAY et IDENTITY_MAX_AI_ATTEMPTS_TOTAL (défauts 3 et 6)', async () => {
+  const d = getIdentityConfig({});
+  assert.equal(d.maxAiAttemptsPerDay, 3);
+  assert.equal(d.maxAiAttemptsTotal, 6);
+  const e = getIdentityConfig({ IDENTITY_MAX_AI_ATTEMPTS_PER_DAY: '5', IDENTITY_MAX_AI_ATTEMPTS_TOTAL: '12' });
+  assert.equal(e.maxAiAttemptsPerDay, 5);
+  assert.equal(e.maxAiAttemptsTotal, 12);
+  assert.equal(getIdentityConfig({ IDENTITY_MAX_AI_ATTEMPTS_PER_DAY: 'abc' }).maxAiAttemptsPerDay, 3);
+  // Le service lit la variable : 1 essai par jour.
+  const svc = createIdentityService({
+    store, now: () => clock, sharp: null, logger: { log() {}, error() {} },
+    config: () => ({ ...getIdentityConfig({ IDENTITY_FILES_ENC_KEY: TEST_KEY, IDENTITY_MAX_AI_ATTEMPTS_PER_DAY: '1' }), enabled: true }),
+    claudeClient: createClaudeClient({ cfg: { ...cfg(), anthropicApiKey: 'unused' }, client: sdk }),
+    loadDeclaration: async () => ({ ...declared }), schedule: (fn) => queue.push(fn),
+  });
+  assert.equal((await svc.status(A)).attemptsLeftToday, 1);
+  proofData = proofExtraction({ issue_date: '2026-05-12' });
+  await fullSubmit();
+  assert.equal((await status()).attemptsLeftToday, 2, 'défaut 3 ailleurs');
+  assert.equal((await svc.status(A)).attemptsLeftToday, 0);
+  // Au-delà : revue obligatoire sans appel à l'IA.
+  const calls = sdk.calls.length;
+  await uploadFile('passport', fakeJpeg()); await uploadFile('address_proof', fakePdf(), { mime: 'application/pdf' });
+  assert.deepEqual(await svc.submit({}, A, null), { status: 'review' });
+  assert.equal(sdk.calls.length, calls);
+});
+
+test('23/11 résidence OU nationalité : passeport sans MRZ -> validé pour la résidence ; l’équipe ajoute la nationalité plus tard', async () => {
+  idData = idExtraction({ fields: { mrz_lines: [] } });
+  await fullSubmit();
+  let s = await status();
+  assert.equal(s.status, 'approved');
+  assert.deepEqual(s.allowedCountries, ['FR']);
+  assert.deepEqual(s.verifiedCountries, { residence: 'FR', nationality: null });
+  assert.deepEqual(s.pendingCountries, ['nationality']);
+  assert.ok(s.checks.some((c) => c.code === 'NATIONALITY' && c.result === 'review'));
+  // Images gardées pour l'équipe (30 jours au plus après l'envoi).
+  assert.equal(store._files.size, 2);
+  const svcRef = createIdentityService({ store, config: cfg, now: () => clock, logger: { log() {}, error() {} } });
+  assert.deepEqual(await svcRef.verifiedCountriesFor(A), { verified: true, countries: ['FR'], declared: { ...DECLARED }, residence: 'FR', nationality: null });
+  const adminTok = token('adm1', { typeUser: 'admin' });
+  assert.equal((await call('GET', '/admin/identity/verifications?status=review', { auth: adminTok })).body.verifications.length, 0);
+  const pend = await call('GET', '/admin/identity/verifications?status=pending', { auth: adminTok });
+  assert.equal(pend.body.verifications.length, 1);
+  assert.deepEqual(pend.body.verifications[0].pendingCountries, ['nationality']);
+  const id = pend.body.verifications[0].id;
+  // Pays hors déclaration ignoré ; la résidence déjà validée n'est jamais retirée.
+  assert.equal((await call('POST', `/admin/identity/verifications/${id}/decision`, { auth: adminTok, body: { outcome: 'approved', nationality: 'US' } })).body.code, 'COUNTRIES_REQUIRED');
+  const ok = await call('POST', `/admin/identity/verifications/${id}/decision`, { auth: adminTok, body: { outcome: 'approved', nationality: 'MA', residence: null } });
+  assert.deepEqual(ok.body.verifiedCountries, { residence: 'FR', nationality: 'MA' });
+  s = await status();
+  assert.deepEqual(s.allowedCountries.sort(), ['FR', 'MA']);
+  assert.deepEqual(s.pendingCountries, []);
+  assert.equal(store._files.size, 0);
+  assert.deepEqual((await svcRef.verifiedCountriesFor(A)).countries.sort(), ['FR', 'MA']);
+  assert.equal((await call('POST', `/admin/identity/verifications/${id}/decision`, { auth: adminTok, body: { outcome: 'approved', nationality: 'MA' } })).status, 409);
+});
+
+test('23/11 l’équipe refuse le pays en attente : le pays déjà validé reste ouvert', async () => {
+  idData = idExtraction({ fields: { mrz_lines: [] } });
+  await fullSubmit();
+  const adminTok = token('adm1', { typeUser: 'admin' });
+  const id = (await call('GET', '/admin/identity/verifications?status=pending', { auth: adminTok })).body.verifications[0].id;
+  const r = await call('POST', `/admin/identity/verifications/${id}/decision`, { auth: adminTok, body: { outcome: 'rejected', reasonCode: 'DOCUMENT_SUSPECTED' } });
+  assert.deepEqual(r.body.verifiedCountries, { residence: 'FR', nationality: null });
+  const s = await status();
+  assert.equal(s.status, 'approved');
+  assert.deepEqual(s.allowedCountries, ['FR']);
+  assert.deepEqual(s.pendingCountries, []);
+  assert.equal(store._files.size, 0);
 });
 
 const sniff = (buf) => (buf[0] === 0xff && buf[1] === 0xd8 ? 'jpeg' : 'other');

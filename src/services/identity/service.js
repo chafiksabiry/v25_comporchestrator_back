@@ -28,6 +28,24 @@ const ID_KINDS_FOR = { passport: ['passport'], id_card: ['id_front', 'id_back'],
 /** Motifs qu'un admin peut choisir en refusant (spec §7.2, plus les cas « humains »). */
 export const ADMIN_REJECT_CODES = [...REJECT_CODES, 'NAME_MISMATCH', 'PROOF_HOLDER_OTHER', 'DOCUMENT_SUSPECTED'];
 
+/** Échecs techniques de NOTRE côté (erreur interne, IA indisponible, clé absente, délai) : ils ne comptent jamais comme un essai. */
+const TECHNICAL_REASONS = new Set(['PROCESSING_ERROR', 'PROCESSING_INTERRUPTED', 'AI_UNAVAILABLE']);
+const TECHNICAL_AI_ERRORS = new Set(['timeout', 'api_error', 'not_configured']);
+
+/**
+ * Un dossier compte-t-il dans les limites d'analyses ? Calculé à la lecture, à partir des données déjà enregistrées (décision,
+ * motifs, erreurs d'appel, jetons) : un dossier ancien mal marqué est corrigé sans toucher à la base.
+ * Compté seulement si l'analyse a réellement été faite par l'IA (marquée `aiCounted`), sans échec technique, avec des jetons.
+ */
+export function countsAsAttempt(v) {
+  if (!v || !v.aiCounted || !v.aiAt) return false;
+  if ((v.decision?.reasonCodes || []).some((r) => TECHNICAL_REASONS.has(r))) return false;
+  const ai = Array.isArray(v.ai) ? v.ai : [];
+  if (ai.some((a) => TECHNICAL_AI_ERRORS.has(a?.error))) return false;
+  if (ai.length && ai.reduce((sum, a) => sum + (Number(a?.input) || 0) + (Number(a?.output) || 0), 0) === 0) return false;
+  return true;
+}
+
 const fileView = (f) => ({ fileId: String(f._id), kind: f.kind, mime: f.mime, size: f.size });
 const uniq = (a) => [...new Set(a.filter(Boolean))];
 
@@ -57,7 +75,7 @@ export function createIdentityService({
 
   function attemptsUsed(list) {
     const t = now().getTime();
-    const counted = list.filter((v) => v.aiCounted && v.aiAt);
+    const counted = list.filter(countsAsAttempt);
     return {
       today: counted.filter((v) => t - new Date(v.aiAt).getTime() < 24 * 3600 * 1000).length,
       total: counted.length,
@@ -67,6 +85,10 @@ export function createIdentityService({
   function allowedOf(v) {
     if (!v || v.status !== 'approved') return [];
     return uniq([normalizeIso2(v.verifiedCountries?.residence), normalizeIso2(v.verifiedCountries?.nationality)]);
+  }
+
+  function pendingOf(v) {
+    return (Array.isArray(v?.pendingCountries) ? v.pendingCountries : []).filter((k) => k === 'nationality' || k === 'residence');
   }
 
   /** La déclaration actuelle a-t-elle changé de pays depuis la vérification validée ? (D12 / D14 : revérification) */
@@ -98,6 +120,8 @@ export function createIdentityService({
       decidedBy: shown?.decision?.by ? (shown.decision.by === 'auto' ? 'auto' : 'team') : null,
       allowedCountries: allowedOf(approved),
       verifiedCountries: approved ? approved.verifiedCountries : null,
+      /** Validé pour un pays : l'autre pays déclaré est encore « en cours de vérification » par l'équipe. */
+      pendingCountries: approved ? pendingOf(approved) : [],
       stale: approved ? isStale(approved, declared) : false,
       attemptsLeftToday: Math.max(0, c.maxAiAttemptsPerDay - used.today),
       attemptsLeftTotal: Math.max(0, c.maxAiAttemptsTotal - used.total),
@@ -248,6 +272,7 @@ export function createIdentityService({
       checks: result.checks,
       decision: { outcome: result.outcome, reasonCodes: result.reasonCodes, by: 'auto', at: now() },
       verifiedCountries: result.verifiedCountries || { nationality: null, residence: null },
+      pendingCountries: result.outcome === OUTCOMES.APPROVED ? (result.pendingCountries || []) : [],
       fingerprints: fps,
       extracted: minimize(idRes.ok ? idRes.data : null, proofRes.ok ? proofRes.data : null, result.facts),
       aiCounted: counted,
@@ -262,7 +287,9 @@ export function createIdentityService({
   async function afterDecision(v, outcome) {
     const c = cfg();
     if (outcome === OUTCOMES.APPROVED) {
-      await store.deleteFilesOf(v._id);
+      // Validé pour un pays, l'autre en revue : les images restent pour l'équipe (jamais au-delà de 30 jours après l'envoi).
+      if (pendingOf(v).length) await store.setFilesExpiry(v._id, new Date(new Date(v.createdAt || now()).getTime() + c.fileTtlMs));
+      else await store.deleteFilesOf(v._id);
       await store.supersedeOthers(v.companyId, v._id, ['approved', 'review', 'rejected']);
     } else if (outcome === OUTCOMES.REJECTED) {
       await store.setFilesExpiry(v._id, new Date(now().getTime() + c.keepAfterRejectMs));
@@ -311,12 +338,12 @@ export function createIdentityService({
   // ---------------- Administration (revue humaine) ----------------
 
   async function adminList(statusFilter = 'review') {
-    const st = ['review', 'processing', 'rejected', 'approved'].includes(statusFilter) ? statusFilter : 'review';
+    const st = ['review', 'pending', 'processing', 'rejected', 'approved'].includes(statusFilter) ? statusFilter : 'review';
     const t = now().getTime();
     return (await store.listByStatus(st)).map((v) => ({
       id: String(v._id), companyId: v.companyId, name: v.declared?.fullName || '', docType: v.docType, status: v.status,
       createdAt: v.createdAt, ageHours: Math.floor((t - new Date(v.updatedAt || v.createdAt).getTime()) / 3600000),
-      reasons: v.decision?.reasonCodes || [], reviewRequested: Boolean(v.reviewRequestedAt),
+      reasons: v.decision?.reasonCodes || [], pendingCountries: pendingOf(v), reviewRequested: Boolean(v.reviewRequestedAt),
       overdue: t - new Date(v.updatedAt || v.createdAt).getTime() > 72 * 3600000,
     }));
   }
@@ -328,7 +355,7 @@ export function createIdentityService({
     return {
       id: String(v._id), companyId: v.companyId, status: v.status, docType: v.docType, attempt: v.attempt, createdAt: v.createdAt,
       declared: v.declared || null, extracted: v.extracted || null, checks: v.checks || [], decision: v.decision || null,
-      verifiedCountries: v.verifiedCountries || null, reviewRequestedAt: v.reviewRequestedAt || null,
+      verifiedCountries: v.verifiedCountries || null, pendingCountries: pendingOf(v), reviewRequestedAt: v.reviewRequestedAt || null,
       files: files.map((f) => ({ ...fileView(f), signals: f.signals || [], meta: f.meta || {} })),
       accessLog: v.accessLog || [], ai: (v.ai || []).map((a) => ({ doc: a.doc, model: a.model, error: a.error, tokens: (a.input || 0) + (a.output || 0) })),
     };
@@ -348,10 +375,11 @@ export function createIdentityService({
   async function adminDecide(id, adminId, body = {}) {
     const v = await store.getVerification(id);
     if (!v) throw new IdentityError(404, 'NOT_FOUND');
-    if (v.status !== 'review') throw new IdentityError(409, 'NOT_IN_REVIEW');
     const outcome = String(body.outcome || '');
     const note = String(body.note || '').slice(0, 500);
     const by = `admin:${adminId}`;
+    if (v.status === 'approved' && pendingOf(v).length) return decidePending(v, adminId, outcome, body, note, by);
+    if (v.status !== 'review') throw new IdentityError(409, 'NOT_IN_REVIEW');
     let patch;
     if (outcome === 'approved') {
       // Pays vérifiés choisis par l'admin, bornés à la déclaration (règle produit : résidence OU nationalité).
@@ -370,6 +398,37 @@ export function createIdentityService({
     // Décision humaine : images supprimées tout de suite, quelle que soit l'issue.
     await store.deleteFilesOf(v._id);
     if (outcome === 'approved') await store.supersedeOthers(v.companyId, v._id, ['approved', 'review', 'rejected']);
+    return { status: updated.status, verifiedCountries: updated.verifiedCountries };
+  }
+
+  /**
+   * Dossier validé pour un pays, l'autre « en revue » : l'équipe ajoute le pays en attente (« approved ») ou le laisse fermé
+   * (« rejected » / « resubmit »). Le pays déjà validé n'est JAMAIS retiré par cette décision.
+   */
+  async function decidePending(v, adminId, outcome, body, note, by) {
+    const pending = pendingOf(v);
+    const current = { residence: normalizeIso2(v.verifiedCountries?.residence) || null, nationality: normalizeIso2(v.verifiedCountries?.nationality) || null };
+    let verifiedCountries = current;
+    let code = null;
+    if (outcome === 'approved') {
+      const add = {};
+      for (const k of pending) {
+        const asked = normalizeIso2(body[k]);
+        if (asked && asked === normalizeIso2(v.declared?.[k])) add[k] = asked;
+      }
+      if (!Object.keys(add).length) throw new IdentityError(400, 'COUNTRIES_REQUIRED');
+      verifiedCountries = { ...current, ...add };
+    } else if (outcome === 'rejected') {
+      code = String(body.reasonCode || '');
+      if (!ADMIN_REJECT_CODES.includes(code)) throw new IdentityError(400, 'REASON_REQUIRED');
+    } else if (outcome === 'resubmit') code = 'RESUBMIT_REQUESTED';
+    else throw new IdentityError(400, 'OUTCOME_INVALID');
+    const patch = {
+      verifiedCountries, pendingCountries: [],
+      decision: { ...(v.decision || {}), outcome: 'approved', reasonCodes: [], by, at: now(), note: code ? `${code}${note ? ` : ${note}` : ''}` : note },
+    };
+    const updated = await store.updateVerification(v._id, patch, { push: { accessLog: { adminId: String(adminId), action: `pending:${outcome}`, fileId: null, at: now() } } });
+    await store.deleteFilesOf(v._id);
     return { status: updated.status, verifiedCountries: updated.verifiedCountries };
   }
 
