@@ -51,7 +51,8 @@ export function smsBody(lang, code, webOtpDomain = '') {
   return webOtpDomain ? `${text}\n\n@${webOtpDomain} #${code}` : text;
 }
 
-export async function sendOtpSms(client, { to, body, messagingServiceSid }) {
-  const m = await client.messages.create({ to, body, messagingServiceSid });
+export async function sendOtpSms(client, { to, body, messagingServiceSid, from }) {
+  // Service de messagerie (MG…) s'il est configuré, sinon l'expéditeur direct (même numéro que les codes d'inscription).
+  const m = await client.messages.create(/^MG[0-9a-f]{32}$/i.test(String(messagingServiceSid || '')) ? { to, body, messagingServiceSid } : { to, body, from });
   return { sid: m?.sid || null };
 }
