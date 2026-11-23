@@ -46,6 +46,8 @@ import { syncPlanMetadataFromStripe } from './src/services/planMetadataSync.js';
 import { retryFailedAnalyses } from './src/services/voicemailAnalysis.js';
 import { applyMailOwnership } from './src/services/mailOwnershipMigration.js';
 import { startGraceSweeper } from './src/services/minutesGrace.js';
+import { identityVerificationRoutes, identityAdminRoutes } from './src/routes/identityVerification.js';
+import { getIdentityConfig } from './src/services/identity/config.js';
 
 const app = express();
 
@@ -142,6 +144,9 @@ app.use('/api/reception', receptionRoutes);
 app.use('/api/secretariat', secretariatToolsRoutes);
 app.use('/api/reach', reachRoutes);
 app.use('/api/company-notifications', companyNotificationRoutes);
+// Vérification d'identité Nomad Solo (désactivée tant que IDENTITY_VERIFICATION_ENABLED n'est pas activé : /status répond { enabled: false }).
+app.use('/api/identity-verification', identityVerificationRoutes);
+app.use('/admin/identity', identityAdminRoutes);
 
 // Health check to verify deployment
 app.get('/api/health', (req, res) => {
@@ -240,6 +245,15 @@ setInterval(() => {
     console.warn('[voicemail-analysis-retry]', err.message);
   });
 }, 10 * 60 * 1000);
+
+// Vérification d'identité : une analyse interrompue par un redémarrage part en revue humaine (jamais validée par défaut).
+setInterval(() => {
+  if (!getIdentityConfig().enabled || mongoose.connection.readyState !== 1) return;
+  import('./src/services/identity/service.js')
+    .then(({ identityService }) => identityService())
+    .then((s) => s.recoverStale())
+    .catch((err) => console.warn('[identity-recover]', err?.message));
+}, 5 * 60 * 1000);
 
 // Warn companies whose wallet / minutes / tokens run short (the first check runs a minute after boot).
 const runLowResourceScan = () =>
