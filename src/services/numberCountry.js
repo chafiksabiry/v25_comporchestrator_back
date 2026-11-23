@@ -18,12 +18,26 @@ export const IDENTITY_VERIFICATION_REQUIRED = 'IDENTITY_VERIFICATION_REQUIRED';
 /** Nomad Solo : le pays de résidence ou de nationalité déclaré a changé depuis la validation (revérification, D12). */
 export const IDENTITY_REVERIFICATION_REQUIRED = 'IDENTITY_REVERIFICATION_REQUIRED';
 
-/** Abonné Nomad Solo ? (forfait actif). Lecture impossible : erreur (la garde refuse alors, jamais « autorisé »). */
-async function isSoloCompanyStrict(companyId) {
-  const { loadCompanyPlanLimits } = await import('./planLimits.js');
-  const limits = await loadCompanyPlanLimits(companyId);
-  return limits?.product === 'callcenter' && limits?.callcenterTier === 'nomad_solo';
+/**
+ * Profil Nomad Solo ? Lecture impossible : erreur (la garde refuse alors, jamais « autorisé »).
+ *  - abonné : forfait actif Nomad Solo ;
+ *  - SANS abonnement (parcours Nomad du 23/11 : la recherche du numéro a lieu AVANT le paiement) : la société a une vérification
+ *    d'identité enregistrée (collection IdentityVerification, propre au parcours Nomad Solo). Une société sans abonnement et sans
+ *    vérification garde la règle historique (ex. TaaS, première ligne d'essai) : rien ne change pour elle.
+ */
+export async function isSoloProfileStrict(companyId, { loadLimits, hasIdentityRecord } = {}) {
+  const limits = await (loadLimits || (async (id) => (await import('./planLimits.js')).loadCompanyPlanLimits(id)))(companyId);
+  if (limits) return limits.product === 'callcenter' && limits.callcenterTier === 'nomad_solo';
+  return Boolean(await (hasIdentityRecord || defaultHasIdentityRecord)(companyId));
 }
+
+async function defaultHasIdentityRecord(companyId) {
+  const { identityService } = await import('./identity/service.js');
+  return (await identityService()).hasRecord(companyId);
+}
+
+/** Le pays `country` est-il couvert par un pays vérifié (même pays ou même zone d'indicatif, ex. +1 US/CA) ? */
+export const coveredByVerified = (allowed, country) => (allowed || []).some((c) => sameNumberZone(c, country));
 
 async function defaultVerifiedCountries(companyId) {
   const { identityService } = await import('./identity/service.js');
@@ -43,7 +57,7 @@ async function soloIdentityGate(companyId, scope, { countryCode, phoneNumber, al
   let solo;
   let verified;
   try {
-    solo = await (deps.isSolo || isSoloCompanyStrict)(companyId);
+    solo = await (deps.isSolo || ((id) => isSoloProfileStrict(id, deps)))(companyId);
     if (!solo) return null;
     verified = await (deps.verifiedCountries || defaultVerifiedCountries)(companyId);
   } catch {
@@ -67,12 +81,12 @@ async function soloIdentityGate(companyId, scope, { countryCode, phoneNumber, al
   let country = verified.residence || allowedSet[0] || '';
   if (countryCode !== undefined && countryCode !== null && String(countryCode).trim() !== '') {
     const asked = normalizeCountryCode(countryCode);
-    if (!allowedSet.includes(asked)) return refuse(`pays demandé ${asked}`);
+    if (!coveredByVerified(allowedSet, asked)) return refuse(`pays demandé ${asked}`);
     country = asked;
   }
   if (phoneNumber !== undefined && phoneNumber !== null && String(phoneNumber).trim() !== '') {
     const of = countryOfE164(phoneNumber);
-    if (!of || !allowedSet.includes(of)) return refuse(`ce numéro est ${of ? `du pays ${of}` : 'd’un pays inconnu'}`);
+    if (!of || !coveredByVerified(allowedSet, of)) return refuse(`ce numéro est ${of ? `du pays ${of}` : 'd’un pays inconnu'}`);
   }
   if (!country) return refuse('aucun pays vérifié');
   return { ok: true, country, companyCountry: scope.country || DEFAULT_COMPANY_COUNTRY, allowedCountries: allowedSet, identityVerified: true };

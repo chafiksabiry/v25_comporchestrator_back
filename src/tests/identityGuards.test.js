@@ -31,16 +31,18 @@ const none = async () => ({ verified: false, countries: [] });
 
 beforeEach(() => { clearCompanyCache(); clearAvailabilityCache(); profile = { country: 'FR', identityCountry: 'MA' }; });
 
-test('drapeau désactivé : règle historique inchangée (pays de l’entreprise, zone Europe), aucune lecture de vérification', async () => {
+test('drapeau désactivé : règle historique inchangée (pays de l’entreprise, zone Europe, pièce enregistrée #249), aucune lecture de vérification', async () => {
   let looked = false;
-  const deps = { identityConfig: OFF, isSolo: async () => { looked = true; return true; }, verifiedCountries: async () => { looked = true; return { verified: false }; } };
+  // Société sans forfait Nomad Solo (loadLimits) : règle d'entreprise. Depuis #249, la pièce enregistrée (MA) ouvre son pays.
+  const deps = { identityConfig: OFF, loadLimits: async () => null, isSolo: async () => { looked = true; return true; }, verifiedCountries: async () => { looked = true; return { verified: false }; } };
   assert.equal((await checkNumberCountry(req, C, { countryCode: 'DE' }, deps)).ok, true);
-  assert.equal((await checkNumberCountry(req, C, { countryCode: 'MA' }, deps)).status, 403);
+  assert.equal((await checkNumberCountry(req, C, { countryCode: 'MA' }, deps)).ok, true);
+  assert.equal((await checkNumberCountry(req, C, { countryCode: 'US' }, deps)).status, 403);
   assert.equal(looked, false);
 });
 
 test('autre forfait que Nomad Solo : règle historique, même drapeau activé', async () => {
-  const r = await checkNumberCountry(req, C, { countryCode: 'DE' }, { identityConfig: ON, isSolo: async () => false, verifiedCountries: none });
+  const r = await checkNumberCountry(req, C, { countryCode: 'DE' }, { identityConfig: ON, isSolo: async () => false, loadLimits: async () => ({ product: 'callcenter', callcenterTier: 'accueil' }), verifiedCountries: none });
   assert.equal(r.ok, true);
 });
 
@@ -100,8 +102,11 @@ test('paiement Nomad Solo vérifié : pays vérifiés (toute nationalité) ; pay
   assert.equal(changed.body.code, 'IDENTITY_REVERIFICATION_REQUIRED');
 });
 
-test('paiement Nomad Solo, drapeau désactivé : comportement historique (pièce FR/GB/US seulement)', async () => {
+test('paiement Nomad Solo, drapeau désactivé : règle déclarée de #249 (résidence + pièce de n’importe quel pays enregistrées)', async () => {
   const r = await soloCheckoutEligibility(req, C, { identityConfig: OFF, service: stockOf({ MA: true }) });
-  assert.equal(r.status, 409);
-  assert.equal(r.body.code, 'NO_NUMBERS_IN_COUNTRY');
+  assert.deepEqual(r, { ok: true, numberCountry: 'MA' });
+  clearAvailabilityCache();
+  const none = await soloCheckoutEligibility(req, C, { identityConfig: OFF, service: stockOf({ US: true }) });
+  assert.equal(none.status, 409);
+  assert.equal(none.body.code, 'NO_NUMBERS_IN_COUNTRY');
 });

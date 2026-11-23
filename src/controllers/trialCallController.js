@@ -18,6 +18,23 @@ import {
 import { createTrialVoiceToken } from '../services/trialCall/voiceToken.js';
 import { USED_STATUSES } from '../services/trialCall/store.js';
 import { sendTrialAlert } from '../services/trialCall/anomaly.js';
+import { USED_SEEN_TTL_MS, usedSeenKey } from '../services/trialCall/paymentGate.js';
+import { getIdentityConfig } from '../services/identity/config.js';
+import { callerAccess } from '../middleware/companyScope.js';
+import { sameNumberZone } from '../utils/numberZone.js';
+
+/**
+ * Identité vérifiée de l'appelant pour l'essai (parcours Nomad, PARCOURS.md §4.5). Vérification d'identité désactivée
+ * (IDENTITY_VERIFICATION_ENABLED) : `{ enabled: false }`, l'essai garde les règles de #246. Activée : pays vérifiés côté serveur
+ * (collection IdentityVerification de la société de l'appelant, jamais une valeur de la requête). Lecture impossible : erreur.
+ */
+export async function defaultTrialIdentity(req) {
+  if (!getIdentityConfig().enabled) return { enabled: false };
+  const access = await callerAccess(req);
+  const { identityService } = await import('../services/identity/service.js');
+  const v = await (await identityService()).verifiedCountriesFor(String(access.companyId));
+  return { enabled: true, verified: Boolean(v?.verified), countries: v?.countries || [], residence: v?.residence || null };
+}
 
 /**
  * Appel d'essai gratuit (Nomad Solo, avant le paiement) : API /api/trial-call. DÉSACTIVÉ PAR DÉFAUT (voir services/trialCall/config.js).
@@ -61,6 +78,7 @@ export function createTrialCallController({
   clearTimer = (h) => clearTimeout(h),
   verifyRequest = (req, cfg) => twilioRequestValid(req, { env, authToken: cfg.twilioAuthToken, requestHost: true }),
   alert = sendTrialAlert,
+  identity = defaultTrialIdentity,
 } = {}) {
   let lazyClient = twilioClient;
   const client = (cfg) => {
@@ -112,6 +130,32 @@ export function createTrialCallController({
   }
 
   const cfgOf = () => trialConfig(env);
+  /** « Déjà utilisé » constaté par le serveur : marque lue par la garde du paiement (l'essai impossible n'empêche pas de payer). */
+  const markUsedSeen = (userId) => (userId ? store.bump(usedSeenKey(userId), 1e9, new Date(now() + USED_SEEN_TTL_MS)).catch(() => undefined) : undefined);
+  /**
+   * Vérification d'identité activée : l'essai exige une vérification validée, et le pays de l'essai doit être un pays de numéro
+   * autorisé (résidence OU nationalité vérifiées, zone +1 comprise). Renvoie un code de refus, ou null.
+   */
+  const identityRefusal = (who, country) => {
+    if (!who?.enabled) return null;
+    if (!who.verified) return 'identity_not_verified';
+    return (who.countries || []).some((c) => sameNumberZone(c, country)) ? null : 'country_not_allowed';
+  };
+  /**
+   * Mobile qui reçoit le code SMS (décision du fondateur n° 2) : un mobile du pays du numéro, OU (vérification activée et validée)
+   * un mobile du pays de RÉSIDENCE VÉRIFIÉ. Le contrôle Lookup « mobile » reste fait, sur le pays du mobile. L'appel, lui, reste
+   * limité au pays du numéro (checkTrialDestination(…, trial.country), inchangé).
+   */
+  const acceptMobile = (raw, country, who) => {
+    const own = checkProspectMobile(raw, country);
+    if (own.ok) return { ...own, smsCountry: country };
+    const residence = who?.enabled && who.verified ? upper(who.residence) : '';
+    if (residence && residence !== country) {
+      const res = checkProspectMobile(raw, residence);
+      if (res.ok) return { ...res, smsCountry: residence };
+    }
+    return own;
+  };
   const userOf = (req) => String(req.user?.userId || req.user?.id || '');
   const fp = (cfg, kind, value) => fingerprint(cfg.hashSecret, kind, value);
 
@@ -220,13 +264,15 @@ export function createTrialCallController({
         const cfg = cfgOf();
         if (!trialEnabled(cfg)) return res.json({ eligible: false, reason: 'disabled' });
         const country = upper(req.query?.country);
+        const refusedByIdentity = identityRefusal(await identity(req), country);
+        if (refusedByIdentity) return res.json({ eligible: false, reason: refusedByIdentity });
         if (CLOSED_TRIAL_COUNTRIES.includes(country) || !trialNumberFor(cfg, country)) return res.json({ eligible: false, reason: 'country_closed' });
         if (!(await openNumber(cfg, country))) return res.json({ eligible: false, reason: 'paused' });
         const userId = userOf(req);
         if (!userId) return fail(res, 401, 'auth_required');
         const deviceId = cleanDeviceId(req.query?.deviceId);
         const h = await personHashes(cfg, req, deviceId);
-        if (await store.findUsed({ userId, emailHash: h.emailHash, deviceHash: deviceId ? h.deviceHash : null })) return res.json({ eligible: false, reason: 'used' });
+        if (await store.findUsed({ userId, emailHash: h.emailHash, deviceHash: deviceId ? h.deviceHash : null })) { await markUsedSeen(userId); return res.json({ eligible: false, reason: 'used' }); }
         const pending = await store.findPendingTrial(userId, new Date(now() - 30 * 60 * 1000));
         return res.json({
           eligible: true,
@@ -251,7 +297,10 @@ export function createTrialCallController({
         if (!userId) return fail(res, 401, 'auth_required');
         const deviceId = cleanDeviceId(req.body?.deviceId);
         if (!deviceId) return fail(res, 400, 'invalid_device');
-        const mobile = checkProspectMobile(req.body?.phone, country);
+        const who = await identity(req);
+        const refusedByIdentity = identityRefusal(who, country);
+        if (refusedByIdentity) return fail(res, 403, refusedByIdentity);
+        const mobile = acceptMobile(req.body?.phone, country, who);
         if (!mobile.ok) return fail(res, 422, mobile.reason);
         const h = await personHashes(cfg, req, deviceId);
         const lang = langOf(req.body?.lang);
@@ -264,7 +313,7 @@ export function createTrialCallController({
         }
         const phoneHash = fp(cfg, 'phone', mobile.phone);
         // 2) Une fois par personne : compte, e-mail normalisé, appareil, téléphone.
-        if (await store.findUsed({ userId, emailHash: h.emailHash, deviceHash: h.deviceHash, phoneHash })) return fail(res, 409, 'used');
+        if (await store.findUsed({ userId, emailHash: h.emailHash, deviceHash: h.deviceHash, phoneHash })) { await markUsedSeen(userId); return fail(res, 409, 'used'); }
         // Un seul essai en cours par personne : pas de nouveau code tant qu'un code validé (30 min) ou une numérotation est en cours.
         if (await store.findActive({ userId, emailHash: h.emailHash, deviceHash: h.deviceHash, phoneHash }, new Date(now() - TRIAL_VERIFIED_TTL_MS))) return fail(res, 409, 'trial_pending');
         // 3) Limites : renvoi après 30 s ; puis compteurs PERSISTANTS et atomiques : 3 envois / jour par compte, par téléphone et par
@@ -304,7 +353,7 @@ export function createTrialCallController({
           lookup = { phoneHash, lineType: r.lineType, countryCode: r.countryCode };
           await store.saveLookup(lookup);
         }
-        if (lookup.lineType !== 'mobile' || lookup.countryCode !== country) {
+        if (lookup.lineType !== 'mobile' || lookup.countryCode !== mobile.smsCountry) {
           await event('trial_refused', { ...base, props: { stage: 'lookup', reason: lookup.lineType === 'mobile' ? 'country' : 'not_mobile' } });
           return fail(res, 422, 'not_mobile');
         }
@@ -339,7 +388,10 @@ export function createTrialCallController({
         if (!userId) return fail(res, 401, 'auth_required');
         const deviceId = cleanDeviceId(req.body?.deviceId);
         if (!deviceId) return fail(res, 400, 'invalid_device');
-        const mobile = checkProspectMobile(req.body?.phone, country);
+        const who = await identity(req);
+        const refusedByIdentity = identityRefusal(who, country);
+        if (refusedByIdentity) return fail(res, 403, refusedByIdentity);
+        const mobile = acceptMobile(req.body?.phone, country, who);
         if (!mobile.ok) return fail(res, 422, mobile.reason);
         const code = String(req.body?.code ?? '').trim();
         if (!/^\d{6}$/.test(code)) return fail(res, 422, 'otp_invalid');
@@ -360,7 +412,7 @@ export function createTrialCallController({
         if (!(await store.claimOtp(otp.id))) return fail(res, 410, 'otp_expired');
         await store.markOtpsUsed(userId, phoneHash);
         const person = { userId, emailHash: h.emailHash, deviceHash: h.deviceHash, phoneHash };
-        if (await store.findUsed(person)) return fail(res, 409, 'used');
+        if (await store.findUsed(person)) { await markUsedSeen(userId); return fail(res, 409, 'used'); }
         if (await store.findActive(person, new Date(now() - TRIAL_VERIFIED_TTL_MS))) return fail(res, 409, 'trial_pending');
         // 3 essais / 24 h par IP, 6 par réseau (/24, /64) : compteurs persistants et atomiques.
         const ipOver = await overLimit([[`trials:ip:${h.ipHash}:${dayKey(now())}`, 3, 2 * DAY], [`trials:net:${h.ipNetHash}:${dayKey(now())}`, 6, 2 * DAY]]);

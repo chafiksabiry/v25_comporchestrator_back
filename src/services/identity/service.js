@@ -370,7 +370,12 @@ export function createIdentityService({
     return { status: updated.status, verifiedCountries: updated.verifiedCountries };
   }
 
-  return { status, upload, removeFile, submit, process, requestReview, recoverStale, verifiedCountriesFor, isStale, adminList, adminDetail, adminFile, adminDecide };
+  /** La société a-t-elle une vérification d'identité enregistrée (tout statut) ? Sert à reconnaître un profil Nomad Solo sans abonnement. */
+  async function hasRecord(companyId) {
+    return (await store.listForCompany(companyId)).length > 0;
+  }
+
+  return { status, upload, removeFile, submit, process, requestReview, recoverStale, verifiedCountriesFor, hasRecord, isStale, adminList, adminDetail, adminFile, adminDecide };
 }
 
 /** Champs extraits conservés (spec §11.1) : ni numéro de document, ni lignes MRZ, ni adresse complète. */
