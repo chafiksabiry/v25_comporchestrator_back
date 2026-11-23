@@ -19,6 +19,7 @@ import { currencyForCountry, pickCurrency } from '../services/currency.js';
 import { stripeLocaleFromRequest } from '../services/stripeLocale.js';
 import { callcenterTierFromMetadata } from '../services/callcenterTier.js';
 import { soloCheckoutEligibility } from '../services/numberAvailability.js';
+import { onStripeSubscriptionEnded } from '../services/nomadNumberLifecycle.js';
 import { existingNomadSubscriptionGate, nomadPendingNumberPurchase, nomadSoloPaymentGate, purchaseChosenNumberAfterPayment } from '../services/nomadSoloPayment.js';
 
 function numberOrNull(value) {
@@ -670,6 +671,8 @@ async function handleSubscriptionUpdated(subscription) {
     { stripeSubscriptionId: subscription.id },
     subscriptionUpdateFields(subscription)
   );
+  // NOMAD résilié (D3) : numéro gardé jusqu'à la fin de la période payée, puis remis dans le stock. `cancel_at_period_end` seul : rien.
+  if (subscription?.status === 'canceled') await onStripeSubscriptionEnded(subscription);
 }
 
 async function handleSubscriptionDeleted(subscription) {
@@ -691,6 +694,8 @@ async function handleSubscriptionDeleted(subscription) {
     );
     console.log(`✅ Reset company ${subRecord.companyId} subscription status to free`);
   }
+  // NOMAD résilié (D3) : numéro gardé jusqu'à la fin de la période payée, puis remis dans le stock (nomadNumberLifecycle.js).
+  await onStripeSubscriptionEnded({ ...subscription, status: 'canceled' });
 }
 
 async function handleProductUpdated(product) {
