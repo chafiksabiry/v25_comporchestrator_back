@@ -49,6 +49,13 @@ const subscriptionSchema = new mongoose.Schema({
   cancelAtPeriodEnd: {
     type: Boolean,
     default: false
+  },
+  // Journal du numéro d'un abonnement NOMAD résilié (services/nomadNumberLifecycle.js, décision D3 du 23/11) : une entrée par ligne
+  // { phoneNumber, phoneNumberId, twilioSid, scheduledAt, status: scheduled|detached|releasing|released|reassigned|excluded|gone, ... }.
+  // Écrit uniquement par ce service. Absent sur les autres abonnements.
+  numberLifecycle: {
+    type: [mongoose.Schema.Types.Mixed],
+    default: undefined
   }
 }, {
   timestamps: true

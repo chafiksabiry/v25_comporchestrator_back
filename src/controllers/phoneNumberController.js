@@ -59,6 +59,27 @@ import { getInboundTest, needsInboundTestProof, realCallProof, receiveInboundCal
 import { stripeLocaleFromRequest } from '../services/stripeLocale.js';
 import { tryAiInbound, aiQueueFor, aiInboundPilotEnabled } from '../services/aiInbound.js';
 import { twilioRequestValid } from '../services/twilioSignature.js';
+import { countedLineFilter, countedLinesQuery, scheduleNomadNumberDetach } from '../services/nomadNumberLifecycle.js';
+
+/**
+ * Lignes qui comptent comme « lignes existantes » de la société (ligne incluse, plafond de l'offre, essai) : jamais l'ancienne ligne
+ * d'un abonnement NOMAD résilié (décision D3 du 23/11). Sans cela, un abonné qui se réabonnait avait encore son ancien numéro compté :
+ * la première ligne du nouvel abonnement n'était plus « incluse » et l'achat du numéro choisi échouait après le paiement.
+ * Base illisible pour cette distinction : comptage d'avant (toutes les lignes non marquées), jamais d'erreur.
+ */
+async function countedLines(companyId) {
+  let query = countedLineFilter(companyId);
+  if (mongoose.connection.readyState === 1) {
+    try { query = await countedLinesQuery(companyId); } catch (e) { console.warn('[nomad-numero] lignes d’un abonnement résilié illisibles :', e?.message || e); }
+  }
+  return PhoneNumber.countDocuments(query);
+}
+
+/** Nouvelle ligne achetée par un réabonné NOMAD : les lignes de l'abonnement résilié partent à la fin de leur période payée (D3). */
+function scheduleOldNomadLines(companyId) {
+  if (mongoose.connection.readyState !== 1 || !companyId) return;
+  scheduleNomadNumberDetach(String(companyId), { afterNewLine: true }).catch((e) => console.warn('[nomad-numero] planification après achat impossible :', e?.message || e));
+}
 
 /** Titulaire Nomad Solo (une seule personne) : l'appelant entend des messages à la première personne. Toute erreur = texte entreprise. */
 const isSoloCompany = async (companyId) => {
@@ -616,7 +637,7 @@ class PhoneNumberController {
       let payment = null;
 
       if (companyId && mongoose.Types.ObjectId.isValid(companyId)) {
-        const existingCount = await PhoneNumber.countDocuments({ companyId });
+        const existingCount = await countedLines(companyId);
         const limits = await loadCompanyPlanLimits(companyId);
         const blocked = localNumberLimitPayload(limits, existingCount);
         if (blocked) return res.status(403).json(blocked);
@@ -798,7 +819,7 @@ class PhoneNumberController {
         return res.status(400).json({ error: 'Invalid companyId' });
       }
 
-      const existingCount = await PhoneNumber.countDocuments({ companyId });
+      const existingCount = await countedLines(companyId);
       const eligible = existingCount === 0 && isLineTrialAllowed(await loadCompanyPlanLimits(companyId));
 
       let activeTrial = null;
@@ -863,7 +884,7 @@ class PhoneNumberController {
       let payment = null;
 
       if (companyId && mongoose.Types.ObjectId.isValid(companyId)) {
-        const existingCount = await PhoneNumber.countDocuments({ companyId });
+        const existingCount = await countedLines(companyId);
         const limits = await loadCompanyPlanLimits(companyId);
         const blocked = localNumberLimitPayload(limits, existingCount);
         if (blocked) return res.status(403).json(blocked);
@@ -994,6 +1015,7 @@ class PhoneNumberController {
         }
       }
 
+      scheduleOldNomadLines(companyId);
       res.json(newNumber);
     } catch (error) {
       console.error('Error purchasing Twilio phone number:', error);
@@ -1410,7 +1432,7 @@ class PhoneNumberController {
       const countryGate = await checkNumberCountry(req, companyId, { phoneNumber });
       if (!countryGate.ok) return res.status(countryGate.status).json(countryGate.body);
 
-      const existingLines = await PhoneNumber.countDocuments({ companyId });
+      const existingLines = await countedLines(companyId);
       const planLimits = await loadCompanyPlanLimits(companyId);
       const lineLimit = localNumberLimitPayload(planLimits, existingLines);
       if (lineLimit) return res.status(403).json(lineLimit);
@@ -1753,7 +1775,7 @@ class PhoneNumberController {
   async isFirstLineIncluded(companyId) {
     if (!companyId || !mongoose.Types.ObjectId.isValid(String(companyId))) return false;
     try {
-      return isLineIncluded(await loadCompanyPlanLimits(companyId), await PhoneNumber.countDocuments({ companyId }));
+      return isLineIncluded(await loadCompanyPlanLimits(companyId), await countedLines(companyId));
     } catch (error) {
       console.warn('[phone-numbers] included check failed:', error?.message);
       return false;
