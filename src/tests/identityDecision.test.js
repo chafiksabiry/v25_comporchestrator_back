@@ -142,6 +142,20 @@ test('titre de séjour : prouve la résidence, PAS la nationalité (réglage du 
   assert.ok(elsewhere.reasonCodes.includes('PERMIT_COUNTRY_MISMATCH'));
 });
 
+test('ancienne CNI française (MRZ 2 × 36, sans date d’expiration) : nationalité FR prouvée, date d’expiration visuelle', () => {
+  const cni = idExtraction({ fields: {
+    document_type: 'national_id_card', issuing_country_iso3: 'FRA', nationality_iso3: 'FRA', last_name_latin: 'DOUEL', given_names_latin: 'CHRISTIANE NICOLE',
+    birth_date: '1929-06-20', issue_date: '2020-06-01', expiry_date: '2030-06-01', mrz_lines: ['IDFRADOUEL<<<<<<<<<<<<<<<<<<<<932013', '0506932020438CHRISTIANE<<NI2906209F3'],
+  } });
+  const r = decide({ declared: { fullName: 'Christiane Douel', residence: 'FR', nationality: 'FR' }, id: cni, proof: proofExtraction({ holder_name: 'Christiane Douel' }), now: NOW });
+  assert.equal(r.checks.find((c) => c.code === 'MRZ').result, 'pass');
+  assert.equal(r.checks.find((c) => c.code === 'MRZ_VISUAL').result, 'pass');
+  assert.equal(r.checks.find((c) => c.code === 'NATIONALITY').result, 'pass');
+  assert.equal(r.outcome, 'approved', JSON.stringify(r.checks.filter((c) => c.result !== 'pass')));
+  assert.deepEqual(r.verifiedCountries, { nationality: 'FR', residence: 'FR' });
+  assert.equal(r.facts.idExpiry, '2030-06-01');
+});
+
 test('dates incohérentes de la pièce -> revue', () => {
   assert.ok(run({ id: idExtraction({ fields: { issue_date: '2031-05-01' } }) }).reasonCodes.includes('DATES_INCONSISTENT'));
 });
@@ -203,18 +217,4 @@ test('outils de date', () => {
   assert.equal(isoDate('2026-02-30'), null);
   assert.equal(latinDigits('٢٠٢٦-١١-٠٤'), '2026-11-04');
   assert.equal(run({ proof: proofExtraction({ issue_date: '٢٠٢٦-١١-٠٤' }) }).outcome, 'approved');
-});
-
-test('ancienne CNI française (MRZ 2 × 36, sans date d’expiration) : nationalité FR prouvée, date d’expiration visuelle', () => {
-  const cni = idExtraction({ fields: {
-    document_type: 'national_id_card', issuing_country_iso3: 'FRA', nationality_iso3: 'FRA', last_name_latin: 'DOUEL', given_names_latin: 'CHRISTIANE NICOLE',
-    birth_date: '1929-06-20', issue_date: '2020-06-01', expiry_date: '2030-06-01', mrz_lines: ['IDFRADOUEL<<<<<<<<<<<<<<<<<<<<932013', '0506932020438CHRISTIANE<<NI2906209F3'],
-  } });
-  const r = decide({ declared: { fullName: 'Christiane Douel', residence: 'FR', nationality: 'FR' }, id: cni, proof: proofExtraction({ holder_name: 'Christiane Douel' }), now: NOW });
-  assert.equal(r.checks.find((c) => c.code === 'MRZ').result, 'pass');
-  assert.equal(r.checks.find((c) => c.code === 'MRZ_VISUAL').result, 'pass');
-  assert.equal(r.checks.find((c) => c.code === 'NATIONALITY').result, 'pass');
-  assert.equal(r.outcome, 'approved', JSON.stringify(r.checks.filter((c) => c.result !== 'pass')));
-  assert.deepEqual(r.verifiedCountries, { nationality: 'FR', residence: 'FR' });
-  assert.equal(r.facts.idExpiry, '2030-06-01');
 });
