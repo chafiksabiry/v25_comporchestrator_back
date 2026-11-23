@@ -48,6 +48,9 @@ import { applyMailOwnership } from './src/services/mailOwnershipMigration.js';
 import { startGraceSweeper } from './src/services/minutesGrace.js';
 import { identityVerificationRoutes, identityAdminRoutes } from './src/routes/identityVerification.js';
 import { getIdentityConfig } from './src/services/identity/config.js';
+import { trialCallRoutes, trialCallController } from './src/routes/trialCall.js';
+import { startTrialCallJobs } from './src/services/trialCall/jobs.js';
+import { mongoTrialStore } from './src/services/trialCall/store.js';
 
 const app = express();
 
@@ -147,6 +150,8 @@ app.use('/api/company-notifications', companyNotificationRoutes);
 // Vérification d'identité Nomad Solo (désactivée tant que IDENTITY_VERIFICATION_ENABLED n'est pas activé : /status répond { enabled: false }).
 app.use('/api/identity-verification', identityVerificationRoutes);
 app.use('/admin/identity', identityAdminRoutes);
+// Appel d'essai gratuit (Nomad Solo, avant paiement) : désactivé par défaut (TRIAL_CALL_ENABLED), voir src/services/trialCall/config.js.
+app.use('/api/trial-call', trialCallRoutes);
 
 // Health check to verify deployment
 app.get('/api/health', (req, res) => {
@@ -238,6 +243,9 @@ startGraceSweeper({
   getClient: async () => (await import('./src/services/phoneNumberService.js')).phoneNumberService.twilioClient,
   isReady: () => mongoose.connection.readyState === 1,
 });
+
+// Appel d'essai gratuit : balayeur (coupure à 60 s) et détection d'anomalie, seulement si l'essai est actif au démarrage.
+startTrialCallJobs({ controller: trialCallController, store: mongoTrialStore, isReady: () => mongoose.connection.readyState === 1 });
 
 // Messages du répondeur dont l'analyse IA a échoué pour une cause transitoire (délai dépassé, réseau, 5xx) : reprise différée, 3 reprises au plus.
 setInterval(() => {
