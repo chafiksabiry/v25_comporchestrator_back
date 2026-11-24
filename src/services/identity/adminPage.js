@@ -1,7 +1,8 @@
 /**
  * Page « Revue des pièces » (admin HARX), sur le modèle de la boîte de réception support : page statique SANS aucune donnée.
  * Le jeton admin du tableau de bord (JWT, typeUser 'admin') est saisi dans le navigateur, gardé en sessionStorage (jamais dans
- * l'URL) et envoyé en en-tête Authorization. Tout le contenu passe par textContent (aucun HTML injecté : le texte lu sur un document
+ * l'URL) et envoyé en en-tête Authorization. Ouverte depuis l'Inbox admin, la page reçoit le jeton de la session admin dans le
+ * fragment (#t=…, jamais envoyé au serveur), le range en sessionStorage puis l'efface aussitôt de l'adresse : pas de saisie à la main. Tout le contenu passe par textContent (aucun HTML injecté : le texte lu sur un document
  * est affiché tel quel, jamais interprété). Images déchiffrées à la volée, dessinées dans un canvas avec un filigrane
  * « HARX — revue — date — admin » ; clic droit et glisser désactivés.
  */
@@ -31,6 +32,7 @@ table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid var(--li
 <script>
 (function(){
 var K='harx-identity-admin',$=function(i){return document.getElementById(i)},who='';
+(function(){var m=/^#t=([^&]+)/.exec(location.hash||'');if(!m)return;try{sessionStorage.setItem(K,decodeURIComponent(m[1]))}catch(e){}try{history.replaceState(null,'',location.pathname+location.search)}catch(e){}})();
 function tok(){try{return sessionStorage.getItem(K)||''}catch(e){return ''}}
 function hdr(){return {Authorization:'Bearer '+tok()}}
 function api(p,o){o=o||{};o.headers=Object.assign(hdr(),o.headers||{});return fetch(p,o).then(function(r){if(r.status===401||r.status===404){try{sessionStorage.removeItem(K)}catch(e){}show();throw new Error('auth')}return r})}
