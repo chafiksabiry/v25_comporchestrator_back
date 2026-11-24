@@ -1,4 +1,4 @@
-import { sharedSupportNotifier } from './notify.js';
+import { sharedSupportNotifier, supportNotifyConfig } from './notify.js';
 
 /**
  * Demandes de l'Inbox admin créées par le serveur lui-même (pas par l'assistant IA) : un dossier de vérification d'identité passé en
@@ -46,9 +46,14 @@ export function identityReviewRequest(v, { trigger, reasonCodes = [], pendingCou
   };
 }
 
-const adminIdentityUrl = (env) => {
-  const base = String(env.PUBLIC_API_BASE_URL || '').trim().replace(/\/+$/, '');
-  return base ? `${base}/admin/identity` : '';
+/**
+ * Page « Identité » du portail d'administration (décision du fondateur du 24/11/2026 : on ne sort pas du portail).
+ * Dérivée de l'adresse de l'Inbox (SUPPORT_INBOX_URL, …/admin/inbox) ; ouvre directement le dossier.
+ */
+export const adminIdentityUrl = (env, verificationId = '') => {
+  const inbox = supportNotifyConfig(env).inboxUrl.replace(/\/+$/, '');
+  const base = /\/admin\/inbox$/.test(inbox) ? inbox.replace(/\/admin\/inbox$/, '/admin/identity') : `${new URL(inbox).origin}/admin/identity`;
+  return verificationId ? `${base}?dossier=${encodeURIComponent(String(verificationId))}` : base;
 };
 
 /**
@@ -59,7 +64,7 @@ export function createIdentityInboxReporter({ getDesk = getSupportDesk, notify =
 
   async function opened(v, info = {}) {
     if (!v?._id) return { created: false };
-    const req = identityReviewRequest(v, { ...info, adminUrl: adminIdentityUrl(env) });
+    const req = identityReviewRequest(v, { ...info, adminUrl: adminIdentityUrl(env, v._id) });
     const d = getDesk();
     let ticketId = '';
     try {
