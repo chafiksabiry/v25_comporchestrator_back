@@ -46,7 +46,7 @@ export function createMongoStore() {
     async unlinkConversation(waId) { await WhatsAppConversation.updateOne({ waId }, { $set: { linkedUserId: null, linkedAt: null } }); },
     /** Résumés des conversations (sans l'historique complet), les plus récentes d'abord. channel : 'web' | 'whatsapp' | undefined. */
     async listConversations({ channel, limit = 50 } = {}) {
-      const match = channel === 'web' ? { waId: /^web:/ } : channel === 'salesiq' ? { waId: /^salesiq:/ } : channel === 'identity' ? { waId: /^identity:/ } : channel === 'whatsapp' ? { waId: { $not: /^(web|salesiq|identity):/ } } : {};
+      const match = channel === 'web' ? { waId: /^web:/ } : channel === 'salesiq' ? { waId: /^salesiq:/ } : channel === 'identity' ? { waId: /^identity:/ } : channel === 'email' ? { waId: /^email:/ } : channel === 'whatsapp' ? { waId: { $not: /^(web|salesiq|identity|email):/ } } : {};
       const rows = await WhatsAppConversation.aggregate([
         { $match: match },
         { $sort: { updatedAt: -1 } },
@@ -65,5 +65,7 @@ export function createMongoStore() {
     async listTickets({ status } = {}) { return (await WhatsAppTicket.find(status ? { status } : {}).sort({ createdAt: -1 }).limit(100).lean()).map(ticketOut); },
     async updateTicket(id, patch) { return ticketOut(await WhatsAppTicket.findByIdAndUpdate(id, { $set: patch }, { new: true }).lean()); },
     async getTicket(id) { return ticketOut(await WhatsAppTicket.findById(id).lean()); },
+    /** Demandes créées depuis une date (indicateurs hebdomadaires de l'Inbox), sans la limite de 100 de listTickets. */
+    async listTicketsSince(since) { return (await WhatsAppTicket.find({ createdAt: { $gte: since } }).select('-transcript').sort({ createdAt: -1 }).limit(5000).lean()).map(ticketOut); },
   };
 }

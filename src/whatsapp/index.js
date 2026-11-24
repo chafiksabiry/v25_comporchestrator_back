@@ -10,6 +10,7 @@ import { createWebChatRouter } from './webChat.js';
 import { createInboxBus, withInboxEvents } from './events.js';
 import { createWebMirror } from './webMirror.js';
 import { sharedSupportNotifier, escalationRequest } from '../support/notify.js';
+import { createSupportDesk } from '../support/agent/index.js';
 
 /**
  * Assemble le module WhatsApp AI Assistant. Toutes les dépendances sont substituables (tests) ;
@@ -30,10 +31,16 @@ export function createWhatsAppModule(overrides = {}) {
   // Chaque escalade prévient l'équipe tout de suite : e-mail à SUPPORT_EMAIL (envoi Brevo du serveur) et webhook
   // WHATSAPP_SUPPORT_NOTIFY_WEBHOOK_URL s'il est défini (src/support/notify.js). « Prévenue » = au moins une voie a abouti.
   const notifier = overrides.supportNotifier || sharedSupportNotifier();
-  const notifySupport = overrides.notifySupport || (async (ticket) => {
+  const baseNotify = overrides.notifySupport || (async (ticket) => {
     const out = await notifier(escalationRequest(ticket));
     if (!out.delivered) throw new Error(`support not notified (email ${out.email}, webhook ${out.webhook})`);
   });
+  // Agent support IA (src/support/agent) : chaque nouvelle escalade lui est confiée (sans effet tant que SUPPORT_AGENT_ENABLED est absent).
+  const desk = overrides.supportDesk || createSupportDesk({ store, kb, whatsapp, notify: notifier, waCfg: cfg, overrides: overrides.supportDeskOverrides || {}, logger });
+  const notifySupport = async (ticket) => {
+    desk.onEscalation(ticket);
+    return baseNotify(ticket);
+  };
 
   const tools = overrides.tools || createToolRunner({
     kb, store, cfg,
@@ -44,7 +51,7 @@ export function createWhatsAppModule(overrides = {}) {
     notifySupport,
   });
   const agent = createAgent({ store, claude, whatsapp, kb, tools, cfg, logger });
-  const router = createWhatsAppRouter({ agent, store, whatsapp, kb, cfg, logger, auth: overrides.auth });
+  const router = createWhatsAppRouter({ agent, store, whatsapp, kb, cfg, logger, auth: overrides.auth, extendAdmin: desk.mount, replyEmail: desk.replyEmail });
   // Chat sur le site (sans redirection vers l'application WhatsApp) : même agent, transport sans réseau.
   const mirror = overrides.mirror !== undefined ? overrides.mirror : createWebMirror({ whatsapp, cfg, logger });
   const webChat = createWebChatRouter({ store, claude, kb, tools, cfg, logger, mirror });
@@ -53,7 +60,7 @@ export function createWhatsAppModule(overrides = {}) {
   const missing = missingConfig(cfg);
   if (cfg.enabled && missing.length) logger.warn(`[whatsapp] module mounted but incomplete: missing ${missing.join(', ')}`);
   logger.log?.(`[whatsapp] AI assistant ready (model ${cfg.model}, ${kb.size} knowledge chunks, store ${store.kind})`);
-  return { router, agent, webAgent: webChat.agent, cfg, kb, store, tools, events, notifier };
+  return { router, agent, webAgent: webChat.agent, cfg, kb, store, tools, events, notifier, supportDesk: desk };
 }
 
 export { getWhatsAppConfig, missingConfig };

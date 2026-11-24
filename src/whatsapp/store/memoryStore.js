@@ -60,7 +60,7 @@ export function createMemoryStore() {
     },
     async listConversations({ channel, limit = 50 } = {}) {
       return [...conversations.values()]
-        .filter((c) => (channel === 'web' ? c.waId.startsWith('web:') : channel === 'salesiq' ? c.waId.startsWith('salesiq:') : channel === 'identity' ? c.waId.startsWith('identity:') : channel === 'whatsapp' ? !/^(web|salesiq|identity):/.test(c.waId) : true))
+        .filter((c) => (channel === 'web' ? c.waId.startsWith('web:') : channel === 'salesiq' ? c.waId.startsWith('salesiq:') : channel === 'identity' ? c.waId.startsWith('identity:') : channel === 'email' ? c.waId.startsWith('email:') : channel === 'whatsapp' ? !/^(web|salesiq|identity|email):/.test(c.waId) : true))
         .map((c) => ({ waId: c.waId, profileName: c.profileName || '', language: c.language?.language || null, linked: Boolean(c.linkedUserId), handoff: Boolean(c.handoff?.active), updatedAt: c.messages.at(-1)?.ts || c.createdAt, messageCount: c.messages.length, last: c.messages.length ? { role: c.messages.at(-1).role, text: c.messages.at(-1).text, ts: c.messages.at(-1).ts } : null }))
         .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
         .slice(0, Math.min(Math.max(Number(limit) || 50, 1), 100));
@@ -79,6 +79,7 @@ export function createMemoryStore() {
     async listTickets({ status } = {}) { return [...tickets.values()].filter((t) => !status || t.status === status).map(clone); },
     async updateTicket(id, patch) { const t = tickets.get(id); if (!t) return null; Object.assign(t, patch); return clone(t); },
     async getTicket(id) { return clone(tickets.get(id)) || null; },
+    async listTicketsSince(since) { return [...tickets.values()].filter((t) => t.createdAt >= since).map(clone); },
     _dump() { return { conversations, processed, linkCodes, tickets }; },
   };
 }

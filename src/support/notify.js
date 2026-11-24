@@ -43,7 +43,7 @@ const URGENCY_LABEL = { low: 'basse', normal: 'normale', high: 'haute' };
 /**
  * Texte de la notification (pur, testable).
  * @param {{kind:'escalation'|'identity_review', channel:string, ticketId?:string, conversationId?:string, urgency?:string,
- *   reason?:string, summary?:string, language?:string, contact?:string, details?:string[], links?:Array<{label:string,url:string}>}} req
+ *   reason?:string, summary?:string, language?:string, contact?:string, details?:string[], links?:Array<{label:string,url:string}>, cc?:string[]}} req
  */
 export function buildNotification(req, cfg = supportNotifyConfig()) {
   const channel = CHANNEL_LABEL[req.channel] || req.channel || 'Inbox';
@@ -84,7 +84,11 @@ export function createSupportNotifier({ env = process.env, mail = defaultSendMai
     if (cfg.to && cfg.emailReady) {
       tasks.push(
         Promise.resolve()
-          .then(() => mail({ sender: { email: cfg.sender, name: 'HARX support' }, to: [{ email: cfg.to }], subject: msg.subject, textContent: msg.text }))
+          .then(() => {
+            // Copie facultative (ex. legal@ pour une demande juridique de l'agent support), sans doublon avec le destinataire.
+            const cc = [...new Set((req.cc || []).map((e) => String(e || '').trim()).filter((e) => EMAIL_RE.test(e) && e !== cfg.to))];
+            return mail({ sender: { email: cfg.sender, name: 'HARX support' }, to: [{ email: cfg.to }], ...(cc.length ? { cc: cc.map((email) => ({ email })) } : {}), subject: msg.subject, textContent: msg.text });
+          })
           .then(() => { out.email = 'sent'; }, (e) => { out.email = 'failed'; logger.warn?.(`[support-notify] e-mail non envoyé : ${e?.message || e}`); }),
       );
     } else {
