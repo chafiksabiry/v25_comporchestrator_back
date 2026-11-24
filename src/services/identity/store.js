@@ -8,12 +8,16 @@ import crypto from 'node:crypto';
 
 const clone = (x) => (x == null ? x : structuredClone(x));
 
-export function createMemoryStore() {
+/**
+ * Magasin en mémoire (tests seulement). `now` : horloge de l'expiration des images ; par défaut l'heure réelle. Les tests qui fixent
+ * l'horloge du service doivent passer la même ici : sinon une image dont l'échéance est calculée sur l'horloge du test (ex. 23/11 10:00)
+ * est jugée expirée dès que l'heure réelle la dépasse, et le test échoue selon le jour où il tourne.
+ */
+export function createMemoryStore({ now = () => new Date() } = {}) {
   const verifications = new Map();
   const files = new Map();
   const id = () => crypto.randomBytes(12).toString('hex');
   let seq = 0;
-  const now = () => new Date();
   return {
     kind: 'memory',
     _verifications: verifications,
