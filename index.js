@@ -42,6 +42,7 @@ import { createSalesIqModule } from './src/salesiq/index.js';
 import { createInboxRecorder } from './src/salesiq/inboxRecorder.js';
 import { registerSupportDesk } from './src/support/inboxRequests.js';
 import { emailBlockers } from './src/support/notify.js';
+import { startSupportDeskJobs } from './src/support/agent/index.js';
 import { startMessageReminders } from './src/services/messageReminders.js';
 import { purgePhoneContactsAfterCancel } from './src/services/contactsRetention.js';
 import { removeTombstoneExpiry } from './src/models/ContactTombstone.js';
@@ -107,6 +108,8 @@ registerSupportDesk({ store: whatsappModule.store });
   const blockers = emailBlockers();
   if (blockers.length) console.warn(`[support-notify] e-mail des escalades inactif : ${blockers.join(', ')} manquant(s)${process.env.WHATSAPP_SUPPORT_NOTIFY_WEBHOOK_URL ? ' (webhook actif)' : ' ; aucun webhook non plus'}`);
 }
+// Agent support IA (SUPPORT_AGENT_ENABLED, désactivé par défaut) : passage toutes les 15 min ; relève de support@harx.ai (SUPPORT_GMAIL_ENABLED).
+startSupportDeskJobs(whatsappModule.supportDesk, { isReady: () => mongoose.connection.readyState === 1 });
 const salesIqRecorder = createInboxRecorder(whatsappModule.store, { enabled: !/^(0|false|no|off)$/i.test(String(process.env.SALESIQ_INBOX_RECORD ?? '1')) });
 app.use('/api/salesiq', createSalesIqModule({ record: salesIqRecorder }).router);
 

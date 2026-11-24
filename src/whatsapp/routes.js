@@ -20,7 +20,7 @@ const safeEqual = (a, b) => {
  * Routes HTTP du module (montées sur /api/whatsapp).
  * Le webhook lit le corps BRUT (nécessaire à la vérification de signature) ; il doit donc être exclu du express.json() global.
  */
-export function createWhatsAppRouter({ agent, store, whatsapp, kb, cfg, auth = authenticate, logger = console }) {
+export function createWhatsAppRouter({ agent, store, whatsapp, kb, cfg, auth = authenticate, logger = console, extendAdmin = null, replyEmail = null }) {
   const router = express.Router();
   const linkLimiter = createRateLimiter({ perMinute: 5, perDay: 30 });
 
@@ -93,7 +93,7 @@ export function createWhatsAppRouter({ agent, store, whatsapp, kb, cfg, auth = a
     return res.type('html').send(ADMIN_INBOX_HTML);
   });
   router.get('/admin/conversations', admin, async (req, res) => {
-    const channel = ['web', 'whatsapp', 'salesiq', 'identity'].includes(String(req.query.channel)) ? String(req.query.channel) : undefined;
+    const channel = ['web', 'whatsapp', 'salesiq', 'identity', 'email'].includes(String(req.query.channel)) ? String(req.query.channel) : undefined;
     res.set('Cache-Control', 'no-store');
     res.json({ conversations: await store.listConversations({ channel, limit: req.query.limit }) });
   });
@@ -128,7 +128,12 @@ export function createWhatsAppRouter({ agent, store, whatsapp, kb, cfg, auth = a
     if (isIdentityConversation(ticket.waId)) return res.status(409).json({ error: 'Identity review: decide in the identity admin page' });
     try {
       // Visiteur du chat du site : pas de message Meta, la réponse est lue par le navigateur dans l'historique.
-      const ids = isWebConversation(ticket.waId) ? [] : await whatsapp.sendText(ticket.waId, text);
+      // E-mail (support@harx.ai) : réponse dans le même fil Gmail, seulement si la relève Gmail est active.
+      let ids = [];
+      if (String(ticket.waId).startsWith('email:')) {
+        if (!replyEmail) return res.status(409).json({ error: 'E-mail channel is not enabled (SUPPORT_GMAIL_ENABLED)' });
+        await replyEmail({ waId: ticket.waId }, text);
+      } else if (!isWebConversation(ticket.waId)) ids = await whatsapp.sendText(ticket.waId, text);
       await store.appendMessage(ticket.waId, { role: 'human_agent', text, wamid: ids[0] || null });
       if (req.body?.resolve) {
         await store.updateTicket(req.params.id, { status: 'resolved', resolvedAt: new Date() });
@@ -139,6 +144,9 @@ export function createWhatsAppRouter({ agent, store, whatsapp, kb, cfg, auth = a
       return res.status(502).json({ error: `WhatsApp send failed: ${e.message}` });
     }
   });
+
+  // Agent support IA : routes /admin/agent/* derrière le même contrôle d'accès (src/support/agent/routes.js).
+  if (typeof extendAdmin === 'function') extendAdmin(router, admin);
 
   return router;
 }
