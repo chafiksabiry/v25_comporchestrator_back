@@ -32,8 +32,10 @@ export function supportNotifyConfig(env = process.env) {
 export function emailBlockers(env = process.env) {
   const missing = [];
   if (!supportNotifyConfig(env).to) missing.push('SUPPORT_EMAIL');
-  if (!env.BREVO_API_KEY) missing.push('BREVO_API_KEY');
-  if (!senderEmail(env)) missing.push('BREVO_SENDER_EMAIL (ou BREVO_FROM_EMAIL)');
+  if (!isEmailConfigured(env)) {
+    if (!env.BREVO_API_KEY) missing.push('BREVO_API_KEY (ou SMTP_HOST, SMTP_USER, SMTP_PASS)');
+    else if (!senderEmail(env)) missing.push('BREVO_SENDER_EMAIL (ou BREVO_FROM_EMAIL)');
+  }
   return missing;
 }
 
