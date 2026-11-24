@@ -233,18 +233,18 @@ try {
   // retour OAuth : même adresse + scope accordé = lecture activée ; autre adresse = wrong_account ; scope refusé = missing_permissions
   reset(); seedMine();
   oauth('autre@cabinet.test', READ_G);
-  assert.equal(await callback('microsoft', qs(readState('microsoft', { personal: true, ownerName: '', read: true })).state), 'https://portal.test/telephony/app/profile?error=wrong_account');
+  assert.equal(await callback('microsoft', qs(readState('microsoft', { personal: true, ownerName: '', read: true })).state), 'https://portal.test/cloud/receptionist/profil?error=wrong_account');
   assert.equal(accounts[0].inbound.readEnabled, false, 'adresse différente : rien n’est activé'); assert.equal(accounts[0].accountEmail, 'sophie@cabinet.test');
   oauth('sophie@cabinet.test', SEND_G);
-  assert.equal(await callback('microsoft', qs(readState('microsoft', { personal: true, ownerName: '', read: true })).state), 'https://portal.test/telephony/app/profile?error=missing_permissions');
+  assert.equal(await callback('microsoft', qs(readState('microsoft', { personal: true, ownerName: '', read: true })).state), 'https://portal.test/cloud/receptionist/profil?error=missing_permissions');
   assert.equal(accounts[0].inbound.readEnabled, false, 'lecture refusée au consentement : rien n’est activé'); assert.deepEqual(accounts[0].scopes, SEND_G, 'comptes et scopes d’envoi intacts');
   oauth('Sophie@Cabinet.test', READ_G);
-  assert.equal(await callback('microsoft', qs(readState('microsoft', { personal: true, ownerName: '', read: true })).state), 'https://portal.test/telephony/app/profile?connected=microsoft&personal=1&read=1');
+  assert.equal(await callback('microsoft', qs(readState('microsoft', { personal: true, ownerName: '', read: true })).state), 'https://portal.test/cloud/receptionist/profil?connected=microsoft&personal=1&read=1');
   assert.equal(accounts[0].inbound.readEnabled, true); assert.ok(accounts[0].scopes.includes(READ_SCOPE.microsoft)); assert.ok(!hasWriteScope('microsoft', accounts[0].scopes), 'aucune écriture');
   assert.equal(accounts.length, 1, 'même compte, pas de doublon');
   // un consentement de lecture sans messagerie déjà connectée est refusé
   reset(); oauth('sophie@cabinet.test', READ_G);
-  assert.equal(await callback('microsoft', qs(readState('microsoft', { personal: true, ownerName: '', read: true })).state), 'https://portal.test/telephony/app/profile?error=invalid_request'); assert.equal(accounts.length, 0);
+  assert.equal(await callback('microsoft', qs(readState('microsoft', { personal: true, ownerName: '', read: true })).state), 'https://portal.test/cloud/receptionist/profil?error=invalid_request'); assert.equal(accounts.length, 0);
   // une reconnexion simple (sans lecture) conserve la lecture si le jeton garde le scope, la retire (et purge) sinon
   reset(); seedMine({ scopes: READ_G, inbound: { readEnabled: true, lastSyncAt: null } }); gmail();
   r = await req('POST', '/accounts/' + C1 + '/mine/microsoft/start', { user: 'sophie' });
@@ -252,7 +252,7 @@ try {
   assert.equal(S.readState(qs(r.body.data.url).state, 'microsoft').shared.read, true);
   inbox.push({ _id: 'e1', companyId: C1, ownerUserId: 'sophie', accountId: ACC_SOPHIE, providerMessageId: 'p1', deletedAt: null, archivedAt: null, status: 'new', receivedAt: new Date(), fetchedAt: new Date() });
   oauth('sophie@cabinet.test', SEND_G);
-  assert.equal(await callback('microsoft', qs(S.startAuthorization({ companyId: C1, userId: 'sophie', provider: 'microsoft', returnTo: 'profile', shared: { personal: true, ownerName: '' } })).state), 'https://portal.test/telephony/app/profile?connected=microsoft&personal=1');
+  assert.equal(await callback('microsoft', qs(S.startAuthorization({ companyId: C1, userId: 'sophie', provider: 'microsoft', returnTo: 'profile', shared: { personal: true, ownerName: '' } })).state), 'https://portal.test/cloud/receptionist/profil?connected=microsoft&personal=1');
   assert.equal(accounts[0].inbound.readEnabled, false); assert.equal(sophieDocs().length, 0, 'scope de lecture perdu : plus rien n’est conservé');
   reset(); seedMine({ _id: ACC_SOPHIE }); // ---- (le nouvel état ci-dessous repart d'une base propre)
 

@@ -269,28 +269,28 @@ try {
   resetDb(); std(); const boss = putConn('microsoft'); const encBefore = boss.credentialsEnc;
   oauthMicrosoft('mgra@acme.test', 'MGRA');
   r = await cb('microsoft', stateFor('microsoft', 'mgrA'));
-  assert.equal(r.status, 302); assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=not_owner');
+  assert.equal(r.status, 302); assert.equal(r.location, 'https://portal.test/cloud/receptionist/outils?error=not_owner');
   assert.equal(conns.length, 1); assert.equal(conns[0].accountEmail, BOSS_EMAIL); assert.equal(conns[0].connectedBy, 'owner1'); assert.equal(conns[0].credentialsEnc, encBefore, 'jeton du propriétaire intact');
   // un état d'un titulaire qui n'est pas le propriétaire : même refus (le rôle ne donne aucun droit)
   oauthMicrosoft('x@acme.test', 'XX');
   conns[0].connectedBy = 'mgrA';
-  assert.equal((await cb('microsoft', stateFor('microsoft', 'owner1'))).location, 'https://portal.test/telephony/app/tools?error=not_owner', 'même le titulaire de la société');
+  assert.equal((await cb('microsoft', stateFor('microsoft', 'owner1'))).location, 'https://portal.test/cloud/receptionist/outils?error=not_owner', 'même le titulaire de la société');
   // le propriétaire reconnecte : accepté, il reste propriétaire
   oauthMicrosoft('mgra-nouveau@acme.test', 'MGRA2');
-  assert.equal((await cb('microsoft', stateFor('microsoft', 'mgrA'))).location, 'https://portal.test/telephony/app/tools?connected=microsoft');
+  assert.equal((await cb('microsoft', stateFor('microsoft', 'mgrA'))).location, 'https://portal.test/cloud/receptionist/outils?connected=microsoft');
   assert.equal(conns[0].connectedBy, 'mgrA'); assert.equal(conns[0].accountEmail, 'mgra-nouveau@acme.test');
   // première connexion et reprise d'une orpheline : la personne devient propriétaire
   conns.length = 0; oauthMicrosoft('mgrb@acme.test', 'MGRB');
-  assert.equal((await cb('microsoft', stateFor('microsoft', 'mgrB'))).location, 'https://portal.test/telephony/app/tools?connected=microsoft');
+  assert.equal((await cb('microsoft', stateFor('microsoft', 'mgrB'))).location, 'https://portal.test/cloud/receptionist/outils?connected=microsoft');
   assert.equal(conns[0].connectedBy, 'mgrB'); assert.notEqual(conns[0].ownerless, true);
   putConn('microsoft', { connectedBy: '', ownerless: true }); oauthMicrosoft('mgra@acme.test', 'MGRA3');
-  assert.equal((await cb('microsoft', stateFor('microsoft', 'mgrA'))).location, 'https://portal.test/telephony/app/tools?connected=microsoft');
+  assert.equal((await cb('microsoft', stateFor('microsoft', 'mgrA'))).location, 'https://portal.test/cloud/receptionist/outils?connected=microsoft');
   assert.equal(conns[0].connectedBy, 'mgrA'); assert.equal(conns[0].ownerless, false, 'plus « sans propriétaire »');
   // course : une insertion concurrente par un autre est refusée par l'index unique (jamais d'écrasement)
   conns.length = 0; const realFOAU = SecretariatConnection.findOneAndUpdate;
   SecretariatConnection.findOneAndUpdate = (f, upd, o) => { putConn('microsoft', { connectedBy: 'owner1' }); return realFOAU(f, upd, o); }; // le propriétaire connecte entre la lecture et l'écriture
   oauthMicrosoft('mgrb@acme.test', 'MGRB');
-  assert.equal((await cb('microsoft', stateFor('microsoft', 'mgrB'))).location, 'https://portal.test/telephony/app/tools?error=not_owner', 'course perdue : refus');
+  assert.equal((await cb('microsoft', stateFor('microsoft', 'mgrB'))).location, 'https://portal.test/cloud/receptionist/outils?error=not_owner', 'course perdue : refus');
   assert.equal(conns[0].connectedBy, 'owner1'); SecretariatConnection.findOneAndUpdate = realFOAU;
   // Zoom : hors du périmètre « boîte mail » : inchangé (toujours remplaçable par un responsable)
   conns.length = 0; conns.push({ _id: 'z1', companyId: C1, provider: 'zoom', accountEmail: 'z@acme.test', status: 'connected', scopes: [], connectedBy: 'owner1', credentialsEnc: 'x' });
@@ -467,16 +467,16 @@ try {
   const encA2 = accounts.find((a) => a._id === SA2).credentialsEnc;
   oauthMicrosoft(accounts.find((a) => a._id === SA2).accountEmail, 'PIRATE');
   r = await cb('microsoft', stateFor('microsoft', 'owner1', { shared: { label: 'Direction', ownerName: '', send: true, calendar: true, accountId: SA2 } }));
-  assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=not_owner'); assert.equal(accounts.find((a) => a._id === SA2).credentialsEnc, encA2);
+  assert.equal(r.location, 'https://portal.test/cloud/receptionist/outils?error=not_owner'); assert.equal(accounts.find((a) => a._id === SA2).credentialsEnc, encA2);
   r = await cb('microsoft', stateFor('microsoft', 'owner1', { shared: { label: 'Autre', ownerName: '', send: true, calendar: true } }));
-  assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=email_in_use', 'même adresse déjà connectée par un autre'); assert.equal(accounts.find((a) => a._id === SA2).connectedBy, 'mgrA');
+  assert.equal(r.location, 'https://portal.test/cloud/receptionist/outils?error=email_in_use', 'même adresse déjà connectée par un autre'); assert.equal(accounts.find((a) => a._id === SA2).connectedBy, 'mgrA');
   r = await cb('microsoft', stateFor('microsoft', 'mgrA', { shared: { label: 'Direction', ownerName: '', send: true, calendar: true, accountId: SA2 } }));
-  assert.equal(r.location, 'https://portal.test/telephony/app/tools?connected=microsoft&shared=1', 'le propriétaire reconnecte');
+  assert.equal(r.location, 'https://portal.test/cloud/receptionist/outils?connected=microsoft&shared=1', 'le propriétaire reconnecte');
   // orphelin : reconnexion par un responsable (il prouve l'accès à la boîte : même adresse obligatoire)
   putShared(SA3, { connectedBy: '', ownerless: true, permissions: { send: true, calendar: true } }, 'SHARED');
   oauthMicrosoft(accounts.find((a) => a._id === SA3).accountEmail, 'REPRIS');
   r = await cb('microsoft', stateFor('microsoft', 'mgrB', { shared: { label: 'Direction', ownerName: '', send: true, calendar: true, accountId: SA3 } }));
-  assert.equal(r.location, 'https://portal.test/telephony/app/tools?connected=microsoft&shared=1'); assert.equal(accounts.find((a) => a._id === SA3).connectedBy, 'mgrB'); assert.equal(accounts.find((a) => a._id === SA3).ownerless, false);
+  assert.equal(r.location, 'https://portal.test/cloud/receptionist/outils?connected=microsoft&shared=1'); assert.equal(accounts.find((a) => a._id === SA3).connectedBy, 'mgrB'); assert.equal(accounts.find((a) => a._id === SA3).ownerless, false);
 
   // =========================================================================================================
   // 5. MESSAGERIES PERSONNELLES — ouvertes à tous les rôles, chacun la sienne seulement
@@ -728,7 +728,7 @@ try {
   // le démarreur (attaquant mgrB) envoie l'URL à une victime (mgrA) qui consent : le callback s'exécute dans le navigateur de la victime
   const stX = await startVia('mgrB');
   let cp = await callbackPending(stX);
-  assert.equal(cp.loc.origin + cp.loc.pathname, 'https://portal.test/telephony/app/tools'); assert.match(cp.pendingId, /^[0-9a-f]{64}$/); assert.equal(cp.loc.searchParams.get('provider'), 'microsoft'); assert.equal(cp.loc.searchParams.get('connected'), null, 'pas de « connected » : rien n’est enregistré');
+  assert.equal(cp.loc.origin + cp.loc.pathname, 'https://portal.test/cloud/receptionist/outils'); assert.match(cp.pendingId, /^[0-9a-f]{64}$/); assert.equal(cp.loc.searchParams.get('provider'), 'microsoft'); assert.equal(cp.loc.searchParams.get('connected'), null, 'pas de « connected » : rien n’est enregistré');
   assert.equal(conns.length, 0, 'le callback n’enregistre RIEN'); assert.equal(pendings.length, 1);
   assert.ok(!JSON.stringify(pendings).includes('ACCESS_MGRA') && !JSON.stringify(pendings).includes('REFRESH_MGRA') && !JSON.stringify(pendings).includes(cp.pendingId), 'jetons chiffrés, identifiant jamais stocké en clair');
   assert.equal(pendings[0].userId, 'mgrB'); assert.equal(String(pendings[0].companyId), C1);
@@ -782,7 +782,7 @@ try {
   oauthMicrosoft('mgrb@acme.test', 'MGRB'); process.env.OAUTH_BROWSER_BINDING = 'off';
   try {
     conns.length = 0; const stOff = new URL((await sec('POST', `/connections/${C1}/microsoft/start`, { user: 'mgrB', body: {} })).body.data.url).searchParams.get('state'); assert.equal(S.readState(stOff, 'microsoft').pend, undefined);
-    assert.equal((await cb('microsoft', stOff)).location, 'https://portal.test/telephony/app/tools?connected=microsoft'); assert.equal(conns[0].connectedBy, 'mgrB');
+    assert.equal((await cb('microsoft', stOff)).location, 'https://portal.test/cloud/receptionist/outils?connected=microsoft'); assert.equal(conns[0].connectedBy, 'mgrB');
   } finally { delete process.env.OAUTH_BROWSER_BINDING; }
 
   // =========================================================================================================
@@ -805,7 +805,7 @@ try {
   assert.equal((await sec('DELETE', `/connections/${C1}/microsoft`, { user: 'mgrA' })).status, 200); assert.deepEqual(inbox.map((d) => d._id), ['q2'], 'seuls les e-mails de la boîte déconnectée sont purgés');
   // reprise d'une connexion orpheline : seuls les anciens e-mails sans propriétaire sont purgés, pas ceux d'une autre boîte
   putConn('microsoft', { connectedBy: '', ownerless: true }); inbox.push({ _id: 'q3', companyId: C1, ownerUserId: null, accountId: null, providerMessageId: 'o', provider: 'microsoft' });
-  oauthMicrosoft('x@acme.test', 'X'); assert.equal((await cb('microsoft', stateFor('microsoft', 'mgrB'))).location, 'https://portal.test/telephony/app/tools?connected=microsoft');
+  oauthMicrosoft('x@acme.test', 'X'); assert.equal((await cb('microsoft', stateFor('microsoft', 'mgrB'))).location, 'https://portal.test/cloud/receptionist/outils?connected=microsoft');
   assert.deepEqual(inbox.map((d) => d._id), ['q2'], 'reprise : anciens e-mails sans propriétaire purgés, pas ceux de la boîte d’un autre');
   // journal d'envoi : destinataires, objet, nom, adresse de la boîte seulement pour l'auteur ; les autres (titulaire compris) ne voient que des totaux
   resetDb(); std(); putConn('microsoft', { connectedBy: 'mgrA' }, 'MGRA'); toolsDocs.push({ companyId: C1, email: { provider: 'microsoft' } });
