@@ -33,7 +33,10 @@ Webhook signé (HMAC, temps constant) ; jetons/clés uniquement en variables d'e
 | `ANTHROPIC_API_KEY` | API Claude ; `WHATSAPP_CLAUDE_MODEL` (défaut `claude-opus-5-5`), `WHATSAPP_CLAUDE_EFFORT` (défaut `low`) |
 | `JWT_SECRET`, `REGISTRATION_BACKEND_URL` | déjà utilisés par l'orchestrateur |
 | `WHATSAPP_ADMIN_API_KEY` | active `/api/whatsapp/admin/*` (tickets, réponse humaine) |
-| `WHATSAPP_SUPPORT_NOTIFY_WEBHOOK_URL`, `SUPPORT_EMAIL` | notification des escalades (webhook type Slack) / adresse citée aux utilisateurs |
+| `SUPPORT_EMAIL` | adresse du support (support@harx.ai) : citée aux utilisateurs **et** destinataire de l'e-mail envoyé à chaque escalade |
+| `WHATSAPP_SUPPORT_NOTIFY_WEBHOOK_URL` | facultatif : webhook (format Slack `{ text }`) appelé à chaque escalade |
+| `BREVO_API_KEY`, `BREVO_SENDER_EMAIL` | envoi de l'e-mail d'escalade (même envoi Brevo que les e-mails du secrétariat) ; sans eux, pas d'e-mail (journal `[support-notify]`) |
+| `SUPPORT_INBOX_URL` | lien « Traiter la demande » de la notification (défaut `https://harx.ai/admin/inbox`) |
 | `WHATSAPP_SUPPORT_NUMBER` (défaut 212711311388), `WHATSAPP_RATE_LIMIT_PER_MINUTE` (10), `WHATSAPP_RATE_LIMIT_PER_DAY` (200), `WHATSAPP_CLAUDE_REFUSAL_FALLBACK` (0) | réglages |
 Site : `VITE_API_URL_ORCHESTRATOR`, `VITE_WHATSAPP_SUPPORT_NUMBER`.
 
@@ -74,3 +77,17 @@ Un visiteur du site n'a pas de numéro : Meta ne peut rien lui envoyer. En revan
 ## Tests
 `npm run whatsapp:test` : langue (corpus fr/en/es/de/it/pt/ar/Darija arabe et latin/mélanges/changements), unités (signature, découpage, formats, stockage, KB, liaison), bout en bout HTTP (vrai Express, fausse Graph API, fausse API d'inscription, « Claude » scripté : webhook signé, doublons, changement de langue, régénération, liaison et isolation entre comptes, escalade, pannes, débit, concurrence).
 `ANTHROPIC_API_KEY=… npm run whatsapp:live-test` : mêmes parcours avec la **vraie** API Claude (transport WhatsApp simulé).
+
+## Notification des demandes (24/11/2026)
+
+Chaque nouvelle demande de l'Inbox prévient l'équipe tout de suite (`src/support/notify.js`) : e-mail à `SUPPORT_EMAIL` par Brevo et,
+s'il est défini, webhook `WHATSAPP_SUPPORT_NOTIFY_WEBHOOK_URL`.
+
+- Escalade de l'assistant (`escalate_to_human`, WhatsApp et chat du site) : ticket + notification ; `support_team_notified` vaut `true`
+  seulement si l'e-mail ou le webhook est parti.
+- Dossier de vérification d'identité passé en revue humaine (demande du client, limite d'analyses, analyse en échec ou interrompue,
+  décision « revue » de l'analyse, pays en attente) : demande `identity:<dossier>` dans l'Inbox (filtre « À traiter »), sans aucune donnée
+  de pièce, + même notification avec le lien de la page Admin › Identité (`PUBLIC_API_BASE_URL/admin/identity`). La demande se ferme
+  d'elle-même à la décision de l'équipe (`src/support/inboxRequests.js`).
+- Jamais bloquant : une notification ou une écriture Inbox en échec est journalisée, le parcours du client ne change pas.
+- Tests : `node --test src/tests/supportNotify.test.js`.

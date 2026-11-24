@@ -46,7 +46,7 @@ export function createMongoStore() {
     async unlinkConversation(waId) { await WhatsAppConversation.updateOne({ waId }, { $set: { linkedUserId: null, linkedAt: null } }); },
     /** Résumés des conversations (sans l'historique complet), les plus récentes d'abord. channel : 'web' | 'whatsapp' | undefined. */
     async listConversations({ channel, limit = 50 } = {}) {
-      const match = channel === 'web' ? { waId: /^web:/ } : channel === 'salesiq' ? { waId: /^salesiq:/ } : channel === 'whatsapp' ? { waId: { $not: /^(web|salesiq):/ } } : {};
+      const match = channel === 'web' ? { waId: /^web:/ } : channel === 'salesiq' ? { waId: /^salesiq:/ } : channel === 'identity' ? { waId: /^identity:/ } : channel === 'whatsapp' ? { waId: { $not: /^(web|salesiq|identity):/ } } : {};
       const rows = await WhatsAppConversation.aggregate([
         { $match: match },
         { $sort: { updatedAt: -1 } },
