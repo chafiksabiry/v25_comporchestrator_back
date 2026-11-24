@@ -65,9 +65,10 @@ test('sans BREVO_API_KEY : e-mail non envoyé, variables manquantes nommées ; l
   assert.equal(out.webhook, 'sent');
   assert.equal(out.delivered, true);
   assert.equal(f.mails.length, 0);
-  assert.deepEqual(emailBlockers(env), ['BREVO_API_KEY']);
+  assert.deepEqual(emailBlockers(env), ['BREVO_API_KEY (ou SMTP_HOST, SMTP_USER, SMTP_PASS)']);
   assert.ok(warns.some((w) => /BREVO_API_KEY/.test(w)));
-  assert.deepEqual(emailBlockers({}), ['SUPPORT_EMAIL', 'BREVO_API_KEY', 'BREVO_SENDER_EMAIL (ou BREVO_FROM_EMAIL)']);
+  assert.deepEqual(emailBlockers({}), ['SUPPORT_EMAIL', 'BREVO_API_KEY (ou SMTP_HOST, SMTP_USER, SMTP_PASS)']);
+  assert.deepEqual(emailBlockers({ SUPPORT_EMAIL: 'support@harx.ai', SMTP_HOST: 'h', SMTP_USER: 'u@harx.ai', SMTP_PASS: 'p' }), []);
 });
 
 test('aucune voie configurée : rien n’est envoyé, delivered = false (l’assistant ne dit pas que l’équipe est prévenue)', async () => {

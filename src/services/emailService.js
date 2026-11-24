@@ -1,4 +1,5 @@
 import axios from 'axios';
+import nodemailer from 'nodemailer';
 
 /**
  * E-mails du secrétariat (écran « E-mails »). Audit : le service d'e-mail de la plateforme est `sendAppEmail`
@@ -8,6 +9,11 @@ import axios from 'axios';
  *
  * Expéditeur : adresse vérifiée de la plateforme, nom affiché = nom du centre ; réponse = adresse de la personne connectée.
  * Aucun contenu complet n'est conservé (voir EmailLog).
+ *
+ * 24/11/2026 (décision du fondateur : « même canal que les e-mails d'inscription ») : comme `sendAppEmail` du service
+ * d'inscription, si l'API Brevo échoue ou n'est pas configurée, l'envoi passe par SMTP (SMTP_HOST, SMTP_PORT, SMTP_USER,
+ * SMTP_PASS, SMTP_FROM_EMAIL, SMTP_FROM_NAME), avec les mêmes réglages (port 587 par défaut, expéditeur = SMTP_FROM_EMAIL
+ * ou SMTP_USER).
  */
 export const TEMPLATES = ['callback_confirmation', 'appointment_confirmation', 'free'];
 export const MAX_RECIPIENTS = 5;
@@ -139,7 +145,9 @@ export function buildPayload({ senderEmail, centerName, replyTo, to, subject, te
 }
 
 export const senderEmail = (env = process.env) => env.BREVO_SENDER_EMAIL || env.BREVO_FROM_EMAIL || env.SMTP_FROM_EMAIL || '';
-export const isEmailConfigured = (env = process.env) => Boolean(env.BREVO_API_KEY && senderEmail(env));
+export const isSmtpConfigured = (env = process.env) => Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS);
+export const isBrevoConfigured = (env = process.env) => Boolean(env.BREVO_API_KEY && senderEmail(env));
+export const isEmailConfigured = (env = process.env) => isBrevoConfigured(env) || isSmtpConfigured(env);
 
 export const NOT_CONFIGURED_MESSAGE = 'L’envoi d’e-mails n’est pas encore activé sur la plateforme. Aucun e-mail n’a été envoyé.';
 
@@ -168,7 +176,53 @@ async function brevoTransport(payload) {
   }
 }
 
-let transport = brevoTransport;
-/** Remplace l'envoi réel (tests, simulation). Sans argument, rétablit Brevo. */
-export function setMailTransport(fn) { transport = typeof fn === 'function' ? fn : brevoTransport; }
+/** Charge utile Brevo → message nodemailer (mêmes réglages SMTP que le service d'inscription). */
+export function brevoPayloadToSmtp(payload, env = process.env) {
+  const fromEmail = env.SMTP_FROM_EMAIL || env.SMTP_USER;
+  const fromName = String(payload.sender?.name || env.SMTP_FROM_NAME || 'HARX').replace(/["\r\n]/g, '');
+  const list = (arr) => (arr || []).map((r) => r.email).filter(Boolean);
+  return {
+    from: `"${fromName}" <${fromEmail}>`,
+    to: list(payload.to),
+    ...(payload.cc?.length ? { cc: list(payload.cc) } : {}),
+    replyTo: payload.replyTo?.email || fromEmail,
+    subject: payload.subject,
+    ...(payload.htmlContent ? { html: payload.htmlContent } : {}),
+    ...(payload.textContent ? { text: payload.textContent } : {}),
+    ...(payload.headers ? { headers: payload.headers } : {}),
+    ...(payload.attachment?.length ? { attachments: payload.attachment.map((a) => ({ filename: a.name, content: a.content, encoding: 'base64' })) } : {}),
+  };
+}
+
+async function smtpTransport(payload, env = process.env) {
+  const transporter = nodemailer.createTransport({
+    host: env.SMTP_HOST,
+    port: Number(env.SMTP_PORT || 587),
+    secure: false,
+    auth: { user: env.SMTP_USER, pass: env.SMTP_PASS },
+  });
+  try {
+    return await transporter.sendMail(brevoPayloadToSmtp(payload, env));
+  } catch (error) {
+    throw new Error(`SMTP : ${error.message || 'envoi impossible'}`);
+  }
+}
+
+/** Brevo puis SMTP, dans le même ordre que `sendAppEmail` du service d'inscription. */
+export async function platformTransport(payload, { env = process.env, brevo = brevoTransport, smtp = smtpTransport } = {}) {
+  if (isBrevoConfigured(env)) {
+    try {
+      return await brevo(payload);
+    } catch (error) {
+      if (!isSmtpConfigured(env)) throw error;
+      console.error(`[email] Brevo a échoué, envoi par SMTP : ${error.message}`);
+    }
+  }
+  if (isSmtpConfigured(env)) return smtp(payload, env);
+  throw new Error('Envoi impossible : ni BREVO_API_KEY ni SMTP configurés.');
+}
+
+let transport = (payload) => platformTransport(payload);
+/** Remplace l'envoi réel (tests, simulation). Sans argument, rétablit l'envoi de la plateforme (Brevo puis SMTP). */
+export function setMailTransport(fn) { transport = typeof fn === 'function' ? fn : (payload) => platformTransport(payload); }
 export const sendMail = (payload) => transport(payload);
