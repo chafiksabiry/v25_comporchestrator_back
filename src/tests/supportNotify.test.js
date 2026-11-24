@@ -121,7 +121,7 @@ test('assistant : aucune voie configurée → ticket créé, support_team_notifi
 function identitySetup() {
   const inboxStore = createInboxStore();
   const sent = [];
-  const reporter = createIdentityInboxReporter({ getDesk: () => ({ store: inboxStore }), notify: async (r) => { sent.push(r); return { email: 'sent', webhook: 'not_configured', delivered: true }; }, env: { PUBLIC_API_BASE_URL: 'https://co.test' }, logger: quiet });
+  const reporter = createIdentityInboxReporter({ getDesk: () => ({ store: inboxStore }), notify: async (r) => { sent.push(r); return { email: 'sent', webhook: 'not_configured', delivered: true }; }, env: { PUBLIC_API_BASE_URL: 'https://co.test', SUPPORT_INBOX_URL: 'https://admin.test/admin/inbox' }, logger: quiet });
   const store = createIdentityStore();
   const pending = [];
   const inbox = { opened: (...a) => { const p = reporter.opened(...a); pending.push(p); return p; }, decided: (...a) => { const p = reporter.decided(...a); pending.push(p); return p; } };
@@ -152,7 +152,7 @@ test('identité : « demander une vérification par l’équipe » crée une dem
   assert.equal(t.sent.length, 1);
   assert.equal(t.sent[0].kind, 'identity_review');
   assert.equal(t.sent[0].ticketId, tickets[0].id);
-  assert.ok(t.sent[0].links.some((l) => l.url === 'https://co.test/admin/identity'));
+  assert.ok(t.sent[0].links.some((l) => /^https:\/\/admin\.test\/admin\/identity\?dossier=.+/.test(l.url)), 'lien vers la page Identité du portail, dossier ouvert');
   assert.ok(t.sent[0].details.includes('Société : c1'));
   // Le même dossier ne crée ni doublon ni seconde notification.
   await createIdentityInboxReporter({ getDesk: () => ({ store: t.inboxStore }), notify: async (r) => { t.sent.push(r); return {}; }, logger: quiet }).opened(await t.store.getVerification(v._id), { trigger: 'HUMAN_REVIEW_REQUESTED' });
@@ -200,4 +200,11 @@ test('identité : une demande Inbox impossible ne change jamais le parcours du c
   await store.createVerification({ companyId: 'c5', status: 'rejected', docType: 'passport', declared: DECLARED, decision: { outcome: 'rejected', reasonCodes: ['UNREADABLE'] } });
   assert.deepEqual(await svc.requestReview('c5'), { status: 'review' });
   await new Promise((r) => setImmediate(r));
+});
+
+test('lien Identité : dans le portail d’administration, jamais la page du serveur', async () => {
+  const { adminIdentityUrl } = await import('../support/inboxRequests.js');
+  assert.equal(adminIdentityUrl({ SUPPORT_INBOX_URL: 'https://harx26register-recette.netlify.app/admin/inbox' }, 'abc'), 'https://harx26register-recette.netlify.app/admin/identity?dossier=abc');
+  assert.equal(adminIdentityUrl({}, ''), 'https://harx.ai/admin/identity');
+  assert.equal(adminIdentityUrl({ SUPPORT_INBOX_URL: 'https://harx.ai/autre' }, 'x'), 'https://harx.ai/admin/identity?dossier=x');
 });
