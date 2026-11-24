@@ -71,8 +71,9 @@ before(async () => {
 });
 after(() => { server?.close(); globalThis.fetch = realFetch; });
 beforeEach(() => {
+  // Magasin à la même horloge que le service : l'échéance des images (horloge du test + 24 h) ne dépend pas du jour où le test tourne.
   clearCompanyCache();
-  enabled = true; clock = new Date('2026-11-22T10:00:00Z'); store = createMemoryStore(); sdk = fakeSdk(); queue = [];
+  enabled = true; clock = new Date('2026-11-22T10:00:00Z'); store = createMemoryStore({ now: () => clock }); sdk = fakeSdk(); queue = [];
   idData = idExtraction(); proofData = proofExtraction(); declared = { ...DECLARED };
 });
 
