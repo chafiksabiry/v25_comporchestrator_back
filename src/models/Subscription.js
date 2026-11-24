@@ -50,6 +50,16 @@ const subscriptionSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  // Résiliation VOLONTAIRE demandée par HARX (suppression du compte, services/accountClosure.js) : posée AVANT l'appel à Stripe, pour
+  // que le webhook customer.subscription.deleted qui suit ne soit jamais pris pour un impayé. Absent sur les autres abonnements.
+  voluntaryCancelAt: {
+    type: Date,
+    default: undefined
+  },
+  voluntaryCancelReason: {
+    type: String,
+    default: undefined
+  },
   // Journal du numéro d'un abonnement NOMAD résilié (services/nomadNumberLifecycle.js, décision D3 du 23/11) : une entrée par ligne
   // { phoneNumber, phoneNumberId, twilioSid, scheduledAt, status: scheduled|detached|releasing|released|reassigned|excluded|gone, ... }.
   // Écrit uniquement par ce service. Absent sur les autres abonnements.

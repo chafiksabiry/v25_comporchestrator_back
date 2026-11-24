@@ -7,6 +7,8 @@ import { createCallEndedHandler } from '../controllers/callEndedController.js';
 import { notifyCompany, verifyIngestToken } from '../services/companyNotificationService.js';
 import { aiInboundTool, aiInboundReport } from '../controllers/aiAgentController.js';
 import { aiInboundLearning } from '../controllers/aiLearningController.js';
+import { createAccountPurgeHandler, ACCOUNT_PURGE_SCOPE } from '../services/accountClosure.js';
+import { verifyServiceToken } from '../middleware/serviceToken.js';
 
 const router = express.Router();
 
@@ -53,5 +55,9 @@ router.post('/call-ended', createCallEndedHandler());
 router.post('/ai-inbound/tools/:tool', aiInboundTool);
 router.post('/ai-inbound/calls/:callSid/report', aiInboundReport);
 router.post('/ai-inbound/calls/:callSid/learning', aiInboundLearning);
+
+// Suppression d'un compte (v25_registration_backend, jeton de service `account-purge`) : résiliation Stripe immédiate et volontaire,
+// numéro(s) remis en stock, données du compte effacées. Voir services/accountClosure.js.
+router.post('/accounts/purge', createAccountPurgeHandler({ verify: (h) => verifyServiceToken(h, [ACCOUNT_PURGE_SCOPE]) }));
 
 export const internalRoutes = router;
