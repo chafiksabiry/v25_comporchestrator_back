@@ -57,6 +57,7 @@ import { startGraceSweeper } from './src/services/minutesGrace.js';
 import { identityVerificationRoutes, identityAdminRoutes } from './src/routes/identityVerification.js';
 import { getIdentityConfig } from './src/services/identity/config.js';
 import { trialCallRoutes, trialCallController } from './src/routes/trialCall.js';
+import { nomadAppLinkRoutes } from './src/routes/nomadAppLink.js';
 import { startTrialCallJobs } from './src/services/trialCall/jobs.js';
 import { runNomadNumberLifecycle } from './src/services/nomadNumberLifecycle.js';
 import { mongoTrialStore } from './src/services/trialCall/store.js';
@@ -179,6 +180,8 @@ app.use('/api/identity-verification', identityVerificationRoutes);
 app.use('/admin/identity', identityAdminRoutes);
 // Appel d'essai gratuit (Nomad Solo, avant paiement) : désactivé par défaut (TRIAL_CALL_ENABLED), voir src/services/trialCall/config.js.
 app.use('/api/trial-call', trialCallRoutes);
+// « M'envoyer le lien par SMS » (app HARX Nomad) : lien harx.ai/app vers le mobile du compte, 1 par minute et 3 par jour.
+app.use('/api/nomad-app', nomadAppLinkRoutes);
 
 // HARX WhatsApp AI Assistant : webhook Meta + liaison de compte + administration du support (voir docs/WHATSAPP_AI_ASSISTANT.md).
 app.use('/api/whatsapp', whatsappModule.router);
