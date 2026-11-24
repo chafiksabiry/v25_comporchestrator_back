@@ -28,8 +28,9 @@ export function getIdentityConfig(env = process.env) {
     proofMaxMonths: 3,
     reviewEtaHours: 24,
     // --- Limites (spec §9.3) ---
-    maxAiAttemptsPerDay: 3,
-    maxAiAttemptsTotal: 6,
+    // Réglables (mêmes valeurs par défaut). Un essai en échec technique de notre côté n'est jamais compté (service.js).
+    maxAiAttemptsPerDay: Math.max(0, int(env.IDENTITY_MAX_AI_ATTEMPTS_PER_DAY, 3)),
+    maxAiAttemptsTotal: Math.max(0, int(env.IDENTITY_MAX_AI_ATTEMPTS_TOTAL, 6)),
     maxFileBytes: 10 * 1024 * 1024,
     maxPdfPages: 3,
     /** Rendu d'un PDF en images : délai maximal et taille maximale d'une image interne (pixels), contre les PDF piégés. */

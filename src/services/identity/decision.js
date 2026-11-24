@@ -8,6 +8,10 @@
  *  - résidence prouvée par le justificatif de domicile : on compare le PAYS, pas l'adresse exacte ;
  *  - un titre de séjour prouve la résidence, pas la nationalité ;
  *  - âge minimum 18 ans.
+ * Règle du fondateur (23/11) « résidence OU nationalité » : si la résidence est prouvée, que le nom concorde (pièce, justificatif,
+ * compte) et qu'aucun contrôle n'est en échec, le dossier est validé pour le pays de résidence, même si la nationalité reste en
+ * revue (MRZ absente, par exemple) ; symétrique pour la nationalité prouvée par une MRZ valide. Le pays non prouvé reste « en
+ * revue » (`pendingCountries`) : l'équipe peut l'ajouter plus tard. Toute « fail » et tout signal de fraude restent bloquants.
  * Refus automatiques limités aux motifs objectifs : pièce expirée, justificatif trop ancien, illisible, pays imprimé différent,
  * type de document non accepté, mineur (MRZ valide).
  *
@@ -272,12 +276,21 @@ export function decide({ declared, id, idError = null, proof, proofError = null,
   const uniq = (arr) => [...new Set(arr)];
   let outcome;
   let reasonCodes;
+  let verifiedPartial = null;
   if (fails.length) {
     outcome = OUTCOMES.REJECTED;
     reasonCodes = uniq(fails.map((c) => c.reason));
   } else if (reviews.length) {
-    outcome = OUTCOMES.REVIEW;
-    reasonCodes = uniq(reviews.map((c) => c.reason));
+    // Règle du fondateur (23/11) « résidence OU nationalité » : un pays prouvé suffit pour valider, l'autre reste en revue.
+    const partial = partialApproval({ checks, reviews, verified, idKind, residenceDeclared, nationalityDeclared });
+    if (partial) {
+      outcome = OUTCOMES.APPROVED;
+      reasonCodes = [];
+      verifiedPartial = partial;
+    } else {
+      outcome = OUTCOMES.REVIEW;
+      reasonCodes = uniq(reviews.map((c) => c.reason));
+    }
   } else {
     // Validation automatique : les contrôles indispensables doivent être PRÉSENTS et « pass » (jamais une validation par absence).
     const passed = new Set(checks.filter((c) => c.result === 'pass').map((c) => c.code));
@@ -293,10 +306,66 @@ export function decide({ declared, id, idError = null, proof, proofError = null,
       reasonCodes = [];
     }
   }
-  const verifiedCountries = outcome === OUTCOMES.APPROVED
-    ? { nationality: verified.nationality, residence: verified.residence }
-    : null;
-  return { outcome, reasonCodes, checks, facts, verifiedCountries, documentNumber };
+  let verifiedCountries = null;
+  let pendingCountries = [];
+  if (outcome === OUTCOMES.APPROVED && verifiedPartial) {
+    verifiedCountries = verifiedPartial.verifiedCountries;
+    pendingCountries = verifiedPartial.pendingCountries;
+  } else if (outcome === OUTCOMES.APPROVED) {
+    verifiedCountries = { nationality: verified.nationality, residence: verified.residence };
+  }
+  return { outcome, reasonCodes, checks, facts, verifiedCountries, pendingCountries, documentNumber };
+}
+
+/**
+ * Contrôles « en revue » qui ne concernent QUE la nationalité : ils n'empêchent pas une validation pour le pays de résidence
+ * prouvé. Une MRZ absente ou mal relue ne dit rien de faux sur la personne : sans MRZ valide, la nationalité n'est simplement
+ * pas prouvée (le nom, l'âge et la validité restent lus sur la pièce et doivent concorder avec le justificatif et le compte).
+ */
+const NATIONALITY_ONLY = new Map([
+  ['MRZ', new Set(['NO_MRZ', 'MRZ_CHECK_FAILED'])],
+  ['NATIONALITY', new Set(['NO_MRZ', 'COUNTRY_MISMATCH_UNVERIFIED', 'COUNTRY_UNREADABLE'])],
+]);
+/**
+ * Contrôles « en revue » qui ne concernent QUE la résidence : ils n'empêchent pas une validation pour le pays de nationalité
+ * prouvé par une MRZ valide (pays seulement déduit, date du justificatif illisible ou hégirienne, avis d'imposition ancien,
+ * attestation d'hébergement, lisibilité partielle du justificatif).
+ */
+const RESIDENCE_ONLY = new Map([
+  ['RESIDENCE', new Set(['RESIDENCE_INFERRED'])],
+  ['PROOF_DATE', new Set(['DATE_MISSING', 'HIJRI_DATE', 'TAX_NOTICE_OLD'])],
+  ['PROOF_TYPE', new Set(['HOSTING_CERTIFICATE'])],
+  ['PROOF_LEGIBILITY', new Set(['PARTIAL_LEGIBILITY'])],
+]);
+/**
+ * Tout autre contrôle « en revue » reste BLOQUANT (dossier en revue humaine), en particulier les signaux de fraude :
+ * pièce ou fichier déjà présenté sur un autre compte (SIGNAL_DOCUMENT_REUSED, SIGNAL_FILE_REUSED), autres signaux techniques
+ * (EXIF, PDF retouché), observations du lecteur (ID_OBSERVATION, PROOF_OBSERVATION, dont l'injection de consignes), désaccord
+ * MRZ / visuel (MRZ_VISUAL_MISMATCH), justificatif au nom d'un autre (PROOF_HOLDER_OTHER), nom différent ou seulement translittéré,
+ * dates de la pièce incohérentes, date d'expiration ou de naissance illisible, mineur non vérifié, date de justificatif future,
+ * titre de séjour d'un autre pays, lisibilité partielle de la pièce, extraction en échec.
+ */
+const inSet = (map, c) => Boolean(map.get(c.code)?.has(c.reason));
+
+/** Validation partielle « résidence OU nationalité » ; null si elle ne s'applique pas. */
+function partialApproval({ checks, reviews, verified, idKind, residenceDeclared, nationalityDeclared }) {
+  const passed = new Set(checks.filter((c) => c.result === 'pass').map((c) => c.code));
+  const all = (codes) => codes.every((c) => passed.has(c));
+  // Identité de la personne : pièce valide, majeur, même nom sur la pièce, le justificatif et le compte (contrôles « pass »).
+  const identity = ['ID_EXPIRY', 'AGE', 'NAME_ID_ACCOUNT', 'NAME_PROOF_ACCOUNT', 'NAME_PROOF_ID'];
+  // 1) Résidence prouvée ; seuls des contrôles de nationalité restent en revue.
+  if (verified.residence && reviews.every((c) => inSet(NATIONALITY_ONLY, c))
+    && all([...identity, 'RESIDENCE', 'PROOF_DATE', ...(idKind === 'residence_permit' ? ['PERMIT_COUNTRY'] : [])])) {
+    const other = nationalityDeclared && nationalityDeclared !== verified.residence ? ['nationality'] : [];
+    return { verifiedCountries: { residence: verified.residence, nationality: null }, pendingCountries: other };
+  }
+  // 2) Nationalité prouvée par une MRZ valide ; seuls des contrôles de résidence restent en revue.
+  if (verified.nationality && idKind !== 'residence_permit' && reviews.every((c) => inSet(RESIDENCE_ONLY, c))
+    && all([...identity, 'MRZ', 'MRZ_VISUAL', 'NATIONALITY'])) {
+    const other = residenceDeclared && residenceDeclared !== verified.nationality ? ['residence'] : [];
+    return { verifiedCountries: { residence: null, nationality: verified.nationality }, pendingCountries: other };
+  }
+  return null;
 }
 
 function splitFull(full) {
