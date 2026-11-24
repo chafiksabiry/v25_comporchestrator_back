@@ -23,10 +23,15 @@ import { isMailProvider, isOwnerless, mayTakeOver, ownerOf, ownsRow } from './ma
  *   MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, MICROSOFT_TENANT_ID (défaut « common »), MICROSOFT_REDIRECT_URI ;
  *   ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET, ZOOM_REDIRECT_URI ; INTEGRATIONS_ENC_KEY (chiffrement des jetons).
  * URI de redirection par défaut : `<PUBLIC_API_BASE_URL>/secretariat/oauth/<fournisseur>/callback` (PUBLIC_API_BASE_URL contient déjà /api).
- * Page de retour du portail : SECRETARIAT_RETURN_URL, à défaut FRONTEND_BASE_URL (+ /telephony/app/tools ou /telephony/onboarding).
+ * Page de retour du portail : SECRETARIAT_RETURN_URL, à défaut FRONTEND_BASE_URL (+ l'adresse CLOUD Receptionist de l'écran).
  * Les jetons ne sont jamais écrits en clair, ni journalisés, ni renvoyés ; l'état OAuth est un JWT de 10 minutes (JWT_SECRET).
+ *
+ * Adresses CLOUD Receptionist (validées par le fondateur le 24/11/2026) : les connexions du secrétariat (Outils, étape « Outils » de la
+ * mise en route, messagerie personnelle de la secrétaire dans son profil) n'existent que dans l'offre Receptionist ; le retour se fait à
+ * leur adresse /cloud/receptionist/<écran> (avant : /telephony/app/tools, /telephony/onboarding, /telephony/app/profile, que le portail
+ * renvoie lui-même vers ces adresses pour un compte Receptionist, requête gardée).
  */
-export const RETURN_PATHS = { tools: '/telephony/app/tools', onboarding: '/telephony/onboarding', profile: '/telephony/app/profile' };
+export const RETURN_PATHS = { tools: '/cloud/receptionist/outils', onboarding: '/cloud/receptionist/mise-en-route', profile: '/cloud/receptionist/profil' };
 /** Pages de retour autorisées pour la connexion de la messagerie PERSONNELLE d'une secrétaire (liste blanche côté serveur). */
 export const PERSONAL_RETURN_TO = ['profile'];
 export const STATE_PURPOSE = 'secretariat-oauth';

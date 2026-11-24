@@ -87,8 +87,12 @@ for (const p of ['google', 'microsoft', 'zoom']) {
 assert.equal(S.isAvailable('dynamics', FULL), false); assert.equal(S.isAvailable('__proto__', FULL), false);
 assert.equal(S.isAvailable('microsoft', { ...FULL, MICROSOFT_TENANT_ID: '../evil' }), false, 'locataire invalide refusé');
 assert.equal(S.isAvailable('microsoft', { ...FULL, MICROSOFT_TENANT_ID: 'contoso.onmicrosoft.com' }), true);
-assert.equal(S.returnUrl('tools', { connected: 'google' }, { FRONTEND_BASE_URL: 'https://portal.test/' }), 'https://portal.test/telephony/app/tools?connected=google');
-assert.equal(S.returnUrl('onboarding', { error: 'x' }, { SECRETARIAT_RETURN_URL: 'https://r.test', FRONTEND_BASE_URL: 'https://portal.test' }), 'https://r.test/telephony/onboarding?error=x', 'SECRETARIAT_RETURN_URL prioritaire');
+assert.equal(S.returnUrl('tools', { connected: 'google' }, { FRONTEND_BASE_URL: 'https://portal.test/' }), 'https://portal.test/cloud/receptionist/outils?connected=google');
+// Adresses CLOUD Receptionist (24/11/2026) : retour à l'adresse /cloud/receptionist/<écran>, jamais /telephony.
+assert.deepEqual(S.RETURN_PATHS, { tools: '/cloud/receptionist/outils', onboarding: '/cloud/receptionist/mise-en-route', profile: '/cloud/receptionist/profil' });
+assert.equal(S.returnUrl('profile', { connected: 'google' }, { FRONTEND_BASE_URL: 'https://portal.test' }), 'https://portal.test/cloud/receptionist/profil?connected=google');
+for (const p of Object.values(S.RETURN_PATHS)) assert.ok(!p.includes('telephony'), p);
+assert.equal(S.returnUrl('onboarding', { error: 'x' }, { SECRETARIAT_RETURN_URL: 'https://r.test', FRONTEND_BASE_URL: 'https://portal.test' }), 'https://r.test/cloud/receptionist/mise-en-route?error=x', 'SECRETARIAT_RETURN_URL prioritaire');
 assert.equal(S.returnUrl('tools', {}, {}), null, 'sans base : pas de redirection devinée');
 assert.equal(S.returnUrl('tools', {}, { FRONTEND_BASE_URL: 'javascript:1' }), null);
 
@@ -255,21 +259,21 @@ try {
   reset(); std();
   for (const query of [{ code: 'CODE_SECRET_123' }, { code: 'CODE_SECRET_123', state: 'faux' }, { code: 'CODE_SECRET_123', state: forge(base, 'autre-secret') }, { code: 'CODE_SECRET_123', state: forge(base, process.env.JWT_SECRET, { expiresIn: -5 }) }, { code: 'CODE_SECRET_123', state: state('microsoft') }]) {
     const r = await cb('google', query);
-    assert.equal(r.status, 302); assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=invalid_state', JSON.stringify(query));
+    assert.equal(r.status, 302); assert.equal(r.location, 'https://portal.test/cloud/receptionist/outils?error=invalid_state', JSON.stringify(query));
   }
-  assert.equal((await cb('dynamics', { code: 'x', state: goodState })).location, 'https://portal.test/telephony/app/tools?error=invalid_state');
+  assert.equal((await cb('dynamics', { code: 'x', state: goodState })).location, 'https://portal.test/cloud/receptionist/outils?error=invalid_state');
   assert.equal(httpCalls.length, 0, 'aucun appel au fournisseur sans état valide'); assert.equal(conns.length, 0);
 
   // refus de l'utilisateur chez le fournisseur
   let r = await cb('google', { error: 'access_denied', state: state('google') });
-  assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=access_denied'); assert.equal(httpCalls.length, 0);
+  assert.equal(r.location, 'https://portal.test/cloud/receptionist/outils?error=access_denied'); assert.equal(httpCalls.length, 0);
   // sans code
   r = await cb('google', { state: state('google') });
-  assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=invalid_request'); assert.equal(httpCalls.length, 0);
+  assert.equal(r.location, 'https://portal.test/cloud/receptionist/outils?error=invalid_request'); assert.equal(httpCalls.length, 0);
 
   // Google : succès
   r = await cb('google', { code: 'CODE_SECRET_123', state: state('google'), companyId: C2 });
-  assert.equal(r.status, 302); assert.equal(r.location, 'https://portal.test/telephony/app/tools?connected=google', 'retour sans jeton ni détail');
+  assert.equal(r.status, 302); assert.equal(r.location, 'https://portal.test/cloud/receptionist/outils?connected=google', 'retour sans jeton ni détail');
   assert.equal(conns.length, 1); const g = conns[0];
   assert.equal(toolsDocs.find((d) => d.companyId === C1)?.email?.provider, 'google', 'aucune messagerie choisie : la première connectée est choisie automatiquement');
   assert.equal(g.companyId, C1, 'le centre vient de l’état signé, jamais de la requête'); assert.equal(g.accountEmail, 'centre@gmail.test');
@@ -290,42 +294,42 @@ try {
   assert.equal(conns.length, 1, 'une seule connexion par centre et fournisseur'); assert.equal(conns[0].accountEmail, 'nouveau@gmail.test'); assert.notEqual(conns[0].credentialsEnc, firstEnc);
   // retour onboarding / SECRETARIAT_RETURN_URL
   r = await cb('google', { code: 'CODE_SECRET_123', state: state('google', { returnTo: 'onboarding' }) });
-  assert.equal(r.location, 'https://portal.test/telephony/onboarding?connected=google');
+  assert.equal(r.location, 'https://portal.test/cloud/receptionist/mise-en-route?connected=google');
   process.env.SECRETARIAT_RETURN_URL = 'https://retour.test';
   r = await cb('google', { error: 'access_denied', state: state('google') });
-  assert.equal(r.location, 'https://retour.test/telephony/app/tools?error=access_denied'); delete process.env.SECRETARIAT_RETURN_URL;
+  assert.equal(r.location, 'https://retour.test/cloud/receptionist/outils?error=access_denied'); delete process.env.SECRETARIAT_RETURN_URL;
 
   // Google : échecs -> ?error=, rien n'est stocké
   const before = conns.length;
   reset(); std();
   on('POST', /oauth2\.googleapis\.com\/token/, () => ({ status: 200, json: { access_token: 'ACCESS_SECRET_G1', expires_in: 3599, scope: 'openid https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.events' } }));
-  assert.equal((await cb('google', { code: 'c', state: state('google') })).location, 'https://portal.test/telephony/app/tools?error=no_refresh_token');
+  assert.equal((await cb('google', { code: 'c', state: state('google') })).location, 'https://portal.test/cloud/receptionist/outils?error=no_refresh_token');
   reset(); std();
   on('POST', /oauth2\.googleapis\.com\/token/, () => ({ status: 200, json: { access_token: 'ACCESS_SECRET_G1', refresh_token: 'REFRESH_SECRET_G1', expires_in: 3599, scope: 'openid https://www.googleapis.com/auth/gmail.send' } }));
-  assert.equal((await cb('google', { code: 'c', state: state('google') })).location, 'https://portal.test/telephony/app/tools?error=missing_permissions', 'scope Agenda décoché');
+  assert.equal((await cb('google', { code: 'c', state: state('google') })).location, 'https://portal.test/cloud/receptionist/outils?error=missing_permissions', 'scope Agenda décoché');
   reset(); std();
   on('POST', /oauth2\.googleapis\.com\/token/, () => ({ status: 400, json: { error: 'invalid_grant', error_description: 'REFRESH_SECRET_G1 détail technique' } }));
   r = await cb('google', { code: 'c', state: state('google') });
-  assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=exchange_failed'); assert.ok(!r.location.includes('invalid_grant'));
+  assert.equal(r.location, 'https://portal.test/cloud/receptionist/outils?error=exchange_failed'); assert.ok(!r.location.includes('invalid_grant'));
   reset(); std();
   on('POST', /oauth2\.googleapis\.com\/token/, () => new Error('ECONNRESET https://x?token=ACCESS_SECRET_G1'));
-  assert.equal((await cb('google', { code: 'c', state: state('google') })).location, 'https://portal.test/telephony/app/tools?error=exchange_failed');
+  assert.equal((await cb('google', { code: 'c', state: state('google') })).location, 'https://portal.test/cloud/receptionist/outils?error=exchange_failed');
   reset(); std();
   on('GET', /userinfo/, () => ({ status: 200, json: {} }));
-  assert.equal((await cb('google', { code: 'c', state: state('google') })).location, 'https://portal.test/telephony/app/tools?error=no_account');
+  assert.equal((await cb('google', { code: 'c', state: state('google') })).location, 'https://portal.test/cloud/receptionist/outils?error=no_account');
   assert.equal(conns.length, before, 'aucun échec n’écrit une connexion');
   // fournisseur indisponible côté HARX au retour
   const saved = process.env.GOOGLE_CLIENT_SECRET; delete process.env.GOOGLE_CLIENT_SECRET;
   reset(); std();
-  assert.equal((await cb('google', { code: 'c', state: goodState })).location, 'https://portal.test/telephony/app/tools?error=unavailable'); assert.equal(httpCalls.length, 0);
+  assert.equal((await cb('google', { code: 'c', state: goodState })).location, 'https://portal.test/cloud/receptionist/outils?error=unavailable'); assert.equal(httpCalls.length, 0);
   process.env.GOOGLE_CLIENT_SECRET = saved;
 
   // Microsoft et Zoom : succès
   reset(); std();
-  assert.equal((await cb('microsoft', { code: 'c', state: state('microsoft') })).location, 'https://portal.test/telephony/app/tools?connected=microsoft');
+  assert.equal((await cb('microsoft', { code: 'c', state: state('microsoft') })).location, 'https://portal.test/cloud/receptionist/outils?connected=microsoft');
   const m = conns.find((c) => c.provider === 'microsoft'); assert.equal(m.accountEmail, 'centre@contoso.test'); assert.equal(credsOf(m).refreshToken, 'REFRESH_SECRET_M1');
   assert.equal(callsTo(/login\.microsoftonline\.com\/common\/oauth2\/v2\.0\/token/)[0].form.client_secret, 'm-secret');
-  assert.equal((await cb('zoom', { code: 'c', state: state('zoom') })).location, 'https://portal.test/telephony/app/tools?connected=zoom');
+  assert.equal((await cb('zoom', { code: 'c', state: state('zoom') })).location, 'https://portal.test/cloud/receptionist/outils?connected=zoom');
   const z = conns.find((c) => c.provider === 'zoom'); assert.equal(z.accountEmail, 'centre@zoom.test');
   const zt = callsTo(/zoom\.us\/oauth\/token/)[0];
   assert.equal(zt.headers.Authorization, `Basic ${Buffer.from('z-id:z-secret').toString('base64')}`, 'Zoom : Basic client_id:client_secret');

@@ -225,7 +225,7 @@ try {
   reset(); oauthOk('Marie@Acme.test');
   const cb = (provider, query) => req('GET', `/oauth/${provider}/callback?${new URLSearchParams(query)}`);
   r = await cb('google', { code: 'CODE_SECRET_123', state: stateFrom(S.startAuthorization({ companyId: C1, userId: 'owner1', provider: 'google', returnTo: 'tools', shared: st1.shared })) });
-  assert.equal(r.status, 302); assert.equal(r.location, 'https://portal.test/telephony/app/tools?connected=google&shared=1');
+  assert.equal(r.status, 302); assert.equal(r.location, 'https://portal.test/cloud/receptionist/outils?connected=google&shared=1');
   assert.equal(accounts.length, 1); const marie = accounts[0];
   assert.deepEqual([marie.companyId, marie.provider, marie.label, marie.ownerName, marie.accountEmail, marie.status], [C1, 'google', 'Marie Durand — direction', 'Marie Durand', 'marie@acme.test', 'connected']);
   assert.deepEqual(marie.permissions, { send: true, calendar: true }); assert.equal(marie.connectedBy, 'owner1');
@@ -245,7 +245,7 @@ try {
   on('POST', /login\.microsoftonline\.com\/common\/oauth2\/v2\.0\/token/, () => ({ status: 200, json: { access_token: 'ACCESS_EQUIPE', refresh_token: 'REFRESH_EQUIPE', expires_in: 3599, scope: 'Mail.Send User.Read' } }));
   on('GET', /graph\.microsoft\.com\/v1\.0\/me\?/, () => ({ status: 200, json: { mail: 'commercial@acme.test' } }));
   r = await cb('microsoft', { code: 'c', state: stateFrom(S.startAuthorization({ companyId: C1, userId: 'owner1', provider: 'microsoft', returnTo: 'tools', shared: { label: 'Équipe commerciale', ownerName: '', send: true, calendar: false } })) });
-  assert.equal(r.location, 'https://portal.test/telephony/app/tools?connected=microsoft&shared=1'); assert.equal(accounts.length, 2);
+  assert.equal(r.location, 'https://portal.test/cloud/receptionist/outils?connected=microsoft&shared=1'); assert.equal(accounts.length, 2);
   const equipe = accounts[1];
   // troisième compte : aucun droit pour les secrétaires
   const prive = seed({ label: 'Direction générale', ownerName: 'DG', accountEmail: 'dg@acme.test', permissions: { send: false, calendar: false } });
@@ -255,10 +255,10 @@ try {
   // reconnexion : l'adresse doit être la même
   reset(); oauthOk('quelquun@autre.test');
   r = await cb('google', { code: 'c', state: stateFrom(S.startAuthorization({ companyId: C1, userId: 'owner1', provider: 'google', returnTo: 'tools', shared: { ...st1.shared, accountId: marie._id } })) });
-  assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=wrong_account'); assert.equal(credsOf(marie).refreshToken, 'REFRESH_MARIE', 'jetons inchangés');
+  assert.equal(r.location, 'https://portal.test/cloud/receptionist/outils?error=wrong_account'); assert.equal(credsOf(marie).refreshToken, 'REFRESH_MARIE', 'jetons inchangés');
   // un état forgé pour un compte d'une autre société ne touche rien
   r = await cb('google', { code: 'c', state: stateFrom(S.startAuthorization({ companyId: C1, userId: 'owner1', provider: 'google', returnTo: 'tools', shared: { ...st1.shared, accountId: etranger._id } })) });
-  assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=invalid_request'); assert.equal(credsOf(etranger).refreshToken, 'REFRESH_MARIE');
+  assert.equal(r.location, 'https://portal.test/cloud/receptionist/outils?error=invalid_request'); assert.equal(credsOf(etranger).refreshToken, 'REFRESH_MARIE');
 
   // ---------- 5. liste : titulaire voit tout, secrétaire seulement l'autorisé, jamais de jeton
   r = await req('GET', `/accounts/${C1}`, { user: 'owner1' });
@@ -483,29 +483,29 @@ try {
 
   // retour OAuth : compte créé au nom de sa propriétaire, chiffré, droits fixes
   r = await personalCb('sophie', 'google', 'Sophie@Cabinet.test', 'ACCESS_SOPHIE', 'REFRESH_SOPHIE');
-  assert.equal(r.location, 'https://portal.test/telephony/app/profile?connected=google&personal=1');
+  assert.equal(r.location, 'https://portal.test/cloud/receptionist/profil?connected=google&personal=1');
   const sophieAcc = accounts.find((a) => a.personalUserId === 'sophie');
   assert.deepEqual([sophieAcc.companyId, sophieAcc.provider, sophieAcc.label, sophieAcc.accountEmail, sophieAcc.status, sophieAcc.connectedBy], [C1, 'google', 'Ma messagerie', 'sophie@cabinet.test', 'connected', 'sophie']);
   assert.deepEqual(sophieAcc.permissions, { send: true, calendar: true });
   assert.ok(!sophieAcc.credentialsEnc.includes('ACCESS_SOPHIE')); assert.equal(credsOf(sophieAcc).refreshToken, 'REFRESH_SOPHIE');
   // reconnexion (même adresse) : mise à jour, pas de doublon ; autre adresse : erreur claire, jetons inchangés
   r = await personalCb('sophie', 'google', 'sophie@cabinet.test', 'ACCESS_SOPHIE', 'REFRESH_SOPHIE');
-  assert.equal(r.location, 'https://portal.test/telephony/app/profile?connected=google&personal=1'); assert.equal(accounts.filter((a) => a.personalUserId === 'sophie').length, 1);
+  assert.equal(r.location, 'https://portal.test/cloud/receptionist/profil?connected=google&personal=1'); assert.equal(accounts.filter((a) => a.personalUserId === 'sophie').length, 1);
   r = await personalCb('sophie', 'google', 'autre@cabinet.test', 'ACCESS_PAUL', 'REFRESH_PAUL');
-  assert.equal(r.location, 'https://portal.test/telephony/app/profile?error=wrong_account'); assert.equal(credsOf(sophieAcc).refreshToken, 'REFRESH_SOPHIE'); assert.equal(sophieAcc.accountEmail, 'sophie@cabinet.test');
+  assert.equal(r.location, 'https://portal.test/cloud/receptionist/profil?error=wrong_account'); assert.equal(credsOf(sophieAcc).refreshToken, 'REFRESH_SOPHIE'); assert.equal(sophieAcc.accountEmail, 'sophie@cabinet.test');
   // adresse déjà connectée : jamais d'écrasement silencieux (compte de sa collègue, compte partagé, et l'inverse)
   r = await personalCb('paul', 'google', 'sophie@cabinet.test', 'ACCESS_PAUL', 'REFRESH_PAUL');
-  assert.equal(r.location, 'https://portal.test/telephony/app/profile?error=email_in_use'); assert.equal(sophieAcc.personalUserId, 'sophie'); assert.equal(credsOf(sophieAcc).refreshToken, 'REFRESH_SOPHIE');
+  assert.equal(r.location, 'https://portal.test/cloud/receptionist/profil?error=email_in_use'); assert.equal(sophieAcc.personalUserId, 'sophie'); assert.equal(credsOf(sophieAcc).refreshToken, 'REFRESH_SOPHIE');
   reset();
   on('POST', /login\.microsoftonline\.com\/common\/oauth2\/v2\.0\/token/, () => ({ status: 200, json: { access_token: 'ACCESS_PAUL', refresh_token: 'REFRESH_PAUL', expires_in: 3599, scope: 'Mail.Send User.Read' } }));
   on('GET', /graph\.microsoft\.com\/v1\.0\/me\?/, () => ({ status: 200, json: { mail: 'commercial@acme.test' } }));
   r = await cb('microsoft', { code: 'c', state: stateFrom(S.startAuthorization({ companyId: C1, userId: 'paul', provider: 'microsoft', returnTo: 'profile', shared: { personal: true, ownerName: '' } })) });
-  assert.equal(r.location, 'https://portal.test/telephony/app/profile?error=email_in_use', 'adresse déjà partagée par le titulaire'); assert.equal(equipe.personalUserId, undefined); assert.equal(credsOf(equipe).refreshToken, 'REFRESH_EQUIPE');
+  assert.equal(r.location, 'https://portal.test/cloud/receptionist/profil?error=email_in_use', 'adresse déjà partagée par le titulaire'); assert.equal(equipe.personalUserId, undefined); assert.equal(credsOf(equipe).refreshToken, 'REFRESH_EQUIPE');
   reset(); oauthOk('sophie@cabinet.test');
   r = await cb('google', { code: 'c', state: stateFrom(S.startAuthorization({ companyId: C1, userId: 'owner1', provider: 'google', returnTo: 'tools', shared: { label: 'Écrase', ownerName: '', send: true, calendar: true } })) });
-  assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=email_in_use', 'le titulaire ne peut pas écraser une messagerie personnelle'); assert.equal(sophieAcc.label, 'Ma messagerie'); assert.equal(credsOf(sophieAcc).refreshToken, 'REFRESH_SOPHIE');
+  assert.equal(r.location, 'https://portal.test/cloud/receptionist/outils?error=email_in_use', 'le titulaire ne peut pas écraser une messagerie personnelle'); assert.equal(sophieAcc.label, 'Ma messagerie'); assert.equal(credsOf(sophieAcc).refreshToken, 'REFRESH_SOPHIE');
   r = await cb('google', { code: 'c', state: stateFrom(S.startAuthorization({ companyId: C1, userId: 'owner1', provider: 'google', returnTo: 'tools', shared: { label: 'Écrase', ownerName: '', send: true, calendar: true, accountId: sophieAcc._id } })) });
-  assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=invalid_request', 'reconnexion « partagée » d’un compte personnel = introuvable'); assert.equal(credsOf(sophieAcc).refreshToken, 'REFRESH_SOPHIE');
+  assert.equal(r.location, 'https://portal.test/cloud/receptionist/outils?error=invalid_request', 'reconnexion « partagée » d’un compte personnel = introuvable'); assert.equal(credsOf(sophieAcc).refreshToken, 'REFRESH_SOPHIE');
   r = await personalCb('paul', 'google', 'paul@cabinet.test', 'ACCESS_PAUL', 'REFRESH_PAUL');
   const paulAcc = accounts.find((a) => a.personalUserId === 'paul'); assert.ok(paulAcc); assert.equal(paulAcc.accountEmail, 'paul@cabinet.test');
 
@@ -560,7 +560,7 @@ try {
   etranger.permissions = { send: false, calendar: false };
   r = await req('GET', '/config', { user: 'otherAgent', root: `${origin}/emails` }); assert.equal(r.body.data.configured, false);
   r = await personalCb('otherAgent', 'google', 'oa@autre.test', 'ACCESS_PAUL', 'REFRESH_PAUL', { companyId: C2 });
-  assert.equal(r.location, 'https://portal.test/telephony/app/profile?connected=google&personal=1');
+  assert.equal(r.location, 'https://portal.test/cloud/receptionist/profil?connected=google&personal=1');
   r = await req('GET', '/config', { user: 'otherAgent', root: `${origin}/emails` }); assert.equal(r.body.data.configured, true, 'compte personnel seul = configuré');
   etranger.permissions = { send: true, calendar: true };
   // à reconnecter : message adressé à la secrétaire elle-même, jamais de repli
@@ -585,7 +585,7 @@ try {
   while (accounts.filter((a) => a.companyId === C1).length < S.MAX_SHARED_ACCOUNTS) seed({ accountEmail: `x${accounts.length}@acme.test` });
   reset(); oauthOk('nouveau@acme.test');
   r = await cb('google', { code: 'c', state: stateFrom(S.startAuthorization({ companyId: C1, userId: 'owner1', provider: 'google', returnTo: 'tools', shared: { label: 'Trop', ownerName: '', send: true, calendar: true } })) });
-  assert.equal(r.location, 'https://portal.test/telephony/app/tools?error=too_many_accounts');
+  assert.equal(r.location, 'https://portal.test/cloud/receptionist/outils?error=too_many_accounts');
 
   // ---------- 11. aucune fuite de jeton
   for (const t of texts) for (const s of SECRETS) assert.ok(!t.includes(s), `réponse sans jeton (${s})`);
