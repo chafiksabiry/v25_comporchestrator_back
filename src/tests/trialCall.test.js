@@ -338,7 +338,7 @@ test('consommation au décroché + filet de secours à 58 s (minuterie, jamais 6
   assert.equal((await call(c.statusWebhook, mkReq({ userId: null, query: { id, t }, body: { CallStatus: 'in-progress' } }))).code, 403);
   const good = TW.callbackToken(env.TRIAL_CALL_HASH_SECRET, id);
   const ann = await call(c.announceWebhook, mkReq({ userId: null, query: { id, t: good }, body: { To: FRIEND } }));
-  assert.match(ann.body, /<Say language="fr-FR" voice="Polly.Lea">Bonjour, ceci est un appel d’essai gratuit/);
+  assert.match(ann.body, /<Say language="fr-FR" voice="Polly.Lea-Generative">Bonjour, ceci est un appel d’essai gratuit/);
   await call(c.statusWebhook, mkReq({ userId: null, query: { id, t: good }, body: { CallStatus: 'in-progress', CallSid: 'CAchild' } }));
   let trial = await store.getTrial(id);
   assert.equal(trial.status, 'in_progress');
