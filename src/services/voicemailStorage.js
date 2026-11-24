@@ -47,6 +47,19 @@ export async function downloadFromCloudinary(publicId) {
   return audio;
 }
 
+/** Supprime définitivement un audio privé de Cloudinary (suppression du compte). Absent : succès. */
+export async function destroyCloudinaryAudio(publicId) {
+  const { cloud, key, secret } = cloudinaryConf();
+  const params = { public_id: publicId, type: 'private', invalidate: 'true', timestamp: Math.floor(Date.now() / 1000) };
+  const form = new FormData();
+  for (const [k, v] of Object.entries(params)) form.append(k, String(v));
+  form.append('api_key', key);
+  form.append('signature', signCloudinary(params, secret));
+  const res = await fetch(`https://api.cloudinary.com/v1_1/${cloud}/video/destroy`, { method: 'POST', body: form, signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !['ok', 'not found'].includes(body?.result)) throw new Error(`cloudinary destroy status ${res.status} ${body?.result || ''}`.trim());
+}
+
 const basicAuth = () => `Basic ${Buffer.from(`${config.twilioAccountSid}:${config.twilioAuthToken}`).toString('base64')}`;
 
 /** Télécharge l'enregistrement chez Twilio (uniquement depuis api.twilio.com : nos identifiants ne partent jamais ailleurs). */
