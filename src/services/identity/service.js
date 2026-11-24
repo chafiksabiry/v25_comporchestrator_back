@@ -11,6 +11,7 @@ import { extractDocument } from './extract.js';
 import { decryptBuffer, encryptBuffer, fingerprint, prepareUpload, splitPages } from './files.js';
 import { loadDeclaration as defaultLoadDeclaration } from './declaration.js';
 import { normalizeIso2 } from './countries.js';
+import { sharedIdentityInboxReporter } from '../../support/inboxRequests.js';
 
 export class IdentityError extends Error {
   constructor(status, code, extra = {}) {
@@ -59,8 +60,20 @@ export function createIdentityService({
   schedule = (fn) => setImmediate(fn),
   sharp = undefined,
   logger = console,
+  inbox = null,
 } = {}) {
   const cfg = () => (typeof config === 'function' ? config() : config);
+  // Inbox support : tout dossier qui passe en revue humaine y crée une demande et prévient l'équipe (e-mail support@, webhook) ;
+  // la demande se ferme à la décision de l'équipe. Jamais attendu ni bloquant : le parcours du client ne change pas.
+  const reporter = () => inbox || sharedIdentityInboxReporter();
+  const reportReview = (v, info) => {
+    if (!v?._id) return;
+    Promise.resolve().then(() => reporter().opened(v, info)).catch((e) => logger.warn?.('[identity] demande Inbox :', e?.message));
+  };
+  const reportDecided = (v, outcome) => {
+    if (!v?._id) return;
+    Promise.resolve().then(() => reporter().decided(v, outcome)).catch((e) => logger.warn?.('[identity] clôture Inbox :', e?.message));
+  };
   const keys = () => deriveKeys(loadFilesKey(cfg()));
 
   async function snapshot(companyId) {
@@ -193,6 +206,7 @@ export function createIdentityService({
         status: 'review', declared, attempt, decision: { outcome: 'review', reasonCodes: ['ATTEMPT_LIMIT'], by: 'auto', at: now() },
         checks: [{ code: 'ATTEMPTS', result: 'review', detail: 'Limite d’analyses automatiques atteinte', reason: 'ATTEMPT_LIMIT' }],
       });
+      reportReview({ ...target, companyId: String(companyId) }, { trigger: 'ATTEMPT_LIMIT', reasonCodes: ['ATTEMPT_LIMIT'] });
       return { status: 'review' };
     }
     await store.updateVerification(target._id, { status: 'processing', declared, attempt, processingStartedAt: now() });
@@ -213,6 +227,7 @@ export function createIdentityService({
         status: 'review', decision: { outcome: 'review', reasonCodes: ['PROCESSING_ERROR'], by: 'auto', at: now() },
         checks: [{ code: 'PROCESSING', result: 'review', detail: 'Erreur interne pendant l’analyse', reason: 'PROCESSING_ERROR' }],
       });
+      reportReview(v, { trigger: 'PROCESSING_ERROR', reasonCodes: ['PROCESSING_ERROR'] });
       return { outcome: 'review', reasonCodes: ['PROCESSING_ERROR'] };
     }
   }
@@ -279,6 +294,8 @@ export function createIdentityService({
       aiAt: aiCalled ? now() : null,
     }, { push: { ai } });
     await afterDecision(updated, result.outcome);
+    if (result.outcome === OUTCOMES.REVIEW) reportReview(updated || v, { trigger: 'AI_REVIEW', reasonCodes: result.reasonCodes });
+    else if (result.outcome === OUTCOMES.APPROVED && pendingOf(updated || {}).length) reportReview(updated, { trigger: 'PENDING_COUNTRY', pendingCountries: pendingOf(updated) });
     logger.log?.(`[identity] décision ${result.outcome} (${result.reasonCodes.join(',') || '-'}) jetons ${ai.reduce((s, a) => s + a.input + a.output, 0)}`);
     // Diagnostic : contrôles non passés (code, résultat, type de document), sans nom ni numéro de pièce.
     const notPassed = (result.checks || []).filter((c) => c.result !== 'pass').map((c) => `${c.code}:${c.result}:${c.reason || '-'}${c.code === 'ID_TYPE' || c.code === 'PROOF_TYPE' ? `:${String(c.detail || '').split(':').pop().trim()}` : ''}`);
@@ -309,6 +326,7 @@ export function createIdentityService({
     });
     // Les images encore présentes restent disponibles pour la revue (jamais au-delà de 30 jours après l'envoi).
     await store.setFilesExpiry(current._id, new Date(new Date(current.createdAt || now()).getTime() + c.fileTtlMs));
+    reportReview(current, { trigger: 'HUMAN_REVIEW_REQUESTED', reasonCodes: uniq([...(current.decision?.reasonCodes || []), 'HUMAN_REVIEW_REQUESTED']) });
     return { status: 'review' };
   }
 
@@ -319,6 +337,7 @@ export function createIdentityService({
         status: 'review', decision: { outcome: 'review', reasonCodes: ['PROCESSING_INTERRUPTED'], by: 'auto', at: now() },
         checks: [...(v.checks || []), { code: 'PROCESSING', result: 'review', detail: 'Analyse interrompue (redémarrage)', reason: 'PROCESSING_INTERRUPTED' }],
       });
+      reportReview(v, { trigger: 'PROCESSING_INTERRUPTED', reasonCodes: ['PROCESSING_INTERRUPTED'] });
     }
   }
 
@@ -401,6 +420,7 @@ export function createIdentityService({
     // Décision humaine : images supprimées tout de suite, quelle que soit l'issue.
     await store.deleteFilesOf(v._id);
     if (outcome === 'approved') await store.supersedeOthers(v.companyId, v._id, ['approved', 'review', 'rejected']);
+    reportDecided(v, outcome);
     return { status: updated.status, verifiedCountries: updated.verifiedCountries };
   }
 
@@ -432,6 +452,7 @@ export function createIdentityService({
     };
     const updated = await store.updateVerification(v._id, patch, { push: { accessLog: { adminId: String(adminId), action: `pending:${outcome}`, fileId: null, at: now() } } });
     await store.deleteFilesOf(v._id);
+    reportDecided(v, `pays en attente : ${outcome}`);
     return { status: updated.status, verifiedCountries: updated.verifiedCountries };
   }
 

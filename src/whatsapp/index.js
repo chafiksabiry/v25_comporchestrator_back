@@ -9,6 +9,7 @@ import { createMongoStore } from './store/mongoStore.js';
 import { createWebChatRouter } from './webChat.js';
 import { createInboxBus, withInboxEvents } from './events.js';
 import { createWebMirror } from './webMirror.js';
+import { sharedSupportNotifier, escalationRequest } from '../support/notify.js';
 
 /**
  * Assemble le module WhatsApp AI Assistant. Toutes les dépendances sont substituables (tests) ;
@@ -26,16 +27,13 @@ export function createWhatsAppModule(overrides = {}) {
   const whatsapp = overrides.whatsapp || createWhatsAppClient({ config: cfg, logger });
   const claude = overrides.claude || createClaudeClient({ config: cfg });
 
-  const notifySupport = overrides.notifySupport || (cfg.notifyWebhookUrl
-    ? async (ticket) => {
-        const res = await fetch(cfg.notifyWebhookUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: `[HARX WhatsApp support] ticket ${ticket.id} (${ticket.urgency}) from +${ticket.waId}: ${ticket.reason}\n${ticket.summary}` }),
-        });
-        if (!res.ok) throw new Error(`notify webhook ${res.status}`);
-      }
-    : null);
+  // Chaque escalade prévient l'équipe tout de suite : e-mail à SUPPORT_EMAIL (envoi Brevo du serveur) et webhook
+  // WHATSAPP_SUPPORT_NOTIFY_WEBHOOK_URL s'il est défini (src/support/notify.js). « Prévenue » = au moins une voie a abouti.
+  const notifier = overrides.supportNotifier || sharedSupportNotifier();
+  const notifySupport = overrides.notifySupport || (async (ticket) => {
+    const out = await notifier(escalationRequest(ticket));
+    if (!out.delivered) throw new Error(`support not notified (email ${out.email}, webhook ${out.webhook})`);
+  });
 
   const tools = overrides.tools || createToolRunner({
     kb, store, cfg,
@@ -55,7 +53,7 @@ export function createWhatsAppModule(overrides = {}) {
   const missing = missingConfig(cfg);
   if (cfg.enabled && missing.length) logger.warn(`[whatsapp] module mounted but incomplete: missing ${missing.join(', ')}`);
   logger.log?.(`[whatsapp] AI assistant ready (model ${cfg.model}, ${kb.size} knowledge chunks, store ${store.kind})`);
-  return { router, agent, webAgent: webChat.agent, cfg, kb, store, tools, events };
+  return { router, agent, webAgent: webChat.agent, cfg, kb, store, tools, events, notifier };
 }
 
 export { getWhatsAppConfig, missingConfig };

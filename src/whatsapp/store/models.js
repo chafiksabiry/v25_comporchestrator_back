@@ -1,7 +1,8 @@
 import mongoose from 'mongoose';
 
 const messageSchema = new mongoose.Schema({
-  role: { type: String, enum: ['user', 'assistant', 'human_agent'], required: true },
+  // system : message du serveur dans une demande créée par lui (dossier d'identité en revue humaine, src/support/inboxRequests.js).
+  role: { type: String, enum: ['user', 'assistant', 'human_agent', 'system'], required: true },
   text: { type: String, default: '' },
   wamid: { type: String, default: null },
   lang: { type: String, default: null },
