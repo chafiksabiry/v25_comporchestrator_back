@@ -273,6 +273,9 @@ export function createTrialCallController({
         const deviceId = cleanDeviceId(req.query?.deviceId);
         const h = await personHashes(cfg, req, deviceId);
         if (await store.findUsed({ userId, emailHash: h.emailHash, deviceHash: deviceId ? h.deviceHash : null })) { await markUsedSeen(userId); return res.json({ eligible: false, reason: 'used' }); }
+        // Essai déjà constaté utilisé pour ce compte (ex. mobile déjà servi à un autre compte, refusé à l'envoi du code) : même réponse
+        // que la garde du paiement (paymentGate), sinon le parcours redemande l'essai et boucle entre « Votre offre » et « Appel de test ».
+        if ((await store.counter(usedSeenKey(userId))) > 0) return res.json({ eligible: false, reason: 'used' });
         const pending = await store.findPendingTrial(userId, new Date(now() - 30 * 60 * 1000));
         return res.json({
           eligible: true,

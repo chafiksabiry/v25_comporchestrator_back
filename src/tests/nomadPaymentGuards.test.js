@@ -407,3 +407,13 @@ test('essai « déjà utilisé » constaté par /eligibility : marque posée, la
   assert.ok((await store.counter(G.usedSeenKey('u1'))) > 0);
   assert.equal((await G.trialPaymentGate({ userId: 'u1', country: 'FR' }, { env: TRIAL_ENV, store })).ok, true);
 });
+
+test('essai refusé à l’envoi du code (mobile déjà utilisé par un autre compte) : /eligibility répond ensuite « used », comme la garde du paiement (plus de boucle Offre ↔ Appel de test)', async () => {
+  const c = trialCtl(async () => ({ enabled: false }));
+  const before = await call(c.eligibility, mkReq({ query: { country: 'FR', deviceId: 'device-abcdef-123' } }));
+  assert.equal(before.body.eligible, true, 'aucun essai pour ce compte : éligible');
+  await store.bump(G.usedSeenKey('u1'), 1e9); // posée par /otp/send quand le mobile a déjà servi (409 used)
+  const after = await call(c.eligibility, mkReq({ query: { country: 'FR', deviceId: 'device-abcdef-123' } }));
+  assert.deepEqual(after.body, { eligible: false, reason: 'used' });
+  assert.equal((await G.trialPaymentGate({ userId: 'u1', country: 'FR' }, { env: TRIAL_ENV, store })).ok, true);
+});
