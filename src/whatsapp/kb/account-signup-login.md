@@ -5,7 +5,7 @@ product: platform
 audience: all
 summary: Real rules for creating an account, verification codes, login, password change/recovery and phone change, with the exact error messages.
 sources: [v25_registration_backend/src/services/authService.js, v25_registration_backend/src/services/userService.js, v25_registration_backend/src/routes/authRoutes.js, v25_registration_backend/src/routes/userRoutes.js]
-verified: 2026-11-12
+verified: 2026-11-24
 ---
 # Sign-up, login and account security
 
@@ -40,3 +40,8 @@ Full name must be 2 to 120 characters ("Full name must be at least 2 characters"
 
 ## Safety
 HARX staff never need your password or verification codes; never share them in chat.
+
+## Account created but never verified (known case, 24/11/2026)
+Symptoms: the customer signed up but never received the verification code (often an SMS to a mobile abroad, e.g. Morocco +212); signing up again says "Email already registered"; signing in says "Ce compte n'est pas encore vérifié. Saisissez le code reçu par e-mail pour l'activer" but the screen offers no field to type a code, so the customer is stuck.
+What to answer: reassure the customer that the account exists and nothing is lost; ask for the exact email used to sign up; explain that the HARX team will send a new 6-digit code by email (valid 10 minutes, check spam, only the LAST email received is valid) and activate the account; then they sign in normally at harx.ai/nomad/connexion (a code is emailed at sign-in). Never ask for a password or a code in the chat.
+Action: escalate to a human (reason: account not verified / verification code not received) with the customer's email. The assistant never verifies or changes an account itself.
