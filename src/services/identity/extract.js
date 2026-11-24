@@ -46,7 +46,10 @@ export function contentBlock({ mime, data }) {
 export async function extractDocument(kind, files, { cfg, client = null, claude = null } = {}) {
   const schema = kind === 'identity' ? IDENTITY_DOCUMENT_SCHEMA : ADDRESS_PROOF_SCHEMA;
   const model = cfg?.model;
-  if (!cfg?.anthropicApiKey && !client && !claude) return { ok: false, error: 'not_configured', model };
+  if (!cfg?.anthropicApiKey && !client && !claude) {
+    console.error(`[identity] extraction ${kind} : clé ANTHROPIC_API_KEY absente (not_configured)`);
+    return { ok: false, error: 'not_configured', model };
+  }
   const c = claude || createClaudeClient({ cfg, client });
   let msg;
   try {
@@ -57,6 +60,8 @@ export async function extractDocument(kind, files, { cfg, client = null, claude 
     });
   } catch (e) {
     const timeout = e?.name === 'APIConnectionTimeoutError' || /timeout/i.test(String(e?.message || ''));
+    // Journal de diagnostic sans donnée personnelle ni secret : type d'erreur, statut HTTP, type d'erreur API, début du message.
+    console.error(`[identity] extraction ${kind} en échec : ${e?.name || 'Error'} statut=${e?.status ?? '-'} type=${e?.error?.error?.type ?? '-'} modele=${model} message=${String(e?.message || '').slice(0, 200)}`);
     return { ok: false, error: timeout ? 'timeout' : 'api_error', model };
   }
   const usage = msg?.usage ? { input: msg.usage.input_tokens ?? 0, output: msg.usage.output_tokens ?? 0, cacheRead: msg.usage.cache_read_input_tokens ?? 0 } : null;
