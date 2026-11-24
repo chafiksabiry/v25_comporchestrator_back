@@ -38,6 +38,8 @@ export function getIdentityConfig(env = process.env) {
     pdfMaxImagePixels: 50_000_000,
     minImageLongSide: 1000,
     normalizeLongSide: 2000,
+    /** Agrandissement de la zone d'une pièce d'identité scannée sur une page PDF (grand côté, px ; maximum lu par l'IA : 2576). */
+    zoomLongSide: 2576,
     /** Durée de vie maximale d'une image, quoi qu'il arrive (index TTL). */
     fileTtlMs: 30 * 24 * 60 * 60 * 1000,
     /** Après un refus, les images restent 24 h pour permettre une correction de la déclaration sans renvoi. */

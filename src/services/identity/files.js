@@ -7,6 +7,10 @@
  * précompilés, aucune bibliothèque système). Seules les images sont lues par l'IA et stockées : JavaScript, fichiers joints et
  * actions du PDF ne sont jamais exécutés ni conservés. Un PDF chiffré avec un mot de passe d'ouverture VIDE (protection de
  * modification seulement, cas courant des factures) est lu ; un PDF qui exige un mot de passe est refusé (PDF_PASSWORD_REQUIRED).
+ * Pièce d'identité scannée sur une page A4 : la pièce n'occupe qu'une partie de la page et, à 2000 px pour la page entière, les
+ * caractères de la MRZ ne font qu'environ 15 px de haut (mesuré, voir identityPdfZoom.test.js). La page est alors suivie d'un
+ * AGRANDISSEMENT de la zone du document (recadrage automatique, grand côté `zoomLongSide` px, 2576 par défaut) : les caractères
+ * MRZ y dépassent le seuil de 28 px.
  */
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -172,11 +176,49 @@ function serialized(fn) {
 }
 
 /**
+ * Cadre du contenu d'une page rendue (pixels nettement plus sombres que le papier blanc), en pixels ; null si rien.
+ * Une ligne ou une colonne compte si au moins `minFrac` de ses pixels sont sombres (les poussières isolées sont ignorées).
+ */
+export function contentBox({ data, width, height }, { threshold = 225, minFrac = 0.004 } = {}) {
+  const rows = new Uint32Array(height);
+  const cols = new Uint32Array(width);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const i = (y * width + x) * 4;
+      if (data[i] + data[i + 1] + data[i + 2] < threshold * 3) { rows[y] += 1; cols[x] += 1; }
+    }
+  }
+  const first = (arr, n, min) => { for (let i = 0; i < n; i += 1) if (arr[i] >= min) return i; return -1; };
+  const last = (arr, n, min) => { for (let i = n - 1; i >= 0; i -= 1) if (arr[i] >= min) return i; return -1; };
+  const minRow = Math.max(2, Math.round(width * minFrac));
+  const minCol = Math.max(2, Math.round(height * minFrac));
+  const y0 = first(rows, height, minRow); const y1 = last(rows, height, minRow);
+  const x0 = first(cols, width, minCol); const x1 = last(cols, width, minCol);
+  if (y0 < 0 || x0 < 0 || y1 <= y0 || x1 <= x0) return null;
+  return { x0, y0, x1: x1 + 1, y1: y1 + 1 };
+}
+
+/**
+ * Faut-il un agrandissement, et de quelle zone ? Seulement si le contenu occupe au plus `maxAreaFrac` de la page (pièce posée sur
+ * une page A4) ; marge de 2 % autour du cadre. Coordonnées en fraction de la page (0 à 1).
+ */
+export function zoomRegion(box, width, height, { maxAreaFrac = 0.6, minSidePx = 150 } = {}) {
+  if (!box) return null;
+  const bw = box.x1 - box.x0; const bh = box.y1 - box.y0;
+  if (Math.max(bw, bh) < minSidePx) return null;
+  if ((bw * bh) / (width * height) > maxAreaFrac) return null;
+  const m = 0.02 * Math.max(width, height);
+  const x0 = Math.max(0, box.x0 - m); const y0 = Math.max(0, box.y0 - m);
+  const x1 = Math.min(width, box.x1 + m); const y1 = Math.min(height, box.y1 + m);
+  return { x: x0 / width, y: y0 / height, w: (x1 - x0) / width, h: (y1 - y0) / height };
+}
+
+/**
  * Rend chaque page d'un PDF en JPEG (grand côté = `longSide` px, fond blanc). Le PDF n'est jamais exécuté : pas d'eval, pas de XFA,
  * pas de scripts ; seule l'apparence des pages est dessinée. Délai maximal `timeoutMs`, image interne bornée à `maxImagePixels`.
  * @returns {Promise<{pages: Array<{data: Buffer, width: number, height: number}>, info: {producer: string, creator: string, creationDate: Date|null}, activeContent: boolean}>}
  */
-export function renderPdf(buf, { maxPages = 3, longSide = 2000, timeoutMs = 20_000, maxImagePixels = 50_000_000 } = {}) {
+export function renderPdf(buf, { maxPages = 3, longSide = 2000, timeoutMs = 20_000, maxImagePixels = 50_000_000, zoomDocument = false, zoomLongSide = 2576, maxZoomFactor = 4 } = {}) {
   return serialized(async () => {
     const libs = await loadPdfLibs();
     if (!libs?.createCanvas) throw new FileRejected('IDENTITY_UNAVAILABLE', 'Rendu PDF indisponible (pdfjs-dist ou @napi-rs/canvas absent)');
@@ -220,6 +262,27 @@ export function renderPdf(buf, { maxPages = 3, longSide = 2000, timeoutMs = 20_0
           throw new FileRejected('PDF_UNREADABLE', `Page ${n} illisible`);
         }
         pages.push({ data: await canvas.encode('jpeg', 88), width, height });
+        // Pièce d'identité : agrandissement de la zone du document s'il n'occupe qu'une partie de la page.
+        const region = zoomDocument ? zoomRegion(contentBox(ctx.getImageData(0, 0, width, height)), width, height) : null;
+        if (region) {
+          const regionLong = Math.max(region.w * width, region.h * height);
+          // Au plus `maxZoomFactor` fois le rendu de la page ; la toile ne contient que la zone (≤ zoomLongSide² pixels).
+          const factor = Math.min(maxZoomFactor, zoomLongSide / regionLong);
+          if (factor > 1.2) {
+            const zScale = scale * factor;
+            const zw = Math.max(1, Math.round(region.w * width * factor));
+            const zh = Math.max(1, Math.round(region.h * height * factor));
+            const zViewport = page.getViewport({ scale: zScale, offsetX: -region.x * width * factor, offsetY: -region.y * height * factor });
+            const zCanvas = createCanvas(zw, zh);
+            const zCtx = zCanvas.getContext('2d');
+            zCtx.fillStyle = '#ffffff';
+            zCtx.fillRect(0, 0, zw, zh);
+            try {
+              await page.render({ canvas: zCanvas, canvasContext: zCtx, viewport: zViewport }).promise;
+              pages.push({ data: await zCanvas.encode('jpeg', 90), width: zw, height: zh, zoomOf: n });
+            } catch { /* agrandissement facultatif : la page entière reste envoyée */ }
+          }
+        }
         page.cleanup();
       }
       return {
@@ -282,10 +345,13 @@ export async function prepareUpload(buf, kind, cfg, { now = new Date(), sharp = 
   const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
   if (mime === 'application/pdf') {
     // Pièce d'identité ou justificatif : même règle. Le PDF d'origine n'est jamais gardé, seules ses pages en JPEG le sont.
-    const pdf = await renderPdf(buf, { maxPages: cfg.maxPdfPages, longSide: cfg.normalizeLongSide, timeoutMs: cfg.pdfRenderTimeoutMs, maxImagePixels: cfg.pdfMaxImagePixels });
+    const pdf = await renderPdf(buf, {
+      maxPages: cfg.maxPdfPages, longSide: cfg.normalizeLongSide, timeoutMs: cfg.pdfRenderTimeoutMs, maxImagePixels: cfg.pdfMaxImagePixels,
+      zoomDocument: kind !== 'address_proof', zoomLongSide: cfg.zoomLongSide ?? 2576,
+    });
     const data = Buffer.concat(pdf.pages.map((p) => p.data));
     const meta = {
-      source: 'pdf', pages: pdf.pages.length, pageBytes: pdf.pages.map((p) => p.data.length), width: pdf.pages[0].width, height: pdf.pages[0].height,
+      source: 'pdf', pages: pdf.pages.filter((p) => !p.zoomOf).length, zooms: pdf.pages.filter((p) => p.zoomOf).length, pageBytes: pdf.pages.map((p) => p.data.length), width: pdf.pages[0].width, height: pdf.pages[0].height,
       pdfCreationDate: pdf.info.creationDate ? pdf.info.creationDate.toISOString().slice(0, 10) : null, pdfActiveContent: pdf.activeContent,
     };
     return { mime: 'image/jpeg', data, size: data.length, sha256, signals: pdfSignals(buf, pdf.info, { now }), meta };

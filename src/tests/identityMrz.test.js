@@ -85,3 +85,57 @@ test('constructeurs de spécimens : TD1 et TD3 valides', () => {
   assert.equal(mrzDocumentKind('IR'), 'residence_permit');
   assert.equal(mrzDocumentKind('ID'), 'id_card');
 });
+
+// ---------------- Tolérances (23/11) : toujours vérifiées par les chiffres de clé ----------------
+const [L1, L2] = ICAO_TD3;
+
+test('tolérance : espaces et chevrons typographiques retirés ; passeport TD3 2 × 44', () => {
+  const r = parseMrz([L1.replace(/</g, ' < ').replace('P', 'P '), `${L2.slice(0, 20)} ${L2.slice(20)}`]);
+  assert.equal(r.valid, true);
+  assert.equal(parseMrz([L1.replace(/<</, '«<'), L2]).valid, true);
+});
+
+test('tolérance : chevrons de remplissage mal comptés (ligne des noms, données facultatives)', () => {
+  // Ligne 1 : chevrons de fin oubliés ou en trop.
+  assert.equal(parseMrz([L1.slice(0, 40), L2]).valid, true);
+  assert.equal(parseMrz([`${L1}<<`, L2]).valid, true);
+  // Ligne 2 : suite « <<<<< » des données facultatives comptée 4 ou 6 fois : réajustée, les chiffres de clé confirment.
+  const r = parseMrz([L1, L2.replace('B<<<<<10', 'B<<<<10')]);
+  assert.equal(r.valid, true);
+  assert.equal(r.repaired, true);
+  assert.equal(r.documentNumber, 'L898902C3');
+  assert.equal(parseMrz([L1, L2.replace('B<<<<<10', 'B<<<<<<10')]).valid, true);
+});
+
+test('tolérance : O lu à la place de 0 dans une date ou un chiffre de clé ; 0 à la place de O dans un code pays', () => {
+  assert.equal(parseMrz([L1, L2.replace('7408122F1204159', '74O8122F12O4159')]).valid, true);
+  assert.equal(parseMrz([L1.replace('UTO', 'UT0'), L2]).valid, true);
+  // Jamais dans le numéro de document (alphanumérique) : une confusion là reste une erreur.
+  assert.equal(parseMrz([L1, L2.replace('L898902C3', 'L8989O2C3')]).valid, false);
+});
+
+test('tolérance sans effet sur une vraie erreur : date retouchée, chiffre de clé faux -> toujours invalide', () => {
+  const r = parseMrz([L1.slice(0, 41), 'L898902C36UTO7408122F1504159ZE184226B<<<<10']);
+  assert.equal(r.format, 'TD3');
+  assert.equal(r.valid, false);
+  assert.equal(parseMrz([L1, L2.slice(0, 30)]).valid, false);
+});
+
+test('ancienne carte d’identité française 2 × 36 (spécimen public) : reconnue, chiffres de clé corrects, nationalité FRA', () => {
+  const cni = ['IDFRADOUEL<<<<<<<<<<<<<<<<<<<<932013', '0506932020438CHRISTIANE<<NI2906209F3'];
+  const r = parseMrz(cni);
+  assert.equal(r.format, 'FR_CNI');
+  assert.equal(r.valid, true);
+  assert.deepEqual(r.checks, { documentNumber: true, birthDate: true, composite: true });
+  assert.equal(r.lastName, 'DOUEL');
+  assert.equal(r.givenNames, 'CHRISTIANE NI');
+  assert.equal(r.nationality, 'FRA');
+  assert.equal(r.birthDate, '290620');
+  assert.equal(r.expiryDate, null);
+  assert.equal(mrzDocumentKind(r.documentCode), 'id_card');
+  // Chiffre de clé du numéro faux : invalide ; chevrons du nom mal comptés : réparés.
+  assert.equal(parseMrz([cni[0], cni[1].replace('0506932020438', '0506932020439')]).valid, false);
+  assert.equal(parseMrz([cni[0].replace('DOUEL<<<<', 'DOUEL<<<'), cni[1]]).valid, true);
+  // Un vrai TD2 de 36 caractères reste lu en TD2.
+  assert.notEqual(parseMrz(['I<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<', 'D231458907UTO7408122F1204159<<<<<<<6']).format, 'FR_CNI');
+});
