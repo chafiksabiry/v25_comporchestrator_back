@@ -263,7 +263,7 @@ async function readSeatsState({ db, stripe, companyId }) {
   const secretariesOnly = SECRETARIES_ONLY_TIERS.includes(tier);
   const used = await countSeatsUsed(db, companyId, { secretariesOnly, membersOnly: !secretariesOnly });
   if (!subscription || !tier) {
-    return notApplicable('no_subscription', used, tier, "Aucun abonnement Call Centre actif ou en essai : pas de siège à facturer.");
+    return notApplicable('no_subscription', used, tier, "Aucun abonnement Contact Centre actif ou en essai : pas de siège à facturer.");
   }
   if (tier === 'nomad_solo') {
     return notApplicable('nomad_solo', used, tier, "Nomad : un seul utilisateur, aucun siège en plus.");
