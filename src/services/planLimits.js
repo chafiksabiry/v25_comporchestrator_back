@@ -55,12 +55,17 @@ export async function loadAiAgentPlan(companyId) {
 /**
  * Quotas for the company's current plan.
  * Stripe product metadata wins over the copied numeric fields.
+ * Impayé (`past_due` ET `unpaid`) : le forfait reste lu, la ligne reste active (décision du fondateur du 23/11/2026, bandeau « abonnement
+ * impayé ») ; `unpaid` était exclu, ce qui refusait l'appel sortant (« Aucun abonnement actif ») et privait le titulaire NOMAD de la sonnerie
+ * par push. Un abonnement résilié (`canceled`) n'est toujours pas lu.
  */
+export const PLAN_LIMITS_STATUSES = Object.freeze(['active', 'trialing', 'past_due', 'unpaid']);
+
 export async function loadCompanyPlanLimits(companyId) {
   if (!companyId) return null;
   const subscription = await Subscription.findOne({
     companyId: String(companyId),
-    status: { $in: ['active', 'trialing', 'past_due'] },
+    status: { $in: [...PLAN_LIMITS_STATUSES] },
   }).populate('planId');
   const plan = subscription?.planId;
   if (!plan || typeof plan === 'string') return null;
