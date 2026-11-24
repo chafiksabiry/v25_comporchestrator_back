@@ -1,5 +1,6 @@
 // Spécimens FICTIFS pour les tests de la vérification d'identité. Personne fictive des spécimens OACI (Doc 9303) :
 // « ERIKSSON ANNA MARIA », numéro de spécimen L898902C3. Aucun document réel, aucune personne réelle.
+import crypto from 'node:crypto';
 import { checkDigit } from '../services/identity/mrz.js';
 
 const pad = (s, n) => (s + '<'.repeat(n)).slice(0, n);
@@ -79,13 +80,90 @@ export function fakeJpeg({ width = 1600, height = 1000, exif = true, software = 
 }
 
 /** PDF minimal d'une page (texte non pertinent), avec options pour simuler des métadonnées ou du contenu actif. */
-export function fakePdf({ pages = 1, producer = 'SPECIMEN BILLING', js = false, eofs = 1, creationDate = 'D:20261104120000' } = {}) {
-  let s = '%PDF-1.4\n';
-  for (let i = 0; i < pages; i += 1) s += `${i + 3} 0 obj << /Type /Page /Parent 2 0 R >> endobj\n`;
-  s += `2 0 obj << /Type /Pages /Count ${pages} >> endobj\n1 0 obj << /Type /Catalog /Pages 2 0 R ${js ? '/OpenAction << /S /JavaScript /JS (app.alert(1)) >>' : ''} >> endobj\n`;
-  s += `9 0 obj << /Producer (${producer}) /CreationDate (${creationDate}) >> endobj\ntrailer << /Root 1 0 R /Info 9 0 R >>\n`;
-  for (let i = 0; i < eofs; i += 1) s += '%%EOF\n';
-  return Buffer.from(s, 'latin1');
+/** Chiffrement PDF standard R6 (AES-256, ISO 32000-2) : algorithme 2.B de hachage. */
+function pdfHashR6(password, salt, udata = Buffer.alloc(0)) {
+  const pwd = Buffer.from(password, 'utf8').subarray(0, 127);
+  let k = crypto.createHash('sha256').update(Buffer.concat([pwd, salt, udata])).digest();
+  for (let round = 0; ; round += 1) {
+    const k1 = Buffer.concat(Array(64).fill(Buffer.concat([pwd, k, udata])));
+    const c = crypto.createCipheriv('aes-128-cbc', k.subarray(0, 16), k.subarray(16, 32));
+    c.setAutoPadding(false);
+    const e = Buffer.concat([c.update(k1), c.final()]);
+    let mod = 0;
+    for (let i = 0; i < 16; i += 1) mod += e[i];
+    k = crypto.createHash(['sha256', 'sha384', 'sha512'][mod % 3]).update(e).digest();
+    if (round >= 63 && e[e.length - 1] <= round - 31) break; // au moins 64 tours, puis dernier octet <= tours - 32
+  }
+  return k.subarray(0, 32);
+}
+const aesNoIv = (key, data) => { const c = crypto.createCipheriv('aes-256-cbc', key, Buffer.alloc(16)); c.setAutoPadding(false); return Buffer.concat([c.update(data), c.final()]); };
+
+/** Dictionnaire /Encrypt R6 et clé de fichier : `userPassword` vide = le PDF s'ouvre sans mot de passe (protection de modification seulement). */
+function pdfEncryption(userPassword, ownerPassword) {
+  const fek = crypto.randomBytes(32);
+  const uvs = crypto.randomBytes(8); const uks = crypto.randomBytes(8);
+  const U = Buffer.concat([pdfHashR6(userPassword, uvs), uvs, uks]);
+  const UE = aesNoIv(pdfHashR6(userPassword, uks), fek);
+  const ovs = crypto.randomBytes(8); const oks = crypto.randomBytes(8);
+  const O = Buffer.concat([pdfHashR6(ownerPassword, ovs, U), ovs, oks]);
+  const OE = aesNoIv(pdfHashR6(ownerPassword, oks, U), fek);
+  const P = -1028;
+  const perms = Buffer.alloc(16);
+  perms.writeInt32LE(P, 0); perms.writeInt32LE(-1, 4); perms.write('Tadb', 8, 'latin1'); crypto.randomBytes(4).copy(perms, 12);
+  const pc = crypto.createCipheriv('aes-256-ecb', fek, null); pc.setAutoPadding(false);
+  const Perms = Buffer.concat([pc.update(perms), pc.final()]);
+  const hex = (b) => `<${b.toString('hex')}>`;
+  const dict = `<< /Filter /Standard /V 5 /R 6 /Length 256 /CF << /StdCF << /AuthEvent /DocOpen /CFM /AESV3 /Length 32 >> >> /StmF /StdCF /StrF /StdCF /O ${hex(O)} /U ${hex(U)} /OE ${hex(OE)} /UE ${hex(UE)} /Perms ${hex(Perms)} /P ${P} /EncryptMetadata true >>`;
+  const enc = (data) => { const iv = crypto.randomBytes(16); const c = crypto.createCipheriv('aes-256-cbc', fek, iv); return Buffer.concat([iv, c.update(data), c.final()]); };
+  return { dict, enc };
+}
+
+/**
+ * PDF de test VALIDE (table xref, pages A4 avec un rectangle de couleur), généré à la volée : aucun vrai document.
+ * Options : `js` (action JavaScript à l'ouverture), `attachment` (fichier joint), `encrypt` ({ userPassword, ownerPassword }),
+ * `eofs` (révisions incrémentales simulées), `producer`, `creationDate`, `color` (RVB 0..1 du rectangle).
+ */
+export function fakePdf({ pages = 1, producer = 'SPECIMEN BILLING', js = false, attachment = false, encrypt = null, eofs = 1, creationDate = 'D:20261104120000', color = [1, 0, 0] } = {}) {
+  const crypt = encrypt ? pdfEncryption(encrypt.userPassword ?? '', encrypt.ownerPassword ?? 'owner-specimen') : null;
+  const str = (t) => (crypt ? `<${crypt.enc(Buffer.from(t, 'latin1')).toString('hex')}>` : `(${t})`);
+  const objs = []; // [numéro, Buffer]
+  const add = (n, body) => objs.push([n, Buffer.isBuffer(body) ? body : Buffer.from(body, 'latin1')]);
+  const stream = (n, dict, data) => {
+    const payload = crypt ? crypt.enc(Buffer.from(data, 'latin1')) : Buffer.from(data, 'latin1');
+    add(n, Buffer.concat([Buffer.from(`<< ${dict} /Length ${payload.length} >>\nstream\n`, 'latin1'), payload, Buffer.from('\nendstream', 'latin1')]));
+  };
+  const pageNums = Array.from({ length: pages }, (_, i) => 10 + i * 2);
+  const extras = [];
+  if (js) extras.push(`/OpenAction << /S /JavaScript /JS ${str('app.alert(1)')} >>`);
+  if (attachment) extras.push(`/Names << /EmbeddedFiles << /Names [${str('specimen.txt')} 6 0 R] >> >>`);
+  add(1, `<< /Type /Catalog /Pages 2 0 R ${extras.join(' ')} >>`);
+  add(2, `<< /Type /Pages /Kids [${pageNums.map((n) => `${n} 0 R`).join(' ')}] /Count ${pages} >>`);
+  add(3, `<< /Producer ${str(producer)} /CreationDate ${str(creationDate)} >>`);
+  if (attachment) {
+    add(6, `<< /Type /Filespec /F ${str('specimen.txt')} /EF << /F 7 0 R >> >>`);
+    stream(7, '/Type /EmbeddedFile', 'SPECIMEN ATTACHMENT');
+  }
+  pageNums.forEach((n) => {
+    add(n, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << >> /Contents ${n + 1} 0 R >>`);
+    stream(n + 1, '', `${color.join(' ')} rg 40 40 515 762 re f`);
+  });
+  if (crypt) add(5, crypt.dict);
+  objs.sort((a, b) => a[0] - b[0]);
+  const parts = [Buffer.from('%PDF-1.7\n%\xe2\xe3\xcf\xd3\n', 'latin1')];
+  let offset = parts[0].length;
+  const offsets = new Map();
+  for (const [n, body] of objs) {
+    offsets.set(n, offset);
+    const chunk = Buffer.concat([Buffer.from(`${n} 0 obj\n`, 'latin1'), body, Buffer.from('\nendobj\n', 'latin1')]);
+    parts.push(chunk); offset += chunk.length;
+  }
+  const size = Math.max(...objs.map(([n]) => n)) + 1;
+  let xref = `xref\n0 ${size}\n0000000000 65535 f \n`;
+  for (let n = 1; n < size; n += 1) xref += offsets.has(n) ? `${String(offsets.get(n)).padStart(10, '0')} 00000 n \n` : '0000000000 65535 f \n';
+  const id = crypto.createHash('md5').update(String(offset)).digest('hex');
+  xref += `trailer\n<< /Size ${size} /Root 1 0 R /Info 3 0 R ${crypt ? '/Encrypt 5 0 R ' : ''}/ID [<${id}> <${id}>] >>\nstartxref\n${offset}\n`;
+  parts.push(Buffer.from(xref + '%%EOF\n'.repeat(Math.max(1, eofs)), 'latin1'));
+  return Buffer.concat(parts);
 }
 
 export const TEST_KEY = 'a'.repeat(64);

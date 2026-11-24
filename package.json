@@ -20,6 +20,7 @@
   "description": "Backend server for telephony application",
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",
+    "@napi-rs/canvas": "1.1.0",
     "axios": "^1.12.2",
     "body-parser": "^1.20.2",
     "cors": "^2.8.5",
@@ -31,6 +32,7 @@
     "libphonenumber-js": "^1.12.10",
     "mongoose": "^7.6.3",
     "multer": "^2.0.2",
+    "pdfjs-dist": "6.5.438",
     "stripe": "^21.0.1",
     "telnyx": "^1.25.5",
     "twilio": "^5.7.0",

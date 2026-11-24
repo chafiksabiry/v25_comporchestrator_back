@@ -1,10 +1,16 @@
 /**
  * Fichiers de la vérification d'identité (spec §2.1, §5.5, §9.3) : type par SIGNATURE BINAIRE (jamais l'extension ni le
- * Content-Type déclaré), dimensions, métadonnées EXIF (lues AVANT la normalisation qui les supprime), inspection PDF,
+ * Content-Type déclaré), dimensions, métadonnées EXIF (lues AVANT la normalisation qui les supprime), PDF rendu en images,
  * normalisation (2000 px, JPEG, sans métadonnées), chiffrement AES-256-GCM et empreintes HMAC.
  * `sharp` est facultatif (optionalDependencies) : sans lui, l'image est gardée à sa taille d'origine, métadonnées JPEG retirées.
+ * PDF : chaque page (3 au plus) est rendue en JPEG côté serveur par pdf.js (`pdfjs-dist`) sur `@napi-rs/canvas` (binaires
+ * précompilés, aucune bibliothèque système). Seules les images sont lues par l'IA et stockées : JavaScript, fichiers joints et
+ * actions du PDF ne sont jamais exécutés ni conservés. Un PDF chiffré avec un mot de passe d'ouverture VIDE (protection de
+ * modification seulement, cas courant des factures) est lu ; un PDF qui exige un mot de passe est refusé (PDF_PASSWORD_REQUIRED).
  */
 import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
+import path from 'node:path';
 
 export class FileRejected extends Error {
   constructor(code, message) {
@@ -122,30 +128,122 @@ export function exifSignals(buf, mime) {
 const PDF_EDITORS = /canva|microsoft.{0,3}word|sejda|ilovepdf|smallpdf|pdfescape|pdffiller|dochub|pdf-xchange|photoshop|libreoffice writer|google docs|pdfcandy|soda pdf|foxit phantom/i;
 
 const pdfDate = (s) => {
-  const m = /D:(\d{4})(\d{2})?(\d{2})?/.exec(String(s || ''));
+  const m = /^(?:D:)?(\d{4})(\d{2})?(\d{2})?/.exec(String(s || ''));
   return m ? new Date(Date.UTC(+m[1], (+(m[2] || 1)) - 1, +(m[3] || 1))) : null;
 };
 
 /**
- * Inspection d'un PDF : refus des PDF avec JavaScript, fichiers joints ou chiffrement ; plus de `maxPages` pages refusé.
- * Signaux : logiciel d'édition, révisions incrémentales multiples, date de création future.
+ * Signaux d'un PDF (ils ne font qu'envoyer en revue) : logiciel d'édition, révisions incrémentales multiples, date de création
+ * future. `info` vient de pdf.js (métadonnées déchiffrées si le PDF est chiffré) ; les révisions sont comptées dans les octets.
  */
-export function inspectPdf(buf, { maxPages = 3, now = new Date() } = {}) {
-  const text = buf.toString('latin1');
-  if (/\/JavaScript\b|\/JS\b/.test(text)) throw new FileRejected('PDF_ACTIVE_CONTENT', 'PDF avec JavaScript refusé');
-  if (/\/EmbeddedFile\b|\/Launch\b/.test(text)) throw new FileRejected('PDF_ACTIVE_CONTENT', 'PDF avec fichier joint refusé');
-  if (/\/Encrypt\b/.test(text)) throw new FileRejected('PDF_ENCRYPTED', 'PDF protégé refusé');
-  const pages = (text.match(/\/Type\s*\/Page(?![s\w])/g) || []).length;
-  if (pages > maxPages) throw new FileRejected('PDF_TOO_MANY_PAGES', `PDF de ${pages} pages (maximum ${maxPages})`);
-  const producer = (/\/Producer\s*\(([^)]{0,120})\)/.exec(text) || [])[1] || '';
-  const creator = (/\/Creator\s*\(([^)]{0,120})\)/.exec(text) || [])[1] || '';
-  const creationDate = pdfDate((/\/CreationDate\s*\(([^)]{0,40})\)/.exec(text) || [])[1]);
-  const eofCount = (text.match(/%%EOF/g) || []).length;
+export function pdfSignals(buf, { producer = '', creator = '', creationDate = null } = {}, { now = new Date() } = {}) {
+  const eofCount = (buf.toString('latin1').match(/%%EOF/g) || []).length;
   const signals = [];
   if (PDF_EDITORS.test(`${producer} ${creator}`)) signals.push({ code: 'PDF_EDITING_SOFTWARE', detail: `PDF produit par un éditeur : ${`${producer} ${creator}`.trim().slice(0, 80)}` });
   if (eofCount > 2) signals.push({ code: 'PDF_INCREMENTAL_UPDATES', detail: `PDF modifié après sa création (${eofCount - 1} révisions)` });
   if (creationDate && creationDate.getTime() > now.getTime() + 24 * 3600 * 1000) signals.push({ code: 'PDF_DATE_IN_FUTURE', detail: 'Date de création du PDF dans le futur' });
-  return { pages: Math.max(pages, 1), producer, creator, creationDate: creationDate ? creationDate.toISOString().slice(0, 10) : null, signals };
+  return signals;
+}
+
+let pdfLibs;
+/** pdf.js (build « legacy » pour Node) et le canvas natif, chargés à la première utilisation. null si indisponibles. */
+async function loadPdfLibs() {
+  if (pdfLibs !== undefined) return pdfLibs;
+  try {
+    const require = createRequire(import.meta.url);
+    const base = `${path.dirname(require.resolve('pdfjs-dist/package.json'))}${path.sep}`;
+    const [pdfjs, canvas] = await Promise.all([import('pdfjs-dist/legacy/build/pdf.mjs'), import('@napi-rs/canvas')]);
+    pdfLibs = { pdfjs, createCanvas: canvas.createCanvas || canvas.default?.createCanvas, base };
+  } catch {
+    pdfLibs = null;
+  }
+  return pdfLibs;
+}
+
+/** Nombre d'entrées d'un résultat pdf.js (Map dans les versions récentes, objet avant). */
+const count = (x) => (x instanceof Map ? x.size : x && typeof x === 'object' ? Object.keys(x).length : 0);
+
+/** Un seul rendu PDF à la fois : borne la mémoire (une page de 2000 px ≈ 16 Mo de pixels). */
+let renderQueue = Promise.resolve();
+function serialized(fn) {
+  const run = renderQueue.then(fn, fn);
+  renderQueue = run.catch(() => {});
+  return run;
+}
+
+/**
+ * Rend chaque page d'un PDF en JPEG (grand côté = `longSide` px, fond blanc). Le PDF n'est jamais exécuté : pas d'eval, pas de XFA,
+ * pas de scripts ; seule l'apparence des pages est dessinée. Délai maximal `timeoutMs`, image interne bornée à `maxImagePixels`.
+ * @returns {Promise<{pages: Array<{data: Buffer, width: number, height: number}>, info: {producer: string, creator: string, creationDate: Date|null}, activeContent: boolean}>}
+ */
+export function renderPdf(buf, { maxPages = 3, longSide = 2000, timeoutMs = 20_000, maxImagePixels = 50_000_000 } = {}) {
+  return serialized(async () => {
+    const libs = await loadPdfLibs();
+    if (!libs?.createCanvas) throw new FileRejected('IDENTITY_UNAVAILABLE', 'Rendu PDF indisponible (pdfjs-dist ou @napi-rs/canvas absent)');
+    const { pdfjs, createCanvas, base } = libs;
+    const task = pdfjs.getDocument({
+      data: new Uint8Array(buf), password: '', isEvalSupported: false, enableXfa: false, disableFontFace: true, useSystemFonts: false,
+      maxImageSize: maxImagePixels, stopAtErrors: false, verbosity: 0,
+      standardFontDataUrl: `${base}standard_fonts${path.sep}`, cMapUrl: `${base}cmaps${path.sep}`, cMapPacked: true,
+      wasmUrl: `${base}wasm${path.sep}`, iccUrl: `${base}iccs${path.sep}`,
+    });
+    let timer;
+    const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new FileRejected('PDF_UNREADABLE', 'Rendu PDF trop long')), timeoutMs); });
+    const work = (async () => {
+      let doc;
+      try {
+        doc = await task.promise;
+      } catch (e) {
+        if (e?.name === 'PasswordException') throw new FileRejected('PDF_PASSWORD_REQUIRED', 'PDF protégé par un mot de passe d’ouverture');
+        throw new FileRejected('PDF_UNREADABLE', 'PDF illisible ou abîmé');
+      }
+      if (doc.numPages > maxPages) throw new FileRejected('PDF_TOO_MANY_PAGES', `PDF de ${doc.numPages} pages (maximum ${maxPages})`);
+      if (doc.numPages < 1) throw new FileRejected('PDF_UNREADABLE', 'PDF sans page');
+      const meta = await doc.getMetadata().catch(() => null);
+      const info = meta?.info || {};
+      const [js, attachments] = await Promise.all([doc.getJSActions().catch(() => null), doc.getAttachments().catch(() => null)]);
+      const pages = [];
+      for (let n = 1; n <= doc.numPages; n += 1) {
+        const page = await doc.getPage(n);
+        const v1 = page.getViewport({ scale: 1 });
+        const scale = longSide / Math.max(v1.width, v1.height, 1);
+        const viewport = page.getViewport({ scale });
+        const width = Math.max(1, Math.round(viewport.width));
+        const height = Math.max(1, Math.round(viewport.height));
+        const canvas = createCanvas(width, height);
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, width, height);
+        try {
+          await page.render({ canvas, canvasContext: ctx, viewport }).promise;
+        } catch {
+          throw new FileRejected('PDF_UNREADABLE', `Page ${n} illisible`);
+        }
+        pages.push({ data: await canvas.encode('jpeg', 88), width, height });
+        page.cleanup();
+      }
+      return {
+        pages,
+        info: { producer: String(info.Producer || '').slice(0, 120), creator: String(info.Creator || '').slice(0, 120), creationDate: pdfDate(info.CreationDate) },
+        activeContent: count(js) > 0 || count(attachments) > 0,
+      };
+    })();
+    try {
+      return await Promise.race([work, timeout]);
+    } finally {
+      clearTimeout(timer);
+      work.catch(() => {});
+      await task.destroy().catch(() => {});
+    }
+  });
+}
+
+/** Pages d'un fichier stocké : un PDF rendu est gardé en une suite de JPEG (tailles dans `meta.pageBytes`). */
+export function splitPages({ mime, data, meta }) {
+  const sizes = Array.isArray(meta?.pageBytes) ? meta.pageBytes : null;
+  if (!sizes || sizes.length < 2 || sizes.reduce((a, b) => a + b, 0) !== data.length) return [{ mime, data }];
+  let at = 0;
+  return sizes.map((n) => { const part = data.subarray(at, at + n); at += n; return { mime, data: part }; });
 }
 
 /** Retire les segments de métadonnées d'un JPEG (APP1 EXIF/XMP, APP13 IPTC) sans réencoder. */
@@ -181,11 +279,16 @@ export async function prepareUpload(buf, kind, cfg, { now = new Date(), sharp = 
   const mime = sniffType(buf);
   if (mime === 'image/heic') throw new FileRejected('FILE_HEIC', 'Photo HEIC non lue : choisissez JPEG (réglage « Le plus compatible » de l’iPhone) ou envoyez une capture JPEG');
   if (!['image/jpeg', 'image/png', 'image/webp', 'application/pdf'].includes(mime)) throw new FileRejected('FILE_TYPE_NOT_ALLOWED');
-  if (mime === 'application/pdf' && kind !== 'address_proof') throw new FileRejected('FILE_TYPE_NOT_ALLOWED', 'La pièce d’identité doit être une photo');
   const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
   if (mime === 'application/pdf') {
-    const pdf = inspectPdf(buf, { maxPages: cfg.maxPdfPages, now });
-    return { mime, data: buf, size: buf.length, sha256, signals: pdf.signals, meta: { pages: pdf.pages, pdfCreationDate: pdf.creationDate } };
+    // Pièce d'identité ou justificatif : même règle. Le PDF d'origine n'est jamais gardé, seules ses pages en JPEG le sont.
+    const pdf = await renderPdf(buf, { maxPages: cfg.maxPdfPages, longSide: cfg.normalizeLongSide, timeoutMs: cfg.pdfRenderTimeoutMs, maxImagePixels: cfg.pdfMaxImagePixels });
+    const data = Buffer.concat(pdf.pages.map((p) => p.data));
+    const meta = {
+      source: 'pdf', pages: pdf.pages.length, pageBytes: pdf.pages.map((p) => p.data.length), width: pdf.pages[0].width, height: pdf.pages[0].height,
+      pdfCreationDate: pdf.info.creationDate ? pdf.info.creationDate.toISOString().slice(0, 10) : null, pdfActiveContent: pdf.activeContent,
+    };
+    return { mime: 'image/jpeg', data, size: data.length, sha256, signals: pdfSignals(buf, pdf.info, { now }), meta };
   }
   const { signals } = exifSignals(buf, mime);
   const lib = sharp === undefined ? await loadSharp() : sharp;
