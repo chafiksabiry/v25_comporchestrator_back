@@ -36,7 +36,7 @@ export async function context(req, res, { needKey = true } = {}) {
   const asked = req.query?.companyId ?? req.body?.companyId;
   if (asked && String(asked) !== access.companyId) { fail(res, 403, 'Ce centre n’est pas le vôtre.'); return null; }
   if (!canManageIntegrations(access)) { fail(res, 403, 'Vous n’avez pas accès aux intégrations.', 'forbidden'); return null; }
-  if (!(await companyHasIntegrations(access.companyId))) { fail(res, 403, 'Les intégrations ne sont pas incluses dans votre forfait (Full Scope ou Multi-clients).', 'plan_required'); return null; }
+  if (!(await companyHasIntegrations(access.companyId))) { fail(res, 403, 'Les intégrations ne sont pas incluses dans votre forfait (Entreprise ou Contact Centre).', 'plan_required'); return null; }
   if (needKey && !integrationsEnabled()) { fail(res, 503, 'Les intégrations ne sont pas encore activées sur ce serveur.', 'integrations_disabled'); return null; }
   return access;
 }

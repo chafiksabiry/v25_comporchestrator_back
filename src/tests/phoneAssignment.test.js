@@ -409,6 +409,36 @@ test('première ligne (incluse) : rôle management sans paiement ; avec un agent
   assert.ok(!names().includes('number.purchase'));
 });
 
+test('défaut 5 (#618) : abonné NOMAD, vérification d’identité désactivée (drapeau absent) -> aucun NOUVEL achat sans documents validés ; validé -> achat inclus', async () => {
+  const { setIdentityServiceForTests } = await import('../services/identity/service.js');
+  const savedFlag = process.env.IDENTITY_VERIFICATION_ENABLED;
+  delete process.env.IDENTITY_VERIFICATION_ENABLED;
+  let verified = false;
+  setIdentityServiceForTests({ verifiedCountriesFor: async () => (verified ? { verified: true, countries: ['FR'], residence: 'FR', nationality: 'FR', declared: null } : { verified: false, countries: [] }) });
+  try {
+    setup('nomad');
+    const res = mockRes();
+    await phoneNumberController.purchaseTwilioNumber(reqAs('owner', { phoneNumber: '+33612345678', companyId: C1 }), res);
+    assert.equal(res.statusCode, 403, JSON.stringify(res.body));
+    assert.equal(res.body.code, 'IDENTITY_VERIFICATION_UNAVAILABLE');
+    assert.ok(!names().includes('number.purchase'), 'aucun numéro commandé');
+    verified = true;
+    const ok = mockRes();
+    await phoneNumberController.purchaseTwilioNumber(reqAs('owner', { phoneNumber: '+33612345678', companyId: C1 }), ok);
+    assert.equal(ok.statusCode, 200, JSON.stringify(ok.body));
+    assert.ok(names().includes('number.purchase'));
+    // Autre offre (Entreprise), même drapeau éteint : rien ne change, aucune lecture de la vérification.
+    verified = false; calls = []; lines = {}; seq = 0;
+    setup('full_scope');
+    const ent = mockRes();
+    await phoneNumberController.purchaseTwilioNumber(reqAs('owner', { phoneNumber: '+33612345678', companyId: C1 }), ent);
+    assert.equal(ent.statusCode, 200, JSON.stringify(ent.body));
+  } finally {
+    setIdentityServiceForTests(null);
+    if (savedFlag !== undefined) process.env.IDENTITY_VERIFICATION_ENABLED = savedFlag;
+  }
+});
+
 test('achat avec un agent refusé (déjà une ligne / hors centre / Accueil / pas titulaire) : AUCUN numéro commandé, paiement libéré ou remboursé', async () => {
   addLine(); addLine({ assignedRole: 'agent', assignedAgentId: AG1 });
   const cases = [
@@ -775,6 +805,21 @@ test('jeton vocal : la règle ne s\'applique pas aux offres sans agents (Accueil
     setup('accueil'); assert.equal((await voiceTokenAs(AG1, { outbound: true, companyId: C1 })).statusCode, 200);
     setup('nomad'); assert.equal((await voiceTokenAs(AG1, {})).statusCode, 200);
   });
+});
+
+test('défaut 6 (#618) : abonné NOMAD d’avant la vérification d’identité, numéro détenu -> ligne listée et jeton vocal servis sans jamais lire la vérification', async () => {
+  const { setIdentityServiceForTests } = await import('../services/identity/service.js');
+  let read = 0;
+  setIdentityServiceForTests({ verifiedCountriesFor: async () => { read += 1; return { verified: false, countries: [] }; }, hasRecord: async () => { read += 1; return false; } });
+  try {
+    voiceStubs(); setup('nomad');
+    const held = addLine();
+    const rows = await listAs('owner');
+    assert.deepEqual(rows.map((r) => String(r._id)), [String(held._id)], 'son numéro reste listé');
+    const r = await voiceTokenAs('owner', { outbound: true, companyId: C1 });
+    assert.equal(r.statusCode, 200, JSON.stringify(r.body));
+    assert.equal(read, 0, 'la vérification n’est lue que pour un NOUVEL achat');
+  } finally { setIdentityServiceForTests(null); }
 });
 
 async function browserOutbound(user, { to = '+33612345678', secretary = true, companyId = C1 } = {}) {

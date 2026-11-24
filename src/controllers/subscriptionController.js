@@ -19,6 +19,8 @@ import { currencyForCountry, pickCurrency } from '../services/currency.js';
 import { stripeLocaleFromRequest } from '../services/stripeLocale.js';
 import { callcenterTierFromMetadata } from '../services/callcenterTier.js';
 import { soloCheckoutEligibility } from '../services/numberAvailability.js';
+import { onStripeSubscriptionEnded } from '../services/nomadNumberLifecycle.js';
+import { existingNomadSubscriptionGate, nomadPendingNumberPurchase, nomadSoloPaymentGate, purchaseChosenNumberAfterPayment } from '../services/nomadSoloPayment.js';
 
 function numberOrNull(value) {
   const n = Number(value);
@@ -197,7 +199,13 @@ export const subscriptionController = {
         if (limits.aiTokensIncluded != null) payload.planId.aiTokensIncluded = limits.aiTokensIncluded;
         if (limits.metadata) payload.planId.metadata = limits.metadata;
       }
-      res.json({ success: true, data: payload, limits });
+      // NOMAD (défaut 8, #618) : achat du numéro choisi encore en cours après le paiement -> `pendingNumberPurchase` (le portail attend
+      // au lieu de proposer un autre numéro ; un achat resté en cours plus de 2 min est résolu ici, comme à la confirmation).
+      let pendingNumberPurchase = null;
+      if (callcenterTierFromMetadata(metadataObject(payload.planId?.metadata)) === 'nomad_solo') {
+        pendingNumberPurchase = await nomadPendingNumberPurchase(companyId).catch(() => null);
+      }
+      res.json({ success: true, data: payload, limits, ...(pendingNumberPurchase ? { pendingNumberPurchase } : {}) });
     } catch (error) {
       res.status(500).json({ error: 'Error fetching subscription' });
     }
@@ -259,9 +267,20 @@ export const subscriptionController = {
       const { plan, stripePriceId: effectivePriceId } = resolved;
       // Nomad Solo (décision du 19/11) : souscrit seulement là où un numéro est disponible, vérifié ici AVANT toute création de
       // paiement, à partir du profil enregistré (pays de résidence, pays de la pièce FR/GB/US) ; jamais d'après le corps de la requête.
+      // Parcours Nomad (23/11) : garde complète du paiement — (a) vérification validée (ci-dessus, #252), (b) essai terminé ou
+      // constaté impossible, (c) numéro choisi revérifié maintenant (aucune réservation). Le numéro choisi est gardé sur le paiement
+      // pour être acheté à la confirmation.
+      let nomadChosenNumber = null;
       if (callcenterTierFromMetadata(resolved.productMetadata ?? plan.metadata) === 'nomad_solo') {
+        // Jamais un second abonnement NOMAD (défaut 2, #618) : actif ou impayé -> 409 NOMAD_SUBSCRIPTION_EXISTS (régularisation par le
+        // portail client Stripe pour un impayé), avant toute autre vérification et tout paiement.
+        const existing = await existingNomadSubscriptionGate(companyId);
+        if (!existing.ok) return res.status(existing.status).json(existing.body);
         const eligibility = await soloCheckoutEligibility(req, companyId);
         if (!eligibility.ok) return res.status(eligibility.status).json(eligibility.body);
+        const nomadGate = await nomadSoloPaymentGate(req, { companyId, userId: access.userId, chosenNumber: req.body?.chosenNumber });
+        if (!nomadGate.ok) return res.status(nomadGate.status).json(nomadGate.body);
+        nomadChosenNumber = nomadGate.chosen;
       }
       // Devise du pays (EUR, USD, GBP, CAD) si le prix Stripe la propose, au montant que ce prix fixe pour elle (Nomad Solo : 29,99 en CAD) ; sinon celle du prix.
       const chosenCurrency = pickCurrency(requestedCurrency, resolved.amounts, resolved.currency);
@@ -280,7 +299,8 @@ export const subscriptionController = {
           companyId: String(companyId),
           stripePriceId: effectivePriceId,
           planId: plan._id,
-          planName: planName || plan.name
+          planName: planName || plan.name,
+          ...(nomadChosenNumber ? { chosenNumber: nomadChosenNumber } : {})
         }
       });
 
@@ -407,7 +427,9 @@ export const subscriptionController = {
       }
 
       if (payment.status === 'succeeded' && payment.fulfilledAt) {
-        return res.json({ success: true, payment, alreadyFulfilled: true });
+        // Parcours Nomad : relecture idempotente du résultat de l'achat du numéro choisi (le lance s'il n'a pas encore eu lieu).
+        const numberPurchase = payment.meta?.chosenNumber ? await purchaseChosenNumberAfterPayment(payment) : null;
+        return res.json({ success: true, payment, alreadyFulfilled: true, ...(numberPurchase ? { numberPurchase } : {}) });
       }
 
       const meta = payment.meta || {};
@@ -448,7 +470,8 @@ export const subscriptionController = {
         });
         payment.fulfilledAt = new Date();
         await payment.save();
-        return res.json({ success: true, payment, activation });
+        const numberPurchase = payment.meta?.chosenNumber ? await purchaseChosenNumberAfterPayment(payment) : null;
+        return res.json({ success: true, payment, activation, ...(numberPurchase ? { numberPurchase } : {}) });
       }
 
       const sessionId = providerRef || payment.providerRef;
@@ -478,7 +501,9 @@ export const subscriptionController = {
       });
       payment.fulfilledAt = new Date();
       await payment.save();
-      res.json({ success: true, payment, activation });
+      // Parcours Nomad : achat du numéro choisi déclenché par la confirmation du paiement (première ligne comprise dans l'abonnement).
+      const numberPurchase = payment.meta?.chosenNumber ? await purchaseChosenNumberAfterPayment(payment) : null;
+      res.json({ success: true, payment, activation, ...(numberPurchase ? { numberPurchase } : {}) });
     } catch (error) {
       console.error('[subscriptions/checkout/confirm]', error);
       res.status(500).json({ error: 'Failed to confirm subscription checkout', message: error.message });
@@ -498,8 +523,14 @@ export const subscriptionController = {
         return res.status(503).json({ error: 'Price details unavailable', code: 'AVAILABILITY_UNAVAILABLE', retryable: true });
       }
       if (callcenterTierFromMetadata(priceMetadata) === 'nomad_solo') {
+        const existing = await existingNomadSubscriptionGate(companyId);
+        if (!existing.ok) return res.status(existing.status).json(existing.body);
         const eligibility = await soloCheckoutEligibility(req, companyId);
         if (!eligibility.ok) return res.status(eligibility.status).json(eligibility.body);
+        // Même garde Nomad que /checkout/init : essai et numéro choisi. Cette route ancienne n'enregistre pas le numéro choisi pour
+        // l'achat automatique : le parcours Nomad du portail passe par /checkout/init (paiement intégré).
+        const nomadGate = await nomadSoloPaymentGate(req, { companyId, userId: access.userId, chosenNumber: req.body?.chosenNumber });
+        if (!nomadGate.ok) return res.status(nomadGate.status).json(nomadGate.body);
       }
       console.log(`💳 Creating checkout session for user ${userId}, plan ${planName || 'unknown'}, price ${priceId}`);
       const session = await stripeService.createCheckoutSession(
@@ -575,6 +606,27 @@ export const subscriptionController = {
   }
 };
 
+/**
+ * Parcours Nomad : achat du numéro choisi déclenché aussi par le webhook Stripe (si la confirmation du navigateur n'arrive pas).
+ * Seulement pour le paiement de CETTE session (metadata.paymentId, providerRef = session.id), payé ; une seule fois (claim atomique).
+ */
+async function purchaseNomadChosenNumberFromWebhook(session) {
+  try {
+    const paymentId = session?.metadata?.paymentId;
+    if (!paymentId || !mongoose.Types.ObjectId.isValid(paymentId)) return;
+    const paid = session.status === 'complete' || session.payment_status === 'paid' || session.payment_status === 'no_payment_required';
+    if (!paid) return;
+    const payment = await CompanyPayment.findById(paymentId);
+    if (!payment || payment.purpose !== 'subscription_upgrade' || !payment.meta?.chosenNumber) return;
+    if (String(payment.providerRef || payment.meta?.stripeSessionId || '') !== String(session.id)) return;
+    if (session.metadata?.companyId && String(session.metadata.companyId) !== String(payment.meta?.companyId)) return;
+    const outcome = await purchaseChosenNumberAfterPayment(payment);
+    console.log(`[webhook] Nomad : numéro choisi pour le paiement ${paymentId} -> ${outcome?.status || 'n/a'}`);
+  } catch (error) {
+    console.error('[webhook] Nomad : achat du numéro choisi en échec :', error?.message || error);
+  }
+}
+
 async function handleCheckoutSessionCompleted(session) {
   const userId = session.client_reference_id;
   const companyId = session.metadata?.companyId;
@@ -592,6 +644,7 @@ async function handleCheckoutSessionCompleted(session) {
         return;
       }
       await activateFromStripeCheckoutSession(session);
+      await purchaseNomadChosenNumberFromWebhook(session);
       return;
     }
 
@@ -618,6 +671,8 @@ async function handleSubscriptionUpdated(subscription) {
     { stripeSubscriptionId: subscription.id },
     subscriptionUpdateFields(subscription)
   );
+  // NOMAD résilié (D3) : numéro gardé jusqu'à la fin de la période payée, puis remis dans le stock. `cancel_at_period_end` seul : rien.
+  if (subscription?.status === 'canceled') await onStripeSubscriptionEnded(subscription);
 }
 
 async function handleSubscriptionDeleted(subscription) {
@@ -639,6 +694,8 @@ async function handleSubscriptionDeleted(subscription) {
     );
     console.log(`✅ Reset company ${subRecord.companyId} subscription status to free`);
   }
+  // NOMAD résilié (D3) : numéro gardé jusqu'à la fin de la période payée, puis remis dans le stock (nomadNumberLifecycle.js).
+  await onStripeSubscriptionEnded({ ...subscription, status: 'canceled' });
 }
 
 async function handleProductUpdated(product) {

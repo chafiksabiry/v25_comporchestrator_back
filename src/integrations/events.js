@@ -40,7 +40,7 @@ export function crmCallInput(call = {}) {
     durationSeconds: p.durationSeconds,
     fromNumber: p.from,
     toNumber: p.to,
-    summary: `${label} passé par HARX Call Centre${p.agentName ? ` (${p.agentName})` : ''}, durée ${p.durationSeconds} s, statut : ${p.status}.`,
+    summary: `${label} passé par HARX Contact Centre${p.agentName ? ` (${p.agentName})` : ''}, durée ${p.durationSeconds} s, statut : ${p.status}.`,
   };
 }
 

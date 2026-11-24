@@ -8,6 +8,7 @@ import { missingConfig } from './config.js';
 import { createRateLimiter } from './rateLimit.js';
 import { isWebConversation } from './webChat.js';
 import { ADMIN_INBOX_HTML } from './adminInbox.js';
+import { isIdentityConversation } from '../support/inboxRequests.js';
 
 const safeEqual = (a, b) => {
   const x = Buffer.from(String(a || ''));
@@ -92,7 +93,7 @@ export function createWhatsAppRouter({ agent, store, whatsapp, kb, cfg, auth = a
     return res.type('html').send(ADMIN_INBOX_HTML);
   });
   router.get('/admin/conversations', admin, async (req, res) => {
-    const channel = ['web', 'whatsapp', 'salesiq'].includes(String(req.query.channel)) ? String(req.query.channel) : undefined;
+    const channel = ['web', 'whatsapp', 'salesiq', 'identity'].includes(String(req.query.channel)) ? String(req.query.channel) : undefined;
     res.set('Cache-Control', 'no-store');
     res.json({ conversations: await store.listConversations({ channel, limit: req.query.limit }) });
   });
@@ -123,6 +124,8 @@ export function createWhatsAppRouter({ agent, store, whatsapp, kb, cfg, auth = a
     if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
     const text = String(req.body?.text || '').trim();
     if (!text) return res.status(400).json({ error: 'text is required' });
+    // Demande d'identité : aucun destinataire WhatsApp ; elle se traite (et se ferme) dans la page Admin › Identité.
+    if (isIdentityConversation(ticket.waId)) return res.status(409).json({ error: 'Identity review: decide in the identity admin page' });
     try {
       // Visiteur du chat du site : pas de message Meta, la réponse est lue par le navigateur dans l'historique.
       const ids = isWebConversation(ticket.waId) ? [] : await whatsapp.sendText(ticket.waId, text);

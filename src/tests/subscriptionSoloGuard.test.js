@@ -18,7 +18,9 @@ const { SubscriptionPlan } = await import('../models/SubscriptionPlan.js');
 const { default: CompanyPayment } = await import('../models/CompanyPayment.js');
 const { clearCompanyCache } = await import('../middleware/companyScope.js');
 const { phoneNumberService } = await import('../services/phoneNumberService.js');
-const { clearAvailabilityCache, countryAvailability, soloCheckoutEligibility, NO_NUMBERS_IN_COUNTRY, RESIDENCE_COUNTRY_REQUIRED, AVAILABILITY_UNAVAILABLE } = await import('../services/numberAvailability.js');
+const { clearAvailabilityCache, countryAvailability, soloCheckoutEligibility, NO_NUMBERS_IN_COUNTRY, RESIDENCE_COUNTRY_REQUIRED, AVAILABILITY_UNAVAILABLE, IDENTITY_VERIFICATION_UNAVAILABLE } = await import('../services/numberAvailability.js');
+const { setIdentityServiceForTests } = await import('../services/identity/service.js');
+const { Subscription } = await import('../models/Subscription.js');
 
 const C1 = '64b0000000000000000000c1';
 const NOMAD = { harx_product: 'callcenter', callcenter_tier: 'nomad_solo' };
@@ -31,8 +33,19 @@ const storedProfile = (over = {}) => ({ name: 'Ada', siren: '', representativeEm
 const saved = { log: console.log, warn: console.warn, error: console.error };
 const orig = { ...stripeService };
 const origPhone = { ...phoneNumberService };
-let calls; let profile; let stock; let twilioDown; let inventoryDown; let registrationDown; let lookups;
+let calls; let profile; let stock; let twilioDown; let inventoryDown; let registrationDown; let lookups; let verifiedNow; let subs;
+// Vérification d'identité (défaut 5, #618 : exigée même drapeau éteint) : par défaut, la déclaration enregistrée est VÉRIFIÉE
+// (résidence et pièce). `verifiedNow = false` : aucune vérification validée.
+const identityOfProfile = () => {
+  const residence = String(profile?.country || '').toUpperCase() || null;
+  const nationality = String(profile?.identityCountry || (profile?.documents || []).find((d) => d.kind === 'identity')?.issuingCountry || '').toUpperCase() || null;
+  return { verified: true, countries: [...new Set([residence, nationality].filter(Boolean))], residence, nationality, declared: null };
+};
+setIdentityServiceForTests({ verifiedCountriesFor: async () => (verifiedNow ? identityOfProfile() : { verified: false, countries: [] }) });
 beforeEach(() => {
+  verifiedNow = true; subs = [];
+  // Abonnements existants de la société (garde « jamais un second abonnement NOMAD », défaut 2) : aucun par défaut.
+  Subscription.find = () => ({ populate: async () => subs });
   console.log = () => {}; console.warn = () => {}; console.error = () => {};
   clearCompanyCache(); clearAvailabilityCache();
   calls = { sessions: 0, payments: 0, twilio: [] }; lookups = 0;
@@ -46,6 +59,8 @@ beforeEach(() => {
   stripeService.createCheckoutSession = async () => { calls.sessions += 1; return { id: 'cs', url: 'https://checkout' }; };
   SubscriptionPlan.findOne = async ({ stripePriceId }) => ({ _id: `plan_${stripePriceId}`, name: 'Plan', price: 29.99, currency: 'eur', stripePriceId, metadata: products[stripePriceId] });
   CompanyPayment.create = async (doc) => { calls.payments += 1; return { _id: 'pay_1', ...doc, save: async () => {} }; };
+  // Parcours Nomad (23/11) : numéro choisi revérifié à l'initialisation du paiement (ici : numéro du stock, libre).
+  phoneNumberService.findClaimableInventoryNumber = async () => ({ owned: true, claimable: true, number: {} });
   phoneNumberService.listClaimableInventory = async ({ countryCode }) => { calls.twilio.push(`inv:${countryCode}`); if (twilioDown || inventoryDown) throw new Error('down'); return []; };
   phoneNumberService.searchTwilioNumbers = async ({ countryCode }) => {
     calls.twilio.push(`search:${countryCode}`);
@@ -62,7 +77,7 @@ beforeEach(() => {
     return { ok: true, json: async () => ({ success: true, data: { companyId: C1, isOwner: true } }) };
   };
 });
-after(() => { Object.assign(console, saved); Object.assign(stripeService, orig); Object.assign(phoneNumberService, origPhone); });
+after(() => { Object.assign(console, saved); Object.assign(stripeService, orig); Object.assign(phoneNumberService, origPhone); setIdentityServiceForTests(null); });
 
 async function post(path, body) {
   const layer = subscriptionRoutes.stack.find((l) => l.route && l.route.path === path && l.route.methods.post);
@@ -72,6 +87,9 @@ async function post(path, body) {
   for (const s of layer.route.stack) { let next = false; await s.handle(req, res, () => { next = true; }); if (!next) break; }
   return out;
 }
+// Numéro choisi (parcours Nomad) dans le pays donné : exigé par la garde du paiement depuis le 23/11.
+const NUM = { MA: '+212522000001', US: '+12125550101', GB: '+442071234567', DE: '+4930123456' };
+const chosen = (cc) => ({ chosenNumber: { phoneNumber: NUM[cc], country: cc } });
 const INIT = (over = {}) => ({ userId: 'u-owner', companyId: C1, priceId: 'price_nomad', planName: 'Nomad Solo', provider: 'stripe', uiMode: 'embedded', ...over });
 const LEGACY = (over = {}) => ({ userId: 'u-owner', companyId: C1, priceId: 'price_nomad', planName: 'Nomad Solo', successUrl: 'https://ok', cancelUrl: 'https://ko', ...over });
 
@@ -86,7 +104,7 @@ for (const [path, body, okCode] of [['/checkout/init', INIT, 201], ['/checkout',
 
   test(`${path} Nomad Solo : pays de résidence avec numéros -> paiement créé`, async () => {
     stock = { MA: true };
-    const r = await post(path, body());
+    const r = await post(path, body(chosen('MA')));
     assert.equal(r.code, okCode, JSON.stringify(r.body));
     assert.equal(calls.sessions, 1);
   });
@@ -94,17 +112,22 @@ for (const [path, body, okCode] of [['/checkout/init', INIT, 201], ['/checkout',
   test(`${path} Nomad Solo : résident hors Europe avec pièce FR/GB/US ENREGISTRÉE et numéros dans ce pays -> autorisé`, async () => {
     profile = storedProfile({ country: 'MA', identityCountry: 'US' });
     stock = { US: true };
-    assert.equal((await post(path, body())).code, okCode);
+    assert.equal((await post(path, body(chosen('US')))).code, okCode);
     // Forme enregistrée sans identityCountry : pays du justificatif « identity ».
     clearCompanyCache(); clearAvailabilityCache(); calls.sessions = 0;
     profile = storedProfile({ country: 'MA', documents: [{ name: 'passeport.pdf', size: 10, kind: 'identity', issuingCountry: 'GB' }] });
     stock = { GB: true };
-    assert.equal((await post(path, body())).code, okCode);
+    assert.equal((await post(path, body(chosen('GB')))).code, okCode);
   });
 
-  test(`${path} Nomad Solo : pièce d'un autre pays (DE) ou pays de la pièce sans numéro -> 409`, async () => {
+  test(`${path} Nomad Solo : pièce de n'importe quel pays (DE) avec numéros -> autorisé ; pays sans numéro -> 409`, async () => {
     profile = storedProfile({ country: 'MA', identityCountry: 'DE' });
     stock = { DE: true };
+    assert.equal((await post(path, body(chosen('DE')))).code, okCode);
+    clearCompanyCache(); clearAvailabilityCache(); calls.sessions = 0; calls.payments = 0;
+    // Français vivant au Maroc : seuls MA et FR comptent, jamais les USA même s'ils ont des numéros.
+    profile = storedProfile({ country: 'MA', identityCountry: 'FR' });
+    stock = { US: true, GB: true };
     assert.equal((await post(path, body())).code, 409);
     clearCompanyCache(); clearAvailabilityCache();
     profile = storedProfile({ country: 'MA', identityCountry: 'FR' });
@@ -173,7 +196,61 @@ for (const [path, body, okCode] of [['/checkout/init', INIT, 201], ['/checkout',
     assert.equal(calls.payments + calls.sessions, 0);
     // Inventaire revenu, numéros en stock : rien n'était mis en cache, le paiement s'ouvre.
     inventoryDown = false; stock = { MA: true }; clearCompanyCache();
-    assert.equal((await post(path, body())).code, okCode);
+    assert.equal((await post(path, body(chosen('MA')))).code, okCode);
+  });
+
+  test(`${path} Nomad Solo (parcours du 23/11) : aucun numéro choisi -> 400 CHOSEN_NUMBER_REQUIRED, aucun paiement`, async () => {
+    stock = { MA: true };
+    const r = await post(path, body());
+    assert.equal(r.code, 400, JSON.stringify(r.body));
+    assert.equal(r.body.code, 'CHOSEN_NUMBER_REQUIRED');
+    assert.equal(calls.payments + calls.sessions, 0);
+  });
+
+  test(`${path} Nomad Solo (parcours du 23/11) : numéro choisi pris entre-temps (revérifié) -> 409 NUMBER_NO_LONGER_AVAILABLE, aucun paiement`, async () => {
+    stock = { MA: true };
+    phoneNumberService.findClaimableInventoryNumber = async () => ({ owned: true, claimable: false, number: {} });
+    const r = await post(path, body(chosen('MA')));
+    assert.equal(r.code, 409, JSON.stringify(r.body));
+    assert.equal(r.body.code, 'NUMBER_NO_LONGER_AVAILABLE');
+    assert.equal(calls.payments + calls.sessions, 0);
+  });
+
+  test(`${path} Nomad Solo (parcours du 23/11) : numéro d'un pays non autorisé -> 403 COUNTRY_NOT_ALLOWED, aucun paiement`, async () => {
+    stock = { MA: true };
+    const r = await post(path, body(chosen('US')));
+    assert.equal(r.code, 403, JSON.stringify(r.body));
+    assert.equal(r.body.code, 'COUNTRY_NOT_ALLOWED');
+    assert.equal(calls.payments + calls.sessions, 0);
+  });
+
+  test(`${path} défaut 5 : vérification d’identité désactivée (drapeau absent) et non validée -> 409 ${IDENTITY_VERIFICATION_UNAVAILABLE}, aucun paiement`, async () => {
+    const savedFlag = process.env.IDENTITY_VERIFICATION_ENABLED;
+    delete process.env.IDENTITY_VERIFICATION_ENABLED;
+    try {
+      stock = { MA: true }; verifiedNow = false;
+      const r = await post(path, body(chosen('MA')));
+      assert.equal(r.code, 409, JSON.stringify(r.body));
+      assert.equal(r.body.code, IDENTITY_VERIFICATION_UNAVAILABLE);
+      assert.equal(calls.payments + calls.sessions, 0);
+    } finally { if (savedFlag !== undefined) process.env.IDENTITY_VERIFICATION_ENABLED = savedFlag; }
+  });
+
+  for (const status of ['active', 'trialing', 'past_due', 'unpaid']) {
+    test(`${path} défaut 2 : abonnement NOMAD ${status} -> 409 NOMAD_SUBSCRIPTION_EXISTS, jamais un second abonnement`, async () => {
+      stock = { MA: true };
+      subs = [{ status, planId: { metadata: NOMAD } }];
+      const r = await post(path, body(chosen('MA')));
+      assert.equal(r.code, 409, JSON.stringify(r.body));
+      assert.deepEqual([r.body.code, r.body.subscriptionStatus, r.body.unpaid], ['NOMAD_SUBSCRIPTION_EXISTS', status, status === 'past_due' || status === 'unpaid']);
+      assert.equal(calls.payments + calls.sessions, 0);
+    });
+  }
+
+  test(`${path} défaut 2 : abonnement NOMAD résilié, ou abonnement d’une autre offre -> pas de refus « déjà abonné »`, async () => {
+    stock = { MA: true };
+    subs = [{ status: 'active', planId: { metadata: CLOUD } }];
+    assert.equal((await post(path, body(chosen('MA')))).code, okCode);
   });
 
   test(`${path} autre offre (CLOUD) : aucune vérification des numéros`, async () => {
@@ -189,14 +266,23 @@ test('/checkout/init Nomad Solo : profil relu sans cache (pays enregistré juste
   assert.equal((await post('/checkout/init', INIT())).code, 409);
   profile = storedProfile({ country: 'MA', identityCountry: 'US' });
   stock = { US: true };
-  assert.equal((await post('/checkout/init', INIT())).code, 201, 'pas de lecture du cache de 60 s');
+  assert.equal((await post('/checkout/init', INIT(chosen('US')))).code, 201, 'pas de lecture du cache de 60 s');
+});
+
+test('/checkout/init Nomad Solo : le numéro choisi est gardé sur le paiement (acheté à la confirmation), jamais réservé', async () => {
+  stock = { MA: true };
+  let created;
+  CompanyPayment.create = async (doc) => { created = doc; calls.payments += 1; return { _id: 'pay_1', ...doc, save: async () => {} }; };
+  const r = await post('/checkout/init', INIT(chosen('MA')));
+  assert.equal(r.code, 201, JSON.stringify(r.body));
+  assert.deepEqual(created.meta.chosenNumber, { phoneNumber: NUM.MA, country: 'MA' });
 });
 
 test('soloCheckoutEligibility : profil non lisible pour cause d’authentification -> statut transmis (401), pas 503', async () => {
   const { ScopeError } = await import('../middleware/companyScope.js');
   const r = await soloCheckoutEligibility({}, C1, { profile: async () => { throw new ScopeError(401, 'Authentication required', 'AUTH_REQUIRED'); } });
   assert.deepEqual([r.ok, r.status, r.body.code], [false, 401, 'AUTH_REQUIRED']);
-  const ok = await soloCheckoutEligibility({}, C1, { profile: async () => ({ country: 'JP', identityCountry: 'GB' }), service: { listClaimableInventory: async () => [], searchTwilioNumbers: async ({ countryCode }) => (countryCode === 'GB' ? [{}] : []) } });
+  const ok = await soloCheckoutEligibility({}, C1, { profile: async () => ({ country: 'JP', identityCountry: 'GB' }), verifiedCountries: async () => ({ verified: true, countries: ['JP', 'GB'], residence: 'JP', nationality: 'GB', declared: null }), service: { listClaimableInventory: async () => [], searchTwilioNumbers: async ({ countryCode }) => (countryCode === 'GB' ? [{}] : []) } });
   assert.deepEqual(ok, { ok: true, numberCountry: 'GB' });
 });
 

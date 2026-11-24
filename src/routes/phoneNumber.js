@@ -22,6 +22,10 @@ router.get('/search', ...guard(companyFrom('companyId')), phoneNumberController.
 // must be allowed to it (else reason `not_allowed`). Answer cached per country.
 router.get('/availability', publicAvailabilityIfNoCompany, ...guard(companyFromIfPresent), phoneNumberController.numberAvailability.bind(phoneNumberController));
 
+// Parcours Nomad : le numéro choisi (sans réservation) est-il encore disponible, juste avant d'ouvrir le paiement ? Même contrôle de
+// pays que la recherche ; refus fermé (503) si la disponibilité est illisible. Le paiement le revérifie lui-même (garde du paiement).
+router.post('/still-available', ...guard(companyFrom('companyId')), phoneNumberController.numberStillAvailable.bind(phoneNumberController));
+
 // Search available Twilio phone numbers
 router.get('/search/twilio', ...guard(companyFrom('companyId')), phoneNumberController.searchTwilioNumbers.bind(phoneNumberController));
 

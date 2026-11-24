@@ -1,8 +1,8 @@
 import { phoneNumberService } from './phoneNumberService.js';
 import { checkNumberCountry } from './numberCountry.js';
 import { companyNumberProfile, normalizeCountryCode, ScopeError } from '../middleware/companyScope.js';
-import { IDENTITY_NUMBER_COUNTRIES } from '../utils/europeZone.js';
 import { numberZonePeers } from '../utils/numberZone.js';
+import { getIdentityConfig } from './identity/config.js';
 
 /**
  * Disponibilité des numéros dans un pays (décision du 19/11) : Nomad Solo n'est souscrit que là où HARX peut vraiment fournir un
@@ -81,14 +81,15 @@ export async function countryAvailability(countryCode, { service = phoneNumberSe
 
 /**
  * Disponibilité pour l'appelant. Avec `companyId` (abonné connu), le pays doit aussi être autorisé à cette entreprise (pays de
- * l'entreprise, zone Europe, ou pays de la pièce d'identité enregistrée pour FR/GB/US) : sinon `not_allowed`.
+ * l'entreprise, zone Europe, ou pays de la pièce d'identité enregistrée) : sinon `not_allowed`.
  * @returns {Promise<{status: number, body: object}>}
  */
 export async function availabilityFor(req, { countryCode, companyId } = {}, deps = {}) {
   const cc = normalizeCountryCode(countryCode);
   if (!/^[A-Z]{2}$/.test(cc)) return { status: 400, body: { error: 'A two-letter countryCode is required', code: 'COUNTRY_CODE_REQUIRED' } };
   if (companyId) {
-    const gate = await (deps.check || checkNumberCountry)(req, companyId, { countryCode: cc });
+    // Affichage seulement : sans vérification d'identité, la règle historique s'applique (le paiement et l'achat restent gardés).
+    const gate = await (deps.check || checkNumberCountry)(req, companyId, { countryCode: cc, allowUnverified: true }, deps.countryDeps || {});
     if (!gate.ok) {
       if (gate.status === 403) return { status: 200, body: { available: false, reason: 'not_allowed', countryCode: cc } };
       return { status: gate.status, body: gate.body };
@@ -101,12 +102,22 @@ export async function availabilityFor(req, { countryCode, companyId } = {}, deps
 export const NO_NUMBERS_IN_COUNTRY = 'NO_NUMBERS_IN_COUNTRY';
 export const RESIDENCE_COUNTRY_REQUIRED = 'RESIDENCE_COUNTRY_REQUIRED';
 export const AVAILABILITY_UNAVAILABLE = 'AVAILABILITY_UNAVAILABLE';
+/** Vérification d'identité activée : paiement Nomad Solo refusé tant que les documents ne sont pas validés (spec §8.1). */
+export const IDENTITY_NOT_VERIFIED = 'IDENTITY_NOT_VERIFIED';
+export const IDENTITY_REVERIFICATION_REQUIRED = 'IDENTITY_REVERIFICATION_REQUIRED';
+/** Vérification d'identité désactivée côté serveur (IDENTITY_VERIFICATION_ENABLED absent) et aucune vérification validée : aucun paiement. */
+export const IDENTITY_VERIFICATION_UNAVAILABLE = 'IDENTITY_VERIFICATION_UNAVAILABLE';
+
+async function defaultVerifiedCountries(companyId) {
+  const { identityService } = await import('./identity/service.js');
+  return (await identityService()).verifiedCountriesFor(companyId);
+}
 
 /**
  * Éligibilité Nomad Solo AVANT paiement (décisions du 19/11), calculée côté serveur à partir du profil ENREGISTRÉ seulement
  * (service d'inscription : `company.profile.country` et `company.profile.identityCountry`, sinon `issuingCountry` du justificatif
  * « identity ») ; aucune valeur de la requête n'est lue. Éligible si le pays de résidence a des numéros, ou si le pays de la pièce
- * d'identité est FR, GB ou US et a des numéros.
+ * d'identité (quel qu'il soit, décision du 22/11) a des numéros.
  *  - pays de résidence non enregistré : 409 RESIDENCE_COUNTRY_REQUIRED (le front doit l'enregistrer avant le paiement) ;
  *  - aucun numéro : 409 NO_NUMBERS_IN_COUNTRY ;
  *  - lecture du profil ou de la disponibilité impossible : 503 AVAILABILITY_UNAVAILABLE (`retryable: true`), jamais « éligible ».
@@ -137,8 +148,32 @@ export async function soloCheckoutEligibility(req, companyId, deps = {}) {
       body: { error: 'Residence country is not saved on the profile', code: RESIDENCE_COUNTRY_REQUIRED },
     };
   }
-  const candidates = [residence];
-  if (IDENTITY_NUMBER_COUNTRIES.includes(identity) && identity !== residence) candidates.push(identity);
+  let candidates = [residence];
+  if (/^[A-Z]{2}$/.test(identity) && identity !== residence) candidates.push(identity);
+  {
+    // Seuls les pays VÉRIFIÉS côté serveur comptent (résidence OU nationalité, toute nationalité ; plus de liste FR/GB/US). Règle du
+    // fondateur (défaut 5 de l'audit #618) : aucun numéro sans documents contrôlés, MÊME si IDENTITY_VERIFICATION_ENABLED est absent.
+    // Aucune vérification validée : 409 IDENTITY_NOT_VERIFIED (vérification activée) ou IDENTITY_VERIFICATION_UNAVAILABLE (désactivée :
+    // l'abonné ne peut pas encore la faire), aucun paiement.
+    const enabled = (deps.identityConfig || getIdentityConfig)().enabled;
+    let verified;
+    try {
+      verified = await (deps.verifiedCountries || defaultVerifiedCountries)(companyId);
+    } catch {
+      return unavailable();
+    }
+    if (!verified?.verified) {
+      return enabled
+        ? { ok: false, status: 409, body: { error: 'Identity documents are not verified', code: IDENTITY_NOT_VERIFIED } }
+        : { ok: false, status: 409, body: { error: 'Identity verification is unavailable', code: IDENTITY_VERIFICATION_UNAVAILABLE } };
+    }
+    const changed = (a, b) => normalizeCountryCode(a || '') !== normalizeCountryCode(b || '');
+    if (verified.declared && (changed(verified.declared.residence, residence) || changed(verified.declared.nationality, identity))) {
+      return { ok: false, status: 409, body: { error: 'Declared countries changed since verification', code: IDENTITY_REVERIFICATION_REQUIRED } };
+    }
+    candidates = [...new Set([verified.residence, verified.nationality].filter(Boolean))];
+    if (!candidates.length) return { ok: false, status: 409, body: { error: 'Identity documents are not verified', code: IDENTITY_NOT_VERIFIED } };
+  }
   let failed = false;
   const reasons = {};
   for (const cc of candidates) {

@@ -40,6 +40,8 @@ import { companyNotificationRoutes } from './src/routes/companyNotifications.js'
 import { createWhatsAppModule } from './src/whatsapp/index.js';
 import { createSalesIqModule } from './src/salesiq/index.js';
 import { createInboxRecorder } from './src/salesiq/inboxRecorder.js';
+import { registerSupportDesk } from './src/support/inboxRequests.js';
+import { emailBlockers } from './src/support/notify.js';
 import { startMessageReminders } from './src/services/messageReminders.js';
 import { purgePhoneContactsAfterCancel } from './src/services/contactsRetention.js';
 import { removeTombstoneExpiry } from './src/models/ContactTombstone.js';
@@ -50,6 +52,13 @@ import { billExpiredTrialLines, reconcilePendingMonthlyLines, terminateSuspended
 import { syncPlanMetadataFromStripe } from './src/services/planMetadataSync.js';
 import { applyMailOwnership } from './src/services/mailOwnershipMigration.js';
 import { startGraceSweeper } from './src/services/minutesGrace.js';
+import { identityVerificationRoutes, identityAdminRoutes } from './src/routes/identityVerification.js';
+import { getIdentityConfig } from './src/services/identity/config.js';
+import { trialCallRoutes, trialCallController } from './src/routes/trialCall.js';
+import { nomadAppLinkRoutes } from './src/routes/nomadAppLink.js';
+import { startTrialCallJobs } from './src/services/trialCall/jobs.js';
+import { runNomadNumberLifecycle } from './src/services/nomadNumberLifecycle.js';
+import { mongoTrialStore } from './src/services/trialCall/store.js';
 
 const app = express();
 
@@ -91,6 +100,12 @@ if (!parseAllowedOrigins()) console.warn('[security] CORS_ALLOWED_ORIGINS absent
 // Le module WhatsApp (et son store enveloppé : temps réel de l'Inbox) est créé ici, avant SalesIQ, qui y copie ses échanges (non bloquant,
 // SALESIQ_INBOX_RECORD=0 pour désactiver) ; ses routes restent montées plus bas, après express.json().
 const whatsappModule = createWhatsAppModule();
+// Demandes créées par le serveur (dossier d'identité en revue humaine) : même Inbox, même notification que les escalades.
+registerSupportDesk({ store: whatsappModule.store });
+{
+  const blockers = emailBlockers();
+  if (blockers.length) console.warn(`[support-notify] e-mail des escalades inactif : ${blockers.join(', ')} manquant(s)${process.env.WHATSAPP_SUPPORT_NOTIFY_WEBHOOK_URL ? ' (webhook actif)' : ' ; aucun webhook non plus'}`);
+}
 const salesIqRecorder = createInboxRecorder(whatsappModule.store, { enabled: !/^(0|false|no|off)$/i.test(String(process.env.SALESIQ_INBOX_RECORD ?? '1')) });
 app.use('/api/salesiq', createSalesIqModule({ record: salesIqRecorder }).router);
 
@@ -156,6 +171,13 @@ app.use('/api/reception', receptionRoutes);
 app.use('/api/secretariat', secretariatToolsRoutes);
 app.use('/api/reach', reachRoutes);
 app.use('/api/company-notifications', companyNotificationRoutes);
+// Vérification d'identité Nomad Solo (désactivée tant que IDENTITY_VERIFICATION_ENABLED n'est pas activé : /status répond { enabled: false }).
+app.use('/api/identity-verification', identityVerificationRoutes);
+app.use('/admin/identity', identityAdminRoutes);
+// Appel d'essai gratuit (Nomad Solo, avant paiement) : désactivé par défaut (TRIAL_CALL_ENABLED), voir src/services/trialCall/config.js.
+app.use('/api/trial-call', trialCallRoutes);
+// « M'envoyer le lien par SMS » (app HARX Nomad) : lien harx.ai/app vers le mobile du compte, 1 par minute et 3 par jour.
+app.use('/api/nomad-app', nomadAppLinkRoutes);
 
 // HARX WhatsApp AI Assistant : webhook Meta + liaison de compte + administration du support (voir docs/WHATSAPP_AI_ASSISTANT.md).
 app.use('/api/whatsapp', whatsappModule.router);
@@ -239,6 +261,16 @@ setInterval(() => {
   });
 }, 10 * 60 * 1000);
 
+// Numéro d'un abonné NOMAD qui résilie (décision D3 du 23/11) : détachement à la fin de la période payée (remise en stock), puis
+// résiliation chez Twilio après 30 jours sans réaffectation, seulement si NOMAD_NUMBER_RELEASE_ENABLED=true ;
+// NOMAD_NUMBER_LIFECYCLE_DRY_RUN=true : journalise sans rien modifier. Même cadence horaire que les autres tâches de lignes.
+setInterval(() => {
+  if (mongoose.connection.readyState !== 1) return;
+  runNomadNumberLifecycle().catch((err) => {
+    console.warn('[nomad-numero-cron]', err.message);
+  });
+}, RETRACTION_CRON_MS);
+
 // Métadonnées des produits Stripe (dont phone_line_price_cents) -> forfaits : au démarrage puis toutes les 6 h, en plus du
 // webhook product.updated, pour qu'un webhook manqué ne laisse pas un prix de ligne périmé.
 setTimeout(() => { syncPlanMetadataFromStripe(); }, 30 * 1000);
@@ -253,6 +285,18 @@ startGraceSweeper({
   getClient: async () => (await import('./src/services/phoneNumberService.js')).phoneNumberService.twilioClient,
   isReady: () => mongoose.connection.readyState === 1,
 });
+
+// Appel d'essai gratuit : balayeur (coupure à 60 s) et détection d'anomalie, seulement si l'essai est actif au démarrage.
+startTrialCallJobs({ controller: trialCallController, store: mongoTrialStore, isReady: () => mongoose.connection.readyState === 1 });
+
+// Vérification d'identité : une analyse interrompue par un redémarrage part en revue humaine (jamais validée par défaut).
+setInterval(() => {
+  if (!getIdentityConfig().enabled || mongoose.connection.readyState !== 1) return;
+  import('./src/services/identity/service.js')
+    .then(({ identityService }) => identityService())
+    .then((s) => s.recoverStale())
+    .catch((err) => console.warn('[identity-recover]', err?.message));
+}, 5 * 60 * 1000);
 
 // Warn companies whose wallet / minutes / tokens run short (the first check runs a minute after boot).
 const runLowResourceScan = () =>

@@ -7,7 +7,7 @@ import { AssignmentError, LINE_NOT_ASSIGNED, LINE_NOT_ASSIGNED_MESSAGE, agentLin
 import { listLinesFor } from '../services/phoneNumberList.js';
 import { callingInfoOf } from '../services/outboundDestinations.js';
 import { LINE_BUSY_CODE, LINE_BUSY_MESSAGE, LINE_CALL_END_PATH, capacityOf, hasFreeLine, signLineCallEnd, verifyLineCallEnd, lineCallsEnforced, releaseCall, staleCheckFor, takeFirstFreeLine, takeLine } from '../services/lineCalls.js';
-import { checkNumberCountry } from '../services/numberCountry.js';
+import { checkNumberCountry, nomadPurchaseIdentityGate } from '../services/numberCountry.js';
 import { availabilityFor, AVAILABILITY_UNAVAILABLE } from '../services/numberAvailability.js';
 import { mergeSearchResults } from '../services/numberSearchMerge.js';
 import { phoneLineCurrency, purchaseCurrency } from '../services/purchaseCurrency.js';
@@ -59,6 +59,27 @@ import { getInboundTest, needsInboundTestProof, realCallProof, receiveInboundCal
 import { stripeLocaleFromRequest } from '../services/stripeLocale.js';
 import { tryAiInbound, aiQueueFor, aiInboundPilotEnabled } from '../services/aiInbound.js';
 import { twilioRequestValid } from '../services/twilioSignature.js';
+import { countedLineFilter, countedLinesQuery, scheduleNomadNumberDetach } from '../services/nomadNumberLifecycle.js';
+
+/**
+ * Lignes qui comptent comme « lignes existantes » de la société (ligne incluse, plafond de l'offre, essai) : jamais l'ancienne ligne
+ * d'un abonnement NOMAD résilié (décision D3 du 23/11). Sans cela, un abonné qui se réabonnait avait encore son ancien numéro compté :
+ * la première ligne du nouvel abonnement n'était plus « incluse » et l'achat du numéro choisi échouait après le paiement.
+ * Base illisible pour cette distinction : comptage d'avant (toutes les lignes non marquées), jamais d'erreur.
+ */
+async function countedLines(companyId) {
+  let query = countedLineFilter(companyId);
+  if (mongoose.connection.readyState === 1) {
+    try { query = await countedLinesQuery(companyId); } catch (e) { console.warn('[nomad-numero] lignes d’un abonnement résilié illisibles :', e?.message || e); }
+  }
+  return PhoneNumber.countDocuments(query);
+}
+
+/** Nouvelle ligne achetée par un réabonné NOMAD : les lignes de l'abonnement résilié partent à la fin de leur période payée (D3). */
+function scheduleOldNomadLines(companyId) {
+  if (mongoose.connection.readyState !== 1 || !companyId) return;
+  scheduleNomadNumberDetach(String(companyId), { afterNewLine: true }).catch((e) => console.warn('[nomad-numero] planification après achat impossible :', e?.message || e));
+}
 
 /** Titulaire Nomad Solo (une seule personne) : l'appelant entend des messages à la première personne. Toute erreur = texte entreprise. */
 const isSoloCompany = async (companyId) => {
@@ -506,6 +527,18 @@ class PhoneNumberController {
     }
   }
 
+  /** POST /phone-numbers/still-available { phoneNumber, country, companyId } — { available } (parcours Nomad, avant le paiement). */
+  async numberStillAvailable(req, res) {
+    try {
+      const { stillAvailableFor } = await import('../services/nomadSoloPayment.js');
+      const { status, body } = await stillAvailableFor(req, { phoneNumber: req.body?.phoneNumber, country: req.body?.country, companyId: req.body?.companyId });
+      res.status(status).json(body);
+    } catch (error) {
+      console.error('[telephony] revérification du numéro illisible:', error?.message);
+      res.status(503).json({ available: false, code: 'NUMBER_CHECK_UNAVAILABLE', retryable: true });
+    }
+  }
+
   async searchTwilioNumbers(req, res) {
     try {
       const { areaCode, limit, locality, postalCode } = req.query;
@@ -584,7 +617,10 @@ class PhoneNumberController {
       }
 
       // Le numéro doit être du pays de l'entreprise (ou d'Europe pour une entreprise européenne).
-      const countryGate = await checkNumberCountry(req, companyId, { phoneNumber });
+      // Parcours Nomad : achat INTERNE déclenché par la confirmation du paiement (services/nomadSoloPayment.js, sans jeton) ; le pays a
+      // été contrôlé à l'initialisation du paiement et revérifié juste avant (pays vérifiés). `harxPaidNomadChoice` n'est jamais lu
+      // depuis la requête HTTP (propriété posée en interne sur l'objet, pas dans le corps).
+      const countryGate = req.harxPaidNomadChoice ? { ok: true } : await checkNumberCountry(req, companyId, { phoneNumber });
       if (!countryGate.ok) return res.status(countryGate.status).json(countryGate.body);
 
       // FR / +33 → always Twilio (ignore client Telnyx).
@@ -601,10 +637,16 @@ class PhoneNumberController {
       let payment = null;
 
       if (companyId && mongoose.Types.ObjectId.isValid(companyId)) {
-        const existingCount = await PhoneNumber.countDocuments({ companyId });
+        const existingCount = await countedLines(companyId);
         const limits = await loadCompanyPlanLimits(companyId);
         const blocked = localNumberLimitPayload(limits, existingCount);
         if (blocked) return res.status(403).json(blocked);
+        // NOMAD Solo : aucun NOUVEL achat sans vérification d'identité validée, même drapeau éteint (défaut 5, #618). L'achat interne
+        // après un paiement NOMAD (harxPaidNomadChoice) est revérifié par purchaseChosenNumberAfterPayment.
+        if (!req.harxPaidNomadChoice) {
+          const idGate = await nomadPurchaseIdentityGate(companyId, limits, { phoneNumber });
+          if (!idGate.ok) return res.status(idGate.status).json(idGate.body);
+        }
         isTrial = existingCount === 0 && isLineTrialAllowed(limits);
         isIncluded = isLineIncluded(limits, existingCount);
         assignCtx = { existingCount, limits };
@@ -677,7 +719,7 @@ class PhoneNumberController {
       const paidPrice = !isTrial && payment?.amount > 0 ? payment.amount / 100 : 0;
       const trialExpiresAt = isTrial ? new Date(Date.now() + linePricing.trialDurationMs) : null;
 
-      const purchaseCurrencyCode = !isTrial && payment?.currency ? payment.currency : await purchaseCurrency(req, companyId);
+      const purchaseCurrencyCode = !isTrial && payment?.currency ? payment.currency : (req.harxPaidNomadChoice?.currency || await purchaseCurrency(req, companyId));
       const purchased = await purchaseUnderAssignment({
         companyId, assignment, assignCtx, db: mongoose.connection.db,
         run: (a) => phoneNumberService.purchaseNumber(
@@ -777,7 +819,7 @@ class PhoneNumberController {
         return res.status(400).json({ error: 'Invalid companyId' });
       }
 
-      const existingCount = await PhoneNumber.countDocuments({ companyId });
+      const existingCount = await countedLines(companyId);
       const eligible = existingCount === 0 && isLineTrialAllowed(await loadCompanyPlanLimits(companyId));
 
       let activeTrial = null;
@@ -825,7 +867,9 @@ class PhoneNumberController {
       }
 
       // Le numéro doit être du pays de l'entreprise (ou d'Europe pour une entreprise européenne).
-      const countryGate = await checkNumberCountry(req, companyId, { phoneNumber });
+      // Achat lancé par le serveur après un paiement Nomad confirmé (contexte interne, jamais posé par HTTP) : pas de session client ;
+      // pays contrôlé au paiement et revérifié par purchaseChosenNumberAfterPayment. Sans cela : 401 (recette 23/11).
+      const countryGate = req.harxPaidNomadChoice ? { ok: true } : await checkNumberCountry(req, companyId, { phoneNumber });
       if (!countryGate.ok) return res.status(countryGate.status).json(countryGate.body);
 
       // ──────────────────────────────────────────────────────────────────
@@ -840,10 +884,16 @@ class PhoneNumberController {
       let payment = null;
 
       if (companyId && mongoose.Types.ObjectId.isValid(companyId)) {
-        const existingCount = await PhoneNumber.countDocuments({ companyId });
+        const existingCount = await countedLines(companyId);
         const limits = await loadCompanyPlanLimits(companyId);
         const blocked = localNumberLimitPayload(limits, existingCount);
         if (blocked) return res.status(403).json(blocked);
+        // NOMAD Solo : aucun NOUVEL achat sans vérification d'identité validée, même drapeau éteint (défaut 5, #618). L'achat interne
+        // après un paiement NOMAD (harxPaidNomadChoice) est revérifié par purchaseChosenNumberAfterPayment.
+        if (!req.harxPaidNomadChoice) {
+          const idGate = await nomadPurchaseIdentityGate(companyId, limits, { phoneNumber });
+          if (!idGate.ok) return res.status(idGate.status).json(idGate.body);
+        }
         isTrial = existingCount === 0 && isLineTrialAllowed(limits);
         isIncluded = isLineIncluded(limits, existingCount);
         assignCtx = { existingCount, limits };
@@ -918,7 +968,7 @@ class PhoneNumberController {
       const paidPrice = !isTrial && payment?.amount > 0 ? payment.amount / 100 : 0;
       const trialExpiresAt = isTrial ? new Date(Date.now() + linePricing.trialDurationMs) : null;
 
-      const purchaseCurrencyCode = !isTrial && payment?.currency ? payment.currency : await purchaseCurrency(req, companyId);
+      const purchaseCurrencyCode = !isTrial && payment?.currency ? payment.currency : (req.harxPaidNomadChoice?.currency ? String(req.harxPaidNomadChoice.currency).toUpperCase() : await purchaseCurrency(req, companyId));
       const purchased = await purchaseUnderAssignment({
         companyId, assignment, assignCtx, db: mongoose.connection.db,
         run: (a) => phoneNumberService.purchaseTwilioNumber(
@@ -965,6 +1015,7 @@ class PhoneNumberController {
         }
       }
 
+      scheduleOldNomadLines(companyId);
       res.json(newNumber);
     } catch (error) {
       console.error('Error purchasing Twilio phone number:', error);
@@ -1381,7 +1432,7 @@ class PhoneNumberController {
       const countryGate = await checkNumberCountry(req, companyId, { phoneNumber });
       if (!countryGate.ok) return res.status(countryGate.status).json(countryGate.body);
 
-      const existingLines = await PhoneNumber.countDocuments({ companyId });
+      const existingLines = await countedLines(companyId);
       const planLimits = await loadCompanyPlanLimits(companyId);
       const lineLimit = localNumberLimitPayload(planLimits, existingLines);
       if (lineLimit) return res.status(403).json(lineLimit);
@@ -1726,7 +1777,7 @@ class PhoneNumberController {
   async isFirstLineIncluded(companyId) {
     if (!companyId || !mongoose.Types.ObjectId.isValid(String(companyId))) return false;
     try {
-      return isLineIncluded(await loadCompanyPlanLimits(companyId), await PhoneNumber.countDocuments({ companyId }));
+      return isLineIncluded(await loadCompanyPlanLimits(companyId), await countedLines(companyId));
     } catch (error) {
       console.warn('[phone-numbers] included check failed:', error?.message);
       return false;

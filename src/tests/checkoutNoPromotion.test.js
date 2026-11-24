@@ -19,6 +19,11 @@ const { default: CompanyPayment } = await import('../models/CompanyPayment.js');
 const { clearCompanyCache } = await import('../middleware/companyScope.js');
 const { phoneNumberService } = await import('../services/phoneNumberService.js');
 const { clearAvailabilityCache } = await import('../services/numberAvailability.js');
+const { setIdentityServiceForTests } = await import('../services/identity/service.js');
+const { Subscription } = await import('../models/Subscription.js');
+// Nomad Solo (défaut 5, #618) : vérification d'identité exigée même drapeau éteint ; ici, le profil FR est vérifié. Aucun abonnement existant.
+setIdentityServiceForTests({ verifiedCountriesFor: async () => ({ verified: true, countries: ['FR'], residence: 'FR', nationality: 'FR', declared: null }) });
+Subscription.find = () => ({ populate: async () => [] });
 
 const C1 = '64b0000000000000000000c1';
 const CLOUD = { harx_product: 'callcenter', callcenter_tier: 'accueil', offer_version: '2026-11' };
@@ -79,12 +84,14 @@ beforeEach(() => {
   // Nomad Solo : garde « numéros disponibles » avant paiement (voir subscriptionSoloGuard.test.js) ; ici, profil FR et stock simulé.
   clearAvailabilityCache();
   phoneNumberService.listClaimableInventory = async () => [{ phoneNumber: '+33100000000' }];
+  // Parcours Nomad (23/11) : numéro choisi exigé et revérifié à l'initialisation (ici : numéro du stock, libre).
+  phoneNumberService.findClaimableInventoryNumber = async () => ({ owned: true, claimable: true, number: {} });
   global.fetch = async (u) => (String(u).includes('/api/call-center/workspace-state')
     ? { ok: true, json: async () => ({ success: true, data: { company: { profile: { country: 'FR' } } } }) }
     : { ok: true, json: async () => ({ success: true, data: { companyId: C1, isOwner: true } }) });
 });
 const origPhone = { ...phoneNumberService };
-after(() => { Object.assign(console, saved); Object.assign(stripeService, orig); Object.assign(phoneNumberService, origPhone); });
+after(() => { Object.assign(console, saved); Object.assign(stripeService, orig); Object.assign(phoneNumberService, origPhone); setIdentityServiceForTests(null); });
 
 async function call(method, path, body = {}) {
   const layer = subscriptionRoutes.stack.find((l) => l.route && l.route.path === path && l.route.methods[method]);
@@ -94,7 +101,9 @@ async function call(method, path, body = {}) {
   for (const s of layer.route.stack) { let next = false; await s.handle(req, res, () => { next = true; }); if (!next) break; }
   return out;
 }
-const INIT = (over = {}) => ({ userId: 'u-owner', companyId: C1, priceId: 'price_cloud', planName: 'Accueil', provider: 'stripe', uiMode: 'embedded', ...over });
+// Numéro choisi (parcours Nomad, 23/11) : envoyé pour toutes les offres, lu seulement pour Nomad Solo.
+const CHOSEN = { chosenNumber: { phoneNumber: '+33100000000', country: 'FR' } };
+const INIT = (over = {}) => ({ userId: 'u-owner', companyId: C1, priceId: 'price_cloud', planName: 'Accueil', provider: 'stripe', uiMode: 'embedded', ...CHOSEN, ...over });
 const opts = (s) => s[s.length - 1];
 
 test('GET /launch-offers : liste vide, sans lire les coupons Stripe', async () => {
@@ -132,7 +141,7 @@ for (const priceId of ['price_cloud', 'price_nomad', 'price_ai', 'price_taas']) 
 test('POST /checkout (ancien chemin) : aucune option de code, toutes offres', async () => {
   for (const priceId of ['price_cloud', 'price_nomad', 'price_taas']) {
     calls.sessions.length = 0;
-    const r = await call('post', '/checkout', { userId: 'u-owner', companyId: C1, priceId, successUrl: 'https://ok', cancelUrl: 'https://ko' });
+    const r = await call('post', '/checkout', { userId: 'u-owner', companyId: C1, priceId, successUrl: 'https://ok', cancelUrl: 'https://ko', ...CHOSEN });
     assert.equal(r.code, 200, JSON.stringify(r.body));
     assert.equal('allowPromotionCodes' in opts(calls.sessions[0]), false, priceId);
   }
