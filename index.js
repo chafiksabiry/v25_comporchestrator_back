@@ -50,6 +50,11 @@ import { billExpiredTrialLines, reconcilePendingMonthlyLines, terminateSuspended
 import { syncPlanMetadataFromStripe } from './src/services/planMetadataSync.js';
 import { applyMailOwnership } from './src/services/mailOwnershipMigration.js';
 import { startGraceSweeper } from './src/services/minutesGrace.js';
+import { identityVerificationRoutes, identityAdminRoutes } from './src/routes/identityVerification.js';
+import { getIdentityConfig } from './src/services/identity/config.js';
+import { trialCallRoutes, trialCallController } from './src/routes/trialCall.js';
+import { startTrialCallJobs } from './src/services/trialCall/jobs.js';
+import { mongoTrialStore } from './src/services/trialCall/store.js';
 
 const app = express();
 
@@ -156,6 +161,11 @@ app.use('/api/reception', receptionRoutes);
 app.use('/api/secretariat', secretariatToolsRoutes);
 app.use('/api/reach', reachRoutes);
 app.use('/api/company-notifications', companyNotificationRoutes);
+// Vérification d'identité Nomad Solo (désactivée tant que IDENTITY_VERIFICATION_ENABLED n'est pas activé : /status répond { enabled: false }).
+app.use('/api/identity-verification', identityVerificationRoutes);
+app.use('/admin/identity', identityAdminRoutes);
+// Appel d'essai gratuit (Nomad Solo, avant paiement) : désactivé par défaut (TRIAL_CALL_ENABLED), voir src/services/trialCall/config.js.
+app.use('/api/trial-call', trialCallRoutes);
 
 // HARX WhatsApp AI Assistant : webhook Meta + liaison de compte + administration du support (voir docs/WHATSAPP_AI_ASSISTANT.md).
 app.use('/api/whatsapp', whatsappModule.router);
@@ -253,6 +263,18 @@ startGraceSweeper({
   getClient: async () => (await import('./src/services/phoneNumberService.js')).phoneNumberService.twilioClient,
   isReady: () => mongoose.connection.readyState === 1,
 });
+
+// Appel d'essai gratuit : balayeur (coupure à 60 s) et détection d'anomalie, seulement si l'essai est actif au démarrage.
+startTrialCallJobs({ controller: trialCallController, store: mongoTrialStore, isReady: () => mongoose.connection.readyState === 1 });
+
+// Vérification d'identité : une analyse interrompue par un redémarrage part en revue humaine (jamais validée par défaut).
+setInterval(() => {
+  if (!getIdentityConfig().enabled || mongoose.connection.readyState !== 1) return;
+  import('./src/services/identity/service.js')
+    .then(({ identityService }) => identityService())
+    .then((s) => s.recoverStale())
+    .catch((err) => console.warn('[identity-recover]', err?.message));
+}, 5 * 60 * 1000);
 
 // Warn companies whose wallet / minutes / tokens run short (the first check runs a minute after boot).
 const runLowResourceScan = () =>

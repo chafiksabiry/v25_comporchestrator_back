@@ -24,6 +24,17 @@ const { numberCountryAllowed, EUROPE_ZONE, isEuropeCountry } = await import('../
 const { phoneNumberService } = await import('../services/phoneNumberService.js');
 const { phoneNumberRoutes } = await import('../routes/phoneNumber.js');
 const { PhoneNumber } = await import('../models/PhoneNumber.js');
+const { Subscription } = await import('../models/Subscription.js');
+// Offre de chaque entreprise (abonnement simulé, aucune base) : sans entrée, pas d'abonnement (règle d'entreprise).
+const tiers = {};
+let planLookups = 0;
+Subscription.findOne = ({ companyId }) => ({
+  populate: async () => {
+    planLookups += 1;
+    const tier = tiers[String(companyId)];
+    return tier ? { planId: { _id: 'p', name: 'Plan', metadata: { harx_product: 'callcenter', callcenter_tier: tier } } } : null;
+  },
+});
 
 const FR_CO = '64b0000000000000000000a1';
 const GB_CO = '64b0000000000000000000a2';
@@ -365,5 +376,48 @@ describe('routes /api/phone-numbers : recherche, achat, paiement', () => {
   it('achat : lecture du pays en échec = 503 (pas d’achat)', async () => {
     const r = await call('POST', '/purchase/twilio', { user: 'ownerDown', body: { phoneNumber: '+33142000000', companyId: DOWN_CO } });
     assert.equal(r.status, 503);
+  });
+});
+
+describe('Nomad Solo : résidence + pièce d’identité enregistrées, rien d’autre (décision du 22/11)', () => {
+  const solo = async () => ({ product: 'callcenter', callcenterTier: 'nomad_solo' });
+  const company = async () => ({ product: 'callcenter', callcenterTier: 'full_scope' });
+  const as = (p, loadLimits = solo) => ({ profile: async () => p, loadLimits });
+  const req = fakeReq('owner');
+  it('Français vivant au Maroc : France (pièce) et Maroc (résidence) oui ; USA et Royaume-Uni non', async () => {
+    const p = { country: 'MA', identityCountry: 'FR' };
+    assert.equal((await checkNumberCountry(req, FR_CO, { countryCode: 'FR' }, as(p))).ok, true);
+    assert.equal((await checkNumberCountry(req, FR_CO, { phoneNumber: '+33142000000' }, as(p))).ok, true);
+    assert.equal((await checkNumberCountry(req, FR_CO, { countryCode: 'MA' }, as(p))).ok, true);
+    const us = await checkNumberCountry(req, FR_CO, { countryCode: 'US' }, as(p));
+    assert.equal(us.status, 403);
+    assert.equal(us.body.code, 'COUNTRY_NOT_ALLOWED');
+    // Les deux règles refusent : l'offre n'est pas lue, message d'entreprise (même code, même refus).
+    assert.equal((await checkNumberCountry(req, FR_CO, { phoneNumber: '+442071234567' }, as(p))).status, 403);
+  });
+  it('résident français : plus de zone Europe pour Nomad Solo (DE, GB refusés) ; une entreprise la garde', async () => {
+    const p = { country: 'FR' };
+    assert.equal((await checkNumberCountry(req, FR_CO, { countryCode: 'DE' }, as(p))).status, 403);
+    assert.equal((await checkNumberCountry(req, FR_CO, { phoneNumber: '+442071234567' }, as(p))).status, 403);
+    assert.equal((await checkNumberCountry(req, FR_CO, { countryCode: 'DE' }, as(p, company))).ok, true);
+    assert.equal((await checkNumberCountry(req, FR_CO, { countryCode: 'DE' }, as(p, async () => null))).ok, true, 'sans abonnement : règle d’entreprise');
+  });
+  it('résidence non enregistrée : jamais la France d’office pour Nomad Solo', async () => {
+    const none = await checkNumberCountry(req, FR_CO, { countryCode: 'FR' }, as({}));
+    assert.equal(none.status, 403);
+    assert.deepEqual(none.body.allowedCountries, []);
+    assert.equal((await checkNumberCountry(req, FR_CO, {}, as({}))).status, 403);
+    // Pièce seule enregistrée : son pays est le pays par défaut.
+    const idOnly = await checkNumberCountry(req, FR_CO, {}, as({ identityCountry: 'GB' }));
+    assert.equal(idOnly.ok, true);
+    assert.equal(idOnly.country, 'GB');
+  });
+  it('l’offre n’est lue que si les deux règles divergent ; lecture impossible = 503, jamais « autorisé »', async () => {
+    let reads = 0;
+    const counting = async () => { reads += 1; return { product: 'callcenter', callcenterTier: 'nomad_solo' }; };
+    assert.equal((await checkNumberCountry(req, FR_CO, { countryCode: 'FR' }, as({ country: 'FR' }, counting))).ok, true);
+    assert.equal(reads, 0);
+    const down = await checkNumberCountry(req, FR_CO, { countryCode: 'DE' }, as({ country: 'FR' }, async () => { throw new Error('db'); }));
+    assert.equal(down.status, 503);
   });
 });

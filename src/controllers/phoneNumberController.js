@@ -506,6 +506,18 @@ class PhoneNumberController {
     }
   }
 
+  /** POST /phone-numbers/still-available { phoneNumber, country, companyId } — { available } (parcours Nomad, avant le paiement). */
+  async numberStillAvailable(req, res) {
+    try {
+      const { stillAvailableFor } = await import('../services/nomadSoloPayment.js');
+      const { status, body } = await stillAvailableFor(req, { phoneNumber: req.body?.phoneNumber, country: req.body?.country, companyId: req.body?.companyId });
+      res.status(status).json(body);
+    } catch (error) {
+      console.error('[telephony] revérification du numéro illisible:', error?.message);
+      res.status(503).json({ available: false, code: 'NUMBER_CHECK_UNAVAILABLE', retryable: true });
+    }
+  }
+
   async searchTwilioNumbers(req, res) {
     try {
       const { areaCode, limit, locality, postalCode } = req.query;
@@ -584,7 +596,10 @@ class PhoneNumberController {
       }
 
       // Le numéro doit être du pays de l'entreprise (ou d'Europe pour une entreprise européenne).
-      const countryGate = await checkNumberCountry(req, companyId, { phoneNumber });
+      // Parcours Nomad : achat INTERNE déclenché par la confirmation du paiement (services/nomadSoloPayment.js, sans jeton) ; le pays a
+      // été contrôlé à l'initialisation du paiement et revérifié juste avant (pays vérifiés). `harxPaidNomadChoice` n'est jamais lu
+      // depuis la requête HTTP (propriété posée en interne sur l'objet, pas dans le corps).
+      const countryGate = req.harxPaidNomadChoice ? { ok: true } : await checkNumberCountry(req, companyId, { phoneNumber });
       if (!countryGate.ok) return res.status(countryGate.status).json(countryGate.body);
 
       // FR / +33 → always Twilio (ignore client Telnyx).
@@ -677,7 +692,7 @@ class PhoneNumberController {
       const paidPrice = !isTrial && payment?.amount > 0 ? payment.amount / 100 : 0;
       const trialExpiresAt = isTrial ? new Date(Date.now() + linePricing.trialDurationMs) : null;
 
-      const purchaseCurrencyCode = !isTrial && payment?.currency ? payment.currency : await purchaseCurrency(req, companyId);
+      const purchaseCurrencyCode = !isTrial && payment?.currency ? payment.currency : (req.harxPaidNomadChoice?.currency || await purchaseCurrency(req, companyId));
       const purchased = await purchaseUnderAssignment({
         companyId, assignment, assignCtx, db: mongoose.connection.db,
         run: (a) => phoneNumberService.purchaseNumber(

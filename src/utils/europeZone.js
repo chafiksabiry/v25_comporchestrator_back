@@ -28,16 +28,17 @@ export function isEuropeCountry(code) {
 }
 
 /**
- * Pays dont un abonné Nomad Solo peut prendre un numéro sur présentation d'une pièce d'identité délivrée par ce pays (passeport,
- * titre de séjour ou carte d'identité), même s'il réside ailleurs (décision du 19/11). HARX achète ces numéros sous son propre
- * dossier réglementaire de plateforme : aucune démarche Twilio par abonné.
+ * Nomad Solo (décision du fondateur, 22/11) : un abonné peut prendre un numéro du pays qui a délivré sa pièce d'identité (passeport,
+ * titre de séjour ou carte d'identité), quel que soit ce pays, en plus de son pays de résidence. « Un Français qui vit au Maroc et
+ * qui s'inscrit avec son passeport français pourra acheter un numéro en France mais pas aux USA. » Avant cette décision, seules les
+ * pièces FR, GB et US ouvraient leur pays (IDENTITY_NUMBER_COUNTRIES, retiré). Le pays doit encore avoir des numéros chez HARX :
+ * c'est la disponibilité (numberAvailability.js) qui le dit, pas cette règle.
  */
-export const IDENTITY_NUMBER_COUNTRIES = Object.freeze(['FR', 'GB', 'US']);
 
 /**
  * Une entreprise du pays `companyCountry` peut-elle chercher / acheter un numéro du pays `numberCountry` ?
  * Oui si c'est le même pays, ou si les deux sont dans la zone Europe, ou (Nomad Solo) si le numéro est du pays de la pièce
- * d'identité déclarée et enregistrée (`identityCountry`) et que ce pays est la France, le Royaume-Uni ou les États-Unis.
+ * d'identité déclarée et enregistrée côté serveur (`identityCountry`), quel que soit ce pays.
  * Pays vide ou inconnu : non (jamais d'égalité de deux vides).
  */
 export function numberCountryAllowed(companyCountry, numberCountry, { identityCountry } = {}) {
@@ -49,5 +50,5 @@ export function numberCountryAllowed(companyCountry, numberCountry, { identityCo
   // Indicatif +1 partagé (numberZone.js) : un abonné canadien prend un numéro +1 (classé US) et inversement.
   if (sameNumberZone(company, number)) return true;
   const id = iso(identityCountry);
-  return Boolean(id) && IDENTITY_NUMBER_COUNTRIES.includes(id) && sameNumberZone(id, number);
+  return /^[A-Z]{2}$/.test(id) && sameNumberZone(id, number);
 }
