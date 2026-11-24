@@ -2,7 +2,9 @@ import 'dotenv/config';
 import { config } from './src/config/env.js';
 import express from 'express';
 import http from 'http';
-import { setupEscrowWebSocket } from './src/websocket/escrowUpdates.js';
+import { setupEscrowWebSocket, ESCROW_PATH } from './src/websocket/escrowUpdates.js';
+import { setupSupportInboxWebSocket, SUPPORT_INBOX_PATH } from './src/websocket/supportInbox.js';
+import { setupUpgradeFallback } from './src/websocket/upgradeFallback.js';
 import { corsMiddleware, parseAllowedOrigins } from './src/middleware/cors.js';
 import { demoBodyQueryAlias, idParam, demoAliasEnabled } from './src/middleware/demoAlias.js';
 import mongoose from 'mongoose';
@@ -35,6 +37,11 @@ import { aiAgentRoutes } from './src/routes/aiAgent.js';
 import { lineCapacityRoutes } from './src/routes/lineCapacity.js';
 import { purgeExpiredBenchRecordings, migrateAiAgentSettings } from './src/services/aiInbound.js';
 import { companyNotificationRoutes } from './src/routes/companyNotifications.js';
+import { createWhatsAppModule } from './src/whatsapp/index.js';
+import { createSalesIqModule } from './src/salesiq/index.js';
+import { createInboxRecorder } from './src/salesiq/inboxRecorder.js';
+import { registerSupportDesk } from './src/support/inboxRequests.js';
+import { emailBlockers } from './src/support/notify.js';
 import { startMessageReminders } from './src/services/messageReminders.js';
 import { purgePhoneContactsAfterCancel } from './src/services/contactsRetention.js';
 import { removeTombstoneExpiry } from './src/models/ContactTombstone.js';
@@ -88,6 +95,20 @@ mongoose.connect(config.mongodbUri, {
 app.use(corsMiddleware());
 if (!parseAllowedOrigins()) console.warn('[security] CORS_ALLOWED_ORIGINS absent : toute origine est acceptée avec credentials (comportement historique)');
 
+// HARX SalesIQ Support Agent : webhook Zobot -> Claude -> réponse en temps réel (voir docs/SALESIQ_SUPPORT_AGENT.md).
+// Monté AVANT le contrôle de connexion MongoDB et avant express.json() : il n'utilise pas la base et lit le corps brut.
+// Le module WhatsApp (et son store enveloppé : temps réel de l'Inbox) est créé ici, avant SalesIQ, qui y copie ses échanges (non bloquant,
+// SALESIQ_INBOX_RECORD=0 pour désactiver) ; ses routes restent montées plus bas, après express.json().
+const whatsappModule = createWhatsAppModule();
+// Demandes créées par le serveur (dossier d'identité en revue humaine) : même Inbox, même notification que les escalades.
+registerSupportDesk({ store: whatsappModule.store });
+{
+  const blockers = emailBlockers();
+  if (blockers.length) console.warn(`[support-notify] e-mail des escalades inactif : ${blockers.join(', ')} manquant(s)${process.env.WHATSAPP_SUPPORT_NOTIFY_WEBHOOK_URL ? ' (webhook actif)' : ' ; aucun webhook non plus'}`);
+}
+const salesIqRecorder = createInboxRecorder(whatsappModule.store, { enabled: !/^(0|false|no|off)$/i.test(String(process.env.SALESIQ_INBOX_RECORD ?? '1')) });
+app.use('/api/salesiq', createSalesIqModule({ record: salesIqRecorder }).router);
+
 // Database connection health check middleware
 app.use((req, res, next) => {
   if (mongoose.connection.readyState !== 1 || !mongoose.connection.db) {
@@ -103,7 +124,9 @@ app.use((req, res, next) => {
   // Exclure les webhooks du parsing JSON global pour permettre l'accès au raw body (Stripe, Telnyx, etc.)
   const isWebhook = 
     req.originalUrl === '/api/phone-numbers/webhooks/telnyx/number-order' ||
-    req.originalUrl === '/api/subscriptions/webhook';
+    req.originalUrl === '/api/subscriptions/webhook' ||
+    // Webhook WhatsApp (Meta) : corps brut requis pour vérifier X-Hub-Signature-256.
+    req.originalUrl.split('?')[0] === '/api/whatsapp/webhook';
 
   if (isWebhook) {
     next();
@@ -154,6 +177,9 @@ app.use('/admin/identity', identityAdminRoutes);
 // Appel d'essai gratuit (Nomad Solo, avant paiement) : désactivé par défaut (TRIAL_CALL_ENABLED), voir src/services/trialCall/config.js.
 app.use('/api/trial-call', trialCallRoutes);
 
+// HARX WhatsApp AI Assistant : webhook Meta + liaison de compte + administration du support (voir docs/WHATSAPP_AI_ASSISTANT.md).
+app.use('/api/whatsapp', whatsappModule.router);
+
 // Health check to verify deployment
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', version: '1.0.1', timestamp: new Date() });
@@ -170,6 +196,9 @@ const server = http.createServer(app);
 
 // Set up WebSocket
 setupEscrowWebSocket(server);
+// Temps réel de l'Inbox support (admin) : signaux sans contenu, voir src/websocket/supportInbox.js.
+setupSupportInboxWebSocket(server, { bus: whatsappModule.events });
+setupUpgradeFallback(server, [ESCROW_PATH, SUPPORT_INBOX_PATH]);
 
 // Start server
 server.listen(config.port, () => {
