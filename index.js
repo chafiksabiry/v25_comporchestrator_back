@@ -54,6 +54,7 @@ import { identityVerificationRoutes, identityAdminRoutes } from './src/routes/id
 import { getIdentityConfig } from './src/services/identity/config.js';
 import { trialCallRoutes, trialCallController } from './src/routes/trialCall.js';
 import { startTrialCallJobs } from './src/services/trialCall/jobs.js';
+import { runNomadNumberLifecycle } from './src/services/nomadNumberLifecycle.js';
 import { mongoTrialStore } from './src/services/trialCall/store.js';
 
 const app = express();
@@ -248,6 +249,16 @@ setInterval(() => {
     console.warn('[phone-line-reconcile-cron]', err.message);
   });
 }, 10 * 60 * 1000);
+
+// Numéro d'un abonné NOMAD qui résilie (décision D3 du 23/11) : détachement à la fin de la période payée (remise en stock), puis
+// résiliation chez Twilio après 30 jours sans réaffectation, seulement si NOMAD_NUMBER_RELEASE_ENABLED=true ;
+// NOMAD_NUMBER_LIFECYCLE_DRY_RUN=true : journalise sans rien modifier. Même cadence horaire que les autres tâches de lignes.
+setInterval(() => {
+  if (mongoose.connection.readyState !== 1) return;
+  runNomadNumberLifecycle().catch((err) => {
+    console.warn('[nomad-numero-cron]', err.message);
+  });
+}, RETRACTION_CRON_MS);
 
 // Métadonnées des produits Stripe (dont phone_line_price_cents) -> forfaits : au démarrage puis toutes les 6 h, en plus du
 // webhook product.updated, pour qu'un webhook manqué ne laisse pas un prix de ligne périmé.
