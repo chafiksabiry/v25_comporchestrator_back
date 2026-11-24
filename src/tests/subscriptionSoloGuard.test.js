@@ -18,7 +18,9 @@ const { SubscriptionPlan } = await import('../models/SubscriptionPlan.js');
 const { default: CompanyPayment } = await import('../models/CompanyPayment.js');
 const { clearCompanyCache } = await import('../middleware/companyScope.js');
 const { phoneNumberService } = await import('../services/phoneNumberService.js');
-const { clearAvailabilityCache, countryAvailability, soloCheckoutEligibility, NO_NUMBERS_IN_COUNTRY, RESIDENCE_COUNTRY_REQUIRED, AVAILABILITY_UNAVAILABLE } = await import('../services/numberAvailability.js');
+const { clearAvailabilityCache, countryAvailability, soloCheckoutEligibility, NO_NUMBERS_IN_COUNTRY, RESIDENCE_COUNTRY_REQUIRED, AVAILABILITY_UNAVAILABLE, IDENTITY_VERIFICATION_UNAVAILABLE } = await import('../services/numberAvailability.js');
+const { setIdentityServiceForTests } = await import('../services/identity/service.js');
+const { Subscription } = await import('../models/Subscription.js');
 
 const C1 = '64b0000000000000000000c1';
 const NOMAD = { harx_product: 'callcenter', callcenter_tier: 'nomad_solo' };
@@ -31,8 +33,19 @@ const storedProfile = (over = {}) => ({ name: 'Ada', siren: '', representativeEm
 const saved = { log: console.log, warn: console.warn, error: console.error };
 const orig = { ...stripeService };
 const origPhone = { ...phoneNumberService };
-let calls; let profile; let stock; let twilioDown; let inventoryDown; let registrationDown; let lookups;
+let calls; let profile; let stock; let twilioDown; let inventoryDown; let registrationDown; let lookups; let verifiedNow; let subs;
+// Vérification d'identité (défaut 5, #618 : exigée même drapeau éteint) : par défaut, la déclaration enregistrée est VÉRIFIÉE
+// (résidence et pièce). `verifiedNow = false` : aucune vérification validée.
+const identityOfProfile = () => {
+  const residence = String(profile?.country || '').toUpperCase() || null;
+  const nationality = String(profile?.identityCountry || (profile?.documents || []).find((d) => d.kind === 'identity')?.issuingCountry || '').toUpperCase() || null;
+  return { verified: true, countries: [...new Set([residence, nationality].filter(Boolean))], residence, nationality, declared: null };
+};
+setIdentityServiceForTests({ verifiedCountriesFor: async () => (verifiedNow ? identityOfProfile() : { verified: false, countries: [] }) });
 beforeEach(() => {
+  verifiedNow = true; subs = [];
+  // Abonnements existants de la société (garde « jamais un second abonnement NOMAD », défaut 2) : aucun par défaut.
+  Subscription.find = () => ({ populate: async () => subs });
   console.log = () => {}; console.warn = () => {}; console.error = () => {};
   clearCompanyCache(); clearAvailabilityCache();
   calls = { sessions: 0, payments: 0, twilio: [] }; lookups = 0;
@@ -64,7 +77,7 @@ beforeEach(() => {
     return { ok: true, json: async () => ({ success: true, data: { companyId: C1, isOwner: true } }) };
   };
 });
-after(() => { Object.assign(console, saved); Object.assign(stripeService, orig); Object.assign(phoneNumberService, origPhone); });
+after(() => { Object.assign(console, saved); Object.assign(stripeService, orig); Object.assign(phoneNumberService, origPhone); setIdentityServiceForTests(null); });
 
 async function post(path, body) {
   const layer = subscriptionRoutes.stack.find((l) => l.route && l.route.path === path && l.route.methods.post);
@@ -211,6 +224,35 @@ for (const [path, body, okCode] of [['/checkout/init', INIT, 201], ['/checkout',
     assert.equal(calls.payments + calls.sessions, 0);
   });
 
+  test(`${path} défaut 5 : vérification d’identité désactivée (drapeau absent) et non validée -> 409 ${IDENTITY_VERIFICATION_UNAVAILABLE}, aucun paiement`, async () => {
+    const savedFlag = process.env.IDENTITY_VERIFICATION_ENABLED;
+    delete process.env.IDENTITY_VERIFICATION_ENABLED;
+    try {
+      stock = { MA: true }; verifiedNow = false;
+      const r = await post(path, body(chosen('MA')));
+      assert.equal(r.code, 409, JSON.stringify(r.body));
+      assert.equal(r.body.code, IDENTITY_VERIFICATION_UNAVAILABLE);
+      assert.equal(calls.payments + calls.sessions, 0);
+    } finally { if (savedFlag !== undefined) process.env.IDENTITY_VERIFICATION_ENABLED = savedFlag; }
+  });
+
+  for (const status of ['active', 'trialing', 'past_due', 'unpaid']) {
+    test(`${path} défaut 2 : abonnement NOMAD ${status} -> 409 NOMAD_SUBSCRIPTION_EXISTS, jamais un second abonnement`, async () => {
+      stock = { MA: true };
+      subs = [{ status, planId: { metadata: NOMAD } }];
+      const r = await post(path, body(chosen('MA')));
+      assert.equal(r.code, 409, JSON.stringify(r.body));
+      assert.deepEqual([r.body.code, r.body.subscriptionStatus, r.body.unpaid], ['NOMAD_SUBSCRIPTION_EXISTS', status, status === 'past_due' || status === 'unpaid']);
+      assert.equal(calls.payments + calls.sessions, 0);
+    });
+  }
+
+  test(`${path} défaut 2 : abonnement NOMAD résilié, ou abonnement d’une autre offre -> pas de refus « déjà abonné »`, async () => {
+    stock = { MA: true };
+    subs = [{ status: 'active', planId: { metadata: CLOUD } }];
+    assert.equal((await post(path, body(chosen('MA')))).code, okCode);
+  });
+
   test(`${path} autre offre (CLOUD) : aucune vérification des numéros`, async () => {
     const r = await post(path, body({ priceId: 'price_cloud' }));
     assert.equal(r.code, okCode, JSON.stringify(r.body));
@@ -240,7 +282,7 @@ test('soloCheckoutEligibility : profil non lisible pour cause d’authentificati
   const { ScopeError } = await import('../middleware/companyScope.js');
   const r = await soloCheckoutEligibility({}, C1, { profile: async () => { throw new ScopeError(401, 'Authentication required', 'AUTH_REQUIRED'); } });
   assert.deepEqual([r.ok, r.status, r.body.code], [false, 401, 'AUTH_REQUIRED']);
-  const ok = await soloCheckoutEligibility({}, C1, { profile: async () => ({ country: 'JP', identityCountry: 'GB' }), service: { listClaimableInventory: async () => [], searchTwilioNumbers: async ({ countryCode }) => (countryCode === 'GB' ? [{}] : []) } });
+  const ok = await soloCheckoutEligibility({}, C1, { profile: async () => ({ country: 'JP', identityCountry: 'GB' }), verifiedCountries: async () => ({ verified: true, countries: ['JP', 'GB'], residence: 'JP', nationality: 'GB', declared: null }), service: { listClaimableInventory: async () => [], searchTwilioNumbers: async ({ countryCode }) => (countryCode === 'GB' ? [{}] : []) } });
   assert.deepEqual(ok, { ok: true, numberCountry: 'GB' });
 });
 

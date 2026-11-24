@@ -7,7 +7,7 @@ import { AssignmentError, LINE_NOT_ASSIGNED, LINE_NOT_ASSIGNED_MESSAGE, agentLin
 import { listLinesFor } from '../services/phoneNumberList.js';
 import { callingInfoOf } from '../services/outboundDestinations.js';
 import { LINE_BUSY_CODE, LINE_BUSY_MESSAGE, LINE_CALL_END_PATH, capacityOf, hasFreeLine, signLineCallEnd, verifyLineCallEnd, lineCallsEnforced, releaseCall, staleCheckFor, takeFirstFreeLine, takeLine } from '../services/lineCalls.js';
-import { checkNumberCountry } from '../services/numberCountry.js';
+import { checkNumberCountry, nomadPurchaseIdentityGate } from '../services/numberCountry.js';
 import { availabilityFor, AVAILABILITY_UNAVAILABLE } from '../services/numberAvailability.js';
 import { mergeSearchResults } from '../services/numberSearchMerge.js';
 import { phoneLineCurrency, purchaseCurrency } from '../services/purchaseCurrency.js';
@@ -620,6 +620,12 @@ class PhoneNumberController {
         const limits = await loadCompanyPlanLimits(companyId);
         const blocked = localNumberLimitPayload(limits, existingCount);
         if (blocked) return res.status(403).json(blocked);
+        // NOMAD Solo : aucun NOUVEL achat sans vérification d'identité validée, même drapeau éteint (défaut 5, #618). L'achat interne
+        // après un paiement NOMAD (harxPaidNomadChoice) est revérifié par purchaseChosenNumberAfterPayment.
+        if (!req.harxPaidNomadChoice) {
+          const idGate = await nomadPurchaseIdentityGate(companyId, limits, { phoneNumber });
+          if (!idGate.ok) return res.status(idGate.status).json(idGate.body);
+        }
         isTrial = existingCount === 0 && isLineTrialAllowed(limits);
         isIncluded = isLineIncluded(limits, existingCount);
         assignCtx = { existingCount, limits };
@@ -861,6 +867,12 @@ class PhoneNumberController {
         const limits = await loadCompanyPlanLimits(companyId);
         const blocked = localNumberLimitPayload(limits, existingCount);
         if (blocked) return res.status(403).json(blocked);
+        // NOMAD Solo : aucun NOUVEL achat sans vérification d'identité validée, même drapeau éteint (défaut 5, #618). L'achat interne
+        // après un paiement NOMAD (harxPaidNomadChoice) est revérifié par purchaseChosenNumberAfterPayment.
+        if (!req.harxPaidNomadChoice) {
+          const idGate = await nomadPurchaseIdentityGate(companyId, limits, { phoneNumber });
+          if (!idGate.ok) return res.status(idGate.status).json(idGate.body);
+        }
         isTrial = existingCount === 0 && isLineTrialAllowed(limits);
         isIncluded = isLineIncluded(limits, existingCount);
         assignCtx = { existingCount, limits };
