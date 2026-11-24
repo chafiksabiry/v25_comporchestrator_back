@@ -770,3 +770,18 @@ test('m3 : un compteur refusé rend les incréments déjà faits (le téléphone
   const ok = await call(c.otpSend, mkReq({ userId: 'victime', ip: '198.51.100.20', body: { phone: ME, country: 'FR', deviceId: 'dev-victime-1', turnstileToken: 'tok' } }));
   assert.equal(ok.code, 200);
 });
+
+// 23/11 : sans service de messagerie, le code part depuis le numéro Twilio des codes d'inscription (TRIAL_CALL_SMS_FROM / TWILIO_PHONE_NUMBER).
+test('OTP sans service de messagerie : SMS envoyé depuis le numéro expéditeur ; ni MG ni expéditeur = essai désactivé', async () => {
+  const FROM = '+15005550006';
+  const noMg = { ...ENABLED_ENV, TRIAL_CALL_MESSAGING_SERVICE_SID: '' };
+  assert.equal(C.trialEnabled(C.trialConfig(noMg)), false, 'sans MG ni expéditeur');
+  assert.equal(C.trialEnabled(C.trialConfig({ ...noMg, TWILIO_PHONE_NUMBER: FROM })), true, 'TWILIO_PHONE_NUMBER suffit');
+  assert.equal(C.trialEnabled(C.trialConfig({ ...noMg, TRIAL_CALL_SMS_FROM: 'pas un numero!' })), false, 'expéditeur invalide');
+  const c = controller({ ...noMg, TRIAL_CALL_SMS_FROM: FROM });
+  const s = await call(c.otpSend, mkReq({ body: { phone: '06 12 34 56 78', country: 'FR', deviceId: DEVICE, turnstileToken: 'tok', lang: 'fr' } }));
+  assert.equal(s.code, 200);
+  assert.equal(sms.length, 1);
+  assert.equal(sms[0].from, FROM);
+  assert.equal(sms[0].messagingServiceSid, undefined);
+});

@@ -363,7 +363,7 @@ export function createTrialCallController({
         const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
         await store.createOtp({ userId, phoneHash, deviceHash: h.deviceHash, ipHash: h.ipHash, codeHash: fp(cfg, 'otp', `${phoneHash}.${code}`), attempts: 0, expiresAt: new Date(t + OTP_TTL_MS), createdAt: new Date(t) });
         try {
-          await sendOtpSms(client(cfg), { to: mobile.phone, body: smsBody(lang, code, cfg.webOtpDomain), messagingServiceSid: cfg.messagingServiceSid });
+          await sendOtpSms(client(cfg), { to: mobile.phone, body: smsBody(lang, code, cfg.webOtpDomain), messagingServiceSid: cfg.messagingServiceSid, from: cfg.smsFrom });
         } catch (e) {
           console.warn('[trial-call] SMS en échec :', e?.code || e?.message || e);
           await store.markOtpsUsed(userId, phoneHash);

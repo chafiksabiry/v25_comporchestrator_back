@@ -86,6 +86,9 @@ export function trialConfig(env = process.env) {
     turnstileSecret: trimmed(env.TURNSTILE_SECRET_KEY),
     turnstileHostnames: hostnames,
     messagingServiceSid: trimmed(env.TRIAL_CALL_MESSAGING_SERVICE_SID),
+    // Expéditeur direct du code SMS, si aucun service de messagerie n'est configuré : le numéro Twilio qui envoie déjà
+    // les codes de l'inscription (TRIAL_CALL_SMS_FROM, sinon TWILIO_PHONE_NUMBER). Format E.164 ou identifiant alphanumérique.
+    smsFrom: trimmed(env.TRIAL_CALL_SMS_FROM || env.TWILIO_PHONE_NUMBER),
     twilioAccountSid: trimmed(env.TWILIO_ACCOUNT_SID),
     twilioAuthToken: trimmed(env.TWILIO_AUTH_TOKEN),
     pinnedAppSid: /^AP[0-9a-f]{32}$/i.test(trimmed(env.TRIAL_CALL_TWIML_APP_SID)) ? trimmed(env.TRIAL_CALL_TWIML_APP_SID) : '',
@@ -102,6 +105,9 @@ export function trialConfig(env = process.env) {
   };
 }
 
+/** Expéditeur SMS direct valable : numéro E.164 ou identifiant alphanumérique de 3 à 11 caractères. */
+export const isSmsSender = (v) => /^\+[1-9]\d{6,14}$/.test(String(v || '')) || /^(?=.*[A-Za-z])[A-Za-z0-9 ]{3,11}$/.test(String(v || ''));
+
 /** Noms des variables manquantes pour activer l'essai (jamais leurs valeurs). Vide = configuration complète. */
 export function missingForActivation(cfg) {
   const missing = [];
@@ -110,7 +116,7 @@ export function missingForActivation(cfg) {
   if (!cfg.turnstileSiteKey) missing.push('TURNSTILE_SITE_KEY');
   if (!cfg.turnstileSecret) missing.push('TURNSTILE_SECRET_KEY');
   if (!cfg.turnstileHostnames.length) missing.push('TURNSTILE_ALLOWED_HOSTNAMES');
-  if (!/^MG[0-9a-f]{32}$/i.test(cfg.messagingServiceSid)) missing.push('TRIAL_CALL_MESSAGING_SERVICE_SID');
+  if (!/^MG[0-9a-f]{32}$/i.test(cfg.messagingServiceSid) && !isSmsSender(cfg.smsFrom)) missing.push('TRIAL_CALL_MESSAGING_SERVICE_SID');
   if (!/^AC[0-9a-f]{32}$/i.test(cfg.twilioAccountSid) || !cfg.twilioAuthToken) missing.push('TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN');
   if (!Object.keys(cfg.numbers).some((cc) => cfg.countries.includes(cc))) missing.push('TRIAL_CALL_NUMBERS');
   return missing;
