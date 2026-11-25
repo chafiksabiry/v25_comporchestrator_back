@@ -20,6 +20,8 @@ import { TRIAL_REQUIRED, trialPaymentGate } from './trialCall/paymentGate.js';
 export const CHOSEN_NUMBER_REQUIRED = 'CHOSEN_NUMBER_REQUIRED';
 export const NUMBER_NO_LONGER_AVAILABLE = 'NUMBER_NO_LONGER_AVAILABLE';
 export const NUMBER_CHECK_UNAVAILABLE = 'NUMBER_CHECK_UNAVAILABLE';
+/** Numéro choisi déjà détenu par la société qui demande : ni « disponible » (rien à acheter) ni « pris ». */
+export const NUMBER_OWNED_BY_YOU = 'NUMBER_OWNED_BY_YOU';
 /** Un abonnement NOMAD existe déjà (actif, en essai, ou impayé) : jamais un second abonnement (défaut 2 de l'audit #618). */
 export const NOMAD_SUBSCRIPTION_EXISTS = 'NOMAD_SUBSCRIPTION_EXISTS';
 export { TRIAL_REQUIRED };
@@ -125,6 +127,13 @@ export async function stillAvailableFor(req, { phoneNumber, country, companyId }
   if (!chosen) return { status: 400, body: { error: 'Invalid phone number', code: CHOSEN_NUMBER_REQUIRED } };
   const gate = await (deps.checkCountry || checkNumberCountry)(req, companyId, { countryCode: chosen.country, phoneNumber: chosen.phoneNumber });
   if (!gate.ok) return { status: gate.status, body: gate.body };
+  // Recette du 25/11 : numéro déjà détenu par CETTE société (acheté par le webhook juste après le paiement) -> jamais « pris par
+  // quelqu'un d'autre » ; le portail relit alors l'état (abonnement + numéros) et affiche « Votre numéro est à vous ».
+  if (companyId) {
+    let held = null;
+    try { held = await (deps.findHeldNumber || defaultFindHeldNumber)(companyId, chosen.phoneNumber); } catch { held = null; }
+    if (held) return { status: 200, body: { available: false, ownedByYou: true, code: NUMBER_OWNED_BY_YOU } };
+  }
   const r = await (deps.stillAvailable || numberStillAvailable)(chosen, deps);
   if (r.unknown) return { status: 503, body: { available: false, code: NUMBER_CHECK_UNAVAILABLE, retryable: true } };
   return { status: 200, body: { available: Boolean(r.available), ...(r.available ? { inventory: Boolean(r.inventory) } : { code: NUMBER_NO_LONGER_AVAILABLE }) } };
@@ -203,6 +212,11 @@ async function buyChosen(payment, chosen, companyId, save, deps) {
     if (!(v.countries || []).some((c) => sameNumberZone(c, chosen.country))) return save({ status: 'failed', code: 'COUNTRY_NOT_ALLOWED' });
     const r = await (deps.purchase || defaultPurchase)({ phoneNumber: chosen.phoneNumber, companyId, currency: payment.currency });
     if (r.status >= 200 && r.status < 300) return save({ status: 'purchased', phoneNumberId: r.body?._id ? String(r.body._id) : undefined });
+    // Refus parce que le numéro est déjà à CETTE société (achat fait par un autre chemin : webhook, confirmation) : c'est un succès.
+    try {
+      const held = await (deps.findHeldNumber || defaultFindHeldNumber)(companyId, chosen.phoneNumber);
+      if (held) return save({ status: 'purchased', phoneNumberId: held._id ? String(held._id) : undefined });
+    } catch { /* lecture impossible : l'issue du refus est gardée */ }
     const code = r.body?.code;
     const taken = r.status === 410 || r.status === 409 || TAKEN_CODES.has(code);
     console.warn(`[nomad] achat du numéro choisi après paiement refusé (paiement ${payment._id}) : ${r.status} ${code || ''}`);
