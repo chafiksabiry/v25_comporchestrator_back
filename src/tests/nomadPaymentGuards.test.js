@@ -83,14 +83,27 @@ test('revérification : zone +1 (numéro canadien) cherchée en US puis CA ; lec
 
 test('POST /phone-numbers/still-available : pays contrôlé, 200 { available }, 503 si illisible', async () => {
   const ok = { ok: true, country: 'FR' };
-  let r = await N.stillAvailableFor({}, { phoneNumber: '+33142000001', country: 'FR', companyId: 'c1' }, { checkCountry: async () => ok, stillAvailable: async () => ({ available: true, inventory: true }) });
+  let r = await N.stillAvailableFor({}, { phoneNumber: '+33142000001', country: 'FR', companyId: 'c1' }, { checkCountry: async () => ok, findHeldNumber: async () => null, stillAvailable: async () => ({ available: true, inventory: true }) });
   assert.deepEqual([r.status, r.body.available], [200, true]);
-  r = await N.stillAvailableFor({}, { phoneNumber: '+33142000001', country: 'FR', companyId: 'c1' }, { checkCountry: async () => ok, stillAvailable: async () => ({ available: false }) });
+  r = await N.stillAvailableFor({}, { phoneNumber: '+33142000001', country: 'FR', companyId: 'c1' }, { checkCountry: async () => ok, findHeldNumber: async () => null, stillAvailable: async () => ({ available: false }) });
   assert.deepEqual([r.status, r.body.available, r.body.code], [200, false, N.NUMBER_NO_LONGER_AVAILABLE]);
-  r = await N.stillAvailableFor({}, { phoneNumber: '+33142000001', country: 'FR', companyId: 'c1' }, { checkCountry: async () => ok, stillAvailable: async () => ({ available: false, unknown: true }) });
+  r = await N.stillAvailableFor({}, { phoneNumber: '+33142000001', country: 'FR', companyId: 'c1' }, { checkCountry: async () => ok, findHeldNumber: async () => null, stillAvailable: async () => ({ available: false, unknown: true }) });
   assert.equal(r.status, 503);
   r = await N.stillAvailableFor({}, { phoneNumber: '+12125550101', country: 'US', companyId: 'c1' }, { checkCountry: async () => ({ ok: false, status: 403, body: { code: 'COUNTRY_NOT_ALLOWED' } }), stillAvailable: async () => { throw new Error('jamais appelé'); } });
   assert.deepEqual([r.status, r.body.code], [403, 'COUNTRY_NOT_ALLOWED']);
+});
+
+test('recette du 25/11 : numéro déjà détenu par CETTE société -> still-available { ownedByYou }, jamais « pris » ; une autre société -> pris', async () => {
+  const ok = { ok: true, country: 'FR' };
+  const asked = [];
+  let r = await N.stillAvailableFor({}, { phoneNumber: '+33162044499', country: 'FR', companyId: 'c1' }, { checkCountry: async () => ok, findHeldNumber: async (c, n) => { asked.push([c, n]); return { _id: 'pn1' }; }, stillAvailable: async () => { throw new Error('jamais appelé'); } });
+  assert.deepEqual([r.status, r.body.available, r.body.ownedByYou, r.body.code], [200, false, true, N.NUMBER_OWNED_BY_YOU]);
+  assert.deepEqual(asked, [['c1', '+33162044499']]);
+  r = await N.stillAvailableFor({}, { phoneNumber: '+33162044499', country: 'FR', companyId: 'c2' }, { checkCountry: async () => ok, findHeldNumber: async () => null, stillAvailable: async () => ({ available: false }) });
+  assert.deepEqual([r.status, r.body.available, r.body.ownedByYou, r.body.code], [200, false, undefined, N.NUMBER_NO_LONGER_AVAILABLE]);
+  // Lecture de la base impossible : on retombe sur la revérification habituelle (jamais « à vous » deviné).
+  r = await N.stillAvailableFor({}, { phoneNumber: '+33162044499', country: 'FR', companyId: 'c1' }, { checkCountry: async () => ok, findHeldNumber: async () => { throw new Error('db'); }, stillAvailable: async () => ({ available: true, inventory: false }) });
+  assert.deepEqual([r.status, r.body.available], [200, true]);
 });
 
 // ------------------------------------------------------------------ garde du paiement (b) et (c)
@@ -227,12 +240,18 @@ test('achat déclenché par la confirmation du paiement : une seule fois (confir
 
 test('achat : numéro pris entre la revérification et l’achat -> « taken » (paiement conservé) ; autre refus -> « failed »', async () => {
   silence();
-  let r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: fakePaymentModel(PAYMENT), verifiedCountries: VERIFIED(['FR']), purchase: async () => ({ status: 410, body: { code: 'NUMBER_NO_LONGER_AVAILABLE' } }) });
+  let r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: fakePaymentModel(PAYMENT), verifiedCountries: VERIFIED(['FR']), findHeldNumber: async () => null, purchase: async () => ({ status: 410, body: { code: 'NUMBER_NO_LONGER_AVAILABLE' } }) });
   assert.equal(r.status, 'taken');
-  r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: fakePaymentModel(PAYMENT), verifiedCountries: VERIFIED(['FR']), purchase: async () => ({ status: 500, body: { code: 'NUMBER_PROVISION_FAILED' } }) });
+  r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: fakePaymentModel(PAYMENT), verifiedCountries: VERIFIED(['FR']), findHeldNumber: async () => null, purchase: async () => ({ status: 500, body: { code: 'NUMBER_PROVISION_FAILED' } }) });
   assert.deepEqual([r.status, r.code], ['failed', 'NUMBER_PROVISION_FAILED']);
-  r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: fakePaymentModel(PAYMENT), verifiedCountries: VERIFIED(['FR']), purchase: async () => { throw new Error('twilio down'); } });
+  r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: fakePaymentModel(PAYMENT), verifiedCountries: VERIFIED(['FR']), findHeldNumber: async () => null, purchase: async () => { throw new Error('twilio down'); } });
   assert.equal(r.status, 'failed');
+});
+
+test('recette du 25/11 : achat refusé parce que le numéro est déjà à CETTE société (webhook) -> « purchased », jamais « taken »', async () => {
+  silence();
+  const r = await N.purchaseChosenNumberAfterPayment(PAYMENT, { Model: fakePaymentModel(PAYMENT), verifiedCountries: VERIFIED(['FR']), findHeldNumber: async (c, n) => (c === 'c1' && n === '+33142000001' ? { _id: 'pn7' } : null), purchase: async () => ({ status: 409, body: { code: 'NUMBER_ALREADY_EXISTS' } }) });
+  assert.deepEqual([r.status, r.phoneNumberId], ['purchased', 'pn7']);
 });
 
 test('achat : pays revérifié sans jeton (pays vérifiés) ; hors pays vérifiés, rien n’est acheté', async () => {
