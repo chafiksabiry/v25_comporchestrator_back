@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { stampJourneyLater } from '../services/signupJourney.js';
 import { guardCompanyAccess } from '../middleware/companyGuard.js';
 import { SubscriptionPlan } from '../models/SubscriptionPlan.js';
 import { Subscription } from '../models/Subscription.js';
@@ -303,6 +304,8 @@ export const subscriptionController = {
           ...(nomadChosenNumber ? { chosenNumber: nomadChosenNumber } : {})
         }
       });
+      // Parcours d'inscription NOMAD : le numéro est choisi à « Votre numéro », avant le paiement (première fois seulement).
+      if (nomadChosenNumber) stampJourneyLater({ userId: access.userId, companyId }, 'number_chosen');
 
       let checkoutUrl;
       let paypalOrderId;
