@@ -1,4 +1,5 @@
 import { buildLocalSearchOptions, buildPrefixSearchOptions } from './numberSearchOptions.js';
+import { stampJourneyLater } from './signupJourney.js';
 import { frenchZoneFor, frenchZonePrefix, zoneOfFrenchNumber } from './frenchZones.js';
 import { addressSidFromAssignments, isRejectedRange, rememberRejectedRange } from './rejectedNumberRanges.js';
 import { countryOfE164 } from '../utils/e164Country.js';
@@ -179,6 +180,8 @@ class PhoneNumberService {
 
         const newPhoneNumber = new PhoneNumber(phoneNumberData);
         await newPhoneNumber.save();
+        // Parcours d'inscription du titulaire : numéro choisi (première fois seulement, jamais bloquant).
+        stampJourneyLater({ companyId }, 'number_chosen');
 
         // 4. Retourner la réponse Telnyx (ligne mensuelle : avec l'id de la ligne HARX, pour son abonnement)
         return options.billingModel === 'monthly' ? { ...response.data, _id: newPhoneNumber._id } : response.data;
@@ -909,6 +912,8 @@ class PhoneNumberService {
       }
       throw saveErr;
     }
+    // Parcours d'inscription du titulaire : numéro choisi (première fois seulement, jamais bloquant).
+    stampJourneyLater({ companyId: phoneNumberData.companyId }, 'number_chosen');
 
     console.log("newPhoneNumber", newPhoneNumber);
     return newPhoneNumber;

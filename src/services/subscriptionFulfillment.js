@@ -8,6 +8,12 @@ import { pickPlanItem } from './seats.js';
 import { subscriptionPeriod, supersededStripeSubscriptionId } from './subscriptionPeriod.js';
 import { isCallcenterMetadata } from './callcenterTier.js';
 import { priceAmounts } from './currency.js';
+import { stampPaymentSucceeded } from './signupJourney.js';
+
+/** Parcours d'inscription : paiement d'abonnement réussi (et appel d'essai « sauté » pour NOMAD) ; jamais attendu ni bloquant. */
+function journeyPaid(userId, companyId) {
+  Promise.resolve().then(() => stampPaymentSucceeded({ userId, companyId })).catch(() => undefined);
+}
 
 export async function resolvePlanByPriceId(priceId) {
   let plan = await SubscriptionPlan.findOne({ stripePriceId: priceId });
@@ -103,6 +109,7 @@ export async function activateCompanySubscription({
     },
     { upsert: true, new: true }
   );
+  if (status === 'active') journeyPaid(userId, companyId);
 
   if (companyId) {
     const nameLower = (plan.name || '').toLowerCase();
@@ -204,6 +211,7 @@ export async function activateFromStripeCheckoutSession(session) {
     },
     { upsert: true, new: true }
   );
+  if (stripeSubscription.status === 'active') journeyPaid(userId, companyId);
 
   const superseded = supersededStripeSubscriptionId(previous, stripeSubscriptionId);
   if (superseded) {
