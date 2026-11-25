@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import { gateAccount } from '../services/accountGate.js';
 
 /**
  * Requires a valid JWT issued by the registration service.
@@ -14,8 +15,11 @@ export function authenticate(req, res, next) {
       return res.status(401).json({ error: 'Authentication required' });
     }
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;
-    next();
+    // Compte désactivé ou supprimé : refusé tout de suite, même avec ce jeton déjà émis (services/accountGate.js). Compte actif : inchangé.
+    return gateAccount(decoded?.userId || decoded?.id, res, next, () => {
+      req.user = decoded;
+      return next();
+    });
   } catch (error) {
     console.error(`[auth] 401 on ${req.method} ${req.originalUrl}: ${error.name} - ${error.message}`);
     return res.status(401).json({ error: 'Authentication failed' });

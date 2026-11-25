@@ -5,6 +5,7 @@
  * Toutes les dépendances sont injectables (base, horloge, extraction, déclaration, file de traitement) : tests sans réseau ni base.
  */
 import crypto from 'node:crypto';
+import { stampJourneyLater } from '../signupJourney.js';
 import { getIdentityConfig, loadFilesKey, deriveKeys } from './config.js';
 import { decide, OUTCOMES, REJECT_CODES } from './decision.js';
 import { extractDocument } from './extract.js';
@@ -12,6 +13,7 @@ import { decryptBuffer, encryptBuffer, fingerprint, prepareUpload, splitPages } 
 import { loadDeclaration as defaultLoadDeclaration } from './declaration.js';
 import { normalizeIso2 } from './countries.js';
 import { sharedIdentityInboxReporter } from '../../support/inboxRequests.js';
+import { notifyIdentityChanged } from './notify.js';
 
 export class IdentityError extends Error {
   constructor(status, code, extra = {}) {
@@ -61,6 +63,9 @@ export function createIdentityService({
   sharp = undefined,
   logger = console,
   inbox = null,
+  notify = notifyIdentityChanged,
+  // Parcours d'inscription (users.journey) : identité envoyée / vérifiée, première fois seulement, jamais attendu ni bloquant.
+  journey = stampJourneyLater,
 } = {}) {
   const cfg = () => (typeof config === 'function' ? config() : config);
   // Inbox support : tout dossier qui passe en revue humaine y crée une demande et prévient l'équipe (e-mail support@, webhook) ;
@@ -73,6 +78,12 @@ export function createIdentityService({
   const reportDecided = (v, outcome) => {
     if (!v?._id) return;
     Promise.resolve().then(() => reporter().decided(v, outcome)).catch((e) => logger.warn?.('[identity] clôture Inbox :', e?.message));
+  };
+  // Pages ouvertes de la société (portail) : prévenues dès qu'un statut change hors de leur geste (analyse finie, décision de l'équipe),
+  // pour se mettre à jour sans rechargement. Jamais attendu ni bloquant.
+  const changed = (companyId, status) => {
+    if (!companyId) return;
+    Promise.resolve().then(() => notify(String(companyId), status)).catch((e) => logger.warn?.('[identity] signal temps réel :', e?.message));
   };
   const keys = () => deriveKeys(loadFilesKey(cfg()));
 
@@ -207,9 +218,11 @@ export function createIdentityService({
         checks: [{ code: 'ATTEMPTS', result: 'review', detail: 'Limite d’analyses automatiques atteinte', reason: 'ATTEMPT_LIMIT' }],
       });
       reportReview({ ...target, companyId: String(companyId) }, { trigger: 'ATTEMPT_LIMIT', reasonCodes: ['ATTEMPT_LIMIT'] });
+      journey({ userId, companyId }, 'identity_submitted');
       return { status: 'review' };
     }
     await store.updateVerification(target._id, { status: 'processing', declared, attempt, processingStartedAt: now() });
+    journey({ userId, companyId }, 'identity_submitted');
     const id = String(target._id);
     schedule(() => { process(id).catch((e) => logger.error?.('[identity] traitement :', e?.message)); });
     return { status: 'processing', verificationId: id };
@@ -228,6 +241,7 @@ export function createIdentityService({
         checks: [{ code: 'PROCESSING', result: 'review', detail: 'Erreur interne pendant l’analyse', reason: 'PROCESSING_ERROR' }],
       });
       reportReview(v, { trigger: 'PROCESSING_ERROR', reasonCodes: ['PROCESSING_ERROR'] });
+      changed(v.companyId, 'review');
       return { outcome: 'review', reasonCodes: ['PROCESSING_ERROR'] };
     }
   }
@@ -294,6 +308,8 @@ export function createIdentityService({
       aiAt: aiCalled ? now() : null,
     }, { push: { ai } });
     await afterDecision(updated, result.outcome);
+    changed(v.companyId, result.outcome);
+    if (result.outcome === OUTCOMES.APPROVED) journey({ userId: v.userId, companyId: v.companyId }, 'identity_verified');
     if (result.outcome === OUTCOMES.REVIEW) reportReview(updated || v, { trigger: 'AI_REVIEW', reasonCodes: result.reasonCodes });
     else if (result.outcome === OUTCOMES.APPROVED && pendingOf(updated || {}).length) reportReview(updated, { trigger: 'PENDING_COUNTRY', pendingCountries: pendingOf(updated) });
     logger.log?.(`[identity] décision ${result.outcome} (${result.reasonCodes.join(',') || '-'}) jetons ${ai.reduce((s, a) => s + a.input + a.output, 0)}`);
@@ -338,6 +354,7 @@ export function createIdentityService({
         checks: [...(v.checks || []), { code: 'PROCESSING', result: 'review', detail: 'Analyse interrompue (redémarrage)', reason: 'PROCESSING_INTERRUPTED' }],
       });
       reportReview(v, { trigger: 'PROCESSING_INTERRUPTED', reasonCodes: ['PROCESSING_INTERRUPTED'] });
+      changed(v.companyId, 'review');
     }
   }
 
@@ -420,7 +437,9 @@ export function createIdentityService({
     // Décision humaine : images supprimées tout de suite, quelle que soit l'issue.
     await store.deleteFilesOf(v._id);
     if (outcome === 'approved') await store.supersedeOthers(v.companyId, v._id, ['approved', 'review', 'rejected']);
+    if (outcome === 'approved') journey({ userId: v.userId, companyId: v.companyId }, 'identity_verified');
     reportDecided(v, outcome);
+    changed(v.companyId, updated.status);
     return { status: updated.status, verifiedCountries: updated.verifiedCountries };
   }
 
@@ -453,6 +472,7 @@ export function createIdentityService({
     const updated = await store.updateVerification(v._id, patch, { push: { accessLog: { adminId: String(adminId), action: `pending:${outcome}`, fileId: null, at: now() } } });
     await store.deleteFilesOf(v._id);
     reportDecided(v, `pays en attente : ${outcome}`);
+    changed(v.companyId, updated.status);
     return { status: updated.status, verifiedCountries: updated.verifiedCountries };
   }
 
