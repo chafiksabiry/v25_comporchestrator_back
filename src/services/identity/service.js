@@ -5,6 +5,7 @@
  * Toutes les dépendances sont injectables (base, horloge, extraction, déclaration, file de traitement) : tests sans réseau ni base.
  */
 import crypto from 'node:crypto';
+import { stampJourneyLater } from '../signupJourney.js';
 import { getIdentityConfig, loadFilesKey, deriveKeys } from './config.js';
 import { decide, OUTCOMES, REJECT_CODES } from './decision.js';
 import { extractDocument } from './extract.js';
@@ -63,6 +64,8 @@ export function createIdentityService({
   logger = console,
   inbox = null,
   notify = notifyIdentityChanged,
+  // Parcours d'inscription (users.journey) : identité envoyée / vérifiée, première fois seulement, jamais attendu ni bloquant.
+  journey = stampJourneyLater,
 } = {}) {
   const cfg = () => (typeof config === 'function' ? config() : config);
   // Inbox support : tout dossier qui passe en revue humaine y crée une demande et prévient l'équipe (e-mail support@, webhook) ;
@@ -215,9 +218,11 @@ export function createIdentityService({
         checks: [{ code: 'ATTEMPTS', result: 'review', detail: 'Limite d’analyses automatiques atteinte', reason: 'ATTEMPT_LIMIT' }],
       });
       reportReview({ ...target, companyId: String(companyId) }, { trigger: 'ATTEMPT_LIMIT', reasonCodes: ['ATTEMPT_LIMIT'] });
+      journey({ userId, companyId }, 'identity_submitted');
       return { status: 'review' };
     }
     await store.updateVerification(target._id, { status: 'processing', declared, attempt, processingStartedAt: now() });
+    journey({ userId, companyId }, 'identity_submitted');
     const id = String(target._id);
     schedule(() => { process(id).catch((e) => logger.error?.('[identity] traitement :', e?.message)); });
     return { status: 'processing', verificationId: id };
@@ -304,6 +309,7 @@ export function createIdentityService({
     }, { push: { ai } });
     await afterDecision(updated, result.outcome);
     changed(v.companyId, result.outcome);
+    if (result.outcome === OUTCOMES.APPROVED) journey({ userId: v.userId, companyId: v.companyId }, 'identity_verified');
     if (result.outcome === OUTCOMES.REVIEW) reportReview(updated || v, { trigger: 'AI_REVIEW', reasonCodes: result.reasonCodes });
     else if (result.outcome === OUTCOMES.APPROVED && pendingOf(updated || {}).length) reportReview(updated, { trigger: 'PENDING_COUNTRY', pendingCountries: pendingOf(updated) });
     logger.log?.(`[identity] décision ${result.outcome} (${result.reasonCodes.join(',') || '-'}) jetons ${ai.reduce((s, a) => s + a.input + a.output, 0)}`);
@@ -431,6 +437,7 @@ export function createIdentityService({
     // Décision humaine : images supprimées tout de suite, quelle que soit l'issue.
     await store.deleteFilesOf(v._id);
     if (outcome === 'approved') await store.supersedeOthers(v.companyId, v._id, ['approved', 'review', 'rejected']);
+    if (outcome === 'approved') journey({ userId: v.userId, companyId: v.companyId }, 'identity_verified');
     reportDecided(v, outcome);
     changed(v.companyId, updated.status);
     return { status: updated.status, verifiedCountries: updated.verifiedCountries };

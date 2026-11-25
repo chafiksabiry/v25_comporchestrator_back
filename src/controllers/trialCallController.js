@@ -22,6 +22,7 @@ import { USED_SEEN_TTL_MS, usedSeenKey } from '../services/trialCall/paymentGate
 import { getIdentityConfig } from '../services/identity/config.js';
 import { callerAccess } from '../middleware/companyScope.js';
 import { sameNumberZone } from '../utils/numberZone.js';
+import { stampJourneyLater } from '../services/signupJourney.js';
 
 /**
  * Identité vérifiée de l'appelant pour l'essai (parcours Nomad, PARCOURS.md §4.5). Vérification d'identité désactivée
@@ -79,6 +80,8 @@ export function createTrialCallController({
   verifyRequest = (req, cfg) => twilioRequestValid(req, { env, authToken: cfg.twilioAuthToken, requestHost: true }),
   alert = sendTrialAlert,
   identity = defaultTrialIdentity,
+  // Parcours d'inscription (users.journey) : offre choisie, appel d'essai passé / déjà utilisé ; jamais attendu ni bloquant.
+  journey = stampJourneyLater,
 } = {}) {
   let lazyClient = twilioClient;
   const client = (cfg) => {
@@ -131,7 +134,11 @@ export function createTrialCallController({
 
   const cfgOf = () => trialConfig(env);
   /** « Déjà utilisé » constaté par le serveur : marque lue par la garde du paiement (l'essai impossible n'empêche pas de payer). */
-  const markUsedSeen = (userId) => (userId ? store.bump(usedSeenKey(userId), 1e9, new Date(now() + USED_SEEN_TTL_MS)).catch(() => undefined) : undefined);
+  const markUsedSeen = (userId) => {
+    if (!userId) return undefined;
+    journey({ userId }, 'trial_call', { outcome: 'used' });
+    return store.bump(usedSeenKey(userId), 1e9, new Date(now() + USED_SEEN_TTL_MS)).catch(() => undefined);
+  };
   /**
    * Vérification d'identité activée : l'essai exige une vérification validée, et le pays de l'essai doit être un pays de numéro
    * autorisé (résidence OU nationalité vérifiées, zone +1 comprise). Renvoie un code de refus, ou null.
@@ -206,6 +213,7 @@ export function createTrialCallController({
       const done = await store.updateTrial(trialId, { status: 'in_progress' }, { set: { status: 'ended', endedAt: new Date(t), durationSec: sec, endReason: reason } });
       if (done) await store.releaseLock(lockKeys(trial), String(trialId));
       if (done) await event('call_ended', { userId: trial.userId, trialId: String(trialId), country: trial.country, props: { sec, reason } });
+      if (done) journey({ userId: trial.userId }, 'trial_call', { outcome: 'done' });
       return done;
     }
     if (trial.status === 'dialing') {
@@ -503,6 +511,8 @@ export function createTrialCallController({
     /** POST /events { name, country, lang, props } : 204 ; ignoré si ni l'essai ni la mesure ne sont activés. */
     events: async (req, res) => {
       try {
+        // « Choisir » sur « Votre offre » (NOMAD) : étape offer_chosen du parcours, même si la mesure est désactivée.
+        if (req.body?.name === 'choose_clicked' && userOf(req)) journey({ userId: userOf(req) }, 'offer_chosen');
         const cfg = cfgOf();
         if (!cfg.eventsFlag && !trialEnabled(cfg)) return res.status(204).end();
         const userId = userOf(req);
