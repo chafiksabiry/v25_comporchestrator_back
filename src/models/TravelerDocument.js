@@ -5,7 +5,7 @@ import mongoose from 'mongoose';
  * (billet avec dates) et, sauf pour les ressortissants exemptés (GCC, États-Unis, Canada, Royaume-Uni, UE/EEE, Suisse), un visa.
  * Une fiche par société (NOMAD = une seule personne). Les fichiers sont CHIFFRÉS comme les pièces d'identité (AES-256-GCM, clé dérivée
  * de IDENTITY_FILES_ENC_KEY, contexte authentifié société + type), et supprimés au plus tard 60 jours après l'envoi (index TTL).
- * Validation : contrôle automatique des dates à l'envoi, puis revue humaine (statut `pending_review` -> `approved` ou `rejected`).
+ * Validation AUTOMATIQUE à l'envoi (statut `approved` dès que les contrôles passent) ; `rejected` possible a posteriori (admin).
  */
 const fileSchema = new mongoose.Schema({
   mime: { type: String, required: true },

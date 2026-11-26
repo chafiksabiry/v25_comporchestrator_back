@@ -17,8 +17,10 @@ import { callcenterTierFromMetadata } from './callcenterTier.js';
  *    même fournisseur (Twilio) pour US, CA, UK et France ; la France joint le dossier réglementaire et l'adresse France de HARX déjà
  *    utilisés pour les lignes NOMAD françaises ;
  *  - éligibilité : vérification d'identité validée (existante) + titre de voyage valide + visa sauf ressortissants exemptés
- *    (GCC, US, CA, UK, UE/EEE, Suisse). Contrôle automatique des dates, puis revue humaine (pending_review -> approved / rejected) ;
- *    le paiement n'est ouvert qu'une fois les pièces VALIDÉES par l'équipe (décision du 26/11/2026).
+ *    (GCC, US, CA, UK, UE/EEE, Suisse). Validation AUTOMATIQUE (décision du 26/11/2026) : identité validée par la vérification
+ *    automatique existante (IA), format des fichiers (signature binaire), dates du voyage contrôlées, visa présent si exigé ; tout
+ *    passe -> `approved` immédiatement, le choix du numéro et le paiement s'ouvrent ; sinon refus motivé (code), la pièce peut être
+ *    renvoyée. La route admin permet encore de retirer une validation (`rejected`) a posteriori.
  *  - résiliation automatique (expireTravelers, tâche planifiée idempotente) : abonnement local résilié, numéro rendu au fournisseur,
  *    minutes restantes perdues.
  */
@@ -135,11 +137,13 @@ export async function submitTravelerDocuments(companyId, userId, { ticket, visa,
     departAt: day(departAt), returnAt: day(returnAt),
     ticket: await file('ticket', ticket, ticketMime),
     ...(visa ? { visa: await file('visa', visa, visaMime) } : {}),
-    status: 'pending_review', reviewedAt: null, reviewedBy: null, rejectReason: null,
+    // Validation AUTOMATIQUE (décision du fondateur du 26/11/2026, remplace la revue par l'équipe) : identité déjà validée par la
+    // vérification automatique (IA), titre de voyage au bon format avec des dates valides, visa présent quand la nationalité l'exige.
+    status: 'approved', reviewedAt: now, reviewedBy: 'auto', rejectReason: null,
     expiresAt: new Date(now.getTime() + TRAVELER_FILES_TTL_MS),
   });
-  console.log(`${TAG} pièces reçues pour la société ${companyId} (visa ${visaRequired ? 'exigé' : 'non exigé'}) : revue humaine en attente`);
-  return { status: saved?.status || 'pending_review', visaRequired };
+  console.log(`${TAG} pièces validées automatiquement pour la société ${companyId} (visa ${visaRequired ? 'exigé' : 'non exigé'})`);
+  return { status: saved?.status || 'approved', visaRequired };
 }
 
 /** Revue humaine (admin HARX) : approved / rejected (motif). */
