@@ -10,7 +10,7 @@ import { bundleAmountCents, bundleLabel, parseBundleQuantities } from '../servic
 import { config } from '../config/env.js';
 import { paypalCaptureId, paypalCaptureNotCompleted, paypalOrderMismatch, stripeSessionMismatch } from '../services/paymentVerification.js';
 import { FALLBACK_PURCHASE_CURRENCY, formatAmountLabel, offerPurchaseCurrency } from '../services/purchaseCurrency.js';
-import { MINUTE_BLOCK, NOMAD_INCLUDED_MINUTES, TRAVELER_DAYS, TRAVELER_INCLUDED_MINUTES, TRAVELER_NUMBER_COUNTRIES, TRAVELER_PRICE_CENTS, NOMAD_NUMBER_COUNTRIES } from '../services/nomadOffers.js';
+import { blockCentsFor, minutePacksFor, MINUTE_BLOCK, NOMAD_INCLUDED_MINUTES, TRAVELER_DAYS, TRAVELER_INCLUDED_MINUTES, TRAVELER_NUMBER_COUNTRIES, TRAVELER_PRICE_CENTS, NOMAD_NUMBER_COUNTRIES } from '../services/nomadOffers.js';
 import {
   computeMinutesPurchaseCents,
   computeTokensPurchaseCents,
@@ -74,14 +74,14 @@ function sanitizePaymentReturnUrl(url, fallback) {
   return fallback;
 }
 
-async function computeAmountCents(purpose, { amountEuros, minutes, tokens }) {
+async function computeAmountCents(purpose, { amountEuros, minutes, tokens, currency }) {
   if (purpose === 'wallet_deposit') {
     const euros = Number(amountEuros);
     if (!Number.isFinite(euros) || euros <= 0) return null;
     return Math.round(euros * 100);
   }
   if (purpose === 'minutes_purchase') {
-    return computeMinutesPurchaseCents(minutes);
+    return computeMinutesPurchaseCents(minutes, currency);
   }
   if (purpose === 'tokens_purchase') {
     return computeTokensPurchaseCents(tokens);
@@ -89,7 +89,7 @@ async function computeAmountCents(purpose, { amountEuros, minutes, tokens }) {
   if (purpose === 'bundle_purchase') {
     const qty = parseBundleQuantities({ minutes, tokens });
     if (!qty) return null;
-    return bundleAmountCents(await computeMinutesPurchaseCents(qty.minutes), await computeTokensPurchaseCents(qty.tokens));
+    return bundleAmountCents(await computeMinutesPurchaseCents(qty.minutes, currency), await computeTokensPurchaseCents(qty.tokens));
   }
   return null;
 }
@@ -120,10 +120,11 @@ export const paymentCheckoutController = {
         },
         pricing: {
           currency,
-          minuteBlock: { minutes: MINUTE_BLOCK.minutes, priceCents: MINUTE_BLOCK.priceCents },
-          minutePacks: pricing.minutePacks,
-          minutesCustomRateCents: pricing.minutesCustomRateCents,
-          minutesCustomRateEuros: pricing.minutesCustomRateCents / 100,
+          // Prix dans la devise du client : 30 min = 5 (€, $, £) ou 8 (dollar canadien).
+          minuteBlock: { minutes: MINUTE_BLOCK.minutes, priceCents: blockCentsFor(currency) },
+          minutePacks: minutePacksFor(currency),
+          minutesCustomRateCents: blockCentsFor(currency) / MINUTE_BLOCK.minutes,
+          minutesCustomRateEuros: blockCentsFor(currency) / MINUTE_BLOCK.minutes / 100,
           tokenPacks: pricing.tokenPacks,
           tokensCustomRateCents: pricing.tokensCustomRateCents,
           tokensCustomRateEuros: pricing.tokensCustomRateCents / 100,
@@ -158,7 +159,7 @@ export const paymentCheckoutController = {
       }
 
       const currency = purpose === 'wallet_deposit' ? WALLET_CURRENCY : await offerPurchaseCurrency(req, companyId);
-      const amountCents = await computeAmountCents(purpose, { amountEuros, minutes, tokens });
+      const amountCents = await computeAmountCents(purpose, { amountEuros, minutes, tokens, currency });
       if (amountCents == null || amountCents <= 0) {
         // Minutes : par tranche de 30 min seulement (30, 60, 90…).
         return res.status(400).json({ error: 'Invalid amount, minutes or tokens quantity', ...(purpose === 'minutes_purchase' || purpose === 'bundle_purchase' ? { code: 'MINUTES_BLOCK_REQUIRED', blockMinutes: MINUTE_BLOCK.minutes } : {}) });

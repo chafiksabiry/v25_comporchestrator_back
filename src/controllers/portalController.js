@@ -36,6 +36,10 @@ export function createPortalHandlers(deps = {}) {
       }
       try {
         const subscription = await findSubscription(access.companyId);
+        // NOMAD Traveler : aucun abonnement Stripe, pas de portail de gestion (décision du 26/11/2026).
+        if (String(subscription?.stripeSubscriptionId || '').startsWith('traveler_')) {
+          return res.status(409).json({ success: false, code: 'TRAVELER_ONE_TIME', error: 'NOMAD Traveler est un paiement unique : aucun abonnement à gérer.' });
+        }
         const stripe = getStripe();
         if (!subscription || !stripe) {
           return res.status(404).json({
