@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 const {
-  italyPricingReportEnabled, availableNumbersUrl, requirementsUrl, formatNumberLine, formatRequirementLines, logTelnyxItalyPricing, NUMBER_TYPES,
+  italyPricingReportEnabled, availableNumbersUrl, requirementsUrl, formatNumberLine, formatRequirementLines, logTelnyxItalyPricing, NUMBER_TYPES, requirementDetailUrl,
 } = await import('../services/telnyxItalyPricingReport.js');
 
 // --- Activation : uniquement avec la valeur 1
@@ -37,6 +37,8 @@ assert.equal(
 );
 assert.match(formatNumberLine('mobile', {}), /initial=\? mensuel=\? devise=\? features=\(aucune\) region=\?/);
 
+assert.equal(requirementDetailUrl('a b'), 'https://api.telnyx.com/v2/requirements/a%20b');
+
 // --- Exigences
 const reqLines = formatRequirementLines('local', {
   id: 'req1', country_code: 'IT', phone_number_type: 'local', action: 'ordering', locality: null,
@@ -61,7 +63,9 @@ const http = {
 };
 const out = [];
 await logTelnyxItalyPricing({ apiKey: KEY, http, log: (l) => out.push(l) });
-assert.equal(urls.length, 4 + 5);
+assert.equal(urls.length, 4 + 5 + 1 + 1);
+assert.ok(urls.some((x) => x.endsWith('/v2/requirements/req1')));
+assert.ok(out.some((l) => l.includes('champs=id,country_code,phone_number_type,action,requirements_types')));
 assert.ok(out.every((l) => !l.includes(KEY)));
 assert.ok(out.some((l) => l.includes('DISPONIBLES type=toll_free : échec HTTP 400 10015 Bad Request no inventory')));
 assert.ok(out.some((l) => l.includes('DISPONIBLES type=mobile : 1 renvoyé(s), total=1')));
