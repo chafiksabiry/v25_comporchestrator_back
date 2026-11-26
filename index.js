@@ -99,6 +99,12 @@ mongoose.connect(config.mongodbUri, {
       }))
       .catch((e) => console.error('[twilio-capabilities] :', e?.message || e));
   }
+  // Diagnostic en lecture seule des prix / exigences Telnyx pour l'Italie : avec LOG_TELNYX_IT_PRICING=1 seulement.
+  if (String(process.env.LOG_TELNYX_IT_PRICING || '').trim() === '1') {
+    Promise.all([import('./src/services/telnyxItalyPricingReport.js'), import('axios')])
+      .then(([{ logTelnyxItalyPricing }, { default: axios }]) => logTelnyxItalyPricing({ apiKey: config.telnyxApiKey, http: axios }))
+      .catch((e) => console.error('[telnyx-it-pricing] :', e?.message || e));
+  }
 }).catch((error) => {
   console.error('❌ MongoDB connection error:', error);
   process.exit(1); // Exit if we can't connect to database
