@@ -60,7 +60,7 @@ test('recharges : devise de l\'abonnement du client (€, $ ou £), même montan
   // Pas d'abonnement Stripe : devise du dernier paiement Traveler, sinon du pays.
   assert.equal(await offerPurchaseCurrency(req, 'c1', { lookup: async () => 'FR', customerCurrency: async () => null, travelerCurrency: async () => 'GBP', dbReady: () => true }), 'GBP');
   assert.equal(await offerPurchaseCurrency(req, 'c1', { lookup: async () => 'US', customerCurrency: async () => null, travelerCurrency: async () => null, dbReady: () => true }), 'USD');
-  assert.equal(await offerPurchaseCurrency(req, 'c1', { lookup: async () => 'GB', customerCurrency: async () => 'cad', travelerCurrency: async () => null, dbReady: () => true }), 'GBP', 'devise hors €/$/£ : pays');
+  assert.equal(await offerPurchaseCurrency(req, 'c1', { lookup: async () => 'GB', customerCurrency: async () => 'chf', travelerCurrency: async () => null, dbReady: () => true }), 'GBP', 'devise hors €/$/£/$ CA : pays');
   // Appelant non identifié ou d'une autre société : EUR (jamais la devise d'autrui).
   assert.equal(await offerPurchaseCurrency({ headers: {} }, 'c1', { customerCurrency: async () => 'gbp' }), 'EUR');
   assert.equal(await offerPurchaseCurrency(req, 'c1', { lookup: async () => { throw new Error('forbidden'); }, customerCurrency: async () => 'gbp' }), 'EUR');
@@ -158,7 +158,7 @@ test('Traveler, pièces : visa demandé à un ressortissant marocain, pas à un 
 
 test('Traveler, garde du paiement : numéro hors pays, abonnement en cours, identité, pièces absentes ou refusées, visa manquant', async () => {
   const now = () => Date.parse('2026-11-26T12:00:00Z');
-  const doc = { status: 'pending_review', departAt: new Date('2026-12-01'), returnAt: new Date('2026-12-20') };
+  const doc = { status: 'approved', departAt: new Date('2026-12-01'), returnAt: new Date('2026-12-20') };
   const deps = (over = {}) => ({ now, verifiedIdentity: async () => ({ verified: true, nationality: 'FR' }), documentOf: async () => doc, liveSubscriptions: async () => [], ...over });
   const gate = (n, d) => T.travelerPaymentGate('c1', { chosenNumber: { phoneNumber: n } }, d);
   assert.deepEqual(await gate('+447700900123', deps()), { ok: true, chosen: { phoneNumber: '+447700900123', country: 'GB' } });
@@ -172,6 +172,8 @@ test('Traveler, garde du paiement : numéro hors pays, abonnement en cours, iden
   assert.equal((await gate('+14155552671', deps({ verifiedIdentity: async () => ({ verified: false }) }))).body.code, 'IDENTITY_NOT_VERIFIED');
   assert.equal((await gate('+14155552671', deps({ documentOf: async () => null }))).body.code, 'TRAVEL_DOCUMENTS_REQUIRED');
   assert.equal((await gate('+14155552671', deps({ documentOf: async () => ({ ...doc, status: 'rejected' }) }))).body.code, 'TRAVEL_DOCUMENTS_REJECTED');
+  // Décision du 26/11 : paiement seulement après validation des pièces par l'équipe.
+  assert.equal((await gate('+14155552671', deps({ documentOf: async () => ({ ...doc, status: 'pending_review' }) }))).body.code, 'TRAVEL_DOCUMENTS_PENDING');
   assert.equal((await gate('+14155552671', deps({ verifiedIdentity: async () => ({ verified: true, nationality: 'IN' }) }))).body.code, 'VISA_REQUIRED');
   assert.equal((await gate('+14155552671', deps({ verifiedIdentity: async () => ({ verified: true, nationality: 'IN' }), documentOf: async () => ({ ...doc, visa: { mime: 'image/png' } }) }))).ok, true);
 });
@@ -232,4 +234,43 @@ test('Traveler : forfait local hors catalogue des abonnements, palier nomad_trav
   assert.equal(isLineIncluded({ product: 'callcenter', callcenterTier: 'nomad_traveler' }, 0), true);
   assert.equal(isLineIncluded({ product: 'callcenter', callcenterTier: 'nomad_traveler' }, 1), false);
   assert.ok(T.TRAVELER_PLAN_PRICE_ID.startsWith('harx_'), 'écarté du catalogue publié (prix Stripe absent)');
+});
+
+// --- Décisions complémentaires du 26/11/2026 ---------------------------------------------------------------------------------
+test('recharges en dollars canadiens : 30 min = 8 $ CA (60 / 16, 150 / 40, 300 / 80) ; €, $, £ restent à 5', async () => {
+  assert.equal(await computeMinutesPurchaseCents(30, 'CAD'), 800);
+  assert.deepEqual(O.minutePacksFor('CAD').map((p) => [p.minutes, p.priceCents]), [[60, 1600], [150, 4000], [300, 8000]]);
+  assert.equal(await computeMinutesPurchaseCents(90, 'cad'), 2400);
+  for (const c of ['EUR', 'USD', 'GBP']) assert.deepEqual(O.minutePacksFor(c).map((p) => p.priceCents), [1000, 2500, 5000], c);
+  const req = { headers: { authorization: `Bearer ${jwt.sign({ userId: 'u1' }, process.env.JWT_SECRET)}` } };
+  assert.equal(await offerPurchaseCurrency(req, 'c1', { lookup: async () => 'CA', customerCurrency: async () => 'cad', travelerCurrency: async () => null, dbReady: () => true }), 'CAD');
+  assert.equal(T.travelerCurrency('CAD', 'CAD'), 'USD', 'Traveler : aucun montant CAD décidé, dollar américain');
+});
+
+test('PayPal retiré par configuration (PAYPAL_CHECKOUT_DISABLED=true, posé en recette) : jamais proposé ni utilisable', async () => {
+  const { paypalService, paypalDisabled } = await import('../services/paypalService.js');
+  const saved = { d: process.env.PAYPAL_CHECKOUT_DISABLED, id: process.env.PAYPAL_CLIENT_ID, sec: process.env.PAYPAL_CLIENT_SECRET };
+  try {
+    process.env.PAYPAL_CLIENT_ID = 'x'; process.env.PAYPAL_CLIENT_SECRET = 'y';
+    process.env.PAYPAL_CHECKOUT_DISABLED = 'true';
+    assert.equal(paypalDisabled(), true); assert.equal(paypalService.isConfigured(), false);
+    delete process.env.PAYPAL_CHECKOUT_DISABLED;
+    assert.equal(paypalDisabled(), false);
+  } finally {
+    for (const [k, v] of [['PAYPAL_CHECKOUT_DISABLED', saved.d], ['PAYPAL_CLIENT_ID', saved.id], ['PAYPAL_CLIENT_SECRET', saved.sec]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+});
+
+test('NOMAD Traveler : ni « Résilier » ni portail Stripe (paiement unique, fin automatique)', async () => {
+  const { createSubscriptionStopHandlers } = await import('../controllers/subscriptionStopController.js');
+  const { createPortalHandlers } = await import('../controllers/portalController.js');
+  const sub = { _id: 's', status: 'active', stripeSubscriptionId: 'traveler_p1', stripeCustomerId: '' };
+  const res = () => { const r = { code: 200 }; r.status = (c) => { r.code = c; return r; }; r.json = (b) => { r.body = b; return r; }; return r; };
+  let updated = false;
+  const stop = createSubscriptionStopHandlers({ getAccess: async () => ({ companyId: 'c1', role: 'owner' }), findSubscription: async () => sub, getStripe: () => ({ subscriptions: { update: async () => { updated = true; } } }) });
+  const r1 = res(); await stop.cancelAtPeriodEnd({ user: {} }, r1);
+  assert.deepEqual([r1.code, r1.body.code, updated], [409, 'TRAVELER_ONE_TIME', false]);
+  const portal = createPortalHandlers({ getAccess: async () => ({ companyId: 'c1', role: 'owner' }), findSubscription: async () => sub, getStripe: () => ({}) });
+  const r2 = res(); await portal.createPortalSession({ body: {}, headers: {} }, r2);
+  assert.deepEqual([r2.code, r2.body.code], [409, 'TRAVELER_ONE_TIME']);
 });

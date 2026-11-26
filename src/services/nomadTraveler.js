@@ -18,7 +18,7 @@ import { callcenterTierFromMetadata } from './callcenterTier.js';
  *    utilisés pour les lignes NOMAD françaises ;
  *  - éligibilité : vérification d'identité validée (existante) + titre de voyage valide + visa sauf ressortissants exemptés
  *    (GCC, US, CA, UK, UE/EEE, Suisse). Contrôle automatique des dates, puis revue humaine (pending_review -> approved / rejected) ;
- *    le paiement est accepté dès l'envoi conforme (pending_review) : un refus humain bloque tout nouveau paiement.
+ *    le paiement n'est ouvert qu'une fois les pièces VALIDÉES par l'équipe (décision du 26/11/2026).
  *  - résiliation automatique (expireTravelers, tâche planifiée idempotente) : abonnement local résilié, numéro rendu au fournisseur,
  *    minutes restantes perdues.
  */
@@ -170,6 +170,8 @@ export async function travelerPaymentGate(companyId, { chosenNumber }, deps = {}
   const doc = status.documents;
   if (!doc) return refuse(409, 'TRAVEL_DOCUMENTS_REQUIRED', { visaRequired: status.visaRequired });
   if (doc.status === 'rejected') return refuse(409, 'TRAVEL_DOCUMENTS_REJECTED');
+  // Décision du fondateur (26/11/2026) : paiement seulement APRÈS validation des pièces par l'équipe, jamais pendant l'attente.
+  if (doc.status !== 'approved') return refuse(409, 'TRAVEL_DOCUMENTS_PENDING');
   if (status.visaRequired && !doc.hasVisa) return refuse(409, 'VISA_REQUIRED');
   const problem = tripDatesProblem(doc, d.now());
   if (problem) return refuse(409, problem);
@@ -397,7 +399,8 @@ export async function expireTravelers({ now = Date.now(), dryRun = String(proces
   return out;
 }
 
-/** Devise d'un paiement Traveler : €, $ ou £ (même chiffre) ; sinon devise du pays (EUR par défaut). */
+/** Devise d'un paiement Traveler : €, $ ou £ (même chiffre ; dollar canadien -> dollar américain, aucun montant CAD décidé) ; sinon EUR. */
 export function travelerCurrency(asked, fallback) {
-  return offerCurrency(asked) || offerCurrency(fallback) || 'EUR';
+  const cad = (c) => (String(c ?? '').trim().toUpperCase() === 'CAD' ? 'USD' : c);
+  return offerCurrency(cad(asked)) || offerCurrency(cad(fallback)) || 'EUR';
 }

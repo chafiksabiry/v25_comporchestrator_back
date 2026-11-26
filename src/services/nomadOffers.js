@@ -39,12 +39,21 @@ export const MINUTE_PACKS = Object.freeze([
 ]);
 export const MAX_MINUTES_PER_PURCHASE = 3000;
 
-/** Prix (centimes) d'une recharge de `minutes` : multiple positif de 30, au plus MAX_MINUTES_PER_PURCHASE ; sinon null (refusé). */
-export function minutesBlockPriceCents(minutes) {
+/**
+ * Prix d'une tranche de 30 min selon la devise (décision du 26/11/2026) : 5 en €, $ et £ ; 8 en dollars canadiens (abonnement CAD).
+ */
+export const BLOCK_PRICE_CENTS_BY_CURRENCY = Object.freeze({ EUR: 500, USD: 500, GBP: 500, CAD: 800 });
+export const blockCentsFor = (currency) => BLOCK_PRICE_CENTS_BY_CURRENCY[String(currency ?? '').trim().toUpperCase()] ?? MINUTE_BLOCK.priceCents;
+
+/** Prix (centimes) d'une recharge de `minutes` dans `currency` : multiple positif de 30, au plus MAX_MINUTES_PER_PURCHASE ; sinon null (refusé). */
+export function minutesBlockPriceCents(minutes, currency = 'EUR') {
   const qty = Number(minutes);
   if (!Number.isInteger(qty) || qty <= 0 || qty > MAX_MINUTES_PER_PURCHASE || qty % MINUTE_BLOCK.minutes !== 0) return null;
-  return (qty / MINUTE_BLOCK.minutes) * MINUTE_BLOCK.priceCents;
+  return (qty / MINUTE_BLOCK.minutes) * blockCentsFor(currency);
 }
+
+/** Les trois choix proposés, au prix de la devise. */
+export const minutePacksFor = (currency) => MINUTE_PACKS.map((p) => ({ ...p, priceCents: minutesBlockPriceCents(p.minutes, currency) }));
 
 /** Pays de numéro proposés à NOMAD (décision du 26/11 : Italie, Espagne, Maroc, Émirats, Arabie saoudite retirés). */
 export const NOMAD_NUMBER_COUNTRIES = Object.freeze(['US', 'CA', 'GB', 'FR', 'DE', 'NL', 'BE']);

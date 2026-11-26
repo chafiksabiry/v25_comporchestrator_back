@@ -118,13 +118,15 @@ async function defaultTravelerCurrency(companyId) {
  *  3. devise du dernier paiement NOMAD Traveler réussi ;
  *  4. sinon devise du pays de la société (GB -> GBP, US -> USD, sinon EUR ; Canada : EUR, aucun montant CAD décidé).
  * Ne lève jamais.
- * @returns {Promise<'EUR'|'USD'|'GBP'>}
+ * Abonnement en dollars canadiens : CAD (30 min = 8 $ CA).
+ * @returns {Promise<'EUR'|'USD'|'GBP'|'CAD'>}
  */
 export async function offerPurchaseCurrency(req, companyId, { lookup = companyCountry, customerCurrency = offerCustomerCurrency, travelerCurrency = defaultTravelerCurrency, dbReady = () => mongoose.connection.readyState === 1 } = {}) {
   try {
     if (!companyId || !identifyCaller(req)) return FALLBACK_PURCHASE_CURRENCY;
     const country = await lookup(req, String(companyId));
-    const ok = (c) => { const v = String(c || '').trim().toUpperCase(); return ['EUR', 'USD', 'GBP'].includes(v) ? v : null; };
+    // Dollar canadien accepté pour un abonnement en CAD (30 min = 8 $ CA, décision du 26/11/2026).
+    const ok = (c) => { const v = String(c || '').trim().toUpperCase(); return ['EUR', 'USD', 'GBP', 'CAD'].includes(v) ? v : null; };
     let fixed = null;
     // Base non connectée (démarrage, tests) : pas de lecture de l'abonnement, devise du pays (comme avant).
     if (dbReady()) {

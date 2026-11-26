@@ -223,8 +223,16 @@ async function refundOrder(orderId, { reason } = {}) {
   return data;
 }
 
+/** PayPal coupé par configuration (PAYPAL_CHECKOUT_DISABLED=true). */
+export function paypalDisabled(env = process.env) {
+  return String(env.PAYPAL_CHECKOUT_DISABLED || '').trim().toLowerCase() === 'true';
+}
+
 export const paypalService = {
   isConfigured() {
+    // PayPal retiré (décision du fondateur du 26/11/2026 : Stripe seulement) : PAYPAL_CHECKOUT_DISABLED=true (posé en recette) le coupe
+    // partout (jetons, abonnements, minutes, lignes) : la configuration publique répond `enabled: false` et toute initialisation est refusée.
+    if (paypalDisabled()) return false;
     try {
       requireCredentials();
       return true;
