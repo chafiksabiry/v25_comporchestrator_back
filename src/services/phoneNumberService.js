@@ -751,12 +751,15 @@ class PhoneNumberService {
         ...(inbound || {}),
       };
 
+      // Mobile britannique (+447, NOMAD Traveler) : aucune exigence d'adresse chez Twilio (vérifié le 26/11) ; le dossier GB « local »
+      // ne lui correspond pas (21649) : il n'est jamais joint à un mobile.
+      const gbLocal = phoneNumber.startsWith('+44') && !phoneNumber.startsWith('+447');
       const currentBundleSid = bundleSid
         || (phoneNumber.startsWith('+33') ? config.twilioFrenchBundleSid : null)
-        || (phoneNumber.startsWith('+44') ? config.twilioGbBundleSid || null : null);
+        || (gbLocal ? config.twilioGbBundleSid || null : null);
       const currentAddressSid = addressSid
         || (phoneNumber.startsWith('+33') ? config.twilioFrenchAddressSid : null)
-        || (phoneNumber.startsWith('+44') ? config.twilioGbAddressSid || null : null);
+        || (gbLocal ? config.twilioGbAddressSid || null : null);
 
       // Fail early (before Twilio IncomingPhoneNumbers.create) when the
       // configured FR bundle is not a "local" regulation — same 21649 Twilio

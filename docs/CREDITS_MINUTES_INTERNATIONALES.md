@@ -1,3 +1,5 @@
+> **Obsolète depuis le 26/11/2026** : le coefficient international est supprimé (décompte 1:1, appels sortants limités au même indicatif pays que la ligne). Voir `src/services/creditCoefficient.js` et `src/services/nomadOffers.js`.
+
 # Crédit minute international = N crédits minute nationale
 
 Recette uniquement à ce stade. Remplace le second solde / les packs internationaux (PR #143, non fusionnée) : **un seul solde de minutes** (`MinutesCompany`, packs et achats à la minute existants inchangés).

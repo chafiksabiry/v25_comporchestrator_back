@@ -4,13 +4,15 @@ import { normalizeDestination } from './voicemailCallback.js';
  * Destinations autorisées pour les appels SORTANTS (navigateur). Logique pure, sans accès base ni réseau.
  * Décision toujours prise par le serveur : le navigateur n'est jamais cru (ni pays, ni liste, ni numéro « déjà validé »).
  *
- * Ordre des contrôles : E.164 valide -> indicatif pays connu -> numéro surtaxé (refus définitif, aucun réglage ne le lève)
- * -> pays activé pour l'entreprise.
+ * Ordre des contrôles : E.164 valide -> numéro surtaxé ou court (refus définitif, aucun réglage ne le lève) -> indicatif pays connu
+ * -> MÊME indicatif pays que la ligne (décision du fondateur du 26/11/2026 : +33 -> +33, +1 -> +1 donc États-Unis <-> Canada, +44 -> +44 ;
+ * plus d'appels internationaux, plus d'exception « France en plus du pays de la société ») -> pays laissé activé par le titulaire.
  */
 export const DESTINATION_NOT_ALLOWED = 'destination_not_allowed';
 export const INVALID_NUMBER = 'invalid_number';
 
 export const MESSAGES = Object.freeze({
+  not_line_country: 'Depuis votre ligne, vous pouvez appeler uniquement les numéros de son pays ({prefix}).',
   country_not_enabled: 'Les appels vers ce pays ne sont pas activés pour votre entreprise.',
   premium_rate: 'Les numéros surtaxés ou à valeur ajoutée ne peuvent pas être appelés.',
   invalid_number: 'Numéro invalide. Saisissez-le au format international, par exemple +33 6 12 34 56 78.',
@@ -19,11 +21,34 @@ export const MESSAGES = Object.freeze({
 
 /** Messages anglais (additifs) des mêmes refus : `messageEn` ; le français de `MESSAGES` reste dans `message`. */
 export const MESSAGES_EN = Object.freeze({
+  not_line_country: 'From your line, you can only call numbers in its country ({prefix}).',
   country_not_enabled: 'Calls to this country are not enabled for your company.',
   premium_rate: 'Premium-rate and value-added numbers cannot be called.',
   invalid_number: 'Invalid number. Enter it in international format, for example +1 415 555 2671.',
   unknown_country: 'Calls to this country are not supported.',
 });
+
+/** Mêmes refus en espagnol et en arabe (`messageEs`, `messageAr`) : le portail affiche la langue de l'interface. */
+export const MESSAGES_ES = Object.freeze({
+  not_line_country: 'Desde su línea solo puede llamar a números de su país ({prefix}).',
+  country_not_enabled: 'Las llamadas a este país no están activadas para su empresa.',
+  premium_rate: 'No se pueden llamar números de tarificación adicional ni números cortos.',
+  invalid_number: 'Número no válido. Introdúzcalo en formato internacional, por ejemplo +34 612 34 56 78.',
+  unknown_country: 'No se admiten llamadas a este país.',
+});
+export const MESSAGES_AR = Object.freeze({
+  not_line_country: 'من خطّك، يمكنك الاتصال فقط بأرقام بلده ({prefix}).',
+  country_not_enabled: 'المكالمات إلى هذا البلد غير مفعّلة لشركتك.',
+  premium_rate: 'لا يمكن الاتصال بالأرقام ذات التعرفة الإضافية أو الأرقام القصيرة.',
+  invalid_number: 'رقم غير صالح. أدخله بالصيغة الدولية، مثلًا ‎+44 7700 900123‎.',
+  unknown_country: 'المكالمات إلى هذا البلد غير مدعومة.',
+});
+
+/** Refus complet (fr, en, es, ar), `{prefix}` remplacé par l'indicatif de la ligne. */
+export function refusalMessages(reason, { prefix = '' } = {}) {
+  const pick = (table) => String(table[reason] || '').replace('{prefix}', prefix);
+  return { message: pick(MESSAGES), messageEn: pick(MESSAGES_EN), messageEs: pick(MESSAGES_ES), messageAr: pick(MESSAGES_AR) };
+}
 
 /** Libellés additifs (clé ISO 3166-1 alpha-2 + libellé anglais), par indicatif : les clients traduisent d'après `iso`. Le champ `name` (français) est inchangé. */
 export const COUNTRY_LABELS_EN = Object.freeze({
@@ -137,7 +162,8 @@ const KNOWN = new Set(COUNTRY_CATALOG.map((c) => c.prefix));
 
 /**
  * Plages surtaxées ou à valeur ajoutée, refusées pour toutes les entreprises, quel que soit leur réglage.
- * Préfixes E.164 complets (indicatif pays compris).
+ * Préfixes E.164 complets (indicatif pays compris). Royaume-Uni : +449 (surtaxés) et +4470 (numéros « personnels » 070, bloqués :
+ * décision du fondateur du 26/11/2026).
  */
 export const PREMIUM_RATE_PREFIXES = Object.freeze([
   // France : 08 9x (surtaxés), 3x xx (numéros courts à tarif spécial), 08 1x / 08 2x (à valeur ajoutée)
@@ -225,29 +251,41 @@ export function validatePrefixList(list) {
 }
 
 /**
- * Pays autorisés pour une entreprise : sa sélection enregistrée si elle en a une ; sinon son propre pays
- * (déduit de ses lignes) et la liste globale de l'environnement (OUTBOUND_ALLOWED_PREFIXES, +33 sans réglage).
+ * Pays autorisés pour une entreprise (décision du 26/11/2026) : UNIQUEMENT l'indicatif de sa ligne (`companyCountry`). La sélection
+ * enregistrée par le titulaire ne peut que le RETIRER (jamais ajouter un autre pays) ; la liste globale OUTBOUND_ALLOWED_PREFIXES
+ * (`envPrefixes`, gardé pour les appelants existants) n'ajoute plus rien. Sans ligne lisible : aucun pays.
  * @returns {{prefixes: string[], customized: boolean}}
  */
-export function effectiveOutboundPrefixes({ saved, companyCountry = '', envPrefixes = ['+33'] }) {
+// eslint-disable-next-line no-unused-vars
+export function effectiveOutboundPrefixes({ saved, companyCountry = '', envPrefixes = [] }) {
+  const home = KNOWN.has(companyCountry) ? [companyCountry] : [];
   if (Array.isArray(saved)) {
     const checked = validatePrefixList(saved);
-    return { prefixes: checked.ok ? checked.value : [], customized: true };
+    return { prefixes: checked.ok ? home.filter((p) => checked.value.includes(p)) : [], customized: true };
   }
-  const defaults = [...new Set([companyCountry, ...envPrefixes].filter((p) => KNOWN.has(p)))];
-  return { prefixes: defaults, customized: false };
+  return { prefixes: home, customized: false };
 }
 
 /**
  * Décision serveur sur une destination.
  * @returns {{ok: true, to: string} | {ok: false, code: string, reason: string, message: string}}
  */
-export function checkDestination(raw, allowedPrefixes) {
+export function checkDestination(raw, allowedPrefixes, { lineCountry = '' } = {}) {
+  const refuse = (code, reason, extra = {}) => ({ ok: false, code, reason, ...refusalMessages(reason, extra), ...(extra.prefix ? { lineCountry: extra.prefix } : {}) });
   const to = toStrictE164(raw);
-  if (!to) return { ok: false, code: INVALID_NUMBER, reason: 'invalid_number', message: MESSAGES.invalid_number, messageEn: MESSAGES_EN.invalid_number };
-  if (isPremiumRate(to)) return { ok: false, code: DESTINATION_NOT_ALLOWED, reason: 'premium_rate', message: MESSAGES.premium_rate, messageEn: MESSAGES_EN.premium_rate };
+  if (!to) return refuse(INVALID_NUMBER, 'invalid_number');
+  if (isPremiumRate(to)) return refuse(DESTINATION_NOT_ALLOWED, 'premium_rate');
   const country = countryPrefixOf(to);
-  if (!country) return { ok: false, code: DESTINATION_NOT_ALLOWED, reason: 'unknown_country', message: MESSAGES.unknown_country, messageEn: MESSAGES_EN.unknown_country };
-  if (!allowedPrefixes.includes(country)) return { ok: false, code: DESTINATION_NOT_ALLOWED, reason: 'country_not_enabled', message: MESSAGES.country_not_enabled, messageEn: MESSAGES_EN.country_not_enabled };
+  if (!country) return refuse(DESTINATION_NOT_ALLOWED, 'unknown_country');
+  // Indicatif différent de celui de la ligne : refus « numéros de votre pays seulement » (le plus fréquent, message dédié).
+  if (lineCountry && country !== lineCountry) return refuse(DESTINATION_NOT_ALLOWED, 'not_line_country', { prefix: lineCountry });
+  if (!allowedPrefixes.includes(country)) return refuse(DESTINATION_NOT_ALLOWED, 'country_not_enabled');
   return { ok: true, to };
+}
+
+/** Même indicatif pays que la ligne ? (rappel du répondeur, transfert) ; ligne ou destination illisible : false. */
+export function sameCountryAsLine(to, lineNumber) {
+  const a = countryPrefixOf(toStrictE164(to));
+  const b = countryPrefixOf(toStrictE164(lineNumber));
+  return Boolean(a && b && a === b);
 }

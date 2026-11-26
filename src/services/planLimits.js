@@ -85,7 +85,7 @@ export async function loadCompanyPlanLimits(companyId) {
     callcenterTier: callcenterTierFromMetadata(metadata),
     /** Prix mensuel d'une ligne supplémentaire (metadata `phone_line_price_cents`, centimes) ; null = prix par défaut. */
     phoneLinePriceCents: phoneLinePriceCentsFromMetadata(metadata),
-    /** Crédits débités par minute internationale (métadonnée `international_minute_credits` du produit, sinon INTERNATIONAL_MINUTE_CREDITS, sinon 1). */
+    /** Toujours 1 : décompte 1:1 (décision du 26/11/2026, plus d'appels internationaux). */
     internationalCoefficient: coefficient.coefficient,
     internationalCoefficientSource: coefficient.source,
     maxGigs: numberOrNull(fromMeta.maxGigs) ?? numberOrNull(plan.maxGigs),

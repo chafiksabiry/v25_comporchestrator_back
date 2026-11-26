@@ -150,6 +150,8 @@ export async function fulfillCompanyPaymentOnce(payment) {
     else if (payment.purpose === 'minutes_purchase') result = await fulfillMinutesPurchase(payment);
     else if (payment.purpose === 'tokens_purchase') result = await fulfillTokensPurchase(payment);
     else if (payment.purpose === 'bundle_purchase') result = await fulfillBundlePurchase(payment);
+    // NOMAD Traveler (paiement unique) : abonnement local de 21 jours, 30 minutes incluses, achat du numéro choisi.
+    else if (payment.purpose === 'traveler_purchase') result = await (await import('./nomadTraveler.js')).fulfillTravelerPurchase(payment);
     else {
       await CompanyPayment.updateOne({ _id: payment._id }, { $unset: { fulfillClaimedAt: 1 } });
       return { fulfilled: false, skipped: true, reason: `unknown purpose ${payment.purpose}` };

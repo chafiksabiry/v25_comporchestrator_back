@@ -88,7 +88,7 @@ async function post(path, body) {
   return out;
 }
 // Numéro choisi (parcours Nomad) dans le pays donné : exigé par la garde du paiement depuis le 23/11.
-const NUM = { MA: '+212522000001', US: '+12125550101', GB: '+442071234567', DE: '+4930123456' };
+const NUM = { MA: '+212522000001', US: '+12125550101', GB: '+442071234567', DE: '+4930123456', BE: '+3221234567' };
 const chosen = (cc) => ({ chosenNumber: { phoneNumber: NUM[cc], country: cc } });
 const INIT = (over = {}) => ({ userId: 'u-owner', companyId: C1, priceId: 'price_nomad', planName: 'Nomad Solo', provider: 'stripe', uiMode: 'embedded', ...over });
 const LEGACY = (over = {}) => ({ userId: 'u-owner', companyId: C1, priceId: 'price_nomad', planName: 'Nomad Solo', successUrl: 'https://ok', cancelUrl: 'https://ko', ...over });
@@ -102,9 +102,17 @@ for (const [path, body, okCode] of [['/checkout/init', INIT, 201], ['/checkout',
     assert.equal(calls.payments + calls.sessions, 0);
   });
 
-  test(`${path} Nomad Solo : pays de résidence avec numéros -> paiement créé`, async () => {
+  test(`${path} Nomad Solo : pays hors de l'offre NOMAD (Maroc, 26/11) -> 403 COUNTRY_NOT_OFFERED, aucun paiement`, async () => {
     stock = { MA: true };
-    const r = await post(path, body(chosen('MA')));
+    const r = await post(path, body({ chosenNumber: { phoneNumber: NUM.MA, country: 'MA' } }));
+    assert.equal(r.code, 403, JSON.stringify(r.body));
+    assert.equal(r.body.code, 'COUNTRY_NOT_OFFERED');
+    assert.equal(calls.payments + calls.sessions, 0);
+  });
+
+  test(`${path} Nomad Solo : pays de résidence avec numéros -> paiement créé`, async () => {
+    profile = storedProfile({ country: 'BE' }); stock = { BE: true }; /* Maroc retiré de l'offre NOMAD (26/11) : résident belge */
+    const r = await post(path, body(chosen('BE')));
     assert.equal(r.code, okCode, JSON.stringify(r.body));
     assert.equal(calls.sessions, 1);
   });
@@ -166,9 +174,9 @@ for (const [path, body, okCode] of [['/checkout/init', INIT, 201], ['/checkout',
   });
 
   test(`${path} Nomad Solo : stock épuisé alors que le cache d'affichage dit « disponible » -> 409, aucun paiement`, async () => {
-    // L'écran a vu des numéros au Maroc (réponse mise en cache pour l'affichage)...
-    stock = { MA: true };
-    assert.deepEqual(await countryAvailability('MA'), { available: true });
+    // L'écran a vu des numéros en Belgique (réponse mise en cache pour l'affichage)...
+    profile = storedProfile({ country: 'BE' }); stock = { BE: true }; /* Maroc retiré de l'offre NOMAD (26/11) : résident belge */
+    assert.deepEqual(await countryAvailability('BE'), { available: true });
     // ...puis le stock s'épuise : la garde relit sans cache et refuse.
     stock = {};
     const r = await post(path, body());
@@ -178,8 +186,8 @@ for (const [path, body, okCode] of [['/checkout/init', INIT, 201], ['/checkout',
   });
 
   test(`${path} Nomad Solo : panne de l'opérateur alors que le cache dit « disponible » -> 503 ${AVAILABILITY_UNAVAILABLE}`, async () => {
-    stock = { MA: true };
-    await countryAvailability('MA');
+    profile = storedProfile({ country: 'BE' }); stock = { BE: true }; /* Maroc retiré de l'offre NOMAD (26/11) : résident belge */
+    await countryAvailability('BE');
     twilioDown = true;
     const r = await post(path, body());
     assert.equal(r.code, 503, JSON.stringify(r.body));
@@ -195,12 +203,12 @@ for (const [path, body, okCode] of [['/checkout/init', INIT, 201], ['/checkout',
     assert.deepEqual([r.body.code, r.body.retryable], [AVAILABILITY_UNAVAILABLE, true]);
     assert.equal(calls.payments + calls.sessions, 0);
     // Inventaire revenu, numéros en stock : rien n'était mis en cache, le paiement s'ouvre.
-    inventoryDown = false; stock = { MA: true }; clearCompanyCache();
-    assert.equal((await post(path, body(chosen('MA')))).code, okCode);
+    inventoryDown = false; profile = storedProfile({ country: 'BE' }); stock = { BE: true }; /* Maroc retiré de l'offre NOMAD (26/11) : résident belge */ clearCompanyCache();
+    assert.equal((await post(path, body(chosen('BE')))).code, okCode);
   });
 
   test(`${path} Nomad Solo (parcours du 23/11) : aucun numéro choisi -> 400 CHOSEN_NUMBER_REQUIRED, aucun paiement`, async () => {
-    stock = { MA: true };
+    profile = storedProfile({ country: 'BE' }); stock = { BE: true }; /* Maroc retiré de l'offre NOMAD (26/11) : résident belge */
     const r = await post(path, body());
     assert.equal(r.code, 400, JSON.stringify(r.body));
     assert.equal(r.body.code, 'CHOSEN_NUMBER_REQUIRED');
@@ -208,16 +216,16 @@ for (const [path, body, okCode] of [['/checkout/init', INIT, 201], ['/checkout',
   });
 
   test(`${path} Nomad Solo (parcours du 23/11) : numéro choisi pris entre-temps (revérifié) -> 409 NUMBER_NO_LONGER_AVAILABLE, aucun paiement`, async () => {
-    stock = { MA: true };
+    profile = storedProfile({ country: 'BE' }); stock = { BE: true }; /* Maroc retiré de l'offre NOMAD (26/11) : résident belge */
     phoneNumberService.findClaimableInventoryNumber = async () => ({ owned: true, claimable: false, number: {} });
-    const r = await post(path, body(chosen('MA')));
+    const r = await post(path, body(chosen('BE')));
     assert.equal(r.code, 409, JSON.stringify(r.body));
     assert.equal(r.body.code, 'NUMBER_NO_LONGER_AVAILABLE');
     assert.equal(calls.payments + calls.sessions, 0);
   });
 
   test(`${path} Nomad Solo (parcours du 23/11) : numéro d'un pays non autorisé -> 403 COUNTRY_NOT_ALLOWED, aucun paiement`, async () => {
-    stock = { MA: true };
+    profile = storedProfile({ country: 'BE' }); stock = { BE: true }; /* Maroc retiré de l'offre NOMAD (26/11) : résident belge */
     const r = await post(path, body(chosen('US')));
     assert.equal(r.code, 403, JSON.stringify(r.body));
     assert.equal(r.body.code, 'COUNTRY_NOT_ALLOWED');
@@ -228,8 +236,8 @@ for (const [path, body, okCode] of [['/checkout/init', INIT, 201], ['/checkout',
     const savedFlag = process.env.IDENTITY_VERIFICATION_ENABLED;
     delete process.env.IDENTITY_VERIFICATION_ENABLED;
     try {
-      stock = { MA: true }; verifiedNow = false;
-      const r = await post(path, body(chosen('MA')));
+      profile = storedProfile({ country: 'BE' }); stock = { BE: true }; /* Maroc retiré de l'offre NOMAD (26/11) : résident belge */ verifiedNow = false;
+      const r = await post(path, body(chosen('BE')));
       assert.equal(r.code, 409, JSON.stringify(r.body));
       assert.equal(r.body.code, IDENTITY_VERIFICATION_UNAVAILABLE);
       assert.equal(calls.payments + calls.sessions, 0);
@@ -238,9 +246,9 @@ for (const [path, body, okCode] of [['/checkout/init', INIT, 201], ['/checkout',
 
   for (const status of ['active', 'trialing', 'past_due', 'unpaid']) {
     test(`${path} défaut 2 : abonnement NOMAD ${status} -> 409 NOMAD_SUBSCRIPTION_EXISTS, jamais un second abonnement`, async () => {
-      stock = { MA: true };
+      profile = storedProfile({ country: 'BE' }); stock = { BE: true }; /* Maroc retiré de l'offre NOMAD (26/11) : résident belge */
       subs = [{ status, planId: { metadata: NOMAD } }];
-      const r = await post(path, body(chosen('MA')));
+      const r = await post(path, body(chosen('BE')));
       assert.equal(r.code, 409, JSON.stringify(r.body));
       assert.deepEqual([r.body.code, r.body.subscriptionStatus, r.body.unpaid], ['NOMAD_SUBSCRIPTION_EXISTS', status, status === 'past_due' || status === 'unpaid']);
       assert.equal(calls.payments + calls.sessions, 0);
@@ -248,9 +256,9 @@ for (const [path, body, okCode] of [['/checkout/init', INIT, 201], ['/checkout',
   }
 
   test(`${path} défaut 2 : abonnement NOMAD résilié, ou abonnement d’une autre offre -> pas de refus « déjà abonné »`, async () => {
-    stock = { MA: true };
+    profile = storedProfile({ country: 'BE' }); stock = { BE: true }; /* Maroc retiré de l'offre NOMAD (26/11) : résident belge */
     subs = [{ status: 'active', planId: { metadata: CLOUD } }];
-    assert.equal((await post(path, body(chosen('MA')))).code, okCode);
+    assert.equal((await post(path, body(chosen('BE')))).code, okCode);
   });
 
   test(`${path} autre offre (CLOUD) : aucune vérification des numéros`, async () => {
@@ -270,12 +278,12 @@ test('/checkout/init Nomad Solo : profil relu sans cache (pays enregistré juste
 });
 
 test('/checkout/init Nomad Solo : le numéro choisi est gardé sur le paiement (acheté à la confirmation), jamais réservé', async () => {
-  stock = { MA: true };
+  profile = storedProfile({ country: 'BE' }); stock = { BE: true }; /* Maroc retiré de l'offre NOMAD (26/11) : résident belge */
   let created;
   CompanyPayment.create = async (doc) => { created = doc; calls.payments += 1; return { _id: 'pay_1', ...doc, save: async () => {} }; };
-  const r = await post('/checkout/init', INIT(chosen('MA')));
+  const r = await post('/checkout/init', INIT(chosen('BE')));
   assert.equal(r.code, 201, JSON.stringify(r.body));
-  assert.deepEqual(created.meta.chosenNumber, { phoneNumber: NUM.MA, country: 'MA' });
+  assert.deepEqual(created.meta.chosenNumber, { phoneNumber: NUM.BE, country: 'BE' });
 });
 
 test('soloCheckoutEligibility : profil non lisible pour cause d’authentification -> statut transmis (401), pas 503', async () => {

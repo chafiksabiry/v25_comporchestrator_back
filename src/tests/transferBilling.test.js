@@ -162,12 +162,11 @@ test('entrant : jeton altéré ou d’un autre appel -> rien de débité', async
   assert.equal(CALLS.length, 0);
 });
 
-test('fiche internationale à 3 crédits : trace du plafond posée sous le DialCallSid, débit × 3', async () => {
+test('décompte 1:1 (26/11/2026) : un ancien jeton portant 3 crédits et INTERNATIONAL_MINUTE_CREDITS restée en configuration ne changent rien, 1 minute = 1 minute', async () => {
   process.env.INTERNATIONAL_MINUTE_CREDITS = '3';
   await hook({ s: stateFor(CALLER, { to: ENTRY_GB, factor: 3 }) }, { CallSid: CALLER, DialCallSid: DIAL, DialCallStatus: 'completed', DialCallDuration: '61' });
-  assert.deepEqual(decisions.get(DIAL), { factor: 3, zone: 'international' });
   await syncMinutesFromCalls(C1);
-  assert.equal(W.minutes, 100 - 2 * 3);
+  assert.equal(W.minutes, 100 - 2, '61 s = 2 minutes entamées, sans coefficient');
 });
 
 test('jeton émis avant cette version (sans numéro) : numéro relu sur la fiche', async () => {
@@ -207,14 +206,13 @@ test('sortant : action du <Dial> de la jambe navigateur (pas de transfert enregi
   assert.equal(CALLS.length, 0);
 });
 
-test('sortant international : la décision de crédit de la jambe navigateur est reprise pour le reste', async () => {
+test('sortant : une ancienne trace à 3 crédits n\'est plus appliquée au reste (décompte 1:1)', async () => {
   process.env.INTERNATIONAL_MINUTE_CREDITS = '3';
   decisions.set(BROWSER_OUT, { factor: 3, zone: 'international' });
   outboundRows.set(PROSPECT_LEG, { callSid: PROSPECT_LEG, companyId: C1, browserCallSid: BROWSER_OUT, lineNumber: LINE, startedAt: new Date(NOW - 59000) });
   assert.equal(await billOutboundTransferRemainder({ CallSid: PROSPECT_LEG, CallStatus: 'completed', CallDuration: '400', To: ENTRY_GB }, { signed: true }), true);
-  assert.deepEqual(decisions.get(PROSPECT_LEG), { factor: 3, zone: 'international' });
   await syncMinutesFromCalls(C1);
-  assert.equal(W.minutes, 100 - 1 * 3);
+  assert.equal(W.minutes, 100 - 1);
 });
 
 test('débit : un même sid inscrit deux fois (sans index unique) n’est débité qu’une fois', async () => {

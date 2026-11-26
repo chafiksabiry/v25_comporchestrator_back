@@ -66,6 +66,12 @@ const subscriptionSchema = new mongoose.Schema({
   numberLifecycle: {
     type: [mongoose.Schema.Types.Mixed],
     default: undefined
+  },
+  // NOMAD Traveler (services/nomadTraveler.js) : fin automatique au 21e jour { status: releasing|done, at, doneAt, summary, lastError }.
+  // Écrit uniquement par ce service. Absent sur les autres abonnements.
+  travelerEnd: {
+    type: mongoose.Schema.Types.Mixed,
+    default: undefined
   }
 }, {
   timestamps: true

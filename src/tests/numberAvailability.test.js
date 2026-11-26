@@ -238,7 +238,9 @@ describe('route GET /api/phone-numbers/availability', () => {
   // Décision du fondateur « oui me prévenir » : la page NOMAD (visiteur non connecté) lit la disponibilité du pays choisi.
   it('sans companyId ni session : public, réponse réduite à { available, reason?, countryCode }', async () => {
     assert.deepEqual(await call('/availability?countryCode=FR'), { status: 200, body: { available: true, countryCode: 'FR' } });
-    assert.deepEqual(await call('/availability?countryCode=ma'), { status: 200, body: { available: false, reason: 'no_inventory', countryCode: 'MA' } });
+    assert.deepEqual(await call('/availability?countryCode=ma'), { status: 200, body: { available: false, reason: 'not_offered', countryCode: 'MA' } }, 'Maroc retiré de l\'offre NOMAD (26/11)');
+    assert.deepEqual(await call('/availability?countryCode=IT'), { status: 200, body: { available: false, reason: 'not_offered', countryCode: 'IT' } }, 'Italie retirée');
+    assert.ok(!searches.includes('MA') && !searches.includes('IT'), 'aucune recherche opérateur pour un pays non proposé');
   });
   it('aucune fuite : ni numéro ni détail d’inventaire, même quand l’opérateur en renvoie', async () => {
     const r = await call('/availability?countryCode=FR');
@@ -286,7 +288,9 @@ describe('route GET /api/phone-numbers/availability', () => {
   });
   it('sans companyId (avant paiement) : disponibilité du pays', async () => {
     assert.deepEqual(await call('/availability?countryCode=FR', 'jp'), { status: 200, body: { available: true, countryCode: 'FR' } });
-    assert.deepEqual(await call('/availability?countryCode=ma', 'jp'), { status: 200, body: { available: false, reason: 'no_inventory', countryCode: 'MA' } });
+    assert.deepEqual(await call('/availability?countryCode=ma', 'jp'), { status: 200, body: { available: false, reason: 'not_offered', countryCode: 'MA' } });
+    for (const cc of ['ES', 'AE', 'SA', 'IT']) assert.equal((await call(`/availability?countryCode=${cc}`, 'jp')).body.reason, 'not_offered', cc);
+    for (const cc of ['US', 'CA', 'GB', 'FR', 'DE', 'NL']) assert.notEqual((await call(`/availability?countryCode=${cc}`, 'jp')).body.reason, 'not_offered', cc);
     assert.equal((await call('/availability', 'jp')).status, 400);
   });
   it('companyId d’une autre entreprise : refusé ; panne Twilio : 503 sans réponse inventée', async () => {

@@ -48,7 +48,7 @@ test('catalogue publié : forfaits archivés exclus, un seul prix par offre', as
   assert.equal(stripeAvailable, true);
   assert.deepEqual(
     plans.map((p) => [p.callcenterTier, p.price, p.currency, p.communicationMinutes]),
-    [['nomad_solo', 19.99, 'eur', 30], ['accueil', 29.99, 'eur', 30], ['full_scope', 49.99, 'eur', 120], ['multi_clients', 99.99, 'eur', 500]],
+    [['nomad_solo', 19.99, 'eur', 120], ['accueil', 29.99, 'eur', 30], ['full_scope', 49.99, 'eur', 120], ['multi_clients', 99.99, 'eur', 500]],
   );
   // L'ancien Accueil à 99 € (et les anciens 199 € / 299 € / 39,99 €) restent en base mais ne sont jamais publiés.
   for (const stale of [99, 199, 299, 39.99]) assert.ok(!plans.some((p) => p.price === stale), `prix périmé ${stale} publié`);
