@@ -220,7 +220,8 @@ test('débit borné : jamais sous zéro, le reste est consigné (non facturé) ;
 // ---------------------------------------------------------------- démarrage refusé à solde 0
 
 test('sortant, solde 0 : refus au démarrage (jeton / vérification : 402 MINUTES_INSUFFICIENT_FOR_DESTINATION ; webhook : refus parlé) et aucune échéance', async () => {
-  for (const offer of Object.keys(OFFERS)) {
+  // NOMAD : ses 120 minutes incluses (26/11/2026) sont accordées à la lecture du solde : le solde n'est pas nul (voir le test qui suit).
+  for (const offer of Object.keys(OFFERS).filter((o) => o !== 'nomad_solo')) {
     plan = offer; W.minutes = 0; DL.rows.clear();
     const shortfall = await pc.minutesShortfall(C1);
     assert.equal(shortfall.code, 'MINUTES_INSUFFICIENT_FOR_DESTINATION', offer); assert.equal(shortfall.balance, 0);
@@ -230,6 +231,8 @@ test('sortant, solde 0 : refus au démarrage (jeton / vérification : 402 MINUTE
   }
   W.minutes = -4;
   assert.equal((await pc.minutesShortfall(C1)).code, 'MINUTES_INSUFFICIENT_FOR_DESTINATION', 'solde négatif (historique) : refus');
+  plan = 'nomad_solo'; W.minutes = 0; DL.rows.clear();
+  assert.equal(await pc.minutesShortfall(C1), null, 'NOMAD : 120 minutes incluses accordées, l\'appel peut partir');
   assert.equal(decideOutboundCall({ to: CALLER, line: { phoneNumber: LINE }, subscribed: true, minutes: 0 }).ok, false);
 });
 

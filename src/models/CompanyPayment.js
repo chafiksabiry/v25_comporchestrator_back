@@ -13,7 +13,7 @@ const companyPaymentSchema = new mongoose.Schema({
   purpose: {
     type: String,
     required: true,
-    enum: ['wallet_deposit', 'minutes_purchase', 'tokens_purchase', 'bundle_purchase', 'subscription_upgrade'],
+    enum: ['wallet_deposit', 'minutes_purchase', 'tokens_purchase', 'bundle_purchase', 'subscription_upgrade', 'traveler_purchase'],
     index: true
   },
   provider: {

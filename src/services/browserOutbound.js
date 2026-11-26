@@ -109,6 +109,7 @@ export const SPOKEN_REFUSALS = Object.freeze({
     premium_rate: 'Premium-rate and value-added numbers cannot be called.',
     unknown_country: 'Calls to this country are not supported.',
     country_not_enabled: 'Calls to this country are not enabled for your company.',
+    not_line_country: 'From your line, you can only call numbers in its country.',
     line_not_assigned: 'No line is assigned to you. Ask the account owner to assign you one.',
     line_busy: 'All lines are busy. Please try again in a moment.',
   },
@@ -125,6 +126,7 @@ export const SPOKEN_REFUSALS = Object.freeze({
     premium_rate: 'Les numéros surtaxés ou à valeur ajoutée ne peuvent pas être appelés.',
     unknown_country: 'Les appels vers ce pays ne sont pas pris en charge.',
     country_not_enabled: 'Les appels vers ce pays ne sont pas activés pour votre entreprise.',
+    not_line_country: 'Depuis votre ligne, vous pouvez appeler uniquement les numéros de son pays.',
   },
   es: {
     not_authorized: 'Llamada no autorizada.',
@@ -139,6 +141,7 @@ export const SPOKEN_REFUSALS = Object.freeze({
     premium_rate: 'No se pueden llamar a números de tarifa premium ni de valor añadido.',
     unknown_country: 'No se admiten llamadas a este país.',
     country_not_enabled: 'Las llamadas a este país no están activadas para su empresa.',
+    not_line_country: 'Desde su línea solo puede llamar a números de su país.',
   },
 });
 const SPOKEN_VOICES = Object.freeze({ en: ['en-US', 'Polly.Joanna'], fr: ['fr-FR', 'Polly.Lea'], es: ['es-ES', 'Polly.Lucia'] });

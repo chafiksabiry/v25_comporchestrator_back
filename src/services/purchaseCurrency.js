@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import jwt from 'jsonwebtoken';
 import { companyCountry, companyCountryRaw, normalizeCountryCode } from '../middleware/companyScope.js';
 import { currencyForCountry, normalizeCurrency, oneShotCurrencyForCountry } from './currency.js';
@@ -101,4 +102,39 @@ export async function phoneLineCurrency(req, companyId, { monthly = false, hintC
   if (/^[A-Z]{2}$/.test(hint)) return { currency: forCountry(hint).toUpperCase(), source: 'client_country' };
   console.warn(JSON.stringify({ event: 'phone_line_currency_fallback', companyId: companyId ? String(companyId) : null, reason }));
   return { currency: FALLBACK_PURCHASE_CURRENCY, source: 'fallback' };
+}
+
+async function defaultTravelerCurrency(companyId) {
+  const { default: CompanyPayment } = await import('../models/CompanyPayment.js');
+  const p = await CompanyPayment.findOne({ companyId: String(companyId), purpose: 'traveler_purchase', status: 'succeeded' }).sort({ createdAt: -1 }).select('currency').lean();
+  return p?.currency || null;
+}
+
+/**
+ * Devise (EUR, USD ou GBP) d'une recharge de minutes ou de jetons NOMAD (décision du 26/11/2026) : celle de l'ABONNEMENT du client,
+ * plus de packs toujours en EUR. Même chiffre dans les trois devises (30 min pour 5 €, 5 $ ou 5 £).
+ *  1. appelant identifié ET membre de la société (lecture du pays par `lookup`, qui le vérifie), sinon EUR ;
+ *  2. devise du client Stripe de l'abonnement d'offre (NOMAD), si c'est EUR, USD ou GBP ;
+ *  3. devise du dernier paiement NOMAD Traveler réussi ;
+ *  4. sinon devise du pays de la société (GB -> GBP, US -> USD, sinon EUR ; Canada : EUR, aucun montant CAD décidé).
+ * Ne lève jamais.
+ * @returns {Promise<'EUR'|'USD'|'GBP'>}
+ */
+export async function offerPurchaseCurrency(req, companyId, { lookup = companyCountry, customerCurrency = offerCustomerCurrency, travelerCurrency = defaultTravelerCurrency, dbReady = () => mongoose.connection.readyState === 1 } = {}) {
+  try {
+    if (!companyId || !identifyCaller(req)) return FALLBACK_PURCHASE_CURRENCY;
+    const country = await lookup(req, String(companyId));
+    const ok = (c) => { const v = String(c || '').trim().toUpperCase(); return ['EUR', 'USD', 'GBP'].includes(v) ? v : null; };
+    let fixed = null;
+    // Base non connectée (démarrage, tests) : pas de lecture de l'abonnement, devise du pays (comme avant).
+    if (dbReady()) {
+      try { fixed = ok(await customerCurrency(String(companyId))); } catch { fixed = null; }
+      if (fixed) return fixed;
+      try { fixed = ok(await travelerCurrency(String(companyId))); } catch { fixed = null; }
+      if (fixed) return fixed;
+    }
+    return oneShotCurrencyForCountry(country).toUpperCase();
+  } catch {
+    return FALLBACK_PURCHASE_CURRENCY;
+  }
 }

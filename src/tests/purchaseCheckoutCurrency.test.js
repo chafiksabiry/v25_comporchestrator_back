@@ -160,9 +160,9 @@ for (const [iso, expected] of [['GB', 'GBP'], ['US', 'USD'], ['FR', 'EUR']]) {
     await paymentCheckoutController.initCheckout(reqOf(checkoutBody({ purpose: 'minutes_purchase', minutes: 150 })), res);
     assert.equal(res.statusCode, 201, JSON.stringify(res.body));
     assert.equal(res.body.currency, expected);
-    assert.equal(res.body.amount, 1000);
+    assert.equal(res.body.amount, 2500, '150 min = 25 (5 par tranche de 30 min, décision du 26/11), même chiffre dans les trois devises');
     assert.equal(stripeCalls[0].currency, expected);
-    assert.equal(stripeCalls[0].amountCents, 1000);
+    assert.equal(stripeCalls[0].amountCents, 2500);
     assert.equal(res.body.quantity, 150);
   });
 }
@@ -177,7 +177,7 @@ test('payments/checkout/init : jetons IA et pack combiné suivent aussi le pays'
   }
 });
 
-test('payments/checkout/init : sans jeton 401, inscription indisponible 503 (jamais ouvert), pays illisible -> EUR, PayPal reçoit la devise en majuscules', async () => {
+test('payments/checkout/init : sans jeton 401, inscription indisponible 503 (jamais ouvert), pays illisible -> EUR, PayPal reçoit la devise en majuscules (jetons ; les minutes sont Stripe seulement)', async () => {
   country = 'GB';
   let res = mockRes();
   await paymentCheckoutController.initCheckout(reqOf(checkoutBody({ purpose: 'minutes_purchase', minutes: 150 }), {}, false), res);
@@ -185,11 +185,11 @@ test('payments/checkout/init : sans jeton 401, inscription indisponible 503 (jam
   registrationDown = true;
   clearCompanyCache();
   res = mockRes();
-  await paymentCheckoutController.initCheckout(reqOf(checkoutBody({ purpose: 'minutes_purchase', minutes: 150, provider: 'paypal' })), res);
+  await paymentCheckoutController.initCheckout(reqOf(checkoutBody({ purpose: 'tokens_purchase', tokens: 50000, provider: 'paypal' })), res);
   assert.equal(res.statusCode, 503); assert.equal(paypalCalls.length, 0, 'aucune commande créée si la société de l\'appelant est invérifiable');
   registrationDown = false; clearCompanyCache(); country = '';
   res = mockRes();
-  await paymentCheckoutController.initCheckout(reqOf(checkoutBody({ purpose: 'minutes_purchase', minutes: 150, provider: 'paypal' })), res);
+  await paymentCheckoutController.initCheckout(reqOf(checkoutBody({ purpose: 'tokens_purchase', tokens: 50000, provider: 'paypal' })), res);
   assert.equal(res.body.currency, 'EUR');
   assert.equal(paypalCalls[0].currency, 'EUR');
 });

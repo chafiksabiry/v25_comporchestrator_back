@@ -69,14 +69,16 @@ test('refus parlés : anglais par défaut (en-US, Polly.Joanna), français et es
 test('webhook : les refus parlés suivent la langue de la ligne (fr pour +33, anglais pour +1) ; les décisions ne changent pas', async () => {
   minutes = 0;
   assert.deepEqual(said(await webhook()), { text: 'Solde de minutes insuffisant.', language: 'fr-FR', voice: 'Polly.Lea' });
+  // Destinations du même indicatif que la ligne (décision du 26/11/2026 : seul le pays de la ligne est appelable).
   lineNumber = '+14155552671';
-  assert.deepEqual(said(await webhook()), { text: 'Insufficient minutes balance.', language: 'en-US', voice: 'Polly.Joanna' });
+  assert.deepEqual(said(await webhook('+14155550123')), { text: 'Insufficient minutes balance.', language: 'en-US', voice: 'Polly.Joanna' });
   lineNumber = '+34911234567';
-  assert.equal(said(await webhook()).text, 'Saldo de minutos insuficiente.');
+  assert.equal(said(await webhook('+34612345678')).text, 'Saldo de minutos insuficiente.');
   minutes = 100; lineNumber = '+14155552671';
-  assert.ok(String(await webhook()).includes('<Dial'), 'avec du solde : l\'appel part');
+  assert.ok(String(await webhook('+14165550123')).includes('<Dial'), 'avec du solde : l\'appel part (États-Unis -> Canada, même indicatif +1)');
+  assert.equal(said(await webhook('+33612345678')).text, 'From your line, you can only call numbers in its country.', 'ligne +1 -> France : refusé');
   Subscription.findOne = () => ({ populate: async () => null });
-  assert.equal(said(await webhook()).text, 'No active subscription.');
+  assert.equal(said(await webhook('+14155550123')).text, 'No active subscription.');
 });
 
 test('webhook : preuve invalide, destination refusée, secrétaire non autorisée, erreur : anglais par défaut', async () => {
@@ -84,7 +86,7 @@ test('webhook : preuve invalide, destination refusée, secrétaire non autorisé
   assert.equal(said(await webhook('+33612345678', { ticket: 'faux' })).language, 'en-US');
   assert.equal(said(await webhook('+1 900 555 1234')).text, 'Premium-rate and value-added numbers cannot be called.');
   assert.equal(said(await webhook('abc')).text, 'Invalid number. Enter it in international format.');
-  assert.equal(said(await webhook('+4915112345678')).text, 'Calls to this country are not enabled for your company.');
+  assert.equal(said(await webhook('+4915112345678')).text, 'From your line, you can only call numbers in its country.', 'ligne française -> Allemagne : refusé');
   secretaryOutbound = false;
   assert.equal(said(await webhook('+33612345678', { secretary: true })).text, 'The account owner has turned off outbound calls for secretaries.');
 });
@@ -96,7 +98,7 @@ test('outbound-check : 422 portent `code` (= error), `reason`, message FR exista
     ['abc', 'invalid_number', 'invalid_number', /Invalid number/],
     ['+1 900 555 1234', 'destination_not_allowed', 'premium_rate', /Premium-rate/],
     ['+999123456789', 'destination_not_allowed', 'unknown_country', /not supported/],
-    ['+4915112345678', 'destination_not_allowed', 'country_not_enabled', /not enabled/],
+    ['+4915112345678', 'destination_not_allowed', 'not_line_country', /only call numbers in its country \(\+33\)/],
   ]) {
     const r = await check(to);
     assert.equal(r.code, 422, to);

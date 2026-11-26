@@ -48,20 +48,44 @@ assert.deepEqual(validatePrefixList(['+44', '+33', '+33']), { ok: true, value: [
 assert.deepEqual(validatePrefixList([]), { ok: true, value: [] });
 for (const bad of [['+999'], ['33'], ['+33; drop'], 'fr', null, [{}]]) assert.equal(validatePrefixList(bad).ok, false, JSON.stringify(bad));
 
-// défaut = pays de la société + liste globale de l'environnement ; sélection enregistrée = remplace le défaut
-assert.deepEqual(effectiveOutboundPrefixes({ saved: undefined, companyCountry: '+212', envPrefixes: ['+33'] }), { prefixes: ['+212', '+33'], customized: false });
-assert.deepEqual(effectiveOutboundPrefixes({ saved: undefined, companyCountry: '', envPrefixes: ['+33'] }), { prefixes: ['+33'], customized: false });
-assert.deepEqual(effectiveOutboundPrefixes({ saved: ['+44'], companyCountry: '+33', envPrefixes: ['+33'] }), { prefixes: ['+44'], customized: true });
-assert.deepEqual(effectiveOutboundPrefixes({ saved: [], companyCountry: '+33', envPrefixes: ['+33'] }), { prefixes: [], customized: true }, 'liste vide = aucun pays');
+// Décision du 26/11/2026 : UNIQUEMENT l'indicatif de la ligne. La liste globale n'ajoute rien ; une sélection enregistrée peut seulement le retirer.
+assert.deepEqual(effectiveOutboundPrefixes({ saved: undefined, companyCountry: '+212', envPrefixes: ['+33'] }), { prefixes: ['+212'], customized: false }, 'plus de France en plus');
+assert.deepEqual(effectiveOutboundPrefixes({ saved: undefined, companyCountry: '', envPrefixes: ['+33'] }), { prefixes: [], customized: false }, 'sans ligne : aucun pays');
+assert.deepEqual(effectiveOutboundPrefixes({ saved: ['+44'], companyCountry: '+33' }), { prefixes: [], customized: true }, 'une sélection n\'ajoute jamais un autre pays');
+assert.deepEqual(effectiveOutboundPrefixes({ saved: ['+33', '+44'], companyCountry: '+33' }), { prefixes: ['+33'], customized: true });
+assert.deepEqual(effectiveOutboundPrefixes({ saved: [], companyCountry: '+33' }), { prefixes: [], customized: true }, 'liste vide = aucun pays');
 
-// politique d'une société (lecture injectée) : pays déduit de ses lignes
-const policy = (saved, lines, env) => resolveOutboundPolicy('c1', { loadSaved: async () => saved, loadLines: async () => lines, env });
-assert.deepEqual((await policy(undefined, [{ phoneNumber: '+32470123456' }], undefined)).prefixes, ['+32', '+33']);
-assert.deepEqual((await policy(undefined, [], '+33,+41')).prefixes, ['+33', '+41']);
+// politique d'une société (lecture injectée) : pays déduit de ses lignes, toujours lu
+const policy = (saved, lines) => resolveOutboundPolicy('c1', { loadSaved: async () => saved, loadLines: async () => lines });
+assert.deepEqual((await policy(undefined, [{ phoneNumber: '+32470123456' }])).prefixes, ['+32']);
+assert.deepEqual((await policy(undefined, [])).prefixes, []);
 assert.equal((await policy(['+44'], [{ phoneNumber: '+32470123456' }])).customized, true);
-assert.equal((await checkCompanyDestination('c1', '+442079460958', { loadSaved: async () => ['+44'], loadLines: async () => [] })).ok, true);
-assert.equal((await checkCompanyDestination('c1', '+442079460958', { loadSaved: async () => undefined, loadLines: async () => [{ phoneNumber: '+33142000001' }] })).reason, 'country_not_enabled');
-assert.equal((await checkCompanyDestination('c1', '+33891234567', { loadSaved: async () => everything, loadLines: async () => [] })).reason, 'premium_rate');
+assert.equal((await policy(['+44'], [{ phoneNumber: '+32470123456' }])).companyCountry, '+32');
+
+// Indicatif identique : +33 -> +33 ; +1 -> +1 (États-Unis <-> Canada) ; +44 -> +44 ; tout autre pays refusé avec un message clair (fr, en, es, ar).
+const line = (n) => ({ loadSaved: async () => undefined, loadLines: async () => [{ phoneNumber: n }] });
+assert.deepEqual(await checkCompanyDestination('c1', '+33 6 12 34 56 78', line('+33142000001')), { ok: true, to: '+33612345678' });
+assert.equal((await checkCompanyDestination('c1', '+14165550123', line('+14155550100'))).ok, true, 'États-Unis -> Canada');
+assert.equal((await checkCompanyDestination('c1', '+14155550123', line('+14165550100'))).ok, true, 'Canada -> États-Unis');
+assert.equal((await checkCompanyDestination('c1', '+447911123456', line('+447700900123'))).ok, true, 'Royaume-Uni -> Royaume-Uni');
+r = await checkCompanyDestination('c1', '+442079460958', line('+33142000001'));
+assert.deepEqual([r.ok, r.code, r.reason, r.lineCountry], [false, 'destination_not_allowed', 'not_line_country', '+33']);
+assert.equal(r.message, 'Depuis votre ligne, vous pouvez appeler uniquement les numéros de son pays (+33).');
+assert.equal(r.messageEn, 'From your line, you can only call numbers in its country (+33).');
+assert.match(r.messageEs, /solo puede llamar a números de su país \(\+33\)/);
+assert.match(r.messageAr, /\(\+33\)/);
+assert.equal((await checkCompanyDestination('c1', '+33612345678', line('+14155550100'))).reason, 'not_line_country', 'ligne américaine -> France : refusé (plus d\'exception France)');
+assert.equal((await checkCompanyDestination('c1', '+33612345678', { loadSaved: async () => ['+33'], loadLines: async () => [] })).ok, false, 'sans ligne : refusé');
+assert.equal((await checkCompanyDestination('c1', '+33891234567', { loadSaved: async () => everything, loadLines: async () => [{ phoneNumber: '+33142000001' }] })).reason, 'premium_rate');
+// Numéros britanniques personnels +44 70 : bloqués comme les surtaxés (décision du 26/11), même depuis une ligne britannique ; les mobiles +447 (hors 70) passent.
+for (const n of ['+447012345678', '+44 70 1234 5678']) {
+  const x = await checkCompanyDestination('c1', n, line('+447700900123'));
+  assert.deepEqual([x.ok, x.reason], [false, 'premium_rate'], n);
+}
+assert.equal(isPremiumRate('+447012345678'), true);
+assert.equal(isPremiumRate('+447700900123'), false);
+// Numéros courts : jamais appelables (format E.164 invalide).
+assert.equal((await checkCompanyDestination('c1', '3010', line('+33142000001'))).reason, 'invalid_number');
 
 // l'ancienne fonction ne contourne pas non plus
 assert.equal(normalizeOutboundDestination('+33 8 91 23 45 67', ['+33']), '');

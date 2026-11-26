@@ -90,7 +90,8 @@ export async function listPublishedPlans(options = {}, deps = {}) {
   // 2. La DB est la source de vérité : seuls les plans listés ici sont publiés.
   //    Les forfaits Call Centre y sont inscrits dès qu'un prix Stripe actif porte harx_product=callcenter.
   await registerCallcenterPlans(stripePrices, Plan, logger);
-  const dbPlans = await Plan.find({ stripePriceId: { $exists: true, $ne: '' } });
+  // Forfaits locaux sans prix Stripe (NOMAD Traveler, paiement unique : `harx_…`) : jamais dans le catalogue des abonnements.
+  const dbPlans = (await Plan.find({ stripePriceId: { $exists: true, $ne: '' } })).filter((p) => !String(p.stripePriceId || '').startsWith('harx_'));
 
   const seen = new Set();
   const plans = (

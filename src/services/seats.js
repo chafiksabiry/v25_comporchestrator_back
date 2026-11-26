@@ -164,7 +164,7 @@ export async function loadSeatPrices(stripe, { now = Date.now() } = {}) {
   const products = await stripe.products.list({ active: true, limit: 100 });
   for (const product of products?.data || []) {
     const tier = seatTierFromMetadata(product.metadata);
-    if (!tier || tier === 'nomad_solo' || prices[tier]) continue;
+    if (!tier || tier === 'nomad_solo' || tier === 'nomad_traveler' || prices[tier]) continue;
     let price = null;
     if (product.default_price && typeof product.default_price === 'object' && product.default_price.active !== false) {
       price = product.default_price;
@@ -244,7 +244,7 @@ function notApplicable(reason, used, tier, message) {
  */
 export async function getSeatsState({ db, stripe, companyId, forSale = EXTRA_SEATS_FOR_SALE }) {
   const state = await readSeatsState({ db, stripe, companyId });
-  if (forSale) return { ...state, forSale: true, canAddSeat: state.applicable && state.tier !== 'nomad_solo' };
+  if (forSale) return { ...state, forSale: true, canAddSeat: state.applicable && state.tier !== 'nomad_solo' && state.tier !== 'nomad_traveler' };
   // Sièges en plus hors vente : prix masqué, une personne de plus seulement dans les places déjà payées (sièges inclus + sièges déjà facturés).
   return {
     ...state,
@@ -265,8 +265,8 @@ async function readSeatsState({ db, stripe, companyId }) {
   if (!subscription || !tier) {
     return notApplicable('no_subscription', used, tier, "Aucun abonnement Contact Centre actif ou en essai : pas de siège à facturer.");
   }
-  if (tier === 'nomad_solo') {
-    return notApplicable('nomad_solo', used, tier, "Nomad : un seul utilisateur, aucun siège en plus.");
+  if (tier === 'nomad_solo' || tier === 'nomad_traveler') {
+    return notApplicable(tier, used, tier, "Nomad : un seul utilisateur, aucun siège en plus.");
   }
   let price = null;
   let billedQuantity = null;

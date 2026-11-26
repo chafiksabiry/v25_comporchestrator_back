@@ -3,7 +3,7 @@
  * Identifiants du front (src/domain/plans.ts) : nomad_solo, accueil, full_scope, multi_clients.
  * Anciennes valeurs encore lues : essentiel, equipe, multi_pays.
  */
-export const CALLCENTER_TIERS = ['nomad_solo', 'accueil', 'full_scope', 'multi_clients'];
+export const CALLCENTER_TIERS = ['nomad_solo', 'nomad_traveler', 'accueil', 'full_scope', 'multi_clients'];
 
 export const CALLCENTER_TIER_ALIASES = {
   essentiel: 'nomad_solo',
@@ -16,7 +16,17 @@ export const CALLCENTER_TIER_ALIASES = {
  * Seul nomad_solo (ex-essentiel) était plafonné avant ; les autres paliers ne sont pas plafonnés
  * tant que le dirigeant ne renseigne pas `activeLocalNumbers` sur le produit Stripe.
  */
-export const CALLCENTER_TIER_LINES = { nomad_solo: 1 };
+export const CALLCENTER_TIER_LINES = { nomad_solo: 1, nomad_traveler: 1 };
+
+/** Offres NOMAD (une seule personne) : NOMAD (abonnement) et NOMAD Traveler (paiement unique, 21 jours). */
+export const NOMAD_TIERS = Object.freeze(['nomad_solo', 'nomad_traveler']);
+export const isNomadTier = (tier) => NOMAD_TIERS.includes(tier);
+
+/**
+ * Minutes incluses imposées par palier (décisions du fondateur du 26/11/2026) : NOMAD 120 par mois (au lieu de 30), NOMAD Traveler 30.
+ * Règle de gestion : prioritaire sur la métadonnée Stripe « COMMUNICATION MINUTES Included » (voir stripeService.extractStripeProductLimits).
+ */
+export const INCLUDED_MINUTES_BY_TIER = Object.freeze({ nomad_solo: 120, nomad_traveler: 30 });
 
 /** Palier canonique ou null (valeur absente ou inconnue). Insensible à la casse, aux espaces, aux tirets et espaces internes. */
 export function normalizeCallcenterTier(value) {
