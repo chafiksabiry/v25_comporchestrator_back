@@ -12,7 +12,7 @@ import { syncMinutesFromCalls } from './escrowController.js';
 import { graceLimitSeconds, raceTimeout, startGraceCall } from '../services/minutesGrace.js';
 import { LINE_CALL_END_PATH, signLineCallEnd } from '../services/lineCalls.js';
 import { ensurePlanMinutesGranted } from '../services/planMinutesGrant.js';
-import { isPremiumRate, MESSAGES as DESTINATION_MESSAGES } from '../services/outboundDestinations.js';
+import { isPremiumRate, MESSAGES as DESTINATION_MESSAGES, refusalMessages, sameCountryAsLine, countryPrefixOf, toStrictE164 } from '../services/outboundDestinations.js';
 import { freshMinutesBalance, maxSecondsForBalance, SECRETARY_OUTBOUND_BLOCKED, secretaryOutboundAllowed, spokenLanguage, spokenRefusal } from '../services/browserOutbound.js';
 import { outboundCreditFactor } from '../services/creditCoefficient.js';
 import { loadCompanyPlanLimits } from '../services/planLimits.js';
@@ -151,6 +151,12 @@ export const voicemailController = {
       if (isPremiumRate(to)) return fail(res, 422, DESTINATION_MESSAGES.premium_rate, 'destination_not_allowed', { reason: 'premium_rate' });
       const line = await callbackLine(vm);
       if (!line) return fail(res, 422, 'Le rappel n’est disponible que depuis la ligne qui a reçu ce message, et elle est introuvable.', 'CALLBACK_LINE_NOT_FOUND');
+      // Décision du 26/11/2026 : rappel seulement vers un numéro du même indicatif pays que la ligne.
+      if (!sameCountryAsLine(to, line.phoneNumber)) {
+        const prefix = countryPrefixOf(toStrictE164(line.phoneNumber));
+        const m = refusalMessages('not_line_country', { prefix });
+        return fail(res, 422, m.message, 'destination_not_allowed', { reason: 'not_line_country', lineCountry: prefix, messageEn: m.messageEn, messageEs: m.messageEs, messageAr: m.messageAr });
+      }
       if (!config.twilioAccountSid || !config.twilioAuthToken) return fail(res, 500, 'La configuration téléphonie du serveur est incomplète.', 'VOICE_SERVER_NOT_CONFIGURED');
       // Rappel = appel sortant : une secrétaire (rôle agent) ne rappelle que si le responsable l'autorise.
       if ((await callerAccess(req)).role === 'agent') {
@@ -185,7 +191,7 @@ export const voicemailController = {
       const to = vm ? pickDestination(vm) : '';
       const line = vm ? await callbackLine(vm) : null;
       linePhone = line?.phoneNumber || vm?.phoneNumber || '';
-      if (!vm || !to || !line || isPremiumRate(to)) return send(callbackRefusal('callbackCannotCall', linePhone));
+      if (!vm || !to || !line || isPremiumRate(to) || !sameCountryAsLine(to, line.phoneNumber)) return send(callbackRefusal('callbackCannotCall', linePhone));
       // Un rappel est un appel sortant : il consomme des minutes, donc seulement avec des minutes disponibles, et il est
       // coupé quand elles sont écoulées.
       const minutes = await freshMinutesBalance(String(vm.companyId), { sync: syncMinutesFromCalls, grant: ensurePlanMinutesGranted, readWallet: (id) => MinutesCompany.findOne({ companyId: id }).select('minutes').lean() });

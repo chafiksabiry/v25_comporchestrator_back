@@ -12,6 +12,7 @@ import { availabilityFor, AVAILABILITY_UNAVAILABLE } from '../services/numberAva
 import { mergeSearchResults } from '../services/numberSearchMerge.js';
 import { phoneLineCurrency, purchaseCurrency } from '../services/purchaseCurrency.js';
 import { checkCompanyDestination } from '../services/outboundPolicy.js';
+import { isNomadTier } from '../services/callcenterTier.js';
 import { isPremiumRate, MESSAGES as DESTINATION_MESSAGES, DESTINATION_NOT_ALLOWED } from '../services/outboundDestinations.js';
 import { paypalService } from '../services/paypalService.js';
 import { stripeService } from '../services/stripeService.js';
@@ -86,7 +87,7 @@ const isSoloCompany = async (companyId) => {
   if (!companyId) return false;
   try {
     const limits = await loadCompanyPlanLimits(companyId);
-    return limits?.product === 'callcenter' && limits?.callcenterTier === 'nomad_solo';
+    return limits?.product === 'callcenter' && isNomadTier(limits?.callcenterTier);
   } catch (e) {
     console.error('isSoloCompany:', e.message);
     return false;

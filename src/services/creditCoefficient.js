@@ -3,31 +3,16 @@ import { countryPrefixOf, toStrictE164 } from './outboundDestinations.js';
 import { internationalInsufficientText } from './browserOutbound.js';
 
 /**
- * Un crédit minute INTERNATIONAL = N crédits minute nationale. UN SEUL solde de minutes (MinutesCompany, packs et achats existants
- * inchangés). Un appel international débite N crédits par minute (minute entamée arrondie à la minute supérieure PUIS multipliée par N) ;
- * un appel national, UE ou DOM-TOM débite 1 crédit par minute, comme aujourd'hui.
+ * DÉCOMPTE 1:1 (décision du fondateur du 26/11/2026) : 1 minute d'appel entamée = 1 minute du solde, appels passés ET reçus. Les appels
+ * internationaux n'existent plus (appels sortants limités au même indicatif pays que la ligne, outboundPolicy.js) : le coefficient
+ * international est SUPPRIMÉ. Il vaut toujours 1 : ni la métadonnée Stripe `international_minute_credits`, ni la variable
+ * `INTERNATIONAL_MINUTE_CREDITS` ne sont plus lues (une valeur restée en configuration est ignorée).
  *
- * N (« coefficient ») n'est PAS écrit en dur : métadonnée `international_minute_credits` du produit Stripe du forfait, sinon variable
- * d'environnement `INTERNATIONAL_MINUTE_CREDITS`, sinon 1 (= comportement actuel inchangé : on déploie sans rien changer, puis on passe à
- * la valeur voulue en configuration). Borne : entier entre 1 et 100 ; une valeur invalide donne 1 et un avertissement.
- *
- * Classification (callZone.js) : sortant = zone de la destination, jugée depuis la ligne RÉELLEMENT utilisée (champ `from` de l'appel
- * stocké ; repli documenté sur la première ligne de l'entreprise si `from` n'est pas un numéro lisible, par exemple « client:… ») : le
- * résultat ne dépend donc pas de l'instant de la synchro. ENTRANTS : toujours 1 (décision du propriétaire : le périmètre ne porte que sur
- * les appels sortants vers l'international ; un débit après coup, sans pré-contrôle, pourrait rendre le solde négatif sans décision).
- * Pays de l'entreprise inconnu : 1 (historique). Toute lecture impossible (forfait, lignes) : 1, comme avant (jamais de report ni de blocage).
- *
- * SOUS-FACTURATION ASSUMÉE : si le forfait ou les lignes sont illisibles pendant un appel international, cet appel est débité à 1 crédit la
- * minute (jamais bloqué ni reporté) : à N > 1 cela facture moins que prévu, jamais plus.
- * PÉRIMÈTRE de « aucun accès supplémentaire à N = 1 » : il vaut pour les LIGNES (aucune lecture du pays à N = 1) ; le FORFAIT est lu (cache 30 s)
- * par les chemins du webhook, du rappel, du transfert et du débit, comme avant l'arrivée du coefficient pour le plafond de durée.
- *
- * ENTRANT / SORTANT : un appel n'est facturé au coefficient que s'il est EXPLICITEMENT sortant (`direction` commence par « outbound » :
- * outbound, outbound-api, outbound-dial). Direction absente, « incoming », « inbound », jambe de transfert : 1. Un appel dont la destination
- * est une ligne de l'entreprise : 1 (appel interne).
- * TRACE DU WEBHOOK : l'appel sortant du navigateur enregistre sa décision (ligne retenue, zone, facteur) sous son sid ; le débit la réutilise
- * (`CallCreditDecision`) au lieu de reclasser, et ne reclasse que les appels sans trace (autres canaux).
+ * Les fonctions ci-dessous gardent leur forme (un seul point de résolution, utilisé par le débit, le webhook, le rappel, le transfert et la
+ * Facturation) pour ne pas toucher aux chemins d'appel : avec un coefficient de 1, chaque appel débite ses minutes entamées, rien de plus,
+ * et aucune trace de décision n'est écrite (`recordCallDecision` n'est appelé que pour un coefficient > 1).
  */
+/** Anciennes clés (ignorées depuis le 26/11/2026) : gardées pour les journaux et les tests qui vérifient qu'elles sont sans effet. */
 export const COEFFICIENT_METADATA_KEY = 'international_minute_credits';
 export const COEFFICIENT_ENV = 'INTERNATIONAL_MINUTE_CREDITS';
 export const COEFFICIENT_MIN = 1;
@@ -42,33 +27,12 @@ export function parseCoefficient(value) {
   return n >= COEFFICIENT_MIN && n <= COEFFICIENT_MAX ? n : null;
 }
 
-function metadataValue(metadata) {
-  if (!metadata || typeof metadata !== 'object') return undefined;
-  const entries = metadata instanceof Map ? [...metadata.entries()] : Object.entries(metadata);
-  return entries.find(([k]) => String(k).trim().toLowerCase().replace(/[\s-]+/g, '_') === COEFFICIENT_METADATA_KEY)?.[1];
-}
-
 /**
- * Coefficient d'un forfait : métadonnée du produit, sinon environnement, sinon 1. Invalide : 1 + avertissement (une métadonnée invalide ne
- * bascule PAS sur l'environnement : on ne devine pas l'intention).
- * @returns {{coefficient: number, source: 'plan'|'env'|'default', invalid: boolean}}
+ * Coefficient d'un forfait : toujours 1 (décompte 1:1, décision du 26/11/2026). Métadonnée et variable d'environnement ignorées.
+ * @returns {{coefficient: 1, source: 'fixed', invalid: false}}
  */
-export function resolveInternationalCoefficient({ metadata, env = process.env } = {}) {
-  const fromPlan = metadataValue(metadata);
-  if (fromPlan !== undefined && String(fromPlan).trim() !== '') {
-    const n = parseCoefficient(fromPlan);
-    if (n) return { coefficient: n, source: 'plan', invalid: false };
-    console.warn(`[credits] ${COEFFICIENT_METADATA_KEY} invalide (« ${String(fromPlan).slice(0, 20)} », attendu : entier ${COEFFICIENT_MIN}–${COEFFICIENT_MAX}) : coefficient 1`);
-    return { coefficient: 1, source: 'plan', invalid: true };
-  }
-  const fromEnv = env?.[COEFFICIENT_ENV];
-  if (fromEnv !== undefined && String(fromEnv).trim() !== '') {
-    const n = parseCoefficient(fromEnv);
-    if (n) return { coefficient: n, source: 'env', invalid: false };
-    console.warn(`[credits] ${COEFFICIENT_ENV} invalide (« ${String(fromEnv).slice(0, 20)} », attendu : entier ${COEFFICIENT_MIN}–${COEFFICIENT_MAX}) : coefficient 1`);
-    return { coefficient: 1, source: 'env', invalid: true };
-  }
-  return { coefficient: 1, source: 'default', invalid: false };
+export function resolveInternationalCoefficient() {
+  return { coefficient: 1, source: 'fixed', invalid: false };
 }
 
 /** Sortant EXPLICITE seulement (outbound, outbound-api, outbound-dial…). Tout le reste (absent, incoming, inbound, transfert) : entrant. */

@@ -1,7 +1,6 @@
 // Run: JWT_SECRET=t TELNYX_API_KEY=x TWILIO_ACCOUNT_SID=ACtest TWILIO_AUTH_TOKEN=x node --test src/tests/creditCoefficient.test.js
-// Un crédit minute international = N crédits minute nationale : UN SEUL solde de minutes ; un appel international débite N crédits par minute
-// (minute entamée arrondie à la minute supérieure PUIS multipliée par N), un appel national / UE / DOM-TOM 1 crédit. N lu de la métadonnée du
-// produit du forfait (international_minute_credits), sinon de INTERNATIONAL_MINUTE_CREDITS, sinon 1 (comportement actuel). Logique pure.
+// Décompte 1:1 depuis le 26/11/2026 : le coefficient résolu vaut TOUJOURS 1 (métadonnée et variable ignorées). Les fonctions pures gardent
+// un paramètre `coefficient` (chemins d'appel inchangés) : les tests qui l'injectent vérifient seulement leur calcul. Logique pure.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -22,28 +21,21 @@ test('coefficient : entier entre 1 et 100, sinon invalide', () => {
   for (const v of [0, 101, -1, 1.5, '1.5', 'abc', '', null, undefined, NaN, '4x', '0']) assert.equal(C.parseCoefficient(v), null, String(v));
 });
 
-test('coefficient : métadonnée du produit du forfait, sinon variable d\'environnement, sinon 1', () => {
-  const meta = { harx_product: 'callcenter', international_minute_credits: '3' };
-  assert.deepEqual(C.resolveInternationalCoefficient({ metadata: meta, env: { INTERNATIONAL_MINUTE_CREDITS: '4' } }), { coefficient: 3, source: 'plan', invalid: false });
-  assert.deepEqual(C.resolveInternationalCoefficient({ metadata: { harx_product: 'callcenter' }, env: { INTERNATIONAL_MINUTE_CREDITS: '4' } }), { coefficient: 4, source: 'env', invalid: false });
-  assert.deepEqual(C.resolveInternationalCoefficient({ metadata: {}, env: {} }), { coefficient: 1, source: 'default', invalid: false });
-  assert.deepEqual(C.resolveInternationalCoefficient({ metadata: null, env: { INTERNATIONAL_MINUTE_CREDITS: '' } }), { coefficient: 1, source: 'default', invalid: false });
-  // clé tolérante (casse, espaces, tirets) et Map
-  assert.equal(C.resolveInternationalCoefficient({ metadata: { ' International-Minute-Credits ': '5' }, env: {} }).coefficient, 5);
-  assert.equal(C.resolveInternationalCoefficient({ metadata: new Map([['international_minute_credits', '6']]), env: {} }).coefficient, 6);
+test('décompte 1:1 (26/11/2026) : coefficient TOUJOURS 1, métadonnée Stripe et INTERNATIONAL_MINUTE_CREDITS ignorées', () => {
+  const fixed = { coefficient: 1, source: 'fixed', invalid: false };
+  assert.deepEqual(C.resolveInternationalCoefficient({ metadata: { harx_product: 'callcenter', international_minute_credits: '3' }, env: { INTERNATIONAL_MINUTE_CREDITS: '4' } }), fixed);
+  assert.deepEqual(C.resolveInternationalCoefficient({ metadata: { harx_product: 'callcenter' }, env: { INTERNATIONAL_MINUTE_CREDITS: '4' } }), fixed);
+  assert.deepEqual(C.resolveInternationalCoefficient({ metadata: new Map([['international_minute_credits', '6']]), env: {} }), fixed);
+  assert.deepEqual(C.resolveInternationalCoefficient(), fixed);
 });
 
-test('coefficient invalide => 1 + avertissement (une métadonnée invalide ne bascule pas sur l\'environnement)', () => {
+test('valeurs résiduelles invalides : 1, sans avertissement (plus rien n\'est lu)', () => {
   const { w, restore } = warns();
   try {
     for (const bad of ['0', '101', '2.5', 'abc', '-4']) {
-      w.length = 0;
-      assert.deepEqual(C.resolveInternationalCoefficient({ metadata: { international_minute_credits: bad }, env: { INTERNATIONAL_MINUTE_CREDITS: '4' } }), { coefficient: 1, source: 'plan', invalid: true }, bad);
-      assert.ok(w.some((x) => /international_minute_credits/.test(x)), bad);
+      assert.deepEqual(C.resolveInternationalCoefficient({ metadata: { international_minute_credits: bad }, env: { INTERNATIONAL_MINUTE_CREDITS: bad } }), { coefficient: 1, source: 'fixed', invalid: false }, bad);
     }
-    w.length = 0;
-    assert.deepEqual(C.resolveInternationalCoefficient({ metadata: {}, env: { INTERNATIONAL_MINUTE_CREDITS: 'abc' } }), { coefficient: 1, source: 'env', invalid: true });
-    assert.ok(w.some((x) => /INTERNATIONAL_MINUTE_CREDITS/.test(x)));
+    assert.equal(w.length, 0);
   } finally { restore(); }
 });
 
@@ -179,13 +171,13 @@ test('A4 : forfait ou pays illisible => facteur 1 (comportement d\'avant), jamai
   } finally { w.restore(); }
 });
 
-test('sans abonnement lisible (limits null) : coefficient de l\'environnement ou 1', async () => {
+test('sans abonnement lisible (limits null) : 1, même si INTERNATIONAL_MINUTE_CREDITS est resté en configuration', async () => {
   const was = process.env.INTERNATIONAL_MINUTE_CREDITS;
   try {
     delete process.env.INTERNATIONAL_MINUTE_CREDITS;
     assert.equal((await C.planCreditCharging({ companyId: 'C1', calls: [], loadLimits: async () => null, country: async () => '+33' })).factorOf(intlCall('A', GB)), 1);
     process.env.INTERNATIONAL_MINUTE_CREDITS = '4';
-    assert.equal((await C.planCreditCharging({ companyId: 'C1', calls: [], loadLimits: async () => null, country: async () => '+33' })).factorOf(intlCall('A', GB)), 4);
+    assert.equal((await C.planCreditCharging({ companyId: 'C1', calls: [], loadLimits: async () => null, country: async () => '+33' })).factorOf(intlCall('A', GB)), 1);
   } finally { if (was === undefined) delete process.env.INTERNATIONAL_MINUTE_CREDITS; else process.env.INTERNATIONAL_MINUTE_CREDITS = was; }
 });
 
@@ -222,18 +214,14 @@ test('vue du solde : crédits restants, coefficient appliqué, minutes internati
 });
 
 // --- A5 : un seul point de résolution (environnement compris, y compris limits null) --------------------------------------------
-test('A5 : coefficientOf — limits du forfait, sinon environnement, sinon 1 ; limits null utilise l\'environnement partout', async () => {
+test('A5 : coefficientOf — forfait sans coefficient ou illisible : 1, la variable d\'environnement n\'est plus lue', async () => {
   const was = process.env.INTERNATIONAL_MINUTE_CREDITS;
   try {
-    delete process.env.INTERNATIONAL_MINUTE_CREDITS;
-    assert.deepEqual(C.coefficientOf(null), { coefficient: 1, source: 'default' });
-    assert.deepEqual(C.coefficientOf({ internationalCoefficient: 3, internationalCoefficientSource: 'plan' }), { coefficient: 3, source: 'plan' });
     process.env.INTERNATIONAL_MINUTE_CREDITS = '4';
-    assert.deepEqual(C.coefficientOf(null), { coefficient: 4, source: 'env' });
-    assert.deepEqual(C.coefficientOf({}), { coefficient: 4, source: 'env' });
-    assert.equal(await C.outboundCreditFactor({ companyId: 'C1', limits: null, to: GB, country: async () => '+33' }), 4);
-    assert.equal(await C.creditFactorForCall({ companyId: 'C1', call: intlCall('A', GB), loadLimits: async () => null, country: async () => '+33' }), 4);
-    assert.equal((await C.planCreditCharging({ companyId: 'C1', calls: [], loadLimits: async () => null, country: async () => '+33' })).factorOf(intlCall('A', GB)), 4);
+    assert.deepEqual(C.coefficientOf(null), { coefficient: 1, source: 'fixed' });
+    assert.deepEqual(C.coefficientOf({}), { coefficient: 1, source: 'fixed' });
+    assert.equal(await C.outboundCreditFactor({ companyId: 'C1', limits: null, to: GB, country: async () => '+33' }), 1);
+    assert.equal(await C.creditFactorForCall({ companyId: 'C1', call: intlCall('A', GB), loadLimits: async () => null, country: async () => '+33' }), 1);
   } finally { if (was === undefined) delete process.env.INTERNATIONAL_MINUTE_CREDITS; else process.env.INTERNATIONAL_MINUTE_CREDITS = was; }
 });
 

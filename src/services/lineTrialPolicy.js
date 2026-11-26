@@ -10,7 +10,7 @@ export function isLineTrialAllowed(limits) {
  * Chaque offre Call Centre inclut une ligne (catalogue : « 1 incluse ») : le premier numéro s'achète sans paiement, sans
  * essai ni facturation de ligne. Les numéros ajoutés ensuite restent payants.
  */
-const TIERS_WITH_INCLUDED_LINE = ['nomad_solo', 'accueil', 'full_scope', 'multi_clients'];
+const TIERS_WITH_INCLUDED_LINE = ['nomad_solo', 'nomad_traveler', 'accueil', 'full_scope', 'multi_clients'];
 
 export function isLineIncluded(limits, existingCount) {
   return (
