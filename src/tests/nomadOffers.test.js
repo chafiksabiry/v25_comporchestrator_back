@@ -141,15 +141,16 @@ const docDeps = (nationality, store) => ({
   saveDocument: async (doc) => { store.doc = doc; return { status: doc.status }; },
 });
 
-test('Traveler, pièces : visa demandé à un ressortissant marocain, pas à un Émirien ; identité non vérifiée refusée ; fichiers chiffrés', async () => {
+test('Traveler, pièces validées AUTOMATIQUEMENT : visa demandé à un ressortissant marocain, pas à un Émirien ; refus motivés (identité, format, dates, visa) ; fichiers chiffrés', async () => {
   const store = {};
   const trip = { departAt: '2026-12-01', returnAt: '2026-12-20' };
   await assert.rejects(T.submitTravelerDocuments('c1', 'u1', { ...trip, ticket: PDF }, docDeps('MA', store)), (e) => e.code === 'VISA_REQUIRED');
   const ma = await T.submitTravelerDocuments('c1', 'u1', { ...trip, ticket: PDF, visa: PNG }, docDeps('MA', store));
-  assert.deepEqual(ma, { status: 'pending_review', visaRequired: true });
+  assert.deepEqual(ma, { status: 'approved', visaRequired: true }, 'validé automatiquement (26/11) : paiement ouvert aussitôt');
+  assert.equal(store.doc.reviewedBy, 'auto');
   assert.equal(store.doc.visa.mime, 'image/png'); assert.match(store.doc.ticket.ciphertext.toString(), /^enc:ticket:/, 'jamais stocké en clair');
   const ae = await T.submitTravelerDocuments('c2', 'u2', { ...trip, ticket: PDF }, docDeps('AE', store));
-  assert.deepEqual(ae, { status: 'pending_review', visaRequired: false });
+  assert.deepEqual(ae, { status: 'approved', visaRequired: false });
   assert.equal(store.doc.visa, undefined);
   await assert.rejects(T.submitTravelerDocuments('c3', 'u3', { ...trip, ticket: PDF }, docDeps(undefined, store)), (e) => e.code === 'IDENTITY_NOT_VERIFIED');
   await assert.rejects(T.submitTravelerDocuments('c1', 'u1', { ...trip, ticket: Buffer.from('<html>pas un billet</html>xxxxxxxx') }, docDeps('FR', store)), (e) => e.code === 'FILE_TYPE_NOT_ALLOWED');
