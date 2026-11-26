@@ -108,8 +108,8 @@ export async function getPlatformPricing() {
 }
 
 /** Prix d'une recharge : multiple de 30 min, 5 par tranche (les trois choix proposés suivent la même règle) ; sinon null (refusée). */
-export async function computeMinutesPurchaseCents(minutes) {
-  return minutesBlockPriceCents(minutes);
+export async function computeMinutesPurchaseCents(minutes, currency = 'EUR') {
+  return minutesBlockPriceCents(minutes, currency);
 }
 
 export async function computeTokensPurchaseCents(tokens) {
