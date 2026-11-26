@@ -88,6 +88,17 @@ mongoose.connect(config.mongodbUri, {
       .then(([{ resyncInboundWebhooks }, { phoneNumberService }, { PhoneNumber }]) => resyncInboundWebhooks({ PhoneNumber, twilioClient: phoneNumberService.twilioClient }))
       .catch((e) => console.error('[inbound-resync] :', e?.message || e));
   }
+  // Diagnostic en lecture seule des capacités voix / SMS / MMS des numéros Twilio : avec LOG_TWILIO_CAPABILITIES=1 seulement.
+  if (String(process.env.LOG_TWILIO_CAPABILITIES || '').trim() === '1') {
+    Promise.all([import('./src/services/twilioCapabilitiesReport.js'), import('./src/services/phoneNumberService.js'), import('./src/models/PhoneNumber.js')])
+      .then(([{ logTwilioCapabilities }, { phoneNumberService }, { PhoneNumber }]) => logTwilioCapabilities({
+        twilioClient: phoneNumberService.twilioClient,
+        PhoneNumber,
+        accountSid: config.twilioAccountSid,
+        db: mongoose.connection.db,
+      }))
+      .catch((e) => console.error('[twilio-capabilities] :', e?.message || e));
+  }
 }).catch((error) => {
   console.error('❌ MongoDB connection error:', error);
   process.exit(1); // Exit if we can't connect to database
