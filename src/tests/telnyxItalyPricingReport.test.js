@@ -42,7 +42,7 @@ assert.equal(requirementDetailUrl('a b'), 'https://api.telnyx.com/v2/requirement
 // --- Exigences
 const reqLines = formatRequirementLines('local', {
   id: 'req1', country_code: 'IT', phone_number_type: 'local', action: 'ordering', locality: null,
-  requirements_types: [{ name: 'Proof of address', type: 'document', description: 'Local   address\nin Italy', example: 'utility bill', acceptance_criteria: { locality_limit: 'Italy' } }],
+  requirement_types: [{ name: 'Proof of address', type: 'document', description: 'Local   address\nin Italy', example: 'utility bill', acceptance_criteria: { locality_limit: 'Italy' } }],
 });
 assert.equal(reqLines[0], '[telnyx-it-pricing] EXIGENCES type=local id=req1 pays=IT type_numero=local action=ordering locality=-');
 assert.equal(reqLines[1], '[telnyx-it-pricing]   - Proof of address [document] : Local address in Italy | ex. utility bill | critères {"locality_limit":"Italy"}');
@@ -63,7 +63,7 @@ const http = {
 };
 const out = [];
 await logTelnyxItalyPricing({ apiKey: KEY, http, log: (l) => out.push(l) });
-assert.equal(urls.length, 4 + 5 + 1 + 1);
+assert.equal(urls.length, 4 + 5 + 1);
 assert.ok(urls.some((x) => x.endsWith('/v2/requirements/req1')));
 assert.ok(out.some((l) => l.includes('champs=id,country_code,phone_number_type,action,requirements_types')));
 assert.ok(out.every((l) => !l.includes(KEY)));

@@ -60,7 +60,7 @@ export function formatNumberLine(type, n) {
 export function formatRequirementLines(type, r) {
   const head = `${LOG_PREFIX} EXIGENCES type=${type} id=${r?.id || '?'} pays=${r?.country_code || '?'} type_numero=${r?.phone_number_type || '?'} action=${r?.action || '?'} locality=${r?.locality || '-'}`;
   const lines = [head];
-  for (const t of r?.requirements_types || []) {
+  for (const t of r?.requirement_types || r?.requirements_types || []) {
     const crit = t?.acceptance_criteria ? JSON.stringify(t.acceptance_criteria) : '';
     lines.push(`${LOG_PREFIX}   - ${oneLine(t?.name, 120)} [${t?.type || '?'}] : ${oneLine(t?.description)}${t?.example ? ` | ex. ${oneLine(t.example, 150)}` : ''}${crit ? ` | critères ${oneLine(crit, 300)}` : ''}`);
   }
@@ -94,6 +94,7 @@ export async function logTelnyxItalyPricing({ apiKey, http, log = console.log })
       log(`${LOG_PREFIX} DISPONIBLES type=${type} : échec ${errorText(err)}`);
     }
   }
+  const ids = new Set();
   for (const type of [null, ...NUMBER_TYPES]) {
     const label = type || 'tous';
     try {
@@ -103,17 +104,13 @@ export async function logTelnyxItalyPricing({ apiKey, http, log = console.log })
       for (const r of rows) {
         for (const line of formatRequirementLines(label, r)) log(line);
         log(`${LOG_PREFIX}   champs=${Object.keys(r || {}).join(',')}`);
+        if (r?.id) ids.add(r.id);
       }
     } catch (err) {
       log(`${LOG_PREFIX} EXIGENCES type=${label} : échec ${errorText(err)}`);
     }
   }
   // Détail de chaque exigence (la liste peut omettre les types de pièces demandées).
-  const ids = new Set();
-  try {
-    const { data } = await http.get(requirementsUrl(null), opts);
-    for (const r of data?.data || []) if (r?.id) ids.add(r.id);
-  } catch { /* déjà journalisé plus haut */ }
   for (const id of ids) {
     try {
       const { data } = await http.get(requirementDetailUrl(id), opts);
