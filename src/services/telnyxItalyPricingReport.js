@@ -29,6 +29,10 @@ export function requirementsUrl(type) {
   return `${API}/requirements?${q.toString()}`;
 }
 
+export function requirementDetailUrl(id) {
+  return `${API}/requirements/${encodeURIComponent(id)}`;
+}
+
 const oneLine = (v, max = 400) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 
 /** Ligne de synthèse d'un numéro disponible. */
@@ -96,9 +100,28 @@ export async function logTelnyxItalyPricing({ apiKey, http, log = console.log })
       const { data } = await http.get(requirementsUrl(type), opts);
       const rows = data?.data || [];
       log(`${LOG_PREFIX} EXIGENCES type=${label} : ${rows.length} enregistrement(s)`);
-      for (const r of rows) for (const line of formatRequirementLines(label, r)) log(line);
+      for (const r of rows) {
+        for (const line of formatRequirementLines(label, r)) log(line);
+        log(`${LOG_PREFIX}   champs=${Object.keys(r || {}).join(',')}`);
+      }
     } catch (err) {
       log(`${LOG_PREFIX} EXIGENCES type=${label} : échec ${errorText(err)}`);
+    }
+  }
+  // Détail de chaque exigence (la liste peut omettre les types de pièces demandées).
+  const ids = new Set();
+  try {
+    const { data } = await http.get(requirementsUrl(null), opts);
+    for (const r of data?.data || []) if (r?.id) ids.add(r.id);
+  } catch { /* déjà journalisé plus haut */ }
+  for (const id of ids) {
+    try {
+      const { data } = await http.get(requirementDetailUrl(id), opts);
+      const r = data?.data || {};
+      for (const line of formatRequirementLines('detail', r)) log(line);
+      log(`${LOG_PREFIX}   brut=${oneLine(JSON.stringify(r), 3000)}`);
+    } catch (err) {
+      log(`${LOG_PREFIX} DETAIL ${id} : échec ${errorText(err)}`);
     }
   }
   log(`${LOG_PREFIX} fin`);
