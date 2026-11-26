@@ -1,5 +1,6 @@
 import CallGraceDeadline from '../models/CallGraceDeadline.js';
 import MinutesCompany from '../models/MinutesCompany.js';
+import { affordableMinutes, creditsForMinutes, creditsForSeconds, normalizeFactor, roundCredits, subtractCredits } from './creditMath.js';
 
 /**
  * B.1 (décision du fondateur) : « Minutes : jamais de dépassement, 5 minutes de grâce puis coupure ».
@@ -70,16 +71,17 @@ const FINISHED = new Set(['completed', 'canceled', 'failed', 'busy', 'no-answer'
  * @returns {Promise<{ amount: number, available: number }>} crédits réservés et crédits libres AVANT la réservation
  */
 export async function reserveCredits({ companyId, need, creditFactor = 1, Wallet = MinutesCompany, attempts = 8 }) {
-  const factor = Number(creditFactor) > 1 ? Number(creditFactor) : 1;
-  const wanted = Math.max(0, Math.floor(Number(need) || 0));
+  // Coefficient décimal possible (4,2) : tout au centième de minute (creditMath.js), jamais de dérive flottante.
+  const factor = normalizeFactor(creditFactor);
+  const wanted = Math.max(0, roundCredits(need));
   let available = 0;
   if (!companyId) return { amount: 0, available };
   for (let i = 0; i < attempts; i += 1) {
     const wallet = await Wallet.findOne({ companyId });
     if (!wallet) return { amount: 0, available: 0 };
     const reserved = Math.max(0, Number(wallet.reservedCredits) || 0);
-    available = Math.max(0, Math.floor(Number(wallet.minutes) || 0) - reserved);
-    const amount = Math.floor(Math.min(available, wanted) / factor) * factor;
+    available = Math.max(0, subtractCredits(Number(wallet.minutes) || 0, reserved));
+    const amount = creditsForMinutes(affordableMinutes(Math.min(available, wanted), factor), factor);
     if (amount <= 0) return { amount: 0, available };
     const updated = await Wallet.findOneAndUpdate(
       { companyId, minutes: wallet.minutes, reservedCredits: reservedIs(Number(wallet.reservedCredits) || 0) },
@@ -120,9 +122,9 @@ export async function releaseReservation(callSid, { Model = CallGraceDeadline, W
  */
 export async function chargeGraceCall(row, durationSeconds, extraKeys = [], { Wallet = MinutesCompany } = {}) {
   const seconds = Math.max(0, Math.round(Number(durationSeconds) || 0));
-  const factor = Number(row.creditFactor) > 1 ? Number(row.creditFactor) : 1;
+  const factor = normalizeFactor(row.creditFactor);
   const keys = [...new Set([row.callSid, ...(row.childSids || []), ...extraKeys].map((k) => String(k || '').trim()).filter(Boolean))];
-  const done = await debitMinutesClamped({ companyId: row.companyId, keys, cost: Math.ceil(seconds / 60) * factor, seconds, batch: keys.length > 1, Wallet });
+  const done = await debitMinutesClamped({ companyId: row.companyId, keys, cost: creditsForSeconds(seconds, factor), seconds, batch: keys.length > 1, Wallet });
   return !done?.retryLater;
 }
 
@@ -171,7 +173,7 @@ export async function releaseForChargedKeys(keys, deps = {}) {
 }
 
 const planOfRow = (row) => {
-  const factor = Number(row.creditFactor) > 1 ? Number(row.creditFactor) : 1;
+  const factor = normalizeFactor(row.creditFactor);
   return { coveredSeconds: row.coveredSeconds || 0, reservedCredits: row.reservedCredits || 0, availableSeconds: row.coveredSeconds || 0, graceStartsAt: new Date(row.graceStartsAt), deadline: new Date(row.deadline), limitSeconds: graceLimitSeconds(row.coveredSeconds || 0), factor };
 };
 
@@ -186,7 +188,7 @@ const planOfRow = (row) => {
 export async function startGraceCall({ callSid, companyId, path, creditFactor = 1, now = Date.now(), signal = null }, { Model = CallGraceDeadline, Wallet = MinutesCompany } = {}) {
   const sid = String(callSid || '').trim();
   if (!sid || !companyId) return null;
-  const factor = Number(creditFactor) > 1 ? Number(creditFactor) : 1;
+  const factor = normalizeFactor(creditFactor);
   const existing = await Model.findOne({ callSid: sid }).lean();
   if (existing) return planOfRow(existing);
   const provisional = planGrace({ coveredSeconds: 0, now });
@@ -212,15 +214,15 @@ export async function startGraceCall({ callSid, companyId, path, creditFactor = 
   }
   const abandon = () => Model.updateOne({ callSid: sid }, { $set: { status: 'ended', reservationStatus: 'none' } });
   if (signal?.aborted) { await abandon(); return null; }
-  const { amount, available } = await reserveCredits({ companyId, need: (TRANCHE_SECONDS / 60) * factor, creditFactor: factor, Wallet });
+  const { amount, available } = await reserveCredits({ companyId, need: creditsForMinutes(TRANCHE_SECONDS / 60, factor), creditFactor: factor, Wallet });
   if (signal?.aborted) { await unreserveCredits({ companyId, amount, Wallet }); await abandon(); return null; }
-  const coveredSeconds = Math.floor(amount / factor) * 60;
+  const coveredSeconds = affordableMinutes(amount, factor) * 60;
   const plan = planGrace({ coveredSeconds, now });
   await Model.updateOne({ callSid: sid, reservationStatus: 'pending' }, { $set: {
     reservationStatus: amount > 0 ? 'held' : 'none', reservedCredits: amount, coveredSeconds, extensible: true,
     graceStartsAt: plan.graceStartsAt, deadline: plan.deadline, expiresAt: new Date(plan.deadline.getTime() + RETENTION_MS),
   } });
-  const availableSeconds = Math.floor(available / factor) * 60;
+  const availableSeconds = affordableMinutes(available, factor) * 60;
   return { ...plan, reservedCredits: amount, availableSeconds, limitSeconds: graceLimitSeconds(availableSeconds) };
 }
 
@@ -303,10 +305,10 @@ export async function extendGraceCalls({ Model = CallGraceDeadline, Wallet = Min
         out.finished += 1;
         return;
       }
-      const factor = Number(row.creditFactor) > 1 ? Number(row.creditFactor) : 1;
-      const { amount } = await reserveCredits({ companyId: row.companyId, need: (TRANCHE_SECONDS / 60) * factor, creditFactor: factor, Wallet });
+      const factor = normalizeFactor(row.creditFactor);
+      const { amount } = await reserveCredits({ companyId: row.companyId, need: creditsForMinutes(TRANCHE_SECONDS / 60, factor), creditFactor: factor, Wallet });
       if (amount <= 0) { out.exhausted += 1; return; }
-      const add = Math.floor(amount / factor) * 60 * 1000;
+      const add = affordableMinutes(amount, factor) * 60 * 1000;
       const used = Math.min(GRACE_SECONDS, (Number(row.graceUsedSeconds) || 0) + Math.max(0, Math.round((t - graceStart) / 1000)));
       const graceStartsAt = new Date(Math.max(graceStart, t) + add);
       const deadline = new Date(graceStartsAt.getTime() + Math.max(0, GRACE_SECONDS - used) * 1000);
@@ -393,10 +395,11 @@ export function planGrace({ coveredSeconds, now = Date.now() }) {
  * Un solde déjà négatif (historique, avant B.1) n'est pas creusé davantage.
  */
 export function clampDebit(cost, balance) {
-  const c = Math.max(0, Number(cost) || 0);
-  const available = Math.max(0, Number(balance) || 0);
+  // Au centième de minute (coefficient décimal) : jamais de « 8.399999 ».
+  const c = Math.max(0, roundCredits(cost));
+  const available = Math.max(0, roundCredits(balance));
   const debit = Math.min(c, available);
-  return { debit, waived: c - debit };
+  return { debit, waived: subtractCredits(c, debit) };
 }
 
 /**
@@ -419,10 +422,16 @@ export async function debitMinutesClamped({ companyId, keys, cost, seconds, batc
     if (list.some((k) => charged.has(k))) return null;
     const balance = Number(wallet.minutes) || 0;
     const { debit, waived } = clampDebit(cost, balance);
+    // Nouveau solde calculé au centième (entiers de centièmes) et ÉCRIT sous garde du solde lu (`minutes: wallet.minutes` dans le filtre) :
+    // aucune dérive flottante même avec un coefficient décimal (100 − 8,4 − 8,4 = 83,2 exactement). Un solde négatif historique : débit 0,
+    // solde inchangé.
+    const nextBalance = debit > 0 ? subtractCredits(balance, debit) : wallet.minutes;
     const updated = await Wallet.findOneAndUpdate(
       { companyId, chargedCallSids: keyFilter, minutes: wallet.minutes },
       {
-        $inc: { minutes: -debit, consumedSeconds: Number(seconds) || 0, ...(waived > 0 ? { graceWaivedMinutes: waived } : {}) },
+        $set: { minutes: nextBalance },
+        // Trace seule (jamais facturée) : `$inc`, pour ne perdre aucun débit concurrent à solde nul.
+        $inc: { consumedSeconds: Number(seconds) || 0, ...(waived > 0 ? { graceWaivedMinutes: waived } : {}) },
         $addToSet: { chargedCallSids: single ? list[0] : { $each: list } },
       },
       { new: true }

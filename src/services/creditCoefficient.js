@@ -1,6 +1,7 @@
 import { classifyZone } from './callZone.js';
 import { countryPrefixOf, toStrictE164 } from './outboundDestinations.js';
 import { internationalInsufficientText } from './browserOutbound.js';
+import { affordableMinutes, creditsForSeconds, normalizeFactor, roundCredits } from './creditMath.js';
 
 /**
  * Un crédit minute INTERNATIONAL = N crédits minute nationale. UN SEUL solde de minutes (MinutesCompany, packs et achats existants
@@ -9,7 +10,13 @@ import { internationalInsufficientText } from './browserOutbound.js';
  *
  * N (« coefficient ») n'est PAS écrit en dur : métadonnée `international_minute_credits` du produit Stripe du forfait, sinon variable
  * d'environnement `INTERNATIONAL_MINUTE_CREDITS`, sinon 1 (= comportement actuel inchangé : on déploie sans rien changer, puis on passe à
- * la valeur voulue en configuration). Borne : entier entre 1 et 100 ; une valeur invalide donne 1 et un avertissement.
+ * la valeur voulue en configuration). Borne : nombre entre 1 et 100, DÉCIMAL au centième accepté (« 4 », « 4.2 », « 4,25 ») ; une valeur
+ * invalide (hors bornes, plus de deux décimales, texte) donne 1 et un avertissement.
+ *
+ * COEFFICIENT DÉCIMAL (décision du 26/11/2026 : minute internationale = multiple réglable de la minute locale, ex. 0,60 € = 4 × 0,15 €,
+ * ou 0,63 € = 4,2 × 0,15 €) : la minute entamée est toujours arrondie à la minute supérieure PUIS multipliée par le coefficient ; le
+ * débit est calculé et écrit AU CENTIÈME DE MINUTE sans perte (creditMath.js : entiers de centièmes, nouveau solde écrit sous garde du
+ * solde lu, jamais de `$inc` flottant). Exemple : 1 min 05 s internationale à 4,2 = 2 min × 4,2 = 8,40 minutes locales débitées.
  *
  * Classification (callZone.js) : sortant = zone de la destination, jugée depuis la ligne RÉELLEMENT utilisée (champ `from` de l'appel
  * stocké ; repli documenté sur la première ligne de l'entreprise si `from` n'est pas un numéro lisible, par exemple « client:… ») : le
@@ -33,12 +40,13 @@ export const COEFFICIENT_ENV = 'INTERNATIONAL_MINUTE_CREDITS';
 export const COEFFICIENT_MIN = 1;
 export const COEFFICIENT_MAX = 100;
 
-/** Entier entre 1 et 100 (nombre ou texte), sinon null. */
+/** Nombre entre 1 et 100, au centième au plus (nombre ou texte, virgule ou point décimal), sinon null. */
 export function parseCoefficient(value) {
   if (value === null || value === undefined) return null;
-  const text = String(value).trim();
-  if (!/^\d+$/.test(text)) return null;
-  const n = Number(text);
+  if (typeof value === 'number' && !Number.isFinite(value)) return null;
+  const text = String(value).trim().replace(',', '.');
+  if (!/^\d+(\.\d{1,2})?$/.test(text)) return null;
+  const n = roundCredits(Number(text));
   return n >= COEFFICIENT_MIN && n <= COEFFICIENT_MAX ? n : null;
 }
 
@@ -58,14 +66,14 @@ export function resolveInternationalCoefficient({ metadata, env = process.env } 
   if (fromPlan !== undefined && String(fromPlan).trim() !== '') {
     const n = parseCoefficient(fromPlan);
     if (n) return { coefficient: n, source: 'plan', invalid: false };
-    console.warn(`[credits] ${COEFFICIENT_METADATA_KEY} invalide (« ${String(fromPlan).slice(0, 20)} », attendu : entier ${COEFFICIENT_MIN}–${COEFFICIENT_MAX}) : coefficient 1`);
+    console.warn(`[credits] ${COEFFICIENT_METADATA_KEY} invalide (« ${String(fromPlan).slice(0, 20)} », attendu : nombre ${COEFFICIENT_MIN}–${COEFFICIENT_MAX}, au centième) : coefficient 1`);
     return { coefficient: 1, source: 'plan', invalid: true };
   }
   const fromEnv = env?.[COEFFICIENT_ENV];
   if (fromEnv !== undefined && String(fromEnv).trim() !== '') {
     const n = parseCoefficient(fromEnv);
     if (n) return { coefficient: n, source: 'env', invalid: false };
-    console.warn(`[credits] ${COEFFICIENT_ENV} invalide (« ${String(fromEnv).slice(0, 20)} », attendu : entier ${COEFFICIENT_MIN}–${COEFFICIENT_MAX}) : coefficient 1`);
+    console.warn(`[credits] ${COEFFICIENT_ENV} invalide (« ${String(fromEnv).slice(0, 20)} », attendu : nombre ${COEFFICIENT_MIN}–${COEFFICIENT_MAX}, au centième) : coefficient 1`);
     return { coefficient: 1, source: 'env', invalid: true };
   }
   return { coefficient: 1, source: 'default', invalid: false };
@@ -111,8 +119,8 @@ export function callCreditFactor(call, options = {}) {
   return d.factor;
 }
 
-/** Crédits d'un appel : minute entamée arrondie à la minute supérieure, puis multipliée. */
-export const callCredits = (call, options) => Math.ceil(Number(call?.duration || 0) / 60) * callCreditFactor(call, options);
+/** Crédits d'un appel : minute entamée arrondie à la minute supérieure, puis multipliée (au centième, sans perte). */
+export const callCredits = (call, options) => creditsForSeconds(call?.duration, callCreditFactor(call, options));
 
 /** Numéro de la première ligne lisible de l'entreprise (permet de distinguer les territoires d'un même indicatif) ; '' si inconnu. */
 export async function companyHomeOf(companyId, options) {
@@ -175,7 +183,7 @@ export async function loadCallDecisions(sids) {
   try {
     const { default: CallCreditDecision } = await import('../models/CallCreditDecision.js');
     const rows = await CallCreditDecision.find({ sid: { $in: list } }).select('sid factor zone').lean();
-    return new Map((rows || []).map((r) => [String(r.sid), { factor: Number(r.factor) >= 1 ? Number(r.factor) : 1, zone: r.zone === 'international' || r.zone === 'domestic' ? r.zone : null }]));
+    return new Map((rows || []).map((r) => [String(r.sid), { factor: normalizeFactor(r.factor), zone: r.zone === 'international' || r.zone === 'domestic' ? r.zone : null }]));
   } catch (error) {
     console.warn('[credits] traces de décision illisibles, reclassement des appels :', error?.message || error);
     return new Map();
@@ -275,14 +283,14 @@ export function insufficientInternationalMessages(credits) {
 /** Vue en lecture seule pour l'écran Facturation : crédits restants, coefficient appliqué, minutes internationales équivalentes. */
 export function buildCreditsOverview({ minutes, planMinutesIncluded = 0, coefficient, companyCountry = '' }) {
   const credits = typeof minutes === 'number' ? minutes : 0;
-  const n = coefficient?.coefficient > 0 ? coefficient.coefficient : 1;
+  const n = normalizeFactor(coefficient?.coefficient);
   const zone = classifyZone({ to: '', companyCountry });
   return {
-    credits,
+    credits: roundCredits(credits),
     includedMinutes: planMinutesIncluded,
     internationalCreditsPerMinute: n,
     coefficientSource: coefficient?.source || 'default',
-    internationalMinutesEquivalent: Math.max(0, Math.floor(Math.floor(credits) / n)),
+    internationalMinutesEquivalent: affordableMinutes(credits, n),
     zone: { companyCountry: countryPrefixOf(companyCountry) || '', euZone: zone.euZone },
   };
 }

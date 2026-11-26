@@ -16,10 +16,13 @@ const FR_LINE = '+33611110001'; const FR = '+33612345678'; const DE = '+49151123
 const warns = () => { const w = []; const orig = console.warn; console.warn = (...a) => w.push(a.join(' ')); return { w, restore: () => { console.warn = orig; } }; };
 
 // --- Lecture du coefficient -----------------------------------------------------------------------------------------------
-test('coefficient : entier entre 1 et 100, sinon invalide', () => {
-  for (const v of [1, 4, 100, '4', ' 4 ', '100', '1']) assert.ok(C.parseCoefficient(v) >= 1, String(v));
+test('coefficient : nombre entre 1 et 100, décimal au centième accepté, sinon invalide', () => {
+  for (const v of [1, 4, 100, '4', ' 4 ', '100', '1', 1.5, '1.5', '4,2', 4.2, '4.25']) assert.ok(C.parseCoefficient(v) >= 1, String(v));
   assert.equal(C.parseCoefficient('4'), 4);
-  for (const v of [0, 101, -1, 1.5, '1.5', 'abc', '', null, undefined, NaN, '4x', '0']) assert.equal(C.parseCoefficient(v), null, String(v));
+  assert.equal(C.parseCoefficient('4.2'), 4.2);
+  assert.equal(C.parseCoefficient('4,2'), 4.2);
+  assert.equal(C.parseCoefficient(4.25), 4.25);
+  for (const v of [0, 101, -1, 0.99, '100.01', '4.255', 'abc', '', null, undefined, NaN, Infinity, '4x', '0', '1e2', '4.']) assert.equal(C.parseCoefficient(v), null, String(v));
 });
 
 test('coefficient : métadonnée du produit du forfait, sinon variable d\'environnement, sinon 1', () => {
@@ -36,7 +39,7 @@ test('coefficient : métadonnée du produit du forfait, sinon variable d\'enviro
 test('coefficient invalide => 1 + avertissement (une métadonnée invalide ne bascule pas sur l\'environnement)', () => {
   const { w, restore } = warns();
   try {
-    for (const bad of ['0', '101', '2.5', 'abc', '-4']) {
+    for (const bad of ['0', '101', '2.555', 'abc', '-4']) {
       w.length = 0;
       assert.deepEqual(C.resolveInternationalCoefficient({ metadata: { international_minute_credits: bad }, env: { INTERNATIONAL_MINUTE_CREDITS: '4' } }), { coefficient: 1, source: 'plan', invalid: true }, bad);
       assert.ok(w.some((x) => /international_minute_credits/.test(x)), bad);

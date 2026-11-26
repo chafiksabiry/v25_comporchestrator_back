@@ -5,6 +5,7 @@ import { normalizeDestination, buildRefusalTwiml, buildCallbackTwiml } from './v
 import { isPremiumRate } from './outboundDestinations.js';
 import { languageForPhone } from './companyLanguage.js';
 import { graceLimitSeconds } from './minutesGrace.js';
+import { affordableMinutes, formatCredits } from './creditMath.js';
 
 /**
  * Appel SORTANT depuis le navigateur (clavier de « Mon poste » de Nomad Solo).
@@ -82,11 +83,11 @@ export const secretaryOutboundAllowed = (settings) => settings?.secretaryOutboun
  * couvre pas une minute entière (toute minute commencée est facturée en entier).
  */
 export function maxSecondsForBalance(minutes, options) {
-  const whole = Math.floor(Number(minutes));
-  // `options.creditFactor` : crédits débités par minute (appel international : coefficient N ; sinon 1). Minutes entières affordables = solde / N.
+  // `options.creditFactor` : crédits débités par minute (appel international : coefficient N, décimal possible ; sinon 1). Minutes entières
+  // couvertes = solde / N, calculé au centième sans perte (8,4 à 4,2 → 2 minutes ; 8,39 → 1).
   // Un objet d'options (et non un nombre) pour rester sûr avec `.map(maxSecondsForBalance)`, qui passe l'indice en second argument.
   const creditFactor = typeof options?.creditFactor === 'number' ? options.creditFactor : 1;
-  const affordable = creditFactor > 1 ? Math.floor(whole / creditFactor) : whole;
+  const affordable = affordableMinutes(minutes, creditFactor);
   return affordable >= 1 ? Math.min(affordable * 60, MAX_CALL_SECONDS) : 0;
 }
 
@@ -144,7 +145,13 @@ export const SPOKEN_REFUSALS = Object.freeze({
 const SPOKEN_VOICES = Object.freeze({ en: ['en-US', 'Polly.Joanna'], fr: ['fr-FR', 'Polly.Lea'], es: ['es-ES', 'Polly.Lucia'] });
 
 /** Texte unique (par langue) du refus « solde insuffisant pour un appel international : 1 minute = N crédits », pour TOUS les canaux. */
-export const internationalInsufficientText = (lang, credits) => (SPOKEN_REFUSALS[lang] || SPOKEN_REFUSALS.en).insufficient_minutes_international.replace('{credits}', String(credits ?? ''));
+export const internationalInsufficientText = (lang, credits) => (SPOKEN_REFUSALS[lang] || SPOKEN_REFUSALS.en).insufficient_minutes_international.replace('{credits}', creditsLabel(credits, SPOKEN_REFUSALS[lang] ? lang : 'en'));
+
+/** N affiché proprement dans la langue du message : « 4 », « 4,2 » (fr, es), « 4.2 » (en). Absent : vide. */
+function creditsLabel(credits, lang) {
+  if (credits === null || credits === undefined || credits === '' || !Number.isFinite(Number(credits))) return String(credits ?? '');
+  return formatCredits(credits, lang);
+}
 
 /** Langue parlée du refus d'après le numéro de la ligne appelante : fr / es si c'est celle de son pays, sinon anglais (ligne absente ou illisible comprise). */
 export function spokenLanguage(linePhone) {
@@ -155,7 +162,7 @@ export function spokenLanguage(linePhone) {
 /** TwiML de refus parlé : clé de refus (voir SPOKEN_REFUSALS), langue (en par défaut). Clé inconnue : message d'erreur générique. */
 export function spokenRefusal(key, language = 'en', params = {}) {
   const lang = SPOKEN_REFUSALS[language] ? language : 'en';
-  const text = (SPOKEN_REFUSALS[lang][key] || SPOKEN_REFUSALS[lang].error).replace('{credits}', String(params?.credits ?? ''));
+  const text = (SPOKEN_REFUSALS[lang][key] || SPOKEN_REFUSALS[lang].error).replace('{credits}', creditsLabel(params?.credits, lang));
   const [voiceLanguage, voice] = SPOKEN_VOICES[lang];
   return buildRefusalTwiml(text, { language: voiceLanguage, voice });
 }

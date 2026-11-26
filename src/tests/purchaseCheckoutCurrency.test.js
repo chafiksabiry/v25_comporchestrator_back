@@ -160,9 +160,9 @@ for (const [iso, expected] of [['GB', 'GBP'], ['US', 'USD'], ['FR', 'EUR']]) {
     await paymentCheckoutController.initCheckout(reqOf(checkoutBody({ purpose: 'minutes_purchase', minutes: 150 })), res);
     assert.equal(res.statusCode, 201, JSON.stringify(res.body));
     assert.equal(res.body.currency, expected);
-    assert.equal(res.body.amount, 1000);
+    assert.equal(res.body.amount, 2250); // 150 min × 0,15 (même montant dans les trois devises)
     assert.equal(stripeCalls[0].currency, expected);
-    assert.equal(stripeCalls[0].amountCents, 1000);
+    assert.equal(stripeCalls[0].amountCents, 2250);
     assert.equal(res.body.quantity, 150);
   });
 }

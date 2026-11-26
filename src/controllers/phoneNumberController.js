@@ -22,6 +22,7 @@ import mongoose from 'mongoose';
 import PhoneNumberPayment from '../models/PhoneNumberPayment.js';
 import { PhoneNumber } from '../models/PhoneNumber.js';
 import { getPhoneLinePricing } from '../services/platformPricingService.js';
+import { affordableMinutes } from '../services/creditMath.js';
 import { activateMonthlyLine, assertMonthlyLineBillable, BILLING_MODEL_MONTHLY, getLinePaymentState, markLineReleaseFailed, phoneLineAmountForCurrency, startMonthlyLineSubscription } from '../services/phoneLineSubscription.js';
 import { isFrenchCountry, resolvePhoneProvider } from '../utils/phoneProvider.js';
 import { isLineIncluded, isLineTrialAllowed, loadCompanyPlanLimits, localNumberLimitPayload } from '../services/planLimits.js';
@@ -2866,7 +2867,7 @@ class PhoneNumberController {
       creditsPerMinute = await outboundCreditFactor({ companyId, limits: planLimits, to });
     }
     if (creditsPerMinute > 1) {
-      if (Number.isFinite(balance) && Math.floor(balance) >= creditsPerMinute) return null;
+      if (Number.isFinite(balance) && affordableMinutes(balance, creditsPerMinute) >= 1) return null; // au centième (coefficient décimal)
       return {
         success: false,
         error: MINUTES_INSUFFICIENT_CODE,

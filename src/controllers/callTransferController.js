@@ -13,6 +13,7 @@ import { loadTools, mergedTools } from '../services/secretariatTools.js';
 import { voiceIdentity } from '../services/voicePresenceService.js';
 import { normalizeOutboundDestination, maxSecondsForBalance } from '../services/browserOutbound.js';
 import { graceLimitSeconds } from '../services/minutesGrace.js';
+import { addCredits, creditsForMinutes, subtractCredits } from '../services/creditMath.js';
 import { insufficientInternationalMessages, loadCallDecisions, outboundCreditFactor, recordCallDecision } from '../services/creditCoefficient.js';
 import { dialLegCall, outboundRemainderCall } from '../services/transferBilling.js';
 import { twilioRequestValid } from '../services/twilioSignature.js';
@@ -92,7 +93,7 @@ export const transferDeps = deps;
 export function elapsedCredits({ startTime, now, factor = 1 }) {
   const start = startTime ? new Date(startTime).getTime() : NaN;
   if (!Number.isFinite(start) || start > now) return 0;
-  return Math.ceil((now - start) / 60000) * (factor >= 1 ? factor : 1);
+  return creditsForMinutes(Math.ceil((now - start) / 60000), factor);
 }
 
 async function context(req, res) {
@@ -204,7 +205,7 @@ export const callTransferController = {
         // pourrait finir négatif d'autant (30 min avec la secrétaire puis 30 min transférées = −30).
         const inProgress = elapsedCredits({ startTime: leg.startTime, now, factor: outbound ? prospectFactor : 1 });
         const balance = await deps.minutes(access.companyId);
-        maxSeconds = maxSecondsForBalance(Number.isFinite(Number(balance)) ? Number(balance) - inProgress : balance, { creditFactor: creditFactor + prospectFactor });
+        maxSeconds = maxSecondsForBalance(Number.isFinite(Number(balance)) ? subtractCredits(Number(balance), inProgress) : balance, { creditFactor: addCredits(creditFactor, prospectFactor) });
         if (!maxSeconds && creditFactor > 1) {
           const m = insufficientInternationalMessages(creditFactor);
           return fail(res, 402, m.messageFr, { code: 'no_minutes', creditsPerMinute: creditFactor, messageEn: m.message, messageEs: m.messageEs });

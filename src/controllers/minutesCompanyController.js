@@ -5,6 +5,7 @@ import { callerAccess, ScopeError } from '../middleware/companyScope.js';
 import mongoose from 'mongoose';
 import { creditFactorForCall } from '../services/creditCoefficient.js';
 import { debitMinutesClamped, releaseForChargedKeys } from '../services/minutesGrace.js';
+import { creditsForSeconds } from '../services/creditMath.js';
 
 async function readMinutes(companyId, res) {
   try {
@@ -151,7 +152,7 @@ export const minutesCompanyController = {
 
       // Billing rule: any started minute is billed in full (10s → 1 min, 1m02s → 2 min), then multiplied by the credits of the zone.
       // B.1 : débit borné par le solde (jamais sous zéro) : les minutes de grâce ne sont pas facturées.
-      const durationMinutes = Math.ceil(durationSeconds / 60) * factor;
+      const durationMinutes = creditsForSeconds(durationSeconds, factor); // au centième (coefficient décimal), sans perte
       const done = await debitMinutesClamped({ companyId, keys: [chargeKey], cost: durationMinutes, seconds: durationSeconds });
       const updated = done?.wallet;
 

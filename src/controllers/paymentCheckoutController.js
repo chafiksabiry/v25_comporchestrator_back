@@ -93,12 +93,30 @@ async function computeAmountCents(purpose, { amountEuros, minutes, tokens }) {
   return null;
 }
 
+/** Coefficient international (forfait de la société si lisible, sinon environnement, sinon 1) et prix de la minute internationale. */
+export async function internationalMinutePricing(companyId, minuteRateCents, { loadLimits } = {}) {
+  let limits = null;
+  if (companyId && mongoose.Types.ObjectId.isValid(String(companyId))) {
+    try {
+      limits = await (loadLimits || (async (id) => (await import('../services/creditCoefficient.js')).cachedPlanLimits(id)))(companyId);
+    } catch {
+      limits = null;
+    }
+  }
+  const { coefficientOf } = await import('../services/creditCoefficient.js');
+  const { coefficient } = coefficientOf(limits);
+  return { coefficient, rateCents: Math.round(Number(minuteRateCents || 0) * coefficient * 100) / 100 };
+}
+
 export const paymentCheckoutController = {
   async getConfig(req, res) {
     try {
       const pricing = await getPlatformPricing();
       // `?companyId=` : devise du pays de l'entreprise (mêmes montants dans les trois devises) ; sinon EUR.
       const currency = req.query?.companyId ? await purchaseCurrency(req, req.query.companyId) : FALLBACK_PURCHASE_CURRENCY;
+      // Minute internationale = N minutes locales (coefficient du forfait de la société, sinon environnement, sinon 1) : prix affiché
+      // = tarif local × N, même montant dans toutes les devises. Lecture du forfait impossible : coefficient de l'environnement.
+      const intl = await internationalMinutePricing(req.query?.companyId, pricing.minuteRateCents);
       res.json({
         success: true,
         paypal: {
@@ -114,6 +132,10 @@ export const paymentCheckoutController = {
           minutePacks: pricing.minutePacks,
           minutesCustomRateCents: pricing.minutesCustomRateCents,
           minutesCustomRateEuros: pricing.minutesCustomRateCents / 100,
+          // Champs additifs : tarif de la minute locale et de la minute internationale (centimes de `currency`), coefficient appliqué.
+          minuteRateCents: pricing.minuteRateCents,
+          internationalMinuteCredits: intl.coefficient,
+          internationalMinuteRateCents: intl.rateCents,
           tokenPacks: pricing.tokenPacks,
           tokensCustomRateCents: pricing.tokensCustomRateCents,
           tokensCustomRateEuros: pricing.tokensCustomRateCents / 100,

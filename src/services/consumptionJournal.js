@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { creditsForMinutes } from './creditMath.js';
 /**
  * Journal de consommation (minutes | jetons IA) d'une entreprise : fonctions PURES, en lecture seule.
  *
@@ -57,7 +58,7 @@ const row = (r) => ({
   quantity: Number.isFinite(r.quantity) ? r.quantity : null,
   balanceAfter: null,
   reference: r.reference,
-  coefficient: Number.isInteger(r.coefficient) ? r.coefficient : null, // crédits par minute, si connu pour cet appel
+  coefficient: Number.isFinite(r.coefficient) && r.coefficient >= 1 ? r.coefficient : null, // crédits par minute (décimal possible : 4,2), si connu pour cet appel
   zone: r.zone ?? null, // 'domestic' | 'international' si connue, sinon null
   source: r.source,
   reconstructed: Boolean(r.reconstructed),
@@ -143,17 +144,17 @@ export function buildMinutesRows({ wallet, payments, calls, debits = {} }) {
     const direction = /^inbound/.test(dir) ? 'inbound' : /^outbound/.test(dir) ? 'outbound' : null;
     const counterpart = direction === 'outbound' ? c.to : direction === 'inbound' ? c.from : null;
     const billedMinutes = Math.ceil(secs / 60);
-    // Coefficient (crédits par minute) : seulement s'il est connu pour CET appel (entier >= 1) avec une zone connue ; sinon la
+    // Coefficient (crédits par minute) : seulement s'il est connu pour CET appel (nombre >= 1, décimal possible) avec une zone connue ; sinon la
     // quantité historique (minutes arrondies) et coefficient null. `debits[sid]` = { coefficient, zone } : source branchée à la fusion du coefficient.
     const d = debits?.[key];
-    const known = d && Number.isInteger(d.coefficient) && d.coefficient >= 1 && (d.zone === 'domestic' || d.zone === 'international');
+    const known = d && Number.isFinite(d.coefficient) && d.coefficient >= 1 && (d.zone === 'domestic' || d.zone === 'international');
     const coefficient = known ? d.coefficient : null;
     rows.push(row({
       id: `call:${key}`,
       type: 'minutes',
       date: isoOrNull(c.startTime) || isoOrNull(c.createdAt) || isoOrNull(c.endTime),
       nature: 'consommation',
-      quantity: -(billedMinutes * (coefficient || 1)),
+      quantity: -creditsForMinutes(billedMinutes, coefficient || 1), // au centième (2 min × 4,2 = 8,4)
       coefficient,
       zone: known ? d.zone : null,
       reference: {

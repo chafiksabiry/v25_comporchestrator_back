@@ -319,11 +319,11 @@ const rowsOf = (r) => r.body.data.items;
   // sens Twilio « outbound-api » / « inbound »
   r = await call(mk({ wallet: { minutes: 0, chargedCallSids: ['B', 'C'], credits: [] }, payments: [], calls: [{ sid: 'B', duration: 30, direction: 'outbound-api', to: '+33600000012', startTime: D('2026-10-01') }, { sid: 'C', duration: 30, direction: 'inbound', from: '+33600000034', startTime: D('2026-10-02') }] }), { type: 'minutes' });
   assert.deepEqual(r.body.data.items.map((x) => [x.reference.direction, x.reference.counterpart]), [['inbound', '•••••••••34'], ['outbound', '•••••••••12']]);
-  // coefficient : connu (entier >= 1 et zone connue) => quantité = -(minutes arrondies x coefficient) ; sinon historique, coefficient null
+  // coefficient : connu (nombre >= 1, décimal possible, et zone connue) => quantité = -(minutes arrondies x coefficient) au centième ; sinon historique, coefficient null
   const calls = [{ sid: 'I', duration: 61, startTime: D('2026-10-01') }, { sid: 'J', duration: 61, startTime: D('2026-10-02') }, { sid: 'K', duration: 61, startTime: D('2026-10-03') }, { sid: 'L', duration: 61, startTime: D('2026-10-04') }];
   r = await call(mk({ wallet: { minutes: 0, chargedCallSids: ['I', 'J', 'K', 'L'], credits: [] }, payments: [], calls, debits: { I: { coefficient: 4, zone: 'international' }, J: { coefficient: 1, zone: 'domestic' }, K: { coefficient: 4, zone: null }, L: { coefficient: 2.5, zone: 'international' } } }), { type: 'minutes' });
   const q = Object.fromEntries(r.body.data.items.map((x) => [x.reference.callSid, [x.quantity, x.coefficient, x.zone]]));
-  assert.deepEqual(q, { I: [-8, 4, 'international'], J: [-2, 1, 'domestic'], K: [-2, null, null], L: [-2, null, null] });
+  assert.deepEqual(q, { I: [-8, 4, 'international'], J: [-2, 1, 'domestic'], K: [-2, null, null], L: [-5, 2.5, 'international'] });
   // lignes sans date : jamais de solde après opération inventé
   r = await call(mk({ wallet: { minutes: 10, chargedCallSids: ['U', 'V'], credits: [] }, payments: [], calls: [{ sid: 'U', duration: 60 }, { sid: 'V', duration: 60, startTime: D('2026-10-01') }] }), { type: 'minutes' });
   assert.ok(r.body.data.items.every((x) => x.balanceAfter === null));

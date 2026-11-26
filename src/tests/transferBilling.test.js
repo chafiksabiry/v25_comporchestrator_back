@@ -58,6 +58,7 @@ beforeEach(() => {
   MinutesCompany.findOneAndUpdate = async (filter, update) => {
     const nin = filter.chargedCallSids?.$nin;
     if (nin && nin.some((k) => W.chargedCallSids.includes(k))) return null;
+    Object.assign(W, update.$set || {});
     for (const [k, v] of Object.entries(update.$inc || {})) W[k] = (W[k] || 0) + v;
     for (const x of update.$addToSet.chargedCallSids.$each) if (!W.chargedCallSids.includes(x)) W.chargedCallSids.push(x);
     return clone(W);

@@ -165,6 +165,7 @@ beforeEach(() => {
       if (!ok) return null;
     }
     Object.assign(W, update.$set || {});
+    Object.assign(W, update.$set || {});
     for (const [k, v] of Object.entries(update.$inc || {})) W[k] = (W[k] || 0) + v;
     for (const [k, v] of Object.entries(update.$addToSet || {})) for (const x of v.$each || [v]) if (!W[k].includes(x)) W[k].push(x);
     return clone(W);

@@ -56,6 +56,7 @@ beforeEach(() => {
     const ne = filter.chargedCallSids?.$ne; const nin = filter.chargedCallSids?.$nin;
     if (ne !== undefined && N.chargedCallSids.includes(ne)) return null;
     if (nin && nin.some((k) => N.chargedCallSids.includes(k))) return null;
+    Object.assign(N, update.$set || {});
     for (const [k, v] of Object.entries(update.$inc || {})) N[k] = (N[k] || 0) + v;
     for (const [k, v] of Object.entries(update.$addToSet || {})) for (const x of v.$each || [v]) if (!N[k].includes(x)) N[k].push(x);
     return clone(N);
@@ -105,7 +106,7 @@ test('coefficient absent : comportement actuel INCHANGÉ pour les 4 offres (1 cr
 });
 
 test('coefficient invalide : 1 + avertissement', async () => {
-  for (const bad of ['0', '101', 'abc', '2.5']) {
+  for (const bad of ['0', '101', 'abc', '2.555']) {
     clearCoefficientCache(); meta = { ...BASE, international_minute_credits: bad }; N = wallet(100); CALLS = [callDoc('INT', 61, { to: GB })]; warnings.length = 0;
     await syncMinutesFromCalls(C1);
     assert.equal(N.minutes, 98, bad); assert.ok(warnings.some((w) => /international_minute_credits/.test(w)), bad);

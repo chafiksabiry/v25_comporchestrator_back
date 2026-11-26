@@ -28,6 +28,7 @@ beforeEach(() => {
     const ne = filter.chargedCallSids?.$ne; const nin = filter.chargedCallSids?.$nin;
     if (ne !== undefined && W.chargedCallSids.includes(ne)) return null;
     if (nin && nin.some((k) => W.chargedCallSids.includes(k))) return null;
+    Object.assign(W, update.$set || {});
     for (const [k, v] of Object.entries(update.$inc || {})) W[k] += v;
     for (const [k, v] of Object.entries(update.$addToSet || {})) for (const x of v.$each || [v]) if (!W[k].includes(x)) W[k].push(x);
     return clone(W);

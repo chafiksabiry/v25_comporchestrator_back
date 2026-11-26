@@ -27,6 +27,7 @@ import { planCreditCharging } from '../services/creditCoefficient.js';
 import { guardCompanyAccess } from '../middleware/companyGuard.js';
 import { guardAgentSelf } from '../middleware/agentGuard.js';
 import { debitMinutesClamped, releaseForChargedKeys } from '../services/minutesGrace.js';
+import { addCredits, creditsForSeconds } from '../services/creditMath.js';
 
 const OWNER_ONLY = { ownerOnly: true };
 const OWN_COMPANY_OWNER = { ownerOnly: true, ownCompany: true };
@@ -965,7 +966,7 @@ export async function syncMinutesFromCalls(companyId) {
       if (secs <= 0) continue;
       addedSeconds += secs;
       // Minute entamée arrondie à la minute supérieure, PUIS multipliée par les crédits de la zone (1 ou N).
-      addedMinutes += Math.ceil(secs / 60) * charging.factorOf(c);
+      addedMinutes = addCredits(addedMinutes, creditsForSeconds(secs, charging.factorOf(c))); // au centième, sans dérive
       newKeys.push(key);
     }
 
