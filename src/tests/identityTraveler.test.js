@@ -63,16 +63,29 @@ test('Traveler : le justificatif de domicile est refusé à l’envoi ; le bille
   await assert.rejects(s.upload(C, 'u1', { kind: 'ticket', docType: 'passport', buffer: fakePdf() }), (e) => e.code === 'FILE_KIND_INVALID');
 });
 
-test('Traveler : visa exigé selon la nationalité déclarée ; ressortissant exempté sans visa', async () => {
+test('Traveler : nationalité soumise au visa -> passeport + billet + visa exigés', async () => {
   const s = svc();
   await sendAll(s, ['passport', 'ticket']);
   await assert.rejects(s.submit({}, C, 'u1'), (e) => e.code === 'FILES_MISSING' && e.extra.missing.includes('visa'));
-  declared = { fullName: 'Anna Eriksson', residence: 'US', nationality: 'FR' }; idData = idExtraction({ issuing: 'FRA' });
-  assert.equal((await s.submit({}, C, 'u1')).status, 'processing');
-  await run();
-  assert.equal((await s.status(C)).status, 'approved');
-  assert.deepEqual(reads, ['identity', 'ticket'], 'visa non lu pour un ressortissant exempté');
-  assert.equal(saved[0].visaRequired, false);
+  store = createMemoryStore({ now: () => clock });
+  const s2 = svc();
+  await sendAll(s2, ['passport']);
+  await assert.rejects(s2.submit({}, C, 'u1'), (e) => e.code === 'FILES_MISSING' && e.extra.missing.join(',') === 'ticket,visa');
+});
+
+test('Traveler : ressortissant exempté (UE, Golfe, US, CA, UK…) -> passeport SEUL, ni billet ni visa lus (règle corrigée du 27/11)', async () => {
+  for (const [nat, iso3] of [['FR', 'FRA'], ['AE', 'ARE'], ['CA', 'CAN'], ['GB', 'GBR'], ['CH', 'CHE']]) {
+    store = createMemoryStore({ now: () => clock }); reads = []; saved = [];
+    declared = { fullName: 'Anna Eriksson', residence: 'US', nationality: nat }; idData = idExtraction({ issuing: iso3 });
+    const s = svc();
+    await sendAll(s, ['passport']);
+    assert.equal((await s.submit({}, C, 'u1')).status, 'processing', nat);
+    await run();
+    const st = await s.status(C);
+    assert.equal(st.status, 'approved', nat); assert.deepEqual(st.allowedCountries, ['US']);
+    assert.deepEqual(reads, ['identity'], `${nat} : aucun billet ni visa lu`);
+    assert.equal(saved[0].visaRequired, false); assert.equal(saved[0].departAt, null);
+  }
 });
 
 test('Traveler : pays du numéro hors US/CA/GB/FR -> déclaration incomplète', async () => {

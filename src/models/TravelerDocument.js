@@ -26,8 +26,8 @@ const schema = new mongoose.Schema({
   /** Pays du numéro Traveler choisi à l'envoi (le visa est contrôlé pour ce pays). */
   numberCountry: { type: String, default: null },
   /** Dates du voyage LUES sur le billet par l'IA. */
-  departAt: { type: Date, required: true },
-  returnAt: { type: Date, required: true },
+  departAt: { type: Date, default: null }, // absentes pour un ressortissant exempté (passeport seul, règle du 27/11/2026)
+  returnAt: { type: Date, default: null },
   /** Faits retenus après la lecture (aucune image conservée : les fichiers sont lus en mémoire puis abandonnés). */
   ticketFacts: { type: mongoose.Schema.Types.Mixed, default: undefined },
   visaFacts: { type: mongoose.Schema.Types.Mixed, default: undefined },
