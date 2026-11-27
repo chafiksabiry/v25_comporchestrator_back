@@ -4,7 +4,7 @@ import { numberZonePeers, sameNumberZone } from '../utils/numberZone.js';
 import { checkNumberCountry } from './numberCountry.js';
 import { callcenterTierFromMetadata, isNomadTier } from './callcenterTier.js';
 import { TRIAL_REQUIRED, trialPaymentGate } from './trialCall/paymentGate.js';
-import { NOMAD_NUMBER_COUNTRIES, isNomadNumberCountry } from './nomadOffers.js';
+import { NOMAD_ACTIVE_COUNTRIES, isNomadNumberCountry, isNomadSoonCountry } from './nomadOffers.js';
 
 /**
  * Parcours Nomad (PARCOURS.md §4, maquette validée le 23/11) : garde du paiement Nomad Solo et achat du numéro choisi.
@@ -26,13 +26,13 @@ export const NUMBER_OWNED_BY_YOU = 'NUMBER_OWNED_BY_YOU';
 /** Un abonnement NOMAD existe déjà (actif, en essai, ou impayé) : jamais un second abonnement (défaut 2 de l'audit #618). */
 export const NOMAD_SUBSCRIPTION_EXISTS = 'NOMAD_SUBSCRIPTION_EXISTS';
 export { TRIAL_REQUIRED };
-/** Pays du numéro hors de l'offre NOMAD (décision du 26/11/2026 : US, CA, GB, FR, DE, NL, BE seulement). */
+/** Pays du numéro hors de l'offre NOMAD active (décisions des 26 et 27/11/2026 : US, CA, GB, FR ; DE, NL, BE « bientôt »). */
 export const COUNTRY_NOT_OFFERED = 'COUNTRY_NOT_OFFERED';
 
 /** Refus d'un pays hors de l'offre NOMAD, ou null. */
 export function nomadCountryRefusal(country) {
   if (isNomadNumberCountry(country)) return null;
-  return { ok: false, status: 403, body: { error: 'Country not offered', code: COUNTRY_NOT_OFFERED, offeredCountries: [...NOMAD_NUMBER_COUNTRIES], message: 'NOMAD est proposé avec un numéro des États-Unis, du Canada, du Royaume-Uni, de France, d’Allemagne, des Pays-Bas ou de Belgique.' } };
+  return { ok: false, status: 403, body: { error: 'Country not offered', code: COUNTRY_NOT_OFFERED, offeredCountries: [...NOMAD_ACTIVE_COUNTRIES], ...(isNomadSoonCountry(country) ? { comingSoon: true } : {}), message: 'NOMAD est proposé avec un numéro des États-Unis, du Canada, du Royaume-Uni ou de France.' } };
 }
 
 /** Statuts d'un abonnement NOMAD qui interdisent d'en ouvrir un autre : actif, en essai, impayé (`past_due`, `unpaid`). */

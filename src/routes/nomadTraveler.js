@@ -2,7 +2,7 @@
  * NOMAD Traveler (décisions du fondateur du 26/11/2026) : /api/nomad/traveler/*
  *  - GET  /offer                    public : prix (centimes, même chiffre en €, $, £), durée, minutes incluses, pays du numéro ;
  *  - GET  /status                   titulaire : identité vérifiée, visa exigé, pièces, abonnement Traveler, dernier achat de numéro ;
- *  - POST /documents                titulaire : titre de voyage (fichier `ticket`, dates `departAt`, `returnAt`) et visa (`visa`) ;
+ *  - POST /documents                titulaire : titre de voyage (`ticket`), visa (`visa`) et pays du numéro (`numberCountry`), lus par l'IA ;
  *  - GET  /numbers?country=US|CA|GB|FR  titulaire : numéros proposés ;
  *  - POST /checkout/init            titulaire : paiement unique Stripe (confirmation : /api/payments/checkout/confirm) ;
  *  - POST /admin/:companyId/review  admin HARX (JWT `typeUser === 'admin'`) : approved / rejected.
@@ -55,7 +55,7 @@ router.get('/status', authenticate, owner, async (req, res) => {
 router.post('/documents', authenticate, owner, (req, res, next) => upload.fields([{ name: 'ticket', maxCount: 1 }, { name: 'visa', maxCount: 1 }])(req, res, (err) => (err ? sendError(res, err) : next())), async (req, res) => {
   try {
     const out = await submitTravelerDocuments(req.travelerCompanyId, req.travelerUserId, {
-      ticket: req.files?.ticket?.[0]?.buffer, visa: req.files?.visa?.[0]?.buffer, departAt: req.body?.departAt, returnAt: req.body?.returnAt,
+      ticket: req.files?.ticket?.[0]?.buffer, visa: req.files?.visa?.[0]?.buffer, numberCountry: req.body?.numberCountry,
     });
     return res.status(201).json({ success: true, ...out });
   } catch (e) { return sendError(res, e); }

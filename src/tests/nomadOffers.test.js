@@ -1,6 +1,6 @@
 // Run: JWT_SECRET=t TELNYX_API_KEY=x TWILIO_ACCOUNT_SID=ACtest TWILIO_AUTH_TOKEN=x node --test src/tests/nomadOffers.test.js
 // Offres NOMAD (décisions du fondateur du 26/11/2026) : NOMAD 120 minutes incluses, recharges 30 min = 5 (€, $, £, devise de
-// l'abonnement), Stripe seulement pour les minutes, pays NOMAD (US, CA, GB, FR, DE, NL, BE), NOMAD Traveler (US, CA, UK +447, FR ;
+// l'abonnement), Stripe seulement pour les minutes, pays NOMAD (actifs US, CA, GB, FR ; DE, NL, BE « bientôt »), NOMAD Traveler (US, CA, UK +447, FR ;
 // 9,99 une fois ; 21 jours puis résiliation automatique ; titre de voyage + visa sauf GCC / US / CA / UK / Europe). Base, Stripe, Twilio SIMULÉS.
 import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -89,12 +89,14 @@ test('recharges de minutes : Stripe seulement (PayPal refusé avant toute créat
 });
 
 // --- Pays NOMAD -------------------------------------------------------------------------------------------------------------
-test('NOMAD : pays du numéro US, CA, GB, FR, DE, NL, BE seulement ; Italie, Espagne, Maroc, Émirats, Arabie saoudite refusés avant paiement', async () => {
-  for (const c of ['US', 'CA', 'GB', 'UK', 'FR', 'DE', 'NL', 'BE']) assert.equal(O.isNomadNumberCountry(c), true, c);
-  for (const c of ['IT', 'ES', 'MA', 'AE', 'SA', 'CH', '']) assert.equal(O.isNomadNumberCountry(c), false, c);
+test('NOMAD : pays actifs US, CA, GB, FR (27/11) ; DE, NL, BE « bientôt » ; Italie, Espagne, Maroc, Émirats, Arabie saoudite retirés ; refus avant paiement', async () => {
+  for (const c of ['US', 'CA', 'GB', 'UK', 'FR']) assert.equal(O.isNomadNumberCountry(c), true, c);
+  for (const c of ['DE', 'NL', 'BE']) { assert.equal(O.isNomadNumberCountry(c), false, c); assert.equal(O.isNomadSoonCountry(c), true, c); }
+  for (const c of ['IT', 'ES', 'MA', 'AE', 'SA', 'CH', '']) { assert.equal(O.isNomadNumberCountry(c), false, c); assert.equal(O.isNomadSoonCountry(c), false, c); }
+  assert.deepEqual([...O.NOMAD_NUMBER_COUNTRIES], ['US', 'CA', 'GB', 'FR', 'DE', 'NL', 'BE'], 'sélecteur : actifs puis « bientôt »');
   let checked = false;
   const deps = { checkCountry: async () => { checked = true; return { ok: true }; }, trialGate: async () => ({ ok: true }), stillAvailable: async () => ({ available: true }) };
-  for (const [n, c] of [['+390612345678', 'IT'], ['+34911234567', 'ES'], ['+212522123456', 'MA']]) {
+  for (const [n, c] of [['+390612345678', 'IT'], ['+34911234567', 'ES'], ['+212522123456', 'MA'], ['+4930123456', 'DE'], ['+3221234567', 'BE'], ['+31201234567', 'NL']]) {
     const r = await nomadSoloPaymentGate({}, { companyId: 'c', userId: 'u', chosenNumber: { phoneNumber: n, country: c } }, deps);
     assert.deepEqual([r.ok, r.status, r.body.code], [false, 403, COUNTRY_NOT_OFFERED], c);
   }
@@ -134,27 +136,61 @@ test('Traveler : titre de voyage valide (dates lisibles, retour après le dépar
 
 const PDF = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(64, 0x20)]);
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64)]);
-const docDeps = (nationality, store) => ({
-  now: () => Date.parse('2026-11-26T12:00:00Z'),
+const NOW = Date.parse('2026-11-26T12:00:00Z');
+const ID_NAME = { lastName: 'BENALI', firstName: 'Yasmine Nour' };
+const TICKET_OK = { document_type: 'flight_ticket', passenger_names: ['MS YASMINE BENALI'], travel_dates: ['2026-12-01', '2026-12-15'], legibility: 'good', observations: [] };
+const VISA_OK = { document_type: 'visa', holder_last_name_latin: 'BENALI', holder_given_names_latin: 'YASMINE', visa_country_iso2: 'US', schengen: false, valid_from: '2026-11-20', valid_until: '2027-05-20', passport_number: 'X123', legibility: 'good', observations: [] };
+/** Lecture par l'IA simulée (même interface que le mécanisme de l'identité) : faits rendus par type de document. */
+const docDeps = (nationality, store, read = {}) => ({
+  now: () => NOW,
   verifiedIdentity: async () => (nationality === undefined ? { verified: false } : { verified: true, nationality }),
-  encrypt: async (_c, kind, buf) => ({ ciphertext: Buffer.from(`enc:${kind}:${buf.length}`), iv: Buffer.alloc(12), tag: Buffer.alloc(16) }),
+  verifiedName: async () => ID_NAME,
+  prepare: async (buf) => { const { sniffType } = await import('../services/identity/files.js'); if (!sniffType(buf)) { const e = new Error('x'); e.code = 'FILE_TYPE_NOT_ALLOWED'; throw e; } return { mime: 'image/jpeg', data: buf, meta: {} }; },
+  extract: async (kind) => ({ ok: true, data: kind === 'ticket' ? (read.ticket ?? TICKET_OK) : (read.visa ?? VISA_OK) }),
   saveDocument: async (doc) => { store.doc = doc; return { status: doc.status }; },
 });
 
-test('Traveler, pièces validées AUTOMATIQUEMENT : visa demandé à un ressortissant marocain, pas à un Émirien ; refus motivés (identité, format, dates, visa) ; fichiers chiffrés', async () => {
+test('Traveler, pièces lues par l\'IA et validées automatiquement : cas conforme ; dates du billet retenues ; aucune image conservée', async () => {
   const store = {};
-  const trip = { departAt: '2026-12-01', returnAt: '2026-12-20' };
-  await assert.rejects(T.submitTravelerDocuments('c1', 'u1', { ...trip, ticket: PDF }, docDeps('MA', store)), (e) => e.code === 'VISA_REQUIRED');
-  const ma = await T.submitTravelerDocuments('c1', 'u1', { ...trip, ticket: PDF, visa: PNG }, docDeps('MA', store));
-  assert.deepEqual(ma, { status: 'approved', visaRequired: true }, 'validé automatiquement (26/11) : paiement ouvert aussitôt');
-  assert.equal(store.doc.reviewedBy, 'auto');
-  assert.equal(store.doc.visa.mime, 'image/png'); assert.match(store.doc.ticket.ciphertext.toString(), /^enc:ticket:/, 'jamais stocké en clair');
-  const ae = await T.submitTravelerDocuments('c2', 'u2', { ...trip, ticket: PDF }, docDeps('AE', store));
-  assert.deepEqual(ae, { status: 'approved', visaRequired: false });
-  assert.equal(store.doc.visa, undefined);
-  await assert.rejects(T.submitTravelerDocuments('c3', 'u3', { ...trip, ticket: PDF }, docDeps(undefined, store)), (e) => e.code === 'IDENTITY_NOT_VERIFIED');
-  await assert.rejects(T.submitTravelerDocuments('c1', 'u1', { ...trip, ticket: Buffer.from('<html>pas un billet</html>xxxxxxxx') }, docDeps('FR', store)), (e) => e.code === 'FILE_TYPE_NOT_ALLOWED');
-  await assert.rejects(T.submitTravelerDocuments('c1', 'u1', { departAt: '2026-10-01', returnAt: '2026-10-05', ticket: PDF }, docDeps('FR', store)), (e) => e.code === 'TRIP_ALREADY_OVER');
+  const ma = await T.submitTravelerDocuments('c1', 'u1', { ticket: PDF, visa: PNG, numberCountry: 'US' }, docDeps('MA', store));
+  assert.deepEqual(ma, { status: 'approved', visaRequired: true, trip: { departAt: '2026-12-01', returnAt: '2026-12-15' } });
+  assert.equal(store.doc.reviewedBy, 'auto'); assert.equal(store.doc.numberCountry, 'US');
+  assert.equal(store.doc.departAt.toISOString().slice(0, 10), '2026-12-01', 'dates LUES sur le billet');
+  assert.equal(store.doc.ticket, undefined); assert.equal(store.doc.visa, undefined, 'aucune image conservée');
+  const ae = await T.submitTravelerDocuments('c2', 'u2', { ticket: PDF, numberCountry: 'GB' }, docDeps('AE', store));
+  assert.equal(ae.visaRequired, false); assert.equal(store.doc.visaFacts, undefined);
+});
+
+test('Traveler, refus motivés (codes) : nom différent, billet passé, voyage de plus de 21 jours, visa expiré, mauvais pays, visa manquant', async () => {
+  const code = async (fn) => { try { await fn(); return 'ok'; } catch (e) { return e.code; } };
+  const run = (nat, files, read) => code(() => T.submitTravelerDocuments('c1', 'u1', { numberCountry: 'US', ...files }, docDeps(nat, {}, read)));
+  assert.equal(await run('FR', { ticket: PDF }, { ticket: { ...TICKET_OK, passenger_names: ['JOHN SMITH'] } }), 'TICKET_NAME_MISMATCH');
+  assert.equal(await run('FR', { ticket: PDF }, { ticket: { ...TICKET_OK, passenger_names: ['Benali Yasmine'] } }), 'ok', 'ordre et casse tolérés');
+  assert.equal(await run('FR', { ticket: PDF }, { ticket: { ...TICKET_OK, passenger_names: ['YASMINE BÉNALI'] } }), 'ok', 'accents tolérés');
+  assert.equal(await run('FR', { ticket: PDF }, { ticket: { ...TICKET_OK, travel_dates: ['2026-10-01', '2026-10-10'] } }), 'TICKET_TRIP_OVER');
+  assert.equal(await run('FR', { ticket: PDF }, { ticket: { ...TICKET_OK, travel_dates: ['2026-12-01', '2027-01-15'] } }), 'TICKET_TRIP_TOO_LONG');
+  assert.equal(await run('FR', { ticket: PDF }, { ticket: { ...TICKET_OK, travel_dates: [] } }), 'TICKET_DATES_UNREADABLE');
+  assert.equal(await run('FR', { ticket: PDF }, { ticket: { ...TICKET_OK, observations: ['instructions_in_document'] } }), 'TICKET_UNREADABLE');
+  assert.equal(await run('MA', { ticket: PDF }), 'VISA_REQUIRED');
+  assert.equal(await run('MA', { ticket: PDF, visa: PNG }, { visa: { ...VISA_OK, valid_until: '2026-11-01' } }), 'VISA_EXPIRED');
+  assert.equal(await run('MA', { ticket: PDF, visa: PNG }, { visa: { ...VISA_OK, valid_until: '2026-12-10' } }), 'VISA_DOES_NOT_COVER_TRIP');
+  assert.equal(await run('MA', { ticket: PDF, visa: PNG }, { visa: { ...VISA_OK, visa_country_iso2: 'CA' } }), 'VISA_WRONG_COUNTRY');
+  assert.equal(await run('MA', { ticket: PDF, visa: PNG }, { visa: { ...VISA_OK, holder_last_name_latin: 'DUPONT' } }), 'VISA_NAME_MISMATCH');
+  assert.equal(await run(undefined, { ticket: PDF }), 'IDENTITY_NOT_VERIFIED');
+  assert.equal(await run('FR', { ticket: Buffer.from('<html>pas un billet</html>xxxxxxxx') }), 'FILE_TYPE_NOT_ALLOWED');
+  // Lecture IA indisponible : jamais une validation, réessayable.
+  assert.equal(await code(() => T.submitTravelerDocuments('c1', 'u1', { ticket: PDF, numberCountry: 'US' }, { ...docDeps('FR', {}), extract: async () => ({ ok: false, error: 'api_error' }) })), 'TRAVEL_DOCUMENT_CHECK_UNAVAILABLE');
+});
+
+test('Traveler, visa pour la France : visa Schengen accepté (autre pays Schengen ou drapeau Schengen) ; Royaume-Uni : visa britannique seulement', async () => {
+  const { visaCountryMatches } = await import('../services/travelDocuments.js');
+  assert.equal(visaCountryMatches({ visa_country_iso2: 'DE', schengen: true }, 'FR'), true);
+  assert.equal(visaCountryMatches({ visa_country_iso2: 'IT', schengen: null }, 'FR'), true);
+  assert.equal(visaCountryMatches({ visa_country_iso2: 'FR', schengen: false }, 'FR'), true);
+  assert.equal(visaCountryMatches({ visa_country_iso2: 'GB', schengen: false }, 'FR'), false);
+  assert.equal(visaCountryMatches({ visa_country_iso2: 'GB' }, 'GB'), true);
+  assert.equal(visaCountryMatches({ visa_country_iso2: 'FR', schengen: true }, 'GB'), false);
+  assert.equal(visaCountryMatches({ visa_country_iso2: 'US' }, 'CA'), false);
 });
 
 test('Traveler, garde du paiement : numéro hors pays, abonnement en cours, identité, pièces absentes ou refusées, visa manquant', async () => {
@@ -176,7 +212,8 @@ test('Traveler, garde du paiement : numéro hors pays, abonnement en cours, iden
   // Décision du 26/11 : paiement seulement après validation des pièces par l'équipe.
   assert.equal((await gate('+14155552671', deps({ documentOf: async () => ({ ...doc, status: 'pending_review' }) }))).body.code, 'TRAVEL_DOCUMENTS_PENDING');
   assert.equal((await gate('+14155552671', deps({ verifiedIdentity: async () => ({ verified: true, nationality: 'IN' }) }))).body.code, 'VISA_REQUIRED');
-  assert.equal((await gate('+14155552671', deps({ verifiedIdentity: async () => ({ verified: true, nationality: 'IN' }), documentOf: async () => ({ ...doc, visa: { mime: 'image/png' } }) }))).ok, true);
+  assert.equal((await gate('+14155552671', deps({ verifiedIdentity: async () => ({ verified: true, nationality: 'IN' }), documentOf: async () => ({ ...doc, visaFacts: { country: 'US' }, numberCountry: 'US' }) }))).ok, true);
+  assert.equal((await gate('+447700900123', deps({ verifiedIdentity: async () => ({ verified: true, nationality: 'IN' }), documentOf: async () => ({ ...doc, visaFacts: { country: 'US' }, numberCountry: 'US' }) }))).body.code, 'VISA_WRONG_COUNTRY', 'numéro britannique avec un visa américain');
 });
 
 // --- NOMAD Traveler : 21 jours puis résiliation automatique -----------------------------------------------------------------
@@ -274,4 +311,13 @@ test('NOMAD Traveler : ni « Résilier » ni portail Stripe (paiement unique, fi
   const portal = createPortalHandlers({ getAccess: async () => ({ companyId: 'c1', role: 'owner' }), findSubscription: async () => sub, getStripe: () => ({}) });
   const r2 = res(); await portal.createPortalSession({ body: {}, headers: {} }, r2);
   assert.deepEqual([r2.code, r2.body.code], [409, 'TRAVELER_ONE_TIME']);
+});
+
+test('recharges d\'une ligne NOMAD Traveler : devise du paiement Traveler (pays du numéro : $, £, €), même si le client Stripe garde une autre devise', async () => {
+  const req = { headers: { authorization: `Bearer ${jwt.sign({ userId: 'u1' }, process.env.JWT_SECRET)}` } };
+  for (const [cur, cents] of [['USD', 500], ['GBP', 500], ['EUR', 500]]) {
+    const c = await offerPurchaseCurrency(req, 'c1', { lookup: async () => 'FR', customerCurrency: async () => 'eur', travelerCurrency: async () => cur, dbReady: () => true });
+    assert.equal(c, cur);
+    assert.equal(await computeMinutesPurchaseCents(30, c), cents, `30 min = 5 ${cur}`);
+  }
 });
