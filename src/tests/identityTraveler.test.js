@@ -16,8 +16,8 @@ const C = '64b0000000000000000000c1';
 const TICKET = { document_type: 'flight_ticket', passenger_names: ['MRS ANNA MARIA ERIKSSON'], travel_dates: ['2026-12-01', '2026-12-15'], legibility: 'good', observations: [] };
 const VISA = { document_type: 'visa', holder_given_names_latin: 'ANNA MARIA', holder_last_name_latin: 'ERIKSSON', visa_country_iso2: 'US', schengen: false, valid_from: '2026-11-01', valid_until: '2027-05-01', passport_number: 'L898902C3', legibility: 'good', observations: [] };
 
-let clock; let store; let queue; let declared; let idData; let reads; let saved; let travelRead;
-const cfg = () => ({ ...getIdentityConfig({ IDENTITY_FILES_ENC_KEY: TEST_KEY, ANTHROPIC_API_KEY: '' }), enabled: true });
+let clock; let store; let queue; let declared; let idData; let reads; let saved; let travelRead; let reuseOn = false; let emails = {};
+const cfg = () => ({ ...getIdentityConfig({ IDENTITY_FILES_ENC_KEY: TEST_KEY, ANTHROPIC_API_KEY: '' }), enabled: true, reuseSamePerson: reuseOn });
 const svc = () => createIdentityService({
   store, config: cfg, now: () => clock, sharp: null, logger: { log() {}, error() {}, warn() {} },
   extract: async (doc) => { reads.push(doc); return doc === 'identity' ? { ok: true, data: idData, usage: { input: 10, output: 10 } } : { ok: false, error: 'invalid_output' }; },
@@ -28,6 +28,7 @@ const svc = () => createIdentityService({
   inbox: { opened() { throw new Error('jamais de revue par l’équipe'); }, decided() {} },
   notify: async () => {},
   journey: () => {},
+  userEmail: async (uid) => emails[uid] || '',
 });
 // Le traitement planifié n'est pas attendu par `schedule` : on attend la fin de l'analyse (statut final dans le magasin).
 const run = async () => {
@@ -35,6 +36,7 @@ const run = async () => {
   for (let i = 0; i < 200 && [...store._verifications.values()].some((v) => v.status === 'processing'); i++) await new Promise((r) => setTimeout(r, 5));
 };
 beforeEach(() => {
+  reuseOn = false; emails = {};
   clock = new Date('2026-11-27T10:00:00Z'); store = createMemoryStore({ now: () => clock }); queue = []; reads = []; saved = []; travelRead = {};
   declared = { fullName: 'Anna Eriksson', residence: 'US', nationality: 'MA' }; idData = idExtraction({ issuing: 'MAR' });
 });
@@ -135,4 +137,34 @@ test('decide({ traveler }) : aucun contrôle de justificatif, passeport exigé',
   assert.deepEqual(r.idNames, { lastName: 'ERIKSSON', firstName: 'ANNA MARIA' });
   const card = decide({ declared: { fullName: 'Anna Eriksson', residence: 'US', nationality: 'MA' }, id: { ...idExtraction({ issuing: 'MAR' }), document_type: 'id_card' }, proof: null, now, traveler: true });
   assert.equal(card.outcome, 'rejected'); assert(card.reasonCodes.includes('DOCUMENT_TYPE_NOT_ACCEPTED'));
+});
+
+// Décision du fondateur (27/11/2026) : réutilisation d'une pièce autorisée pour la MÊME personne (même nom ET même e-mail de connexion).
+async function reuseCase({ on = true, email2 = 'Chafik@Example.com', name2 = 'Anna Eriksson' } = {}) {
+  reuseOn = on; emails = { u1: 'chafik@example.com', u2: email2 };
+  declared = { fullName: 'Anna Eriksson', residence: 'US', nationality: 'FR' }; idData = idExtraction({ issuing: 'FRA' });
+  const s = svc();
+  for (const [company, user, name] of [['64b0000000000000000000d1', 'u1', 'Anna Eriksson'], [C, 'u2', name2]]) {
+    declared = { ...declared, fullName: name };
+    await s.upload(company, user, { kind: 'passport', docType: 'passport', offer: 'traveler', buffer: fakeJpeg({ marker: company === C ? 2 : 1 }) });
+    await s.submit({}, company, user); await run();
+  }
+  return s.status(C);
+}
+
+test('Réutilisation d’un passeport : même nom et même e-mail (casse ignorée) -> validé', async () => {
+  const st = await reuseCase();
+  assert.equal(st.status, 'approved'); assert.deepEqual(st.reasons, []);
+});
+test('Réutilisation d’un passeport : e-mail différent -> refus motivé DOCUMENT_REUSED', async () => {
+  const st = await reuseCase({ email2: 'autre@example.com' });
+  assert.equal(st.status, 'rejected'); assert(st.reasons.includes('DOCUMENT_REUSED'));
+});
+test('Réutilisation d’un passeport : nom différent -> refus motivé DOCUMENT_REUSED', async () => {
+  const st = await reuseCase({ name2: 'Anna Eriksson Dupont' });
+  assert.equal(st.status, 'rejected'); assert(st.reasons.includes('DOCUMENT_REUSED'));
+});
+test('Réutilisation d’un passeport : option désactivée -> refus motivé même pour la même personne', async () => {
+  const st = await reuseCase({ on: false });
+  assert.equal(st.status, 'rejected'); assert(st.reasons.includes('DOCUMENT_REUSED'));
 });
