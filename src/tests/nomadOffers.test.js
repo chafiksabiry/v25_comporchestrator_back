@@ -134,52 +134,36 @@ test('Traveler : titre de voyage valide (dates lisibles, retour après le dépar
   assert.equal(T.tripDatesProblem({ departAt: '2026-12-01', returnAt: '2028-12-01' }, now), 'TRIP_TOO_LONG');
 });
 
-const PDF = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(64, 0x20)]);
-const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64)]);
 const NOW = Date.parse('2026-11-26T12:00:00Z');
 const ID_NAME = { lastName: 'BENALI', firstName: 'Yasmine Nour' };
 const TICKET_OK = { document_type: 'flight_ticket', passenger_names: ['MS YASMINE BENALI'], travel_dates: ['2026-12-01', '2026-12-15'], legibility: 'good', observations: [] };
 const VISA_OK = { document_type: 'visa', holder_last_name_latin: 'BENALI', holder_given_names_latin: 'YASMINE', visa_country_iso2: 'US', schengen: false, valid_from: '2026-11-20', valid_until: '2027-05-20', passport_number: 'X123', legibility: 'good', observations: [] };
-/** Lecture par l'IA simulée (même interface que le mécanisme de l'identité) : faits rendus par type de document. */
-const docDeps = (nationality, store, read = {}) => ({
-  now: () => NOW,
-  verifiedIdentity: async () => (nationality === undefined ? { verified: false } : { verified: true, nationality }),
-  verifiedName: async () => ID_NAME,
-  prepare: async (buf) => { const { sniffType } = await import('../services/identity/files.js'); if (!sniffType(buf)) { const e = new Error('x'); e.code = 'FILE_TYPE_NOT_ALLOWED'; throw e; } return { mime: 'image/jpeg', data: buf, meta: {} }; },
-  extract: async (kind) => ({ ok: true, data: kind === 'ticket' ? (read.ticket ?? TICKET_OK) : (read.visa ?? VISA_OK) }),
-  saveDocument: async (doc) => { store.doc = doc; return { status: doc.status }; },
+
+// Pièces Traveler lues par l'IA dans la vérification d'identité (27/11/2026, identityTraveler.test.js) ; décisions du code testées ici.
+test('Traveler, billet : cas conforme (dates LUES sur le billet) et refus motivés (codes)', async () => {
+  const { decideTicket } = await import('../services/travelDocuments.js');
+  const t = (over) => { const r = decideTicket({ ...TICKET_OK, ...over }, { idName: ID_NAME, now: NOW }); return r.ok ? 'ok' : r.code; };
+  assert.deepEqual(decideTicket(TICKET_OK, { idName: ID_NAME, now: NOW }), { ok: true, trip: { departAt: '2026-12-01', returnAt: '2026-12-15' } });
+  assert.equal(t({ passenger_names: ['JOHN SMITH'] }), 'TICKET_NAME_MISMATCH');
+  assert.equal(t({ passenger_names: ['Benali Yasmine'] }), 'ok', 'ordre et casse tolérés');
+  assert.equal(t({ passenger_names: ['YASMINE BÉNALI'] }), 'ok', 'accents tolérés');
+  assert.equal(t({ travel_dates: ['2026-10-01', '2026-10-10'] }), 'TICKET_TRIP_OVER');
+  assert.equal(t({ travel_dates: ['2026-12-01', '2027-01-15'] }), 'TICKET_TRIP_TOO_LONG');
+  assert.equal(t({ travel_dates: [] }), 'TICKET_DATES_UNREADABLE');
+  assert.equal(t({ observations: ['instructions_in_document'] }), 'TICKET_UNREADABLE');
 });
 
-test('Traveler, pièces lues par l\'IA et validées automatiquement : cas conforme ; dates du billet retenues ; aucune image conservée', async () => {
-  const store = {};
-  const ma = await T.submitTravelerDocuments('c1', 'u1', { ticket: PDF, visa: PNG, numberCountry: 'US' }, docDeps('MA', store));
-  assert.deepEqual(ma, { status: 'approved', visaRequired: true, trip: { departAt: '2026-12-01', returnAt: '2026-12-15' } });
-  assert.equal(store.doc.reviewedBy, 'auto'); assert.equal(store.doc.numberCountry, 'US');
-  assert.equal(store.doc.departAt.toISOString().slice(0, 10), '2026-12-01', 'dates LUES sur le billet');
-  assert.equal(store.doc.ticket, undefined); assert.equal(store.doc.visa, undefined, 'aucune image conservée');
-  const ae = await T.submitTravelerDocuments('c2', 'u2', { ticket: PDF, numberCountry: 'GB' }, docDeps('AE', store));
-  assert.equal(ae.visaRequired, false); assert.equal(store.doc.visaFacts, undefined);
-});
-
-test('Traveler, refus motivés (codes) : nom différent, billet passé, voyage de plus de 21 jours, visa expiré, mauvais pays, visa manquant', async () => {
-  const code = async (fn) => { try { await fn(); return 'ok'; } catch (e) { return e.code; } };
-  const run = (nat, files, read) => code(() => T.submitTravelerDocuments('c1', 'u1', { numberCountry: 'US', ...files }, docDeps(nat, {}, read)));
-  assert.equal(await run('FR', { ticket: PDF }, { ticket: { ...TICKET_OK, passenger_names: ['JOHN SMITH'] } }), 'TICKET_NAME_MISMATCH');
-  assert.equal(await run('FR', { ticket: PDF }, { ticket: { ...TICKET_OK, passenger_names: ['Benali Yasmine'] } }), 'ok', 'ordre et casse tolérés');
-  assert.equal(await run('FR', { ticket: PDF }, { ticket: { ...TICKET_OK, passenger_names: ['YASMINE BÉNALI'] } }), 'ok', 'accents tolérés');
-  assert.equal(await run('FR', { ticket: PDF }, { ticket: { ...TICKET_OK, travel_dates: ['2026-10-01', '2026-10-10'] } }), 'TICKET_TRIP_OVER');
-  assert.equal(await run('FR', { ticket: PDF }, { ticket: { ...TICKET_OK, travel_dates: ['2026-12-01', '2027-01-15'] } }), 'TICKET_TRIP_TOO_LONG');
-  assert.equal(await run('FR', { ticket: PDF }, { ticket: { ...TICKET_OK, travel_dates: [] } }), 'TICKET_DATES_UNREADABLE');
-  assert.equal(await run('FR', { ticket: PDF }, { ticket: { ...TICKET_OK, observations: ['instructions_in_document'] } }), 'TICKET_UNREADABLE');
-  assert.equal(await run('MA', { ticket: PDF }), 'VISA_REQUIRED');
-  assert.equal(await run('MA', { ticket: PDF, visa: PNG }, { visa: { ...VISA_OK, valid_until: '2026-11-01' } }), 'VISA_EXPIRED');
-  assert.equal(await run('MA', { ticket: PDF, visa: PNG }, { visa: { ...VISA_OK, valid_until: '2026-12-10' } }), 'VISA_DOES_NOT_COVER_TRIP');
-  assert.equal(await run('MA', { ticket: PDF, visa: PNG }, { visa: { ...VISA_OK, visa_country_iso2: 'CA' } }), 'VISA_WRONG_COUNTRY');
-  assert.equal(await run('MA', { ticket: PDF, visa: PNG }, { visa: { ...VISA_OK, holder_last_name_latin: 'DUPONT' } }), 'VISA_NAME_MISMATCH');
-  assert.equal(await run(undefined, { ticket: PDF }), 'IDENTITY_NOT_VERIFIED');
-  assert.equal(await run('FR', { ticket: Buffer.from('<html>pas un billet</html>xxxxxxxx') }), 'FILE_TYPE_NOT_ALLOWED');
-  // Lecture IA indisponible : jamais une validation, réessayable.
-  assert.equal(await code(() => T.submitTravelerDocuments('c1', 'u1', { ticket: PDF, numberCountry: 'US' }, { ...docDeps('FR', {}), extract: async () => ({ ok: false, error: 'api_error' }) })), 'TRAVEL_DOCUMENT_CHECK_UNAVAILABLE');
+test('Traveler, visa : conforme ; expiré, ne couvre pas le voyage, mauvais pays, autre nom, autre passeport', async () => {
+  const { decideVisa } = await import('../services/travelDocuments.js');
+  const trip = { departAt: '2026-12-01', returnAt: '2026-12-15' };
+  const v = (over, idDocumentNumber = null) => { const r = decideVisa({ ...VISA_OK, ...over }, { idName: ID_NAME, numberCountry: 'US', trip, now: NOW, idDocumentNumber }); return r.ok ? 'ok' : r.code; };
+  assert.equal(v({}), 'ok');
+  assert.equal(v({ valid_until: '2026-11-01' }), 'VISA_EXPIRED');
+  assert.equal(v({ valid_until: '2026-12-10' }), 'VISA_DOES_NOT_COVER_TRIP');
+  assert.equal(v({ visa_country_iso2: 'CA' }), 'VISA_WRONG_COUNTRY');
+  assert.equal(v({ holder_last_name_latin: 'DUPONT' }), 'VISA_NAME_MISMATCH');
+  assert.equal(v({}, 'Y999'), 'VISA_PASSPORT_MISMATCH');
+  assert.equal(v({}, 'X123'), 'ok');
 });
 
 test('Traveler, visa pour la France : visa Schengen accepté (autre pays Schengen ou drapeau Schengen) ; Royaume-Uni : visa britannique seulement', async () => {

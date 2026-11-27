@@ -138,7 +138,8 @@ export function createToolRunner(deps) {
           const meta = p.metadata?.get ? Object.fromEntries(p.metadata) : (p.metadata || {});
           const telephony = String(meta.harx_product || '').trim().toLowerCase().replace(/[\s_-]+/g, '') === 'callcenter';
           return {
-            name: p.name, price: p.price ?? null, currency: p.currency ?? null, period: 'month',
+            // Jamais « Solo » (règle permanente du fondateur) : le forfait NOMAD est présenté « HARX Nomad ».
+            name: String(p.name ?? '').replace(/\b(?:HARX\s+)?Nomad\s+Solo\b/gi, 'HARX Nomad'), price: p.price ?? null, currency: p.currency ?? null, period: 'month',
             product: telephony ? 'telephony' : 'taas', tier: p.callcenterTier ?? null,
             ai_agent: Boolean(p.aiAgent),
             description: p.description, features: p.features,
