@@ -314,3 +314,15 @@ test('Traveler, garde du paiement : ressortissant exempté, passeport seul (aucu
   const ma = await T.travelerPaymentGate('c1', { chosenNumber: { phoneNumber: '+12125550101' } }, deps('MA', { status: 'approved', departAt: null, returnAt: null, visaFacts: { country: 'US' }, numberCountry: 'US' }));
   assert.equal(ma.ok, false); assert.equal(ma.body.code, 'TRIP_DATES_REQUIRED');
 });
+
+test('Traveler, prix par pays du numéro (27/11/2026) : Canada 14,99 $ US ; US 9,99 $ ; UK 9,99 £ ; FR 9,99 € ; autre montant refusé', async () => {
+  const O = await import('../services/nomadOffers.js');
+  assert.deepEqual(O.travelerPriceFor('CA'), { cents: 1499, currency: 'USD' });
+  assert.deepEqual(O.travelerPriceFor('US'), { cents: 999, currency: 'USD' });
+  assert.deepEqual(O.travelerPriceFor('UK'), { cents: 999, currency: 'GBP' });
+  assert.deepEqual(O.travelerPriceFor('FR'), { cents: 999, currency: 'EUR' });
+  assert.equal(O.travelerPriceFor('DE'), null);
+  const pay = (amount, currency, phoneNumber) => ({ _id: 'p1', companyId: 'c1', amount, currency, meta: { userId: 'u1', chosenNumber: { phoneNumber } } });
+  await assert.rejects(T.fulfillTravelerPurchase(pay(999, 'USD', '+14314507791'), { ensurePlan: async () => ({ _id: 'x' }) }), /TRAVELER_AMOUNT_MISMATCH/, 'Canada payé 9,99');
+  await assert.rejects(T.fulfillTravelerPurchase(pay(1499, 'EUR', '+14314507791'), { ensurePlan: async () => ({ _id: 'x' }) }), /TRAVELER_AMOUNT_MISMATCH/, 'mauvaise devise');
+});

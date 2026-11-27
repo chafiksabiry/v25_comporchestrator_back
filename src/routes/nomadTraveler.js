@@ -15,7 +15,7 @@ import { paymentCheckoutController } from '../controllers/paymentCheckoutControl
 import {
   TravelerError, reviewTravelerDocuments, searchTravelerNumbers, travelerStatus, TRAVELER_PURPOSE,
 } from '../services/nomadTraveler.js';
-import { TRAVELER_DAYS, TRAVELER_INCLUDED_MINUTES, TRAVELER_NUMBER_COUNTRIES, TRAVELER_PRICE_CENTS, OFFER_CURRENCIES } from '../services/nomadOffers.js';
+import { TRAVELER_DAYS, TRAVELER_INCLUDED_MINUTES, TRAVELER_NUMBER_COUNTRIES, TRAVELER_PRICE_CENTS, TRAVELER_PRICES, OFFER_CURRENCIES } from '../services/nomadOffers.js';
 import CompanyPayment from '../models/CompanyPayment.js';
 
 const router = express.Router();
@@ -37,7 +37,7 @@ const owner = async (req, res, next) => {
 
 router.get('/offer', (_req, res) => {
   res.set('Cache-Control', 'public, max-age=300');
-  res.json({ priceCents: TRAVELER_PRICE_CENTS, currencies: OFFER_CURRENCIES, days: TRAVELER_DAYS, includedMinutes: TRAVELER_INCLUDED_MINUTES, numberCountries: TRAVELER_NUMBER_COUNTRIES, oneTime: true });
+  res.json({ priceCents: TRAVELER_PRICE_CENTS, prices: TRAVELER_PRICES, currencies: OFFER_CURRENCIES, days: TRAVELER_DAYS, includedMinutes: TRAVELER_INCLUDED_MINUTES, numberCountries: TRAVELER_NUMBER_COUNTRIES, oneTime: true });
 });
 
 router.get('/status', authenticate, owner, async (req, res) => {
