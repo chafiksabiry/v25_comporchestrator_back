@@ -28,7 +28,7 @@ test('assistant WhatsApp : get_subscription_plans lit exactement le catalogue pu
   assert.deepEqual([accueil[0].price, accueil[0].currency, accueil[0].product, accueil[0].tier], [29.99, 'eur', 'telephony', 'accueil']);
   assert.ok(!fr.plans.some((p) => p.price === 99), 'ancien prix 99 € renvoyé');
   assert.deepEqual(fr.plans.filter((p) => p.product === 'telephony').map((p) => [p.name, p.price, p.communication_minutes_included]), [
-    ['Nomad Solo', 19.99, 120], ['Accueil / Secrétariat', 29.99, 30], ['Company Full Scope In & Out', 49.99, 120], ['Contact Centre Multi-clients', 99.99, 500], // NOMAD : 120 minutes incluses (décision du 26/11/2026)
+    ['HARX Nomad', 19.99, 120], ['Accueil / Secrétariat', 29.99, 30], ['Company Full Scope In & Out', 49.99, 120], ['Contact Centre Multi-clients', 99.99, 500], // NOMAD : 120 minutes incluses (décision du 26/11/2026)
   ]);
   assert.equal(fr.plans.find((p) => p.name === 'STARTER').product, 'taas');
 
