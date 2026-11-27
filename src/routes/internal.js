@@ -9,6 +9,7 @@ import { aiInboundTool, aiInboundReport } from '../controllers/aiAgentController
 import { aiInboundLearning } from '../controllers/aiLearningController.js';
 import { createAccountPurgeHandler, ACCOUNT_PURGE_SCOPE } from '../services/accountClosure.js';
 import { verifyServiceToken } from '../middleware/serviceToken.js';
+import { ensureTravelerTokensGranted } from '../services/nomadTraveler.js';
 
 const router = express.Router();
 
@@ -27,6 +28,8 @@ router.get('/companies/:companyId/tokens-balance', async (req, res) => {
   const { companyId } = req.params;
   if (!mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ error: 'Invalid companyId format' });
   try {
+    // Rattrapage NOMAD Traveler : 20 000 jetons inclus accordés (une fois par achat) avant la lecture du solde.
+    await ensureTravelerTokensGranted(companyId).catch((e) => console.warn('tokens-balance: jetons Traveler non accordés :', e?.message || e));
     const row = await TokensCompany.findOne({ companyId }).select('tokens').lean();
     res.json({ success: true, tokens: Number(row?.tokens) || 0 });
   } catch (error) {

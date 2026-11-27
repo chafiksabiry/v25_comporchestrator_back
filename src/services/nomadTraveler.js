@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import {
-  TRAVELER_DAYS, TRAVELER_DURATION_MS, TRAVELER_NUMBER_COUNTRIES, TRAVELER_PRICE_CENTS, TRAVELER_TIER,
+  TRAVELER_DAYS, TRAVELER_DURATION_MS, TRAVELER_INCLUDED_TOKENS, TRAVELER_NUMBER_COUNTRIES, TRAVELER_PRICE_CENTS, TRAVELER_TIER,
   offerCurrency, travelerNumberCountry, travelerPriceFor, travelerVisaRequired,
 } from './nomadOffers.js';
 import { callcenterTierFromMetadata } from './callcenterTier.js';
@@ -21,8 +21,10 @@ import { callcenterTierFromMetadata } from './callcenterTier.js';
  *    automatique existante (IA), format des fichiers (signature binaire), dates du voyage contrôlées, visa présent si exigé ; tout
  *    passe -> `approved` immédiatement, le choix du numéro et le paiement s'ouvrent ; sinon refus motivé (code), la pièce peut être
  *    renvoyée. La route admin permet encore de retirer une validation (`rejected`) a posteriori.
+ *  - 20 000 jetons IA inclus (décision du 27/11/2026, ensureTravelerTokensGranted) : accordés une fois par achat, à l'activation ou, en
+ *    rattrapage, à la prochaine lecture du solde ;
  *  - résiliation automatique (expireTravelers, tâche planifiée idempotente) : abonnement local résilié, numéro rendu au fournisseur,
- *    minutes restantes perdues.
+ *    minutes et jetons restants perdus.
  */
 
 export const TRAVELER_PLAN_PRICE_ID = 'harx_nomad_traveler_once';
@@ -230,6 +232,9 @@ export async function fulfillTravelerPurchase(payment, deps = {}) {
     const { ensurePlanMinutesGranted } = await import('./planMinutesGrant.js');
     await ensurePlanMinutesGranted(companyId);
   } catch (e) { console.warn(`${TAG} minutes incluses non accordées (reprise à la prochaine lecture du solde) :`, e?.message || e); }
+  try {
+    await (deps.grantTokens || ensureTravelerTokensGranted)(companyId);
+  } catch (e) { console.warn(`${TAG} jetons IA inclus non accordés (reprise à la prochaine lecture du solde) :`, e?.message || e); }
   const numberPurchase = await purchaseTravelerNumber(payment, deps);
   return { activated: true, numberPurchase };
 }
@@ -267,6 +272,47 @@ export async function purchaseTravelerNumber(payment, deps = {}) {
     console.error(`${TAG} achat du numéro en échec (paiement ${payment._id}) :`, e?.message || e);
     return save({ status: 'failed', code: 'NUMBER_PURCHASE_FAILED' });
   }
+}
+
+// ---------------- Jetons IA inclus (20 000, une fois par achat) ----------------
+
+/** Clé d'attribution des jetons Traveler : liée à l'abonnement local de l'achat (`traveler_<paiement>`), donc une seule fois par achat. */
+export const travelerTokensGrantKey = (sub) => `traveler_tokens:${sub?.stripeSubscriptionId || String(sub?._id || '')}`;
+export const travelerEndKey = (subId) => `traveler_end:${subId}`;
+
+const isLiveTraveler = (s) => Boolean(s) && LIVE.includes(s.status)
+  && (String(s.stripeSubscriptionId || '').startsWith(TRAVELER_SUB_PREFIX) || isTravelerSubscription(s));
+
+const tokensDeps = () => ({
+  liveSubscriptions: defaultDeps().liveSubscriptions,
+  /** Crédit atomique : la clé n'est ajoutée qu'une fois (filtre `$ne` dans la même écriture). Portefeuille créé au besoin. */
+  credit: async (companyId, key, amount) => {
+    const { default: TokensCompany } = await import('../models/TokensCompany.js');
+    const oid = new mongoose.Types.ObjectId(String(companyId));
+    try {
+      await TokensCompany.updateOne({ companyId: oid }, { $setOnInsert: { companyId: oid, tokens: 0, purchasedTokens: 0, consumedTokens: 0, planTokensGranted: 0, planGrantKeys: [] } }, { upsert: true });
+    } catch (e) { if (e?.code !== 11000) throw e; }
+    const r = await TokensCompany.updateOne({ companyId: oid, planGrantKeys: { $ne: key } }, { $inc: { tokens: amount, planTokensGranted: amount }, $addToSet: { planGrantKeys: key } });
+    return r.modifiedCount > 0;
+  },
+  log: (...a) => console.log(TAG, ...a),
+});
+
+/**
+ * Accorde les 20 000 jetons IA de NOMAD Traveler, une seule fois par achat (clé `traveler_tokens:traveler_<paiement>`). Appelée à
+ * l'activation et à chaque lecture du solde (rattrapage d'un Traveler déjà actif sans attribution). Sans Traveler en cours : rien.
+ * @returns {Promise<{granted: boolean, allowance: number, key?: string, alreadyGranted?: boolean}>}
+ */
+export async function ensureTravelerTokensGranted(companyId, deps = {}) {
+  const d = { ...tokensDeps(), ...deps };
+  const id = String(companyId || '').trim();
+  if (!mongoose.Types.ObjectId.isValid(id)) return { granted: false, allowance: 0 };
+  const sub = ((await d.liveSubscriptions(id)) || []).find(isLiveTraveler);
+  if (!sub) return { granted: false, allowance: 0 };
+  const key = travelerTokensGrantKey(sub);
+  const granted = await d.credit(id, key, TRAVELER_INCLUDED_TOKENS);
+  if (granted) d.log(`société ${id} : ${TRAVELER_INCLUDED_TOKENS} jetons IA NOMAD Traveler accordés (${key})`);
+  return granted ? { granted: true, allowance: TRAVELER_INCLUDED_TOKENS, key } : { granted: false, allowance: TRAVELER_INCLUDED_TOKENS, key, alreadyGranted: true };
 }
 
 // ---------------- Résiliation automatique au 21e jour ----------------
@@ -322,6 +368,22 @@ const expiryDeps = () => ({
     await MinutesCompany.updateOne({ companyId: oid, planGrantKeys: { $ne: key } }, { $set: { minutes: 0 }, $addToSet: { planGrantKeys: key }, $push: { credits: { at: new Date(now), minutes: -lost, planName: 'NOMAD Traveler', kind: 'expired', grantKey: key } } });
     return lost;
   },
+  /** Jetons restants perdus (une fois, clé `traveler_end:<abonnement>`), tracés dans le journal des consommations (TokensUsageLedger). */
+  forfeitTokens: async (companyId, subId, now) => {
+    const { default: TokensCompany } = await import('../models/TokensCompany.js');
+    const key = travelerEndKey(subId);
+    const oid = new mongoose.Types.ObjectId(String(companyId));
+    const w = await TokensCompany.findOne({ companyId: oid }).select('tokens planGrantKeys').lean();
+    if (!w || (w.planGrantKeys || []).includes(key)) return 0;
+    const lost = Math.max(0, Number(w.tokens) || 0);
+    const r = await TokensCompany.updateOne({ companyId: oid, planGrantKeys: { $ne: key } }, { $set: { tokens: 0 }, $addToSet: { planGrantKeys: key } });
+    if (!r.modifiedCount) return 0;
+    try {
+      const { default: TokensUsageLedger } = await import('../models/TokensUsageLedger.js');
+      await TokensUsageLedger.create({ companyId: oid, usageId: key, tokensUsed: lost, tool: 'traveler_expired', meta: { kind: 'expired', planName: 'NOMAD Traveler', at: new Date(now) } });
+    } catch (e) { if (e?.code !== 11000) console.warn(TAG, 'journal des jetons perdus non écrit :', e?.message || e); }
+    return lost;
+  },
   finishEnd: async (subId, now, summary) => {
     const { Subscription } = await import('../models/Subscription.js');
     await Subscription.collection.updateOne({ _id: subId, 'travelerEnd.status': 'releasing' }, { $set: { 'travelerEnd.status': 'done', 'travelerEnd.doneAt': new Date(now), 'travelerEnd.summary': summary } });
@@ -337,13 +399,13 @@ const expiryDeps = () => ({
 /**
  * Résiliation automatique des NOMAD Traveler arrivés au 21e jour. Idempotent et rejouable :
  *  1. abonnement local arrivé à échéance -> résilié (réservation atomique, une seule fois) ;
- *  2. pour chaque fin « en cours » : lignes de la société rendues au fournisseur (fiche retirée), minutes restantes perdues (une fois),
- *     puis fin close. Une panne (Twilio) laisse la fin « en cours » : reprise au passage suivant, rien n'est fait deux fois.
+ *  2. pour chaque fin « en cours » : lignes de la société rendues au fournisseur (fiche retirée), minutes et jetons IA restants perdus
+ *     (une fois chacun), puis fin close. Une panne (Twilio) laisse la fin « en cours » : reprise au passage suivant, rien n'est fait deux fois.
  * `dryRun` (TRAVELER_EXPIRY_DRY_RUN=true) : journalise sans rien modifier.
  */
 export async function expireTravelers({ now = Date.now(), dryRun = String(process.env.TRAVELER_EXPIRY_DRY_RUN || '').toLowerCase() === 'true', deps: d = {} } = {}) {
   const deps = { ...expiryDeps(), ...d };
-  const out = { ended: 0, released: 0, protected: 0, forfeited: 0, failed: 0, dryRun };
+  const out = { ended: 0, released: 0, protected: 0, forfeited: 0, tokensForfeited: 0, failed: 0, dryRun };
   for (const sub of (await deps.dueSubscriptions(now)) || []) {
     if (dryRun) { deps.log(`[dry-run] société ${sub.companyId} : NOMAD Traveler serait résilié (21 jours écoulés)`); continue; }
     if (await deps.claimEnd(sub, now)) { out.ended += 1; deps.log(`société ${sub.companyId} : NOMAD Traveler résilié (21 jours écoulés)`); }
@@ -358,9 +420,10 @@ export async function expireTravelers({ now = Date.now(), dryRun = String(proces
         released += 1;
       }
       const lost = await deps.forfeitMinutes(sub.companyId, String(sub._id), now);
-      await deps.finishEnd(sub._id, now, { released, kept, minutesLost: lost });
-      out.released += released; out.protected += kept; out.forfeited += lost;
-      deps.log(`société ${sub.companyId} : ${released} numéro(s) rendu(s) au fournisseur, ${lost} minute(s) perdue(s)`);
+      const tokensLost = await deps.forfeitTokens(sub.companyId, String(sub._id), now);
+      await deps.finishEnd(sub._id, now, { released, kept, minutesLost: lost, tokensLost });
+      out.released += released; out.protected += kept; out.forfeited += lost; out.tokensForfeited += tokensLost;
+      deps.log(`société ${sub.companyId} : ${released} numéro(s) rendu(s) au fournisseur, ${lost} minute(s) et ${tokensLost} jeton(s) IA perdu(s)`);
     } catch (e) {
       out.failed += 1;
       deps.warn(`société ${sub.companyId} : fin en échec, reprise au prochain passage :`, e?.message || e);

@@ -201,8 +201,8 @@ test('Traveler, garde du paiement : numéro hors pays, abonnement en cours, iden
 });
 
 // --- NOMAD Traveler : 21 jours puis résiliation automatique -----------------------------------------------------------------
-function expiryWorld({ endAt, lines, minutes = 17, failRelease = 0 }) {
-  const w = { sub: { _id: 'S1', companyId: 'C1', status: 'active', currentPeriodEnd: new Date(endAt), travelerEnd: null }, lines: [...lines], minutes, forfeited: [], released: [], failRelease };
+function expiryWorld({ endAt, lines, minutes = 17, tokens = 12345, failRelease = 0 }) {
+  const w = { sub: { _id: 'S1', companyId: 'C1', status: 'active', currentPeriodEnd: new Date(endAt), travelerEnd: null }, lines: [...lines], minutes, tokens, forfeited: [], tokensForfeited: [], released: [], failRelease };
   w.deps = {
     dueSubscriptions: async (now) => (['active', 'trialing', 'past_due', 'unpaid'].includes(w.sub.status) && w.sub.currentPeriodEnd.getTime() <= now ? [w.sub] : []),
     claimEnd: async (sub, now) => { if (w.sub.status !== 'active') return false; w.sub.status = 'canceled'; w.sub.travelerEnd = { status: 'releasing', at: new Date(now) }; return true; },
@@ -212,6 +212,7 @@ function expiryWorld({ endAt, lines, minutes = 17, failRelease = 0 }) {
     protectedNumber: async (n) => n === '+15005550006',
     detachOnly: async (l) => { w.lines = w.lines.filter((x) => x !== l); },
     forfeitMinutes: async () => { if (w.forfeited.length) return 0; const lost = w.minutes; w.minutes = 0; w.forfeited.push(lost); return lost; },
+    forfeitTokens: async () => { if (w.tokensForfeited.length) return 0; const lost = w.tokens; w.tokens = 0; w.tokensForfeited.push(lost); return lost; },
     finishEnd: async () => { w.sub.travelerEnd.status = 'done'; },
     noteError: async () => {},
     log: () => {}, warn: () => {},
@@ -325,4 +326,90 @@ test('Traveler, prix par pays du numéro (27/11/2026) : Canada 14,99 $ US ; US 9
   const pay = (amount, currency, phoneNumber) => ({ _id: 'p1', companyId: 'c1', amount, currency, meta: { userId: 'u1', chosenNumber: { phoneNumber } } });
   await assert.rejects(T.fulfillTravelerPurchase(pay(999, 'USD', '+14314507791'), { ensurePlan: async () => ({ _id: 'x' }) }), /TRAVELER_AMOUNT_MISMATCH/, 'Canada payé 9,99');
   await assert.rejects(T.fulfillTravelerPurchase(pay(1499, 'EUR', '+14314507791'), { ensurePlan: async () => ({ _id: 'x' }) }), /TRAVELER_AMOUNT_MISMATCH/, 'mauvaise devise');
+});
+
+// --- NOMAD Traveler : 20 000 jetons IA inclus (décision du 27/11/2026) ------------------------------------------------------------
+const CID = '65a1b2c3d4e5f60718293a4b';
+function tokensWorld(subs) {
+  const w = { subs, wallet: { tokens: 0, planGrantKeys: [] }, credits: 0 };
+  w.deps = {
+    liveSubscriptions: async () => w.subs,
+    credit: async (_c, key, amount) => { if (w.wallet.planGrantKeys.includes(key)) return false; w.wallet.planGrantKeys.push(key); w.wallet.tokens += amount; w.credits += 1; return true; },
+    log: () => {},
+  };
+  return w;
+}
+const travelerSub = (pid = 'P1') => ({ _id: 'S1', status: 'active', stripeSubscriptionId: `traveler_${pid}`, planId: { metadata: { callcenter_tier: 'nomad_traveler' } } });
+
+test('Traveler, jetons IA : constante unique 20 000 (comme le mois NOMAD)', () => {
+  assert.equal(O.TRAVELER_INCLUDED_TOKENS, 20000);
+});
+
+test('Traveler, jetons IA : 20 000 accordés à l\'activation, une seule fois par achat (idempotent, clé liée au paiement Traveler)', async () => {
+  const w = tokensWorld([travelerSub('P1')]);
+  const r1 = await T.ensureTravelerTokensGranted(CID, w.deps);
+  assert.deepEqual([r1.granted, r1.allowance, r1.key, w.wallet.tokens], [true, 20000, 'traveler_tokens:traveler_P1', 20000]);
+  const r2 = await T.ensureTravelerTokensGranted(CID, w.deps);
+  assert.deepEqual([r2.granted, r2.alreadyGranted, w.wallet.tokens, w.credits], [false, true, 20000, 1], 'deuxième appel : rien de plus');
+  // Nouvel achat Traveler (autre paiement) : nouvelle attribution.
+  w.subs = [travelerSub('P2')];
+  const r3 = await T.ensureTravelerTokensGranted(CID, w.deps);
+  assert.deepEqual([r3.granted, w.wallet.tokens], [true, 40000]);
+});
+
+test('Traveler, jetons IA : fulfillTravelerPurchase appelle l\'attribution des jetons', async () => {
+  // La garde du montant passe ; on arrête avant l'écriture en base (forfait simulé qui lève) pour vérifier l'ordre sans base.
+  const src = (await import('node:fs')).readFileSync(new URL('../services/nomadTraveler.js', import.meta.url), 'utf8');
+  const body = src.slice(src.indexOf('export async function fulfillTravelerPurchase'), src.indexOf('export async function purchaseTravelerNumber'));
+  assert.ok(body.indexOf('ensurePlanMinutesGranted') < body.indexOf('ensureTravelerTokensGranted'), 'jetons accordés juste après les 30 minutes');
+  assert.ok(body.indexOf('ensureTravelerTokensGranted') < body.indexOf('purchaseTravelerNumber'), 'avant l\'achat du numéro');
+});
+
+test('Traveler, jetons IA : rattrapage d\'un Traveler déjà actif à la lecture du solde (portail, interne, répondeur, débit)', async () => {
+  const w = tokensWorld([travelerSub('OLD')]);
+  w.wallet.tokens = 0;
+  const r = await T.ensureTravelerTokensGranted(CID, w.deps);
+  assert.deepEqual([r.granted, w.wallet.tokens], [true, 20000]);
+  // Chaque lecture du solde passe par l'attribution idempotente.
+  const fs = await import('node:fs');
+  const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), 'utf8');
+  assert.match(read('../routes/internal.js'), /tokens-balance[\s\S]*ensureTravelerTokensGranted\(companyId\)/);
+  assert.match(read('../services/voicemailAnalysis.js'), /getTokensBalance[\s\S]*ensureTravelerTokensGranted\(companyId\)/);
+  const ctrl = read('../controllers/tokensCompanyController.js');
+  assert.match(ctrl, /chargeUsage[\s\S]*ensureTravelerTokensGranted\(companyId\)/);
+  assert.match(ctrl, /checkBalance[\s\S]*ensureTravelerTokensGranted\(companyId\)/);
+  assert.match(ctrl, /getTokens[\s\S]*ensurePlanTokensGranted\(companyId\)/, 'lecture du portail : ensurePlanTokensGranted -> branche Traveler');
+});
+
+test('Traveler, jetons IA : ensurePlanTokensGranted délègue à la branche Traveler (pas de métadonnée Stripe)', async () => {
+  const { ensurePlanTokensGranted } = await import('../services/planTokensGrant.js');
+  const r = await ensurePlanTokensGranted(CID, { travelerGrant: async () => ({ granted: true, allowance: 20000, key: 'traveler_tokens:traveler_P1' }) });
+  assert.deepEqual([r.granted, r.allowance, r.planName], [true, 20000, 'NOMAD TRAVELER']);
+});
+
+test('NOMAD inchangé : aucun jeton Traveler pour un abonnement NOMAD mensuel ni sans abonnement', async () => {
+  const nomad = tokensWorld([{ _id: 'S9', status: 'active', stripeSubscriptionId: 'sub_123', planId: { metadata: { callcenter_tier: 'nomad_solo' } } }]);
+  const r = await T.ensureTravelerTokensGranted(CID, nomad.deps);
+  assert.deepEqual([r.granted, r.allowance, nomad.wallet.tokens, nomad.credits], [false, 0, 0, 0]);
+  const none = tokensWorld([]);
+  assert.equal((await T.ensureTravelerTokensGranted(CID, none.deps)).allowance, 0);
+  const ended = tokensWorld([{ ...travelerSub('P1'), status: 'canceled' }]);
+  assert.equal((await T.ensureTravelerTokensGranted(CID, ended.deps)).allowance, 0, 'Traveler terminé : plus d\'attribution');
+  assert.equal((await T.ensureTravelerTokensGranted('pas-un-id', none.deps)).allowance, 0);
+});
+
+test('Traveler, jetons IA : perdus à la fin des 21 jours, une seule fois, avec les minutes', async () => {
+  const end = Date.parse('2026-12-18T10:00:00Z');
+  const w = expiryWorld({ endAt: end, lines: [{ _id: 'L1', phoneNumber: '+14155552671' }], tokens: 15000 });
+  let r = await T.expireTravelers({ now: end, dryRun: false, deps: w.deps });
+  assert.deepEqual([r.forfeited, r.tokensForfeited, w.tokens, w.minutes], [17, 15000, 0, 0]);
+  r = await T.expireTravelers({ now: end + 3600_000, dryRun: false, deps: w.deps });
+  assert.deepEqual([r.tokensForfeited, w.tokensForfeited.length], [0, 1], 'deuxième passage : rien de plus');
+  // Panne avant la perte : jetons conservés tant que la ligne n'est pas rendue.
+  const f = expiryWorld({ endAt: end, lines: [{ _id: 'L2', phoneNumber: '+14155552671' }], tokens: 900, failRelease: 1 });
+  r = await T.expireTravelers({ now: end, dryRun: false, deps: f.deps });
+  assert.deepEqual([r.failed, f.tokens], [1, 900]);
+  r = await T.expireTravelers({ now: end + 900_000, dryRun: false, deps: f.deps });
+  assert.deepEqual([r.tokensForfeited, f.tokens], [900, 0]);
+  assert.equal(T.travelerEndKey('S1'), 'traveler_end:S1');
 });

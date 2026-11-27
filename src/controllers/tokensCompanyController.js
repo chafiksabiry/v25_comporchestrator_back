@@ -4,6 +4,7 @@ import TokensCompany, {
   normalizeAiProviders,
 } from '../models/TokensCompany.js';
 import { ensurePlanTokensGranted } from '../services/planTokensGrant.js';
+import { ensureTravelerTokensGranted } from '../services/nomadTraveler.js';
 import TokensUsageLedger from '../models/TokensUsageLedger.js';
 import CompanyPayment from '../models/CompanyPayment.js';
 import mongoose from 'mongoose';
@@ -240,6 +241,8 @@ export const tokensCompanyController = {
     if (!(await authorizeChargeUsage(req, res, companyId))) return;
 
     try {
+      // Rattrapage NOMAD Traveler (20 000 jetons inclus, une fois par achat) avant le débit.
+      await ensureTravelerTokensGranted(companyId).catch((err) => console.warn('[tokens] traveler grant failed:', err?.message || err));
       const wallet = await ensureWallet(companyId);
 
       const providerHint = meta?.provider || req.body?.provider || null;
@@ -333,6 +336,7 @@ export const tokensCompanyController = {
     if (!companyId) return res.status(400).json({ error: 'companyId is required' });
     if (!(await guardCompanyAccess(req, res, companyId))) return;
     try {
+      await ensureTravelerTokensGranted(companyId).catch((err) => console.warn('[tokens] traveler grant failed:', err?.message || err));
       const wallet = await ensureWallet(companyId);
       const tokens = typeof wallet.tokens === 'number' ? wallet.tokens : 0;
       const aiProviders = normalizeAiProviders(wallet.aiProviders);
