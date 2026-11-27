@@ -2,29 +2,26 @@
  * NOMAD Traveler (décisions du fondateur du 26/11/2026) : /api/nomad/traveler/*
  *  - GET  /offer                    public : prix (centimes, même chiffre en €, $, £), durée, minutes incluses, pays du numéro ;
  *  - GET  /status                   titulaire : identité vérifiée, visa exigé, pièces, abonnement Traveler, dernier achat de numéro ;
- *  - POST /documents                titulaire : titre de voyage (`ticket`), visa (`visa`) et pays du numéro (`numberCountry`), lus par l'IA ;
+ *  (pièces Traveler : passeport, billet, visa, déposés et lus dans la vérification d'identité, /api/identity-verification, 27/11/2026) ;
  *  - GET  /numbers?country=US|CA|GB|FR  titulaire : numéros proposés ;
  *  - POST /checkout/init            titulaire : paiement unique Stripe (confirmation : /api/payments/checkout/confirm) ;
  *  - POST /admin/:companyId/review  admin HARX (JWT `typeUser === 'admin'`) : approved / rejected.
  */
 import express from 'express';
-import multer from 'multer';
 import { authenticate } from '../middleware/auth.js';
 import { guardCompanyAccess } from '../middleware/companyGuard.js';
 import { adminFromToken } from './identityVerification.js';
 import { paymentCheckoutController } from '../controllers/paymentCheckoutController.js';
 import {
-  TravelerError, reviewTravelerDocuments, searchTravelerNumbers, submitTravelerDocuments, travelerStatus, TRAVELER_PURPOSE,
+  TravelerError, reviewTravelerDocuments, searchTravelerNumbers, travelerStatus, TRAVELER_PURPOSE,
 } from '../services/nomadTraveler.js';
 import { TRAVELER_DAYS, TRAVELER_INCLUDED_MINUTES, TRAVELER_NUMBER_COUNTRIES, TRAVELER_PRICE_CENTS, OFFER_CURRENCIES } from '../services/nomadOffers.js';
 import CompanyPayment from '../models/CompanyPayment.js';
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 2, fields: 6 } });
 
 const sendError = (res, e) => {
   if (e instanceof TravelerError) return res.status(e.status).json({ error: e.code, code: e.code, ...e.extra });
-  if (e?.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'FILE_TOO_LARGE', code: 'FILE_TOO_LARGE' });
   if (e?.code === 'IDENTITY_FILES_KEY_MISSING' || e?.name === 'IdentityDisabledError') return res.status(503).json({ error: 'DOCUMENTS_UNAVAILABLE', code: 'DOCUMENTS_UNAVAILABLE' });
   console.error('[nomad-traveler]', e?.message || e);
   return res.status(500).json({ error: 'TRAVELER_ERROR', code: 'TRAVELER_ERROR' });
@@ -49,15 +46,6 @@ router.get('/status', authenticate, owner, async (req, res) => {
     const last = await CompanyPayment.findOne({ companyId: req.travelerCompanyId, purpose: TRAVELER_PURPOSE }).sort({ createdAt: -1 }).select('status meta.numberPurchase meta.chosenNumber currency').lean();
     res.set('Cache-Control', 'no-store');
     return res.json({ ...status, lastPayment: last ? { status: last.status, currency: last.currency, numberPurchase: last.meta?.numberPurchase || null, chosenNumber: last.meta?.chosenNumber || null } : null });
-  } catch (e) { return sendError(res, e); }
-});
-
-router.post('/documents', authenticate, owner, (req, res, next) => upload.fields([{ name: 'ticket', maxCount: 1 }, { name: 'visa', maxCount: 1 }])(req, res, (err) => (err ? sendError(res, err) : next())), async (req, res) => {
-  try {
-    const out = await submitTravelerDocuments(req.travelerCompanyId, req.travelerUserId, {
-      ticket: req.files?.ticket?.[0]?.buffer, visa: req.files?.visa?.[0]?.buffer, numberCountry: req.body?.numberCountry,
-    });
-    return res.status(201).json({ success: true, ...out });
   } catch (e) { return sendError(res, e); }
 });
 
