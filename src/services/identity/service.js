@@ -329,8 +329,15 @@ export function createIdentityService({
       document: result.documentNumber?.number ? fingerprint(k.hmac, 'doc', result.documentNumber.country, result.documentNumber.type, result.documentNumber.number) : null,
       files: files.map((f) => fingerprint(k.hmac, 'file', f.sha256)),
     };
-    const found = await store.findOtherCompanyFingerprint(fps, v.companyId);
-    const reuse = found && !(c.reuseSamePerson && await samePerson(found, v, userEmail)) ? found : null;
+    // Toutes les autres sociétés qui ont présenté cette pièce : la réutilisation n'est tolérée que si CHACUNE est la même personne
+    // (même nom ET même e-mail, IDENTITY_REUSE_SAME_PERSON) ; diagnostic masqué dans les journaux (jamais d'e-mail en clair).
+    const others = store.findOtherCompanyFingerprints ? await store.findOtherCompanyFingerprints(fps, v.companyId) : [await store.findOtherCompanyFingerprint(fps, v.companyId)].filter(Boolean);
+    let reuse = null;
+    for (const o of others) {
+      const d = await personMatch(o, v, userEmail);
+      logger.log?.(`[identity] pièce déjà présentée (${o.kind}) par la société …${String(o.companyId).slice(-8)} : nom identique ${d.sameName ? 'oui' : 'non'}, e-mail identique ${d.sameEmail ? 'oui' : 'non'} (${d.emails.join(' / ')})${c.reuseSamePerson ? '' : ', option même personne désactivée'}`);
+      if (!(c.reuseSamePerson && d.sameName && d.sameEmail)) { reuse = o; break; }
+    }
     if (reuse) {
       signals.push(reuse.kind === 'document'
         ? { code: 'DOCUMENT_REUSED', detail: 'Même pièce d’identité déjà présentée sur un autre compte' }
@@ -618,13 +625,24 @@ export function createIdentityService({
  * IDENTITY_REUSE_SAME_PERSON=true. Nom OU e-mail différent : la réutilisation reste un signal (refus motivé en Traveler).
  */
 export async function samePerson(other, v, userEmail) {
-  if (!other?.userId || !v?.userId) return false;
-  const nameOk = sameNameTokens(other.fullName, v.declared?.fullName);
-  if (!nameOk) return false;
+  const d = await personMatch(other, v, userEmail);
+  return d.sameName && d.sameEmail;
+}
+
+/** Comparaison détaillée (nom, e-mail) avec les e-mails MASQUÉS pour le diagnostic (ex. ch***@yopmail.com). */
+export async function personMatch(other, v, userEmail) {
+  const sameName = sameNameTokens(other?.fullName, v?.declared?.fullName);
   let a = ''; let b = '';
-  try { [a, b] = await Promise.all([userEmail(other.userId), userEmail(v.userId)]); } catch { return false; }
+  if (other?.userId && v?.userId) {
+    try { [a, b] = await Promise.all([userEmail(other.userId), userEmail(v.userId)]); } catch { a = ''; b = ''; }
+  }
   const norm = (e) => String(e || '').trim().toLowerCase();
-  return Boolean(norm(a)) && norm(a) === norm(b);
+  return { sameName, sameEmail: Boolean(norm(a)) && norm(a) === norm(b), emails: [maskEmail(a, !other?.userId), maskEmail(b, !v?.userId)] };
+}
+export function maskEmail(e, noUser = false) {
+  if (noUser) return 'utilisateur inconnu';
+  const m = String(e || '').trim().toLowerCase().match(/^([^@]{0,2})[^@]*@(.+)$/);
+  return m ? `${m[1]}***@${m[2]}` : 'e-mail introuvable';
 }
 /** Même nom : mêmes mots, accents, casse et ordre ignorés (« Chafik SABIRY » = « sabiry chafik » = « Chafik Sabiry »). */
 export function sameNameTokens(a, b) {
