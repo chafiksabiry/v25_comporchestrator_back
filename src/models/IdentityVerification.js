@@ -14,6 +14,9 @@ const schema = new mongoose.Schema({
   userId: { type: String, default: null },
   status: { type: String, enum: ['draft', 'processing', 'approved', 'review', 'rejected', 'superseded'], default: 'draft', index: true },
   docType: { type: String, enum: ['passport', 'id_card', 'residence_permit'], default: 'id_card' },
+  // NOMAD Traveler (27/11/2026) : dossier Traveler (passeport + billet + visa, sans justificatif) et pays du numéro validé.
+  offer: { type: String, enum: ['traveler', null], default: null },
+  travelerCountry: { type: String, default: null },
   attempt: { type: Number, default: 0 },
   /** Copie de la déclaration relue côté serveur au moment de l'envoi (jamais une valeur de la requête). */
   declared: { fullName: String, residence: String, nationality: String },

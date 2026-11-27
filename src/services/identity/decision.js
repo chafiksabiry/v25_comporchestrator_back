@@ -93,7 +93,7 @@ const EXTRACTION_REVIEW = { refusal: 'AI_REFUSED', timeout: 'AI_UNAVAILABLE', ap
  * @param {Date} input.now
  * @param {{minAge?: number, proofMaxMonths?: number}} [input.rules]
  */
-export function decide({ declared, id, idError = null, proof, proofError = null, signals = [], now, rules = {} }) {
+export function decide({ declared, id, idError = null, proof, proofError = null, signals = [], now, rules = {}, traveler = false }) {
   const minAge = rules.minAge ?? 18;
   const proofMaxMonths = rules.proofMaxMonths ?? 3;
   const today = startOfDay(now instanceof Date ? now : new Date(now));
@@ -206,8 +206,14 @@ export function decide({ declared, id, idError = null, proof, proofError = null,
     observationChecks(add, 'ID', id.observations, id.legibility);
   }
 
+  // NOMAD Traveler (27/11/2026) : passeport seulement (le visa est lié au passeport).
+  if (traveler && idKind && idKind !== 'passport') add('ID_TYPE', 'fail', `Traveler : passeport exigé (${idKind})`, { reason: 'DOCUMENT_TYPE_NOT_ACCEPTED', doc: 'id' });
+
   // ---------------- Justificatif de domicile ----------------
-  if (!proof) {
+  // NOMAD Traveler (27/11/2026) : aucune adresse ni justificatif de domicile ; le billet et le visa sont contrôlés après la pièce.
+  if (traveler) {
+    // rien
+  } else if (!proof) {
     add('PROOF_EXTRACTION', 'review', 'Justificatif non lu par le service d’extraction', { reason: EXTRACTION_REVIEW[proofError] || 'AI_UNAVAILABLE' });
   } else if (proof.document_type === 'unreadable' || proof.legibility === 'poor') {
     add('PROOF_LEGIBILITY', 'fail', 'Justificatif illisible', { reason: 'UNREADABLE', doc: 'proof' });
@@ -283,7 +289,7 @@ export function decide({ declared, id, idError = null, proof, proofError = null,
     reasonCodes = uniq(fails.map((c) => c.reason));
   } else if (reviews.length) {
     // Règle du fondateur (23/11) « résidence OU nationalité » : un pays prouvé suffit pour valider, l'autre reste en revue.
-    const partial = partialApproval({ checks, reviews, verified, idKind, residenceDeclared, nationalityDeclared });
+    const partial = traveler ? null : partialApproval({ checks, reviews, verified, idKind, residenceDeclared, nationalityDeclared });
     if (partial) {
       outcome = OUTCOMES.APPROVED;
       reasonCodes = [];
@@ -295,8 +301,11 @@ export function decide({ declared, id, idError = null, proof, proofError = null,
   } else {
     // Validation automatique : les contrôles indispensables doivent être PRÉSENTS et « pass » (jamais une validation par absence).
     const passed = new Set(checks.filter((c) => c.result === 'pass').map((c) => c.code));
-    const required = ['MRZ', 'MRZ_VISUAL', 'ID_EXPIRY', 'AGE', 'NAME_ID_ACCOUNT', 'RESIDENCE', 'PROOF_DATE', 'NAME_PROOF_ACCOUNT', 'NAME_PROOF_ID'];
-    required.push(idKind === 'residence_permit' ? 'PERMIT_COUNTRY' : 'NATIONALITY');
+    // Traveler : la pièce seule (MRZ valide, nationalité prouvée, nom du compte, validité, âge) ; aucun contrôle de résidence.
+    const required = traveler
+      ? ['MRZ', 'MRZ_VISUAL', 'ID_EXPIRY', 'AGE', 'NAME_ID_ACCOUNT', 'NATIONALITY']
+      : ['MRZ', 'MRZ_VISUAL', 'ID_EXPIRY', 'AGE', 'NAME_ID_ACCOUNT', 'RESIDENCE', 'PROOF_DATE', 'NAME_PROOF_ACCOUNT', 'NAME_PROOF_ID'];
+    if (!traveler) required.push(idKind === 'residence_permit' ? 'PERMIT_COUNTRY' : 'NATIONALITY');
     const missing = required.filter((c) => !passed.has(c));
     if (missing.length) {
       outcome = OUTCOMES.REVIEW;
@@ -315,7 +324,7 @@ export function decide({ declared, id, idError = null, proof, proofError = null,
   } else if (outcome === OUTCOMES.APPROVED) {
     verifiedCountries = { nationality: verified.nationality, residence: verified.residence };
   }
-  return { outcome, reasonCodes, checks, facts, verifiedCountries, pendingCountries, documentNumber };
+  return { outcome, reasonCodes, checks, facts, verifiedCountries, pendingCountries, documentNumber, idNames: idNameForProof };
 }
 
 /**
