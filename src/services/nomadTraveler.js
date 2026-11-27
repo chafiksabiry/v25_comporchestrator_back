@@ -4,6 +4,7 @@ import {
   offerCurrency, travelerNumberCountry, travelerVisaRequired,
 } from './nomadOffers.js';
 import { callcenterTierFromMetadata } from './callcenterTier.js';
+import { decideTicket, decideVisa, extractTravelDocument, pagesOf } from './travelDocuments.js';
 
 /**
  * NOMAD Traveler (décisions du fondateur du 26/11/2026) : numéro temporaire des États-Unis, du Canada, du Royaume-Uni (mobiles +447)
@@ -72,16 +73,25 @@ export async function acceptedFileType(buffer) {
 const defaultDeps = () => ({
   now: () => Date.now(),
   verifiedIdentity: async (companyId) => (await (await import('./identity/service.js')).identityService()).verifiedCountriesFor(companyId),
-  documentOf: async (companyId) => (await import('../models/TravelerDocument.js')).TravelerDocument.findOne({ companyId: String(companyId) }).select('-ticket.ciphertext -visa.ciphertext').lean(),
+  documentOf: async (companyId) => (await import('../models/TravelerDocument.js')).TravelerDocument.findOne({ companyId: String(companyId) }).lean(),
   saveDocument: async (doc) => {
     const { TravelerDocument } = await import('../models/TravelerDocument.js');
-    return TravelerDocument.findOneAndUpdate({ companyId: doc.companyId }, { $set: doc, $unset: doc.visa ? {} : { visa: 1 } }, { upsert: true, new: true }).select('-ticket.ciphertext -visa.ciphertext').lean();
+    return TravelerDocument.findOneAndUpdate({ companyId: doc.companyId }, { $set: doc, $unset: { ticket: 1, visa: 1, ...(doc.visaFacts ? {} : { visaFacts: 1 }) } }, { upsert: true, new: true }).lean();
   },
-  encrypt: async (companyId, kind, buffer) => {
-    const { loadFilesKey, deriveKeys } = await import('./identity/config.js');
-    const { encryptBuffer } = await import('./identity/files.js');
-    const { enc } = deriveKeys(loadFilesKey());
-    return encryptBuffer(buffer, enc, `traveler:${companyId}:${kind}`);
+  verifiedName: async (companyId) => {
+    const svc = await (await import('./identity/service.js')).identityService();
+    return svc.verifiedNameFor ? svc.verifiedNameFor(companyId) : null;
+  },
+  /** Préparation du fichier : la même que pour la pièce d'identité (prepareUpload). */
+  prepare: async (buffer) => {
+    const { getIdentityConfig } = await import('./identity/config.js');
+    const { prepareUpload } = await import('./identity/files.js');
+    return prepareUpload(buffer, 'travel_document', getIdentityConfig());
+  },
+  /** Lecture par l'IA (même client et même modèle que la pièce d'identité). */
+  extract: async (kind, prepared) => {
+    const { getIdentityConfig } = await import('./identity/config.js');
+    return extractTravelDocument(kind, pagesOf(prepared), { cfg: getIdentityConfig() });
   },
   liveSubscriptions: async (companyId) => {
     const { Subscription } = await import('../models/Subscription.js');
@@ -108,7 +118,7 @@ export async function travelerStatus(companyId, deps = {}) {
     identityVerified: verified,
     nationality,
     visaRequired: verified ? travelerVisaRequired(nationality) : null,
-    documents: doc ? { status: doc.status, departAt: doc.departAt, returnAt: doc.returnAt, hasVisa: Boolean(doc.visa), rejectReason: doc.rejectReason || null } : null,
+    documents: doc ? { status: doc.status, departAt: doc.departAt, returnAt: doc.returnAt, hasVisa: Boolean(doc.visaFacts || doc.visa), numberCountry: doc.numberCountry || null, rejectReason: doc.rejectReason || null } : null,
     subscription: traveler ? { status: traveler.status, endsAt: traveler.currentPeriodEnd } : null,
     otherSubscription: !traveler && subs.length > 0,
   };
@@ -118,32 +128,53 @@ export async function travelerStatus(companyId, deps = {}) {
  * Envoi des pièces (titre de voyage, visa) : identité vérifiée exigée (la nationalité vérifiée décide du visa), dates contrôlées,
  * fichiers chiffrés. Un nouvel envoi remplace le précédent et repasse en revue (pending_review).
  */
-export async function submitTravelerDocuments(companyId, userId, { ticket, visa, departAt, returnAt }, deps = {}) {
+export async function submitTravelerDocuments(companyId, userId, { ticket, visa, numberCountry }, deps = {}) {
   const d = withDeps(deps);
-  let identity;
-  try { identity = await d.verifiedIdentity(companyId); } catch { throw new TravelerError(503, 'IDENTITY_LOOKUP_FAILED', undefined, { retryable: true }); }
+  let identity; let idName;
+  try {
+    identity = await d.verifiedIdentity(companyId);
+    idName = identity?.verified ? await d.verifiedName(companyId) : null;
+  } catch { throw new TravelerError(503, 'IDENTITY_LOOKUP_FAILED', undefined, { retryable: true }); }
   if (!identity?.verified) throw new TravelerError(409, 'IDENTITY_NOT_VERIFIED');
-  const problem = tripDatesProblem({ departAt, returnAt }, d.now());
-  if (problem) throw new TravelerError(400, problem);
   const visaRequired = travelerVisaRequired(identity.nationality);
+  const country = String(numberCountry || '').trim().toUpperCase().replace(/^UK$/, 'GB');
+  if (!TRAVELER_NUMBER_COUNTRIES.includes(country)) throw new TravelerError(400, 'TRAVELER_COUNTRY_REQUIRED', undefined, { countries: [...TRAVELER_NUMBER_COUNTRIES] });
   if (!ticket) throw new TravelerError(400, 'TICKET_REQUIRED');
   if (visaRequired && !visa) throw new TravelerError(400, 'VISA_REQUIRED');
-  const ticketMime = await acceptedFileType(ticket);
-  const visaMime = visa ? await acceptedFileType(visa) : null;
-  const now = new Date(d.now());
-  const file = async (kind, buffer, mime) => ({ mime, size: buffer.length, ...(await d.encrypt(String(companyId), kind, buffer)), uploadedAt: now });
+  const now = d.now();
+  // Lecture par l'IA (même mécanisme que la pièce d'identité) puis décision par le code. Images lues en mémoire, jamais conservées.
+  const read = async (kind, buffer) => {
+    let prepared;
+    try { prepared = await d.prepare(buffer); } catch (e) { throw new TravelerError(e?.code === 'FILE_TOO_LARGE' ? 413 : 400, e?.code && /^FILE_|^PHOTO_/.test(e.code) ? (e.code === 'FILE_HEIC' ? 'FILE_TYPE_NOT_ALLOWED' : e.code) : 'FILE_TYPE_NOT_ALLOWED'); }
+    const r = await d.extract(kind, prepared);
+    if (!r?.ok) throw new TravelerError(503, 'TRAVEL_DOCUMENT_CHECK_UNAVAILABLE', undefined, { retryable: true });
+    return r.data;
+  };
+  const ticketFacts = await read('ticket', ticket);
+  const t = decideTicket(ticketFacts, { idName, now });
+  if (!t.ok) throw new TravelerError(422, t.code);
+  let visaFacts = null;
+  if (visaRequired) {
+    const raw = await read('visa', visa);
+    const v = decideVisa(raw, { idName, numberCountry: country, trip: t.trip, now });
+    if (!v.ok) throw new TravelerError(422, v.code);
+    visaFacts = v.visa;
+  }
+  const at = new Date(now);
   const saved = await d.saveDocument({
     companyId: String(companyId), userId: userId ? String(userId) : null, nationality: identity.nationality || null, visaRequired,
-    departAt: day(departAt), returnAt: day(returnAt),
-    ticket: await file('ticket', ticket, ticketMime),
-    ...(visa ? { visa: await file('visa', visa, visaMime) } : {}),
-    // Validation AUTOMATIQUE (décision du fondateur du 26/11/2026, remplace la revue par l'équipe) : identité déjà validée par la
-    // vérification automatique (IA), titre de voyage au bon format avec des dates valides, visa présent quand la nationalité l'exige.
-    status: 'approved', reviewedAt: now, reviewedBy: 'auto', rejectReason: null,
-    expiresAt: new Date(now.getTime() + TRAVELER_FILES_TTL_MS),
+    numberCountry: country,
+    // Dates LUES sur le billet (jamais celles saisies par le client).
+    departAt: day(t.trip.departAt), returnAt: day(t.trip.returnAt),
+    ticketFacts: { passengers: (ticketFacts.passenger_names || []).length, documentType: ticketFacts.document_type },
+    ...(visaFacts ? { visaFacts } : {}),
+    // Validation AUTOMATIQUE (décisions du fondateur du 26/11/2026) : identité validée par l'IA, billet et visa lus par l'IA et
+    // contrôlés par le code (nom, dates, durée, pays, validité).
+    status: 'approved', reviewedAt: at, reviewedBy: 'auto', rejectReason: null,
+    expiresAt: new Date(at.getTime() + TRAVELER_FILES_TTL_MS),
   });
-  console.log(`${TAG} pièces validées automatiquement pour la société ${companyId} (visa ${visaRequired ? 'exigé' : 'non exigé'})`);
-  return { status: saved?.status || 'approved', visaRequired };
+  console.log(`${TAG} pièces lues et validées automatiquement pour la société ${companyId} (visa ${visaRequired ? 'exigé' : 'non exigé'})`);
+  return { status: saved?.status || 'approved', visaRequired, trip: t.trip };
 }
 
 /** Revue humaine (admin HARX) : approved / rejected (motif). */
@@ -177,6 +208,8 @@ export async function travelerPaymentGate(companyId, { chosenNumber }, deps = {}
   // Décision du fondateur (26/11/2026) : paiement seulement APRÈS validation des pièces par l'équipe, jamais pendant l'attente.
   if (doc.status !== 'approved') return refuse(409, 'TRAVEL_DOCUMENTS_PENDING');
   if (status.visaRequired && !doc.hasVisa) return refuse(409, 'VISA_REQUIRED');
+  // Visa contrôlé pour le pays du numéro choisi à l'envoi : un numéro d'un autre pays exige un visa de ce pays (pièces à renvoyer).
+  if (status.visaRequired && doc.numberCountry && doc.numberCountry !== country) return refuse(409, 'VISA_WRONG_COUNTRY', { numberCountry: doc.numberCountry });
   const problem = tripDatesProblem(doc, d.now());
   if (problem) return refuse(409, problem);
   return { ok: true, chosen: { phoneNumber, country } };
