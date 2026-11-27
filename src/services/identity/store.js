@@ -55,6 +55,16 @@ export function createMemoryStore({ now = () => new Date() } = {}) {
       }
       return null;
     },
+    /** Toutes les sociétés (autres que celle-ci) qui ont présenté la même pièce ou le même fichier, 20 au plus. */
+    async findOtherCompanyFingerprints({ document, files: fps }, companyId) {
+      const out = [];
+      for (const v of verifications.values()) {
+        if (v.companyId === String(companyId)) continue;
+        const kind = document && v.fingerprints?.document === document ? 'document' : fps?.length && (v.fingerprints?.files || []).some((f) => fps.includes(f)) ? 'file' : null;
+        if (kind) out.push({ kind, companyId: v.companyId, userId: v.userId || null, fullName: v.declared?.fullName || '' });
+      }
+      return out.slice(0, 20);
+    },
     async listStaleProcessing(before) {
       return [...verifications.values()].filter((v) => v.status === 'processing' && v.processingStartedAt && v.processingStartedAt < before).map(clone);
     },
@@ -118,6 +128,14 @@ export async function createMongoStore() {
       const hit = await V.findOne({ companyId: { $ne: String(companyId) }, $or: or }).select('fingerprints companyId userId declared.fullName').lean();
       if (!hit) return null;
       return { kind: document && hit.fingerprints?.document === document ? 'document' : 'file', companyId: hit.companyId, userId: hit.userId || null, fullName: hit.declared?.fullName || '' };
+    },
+    async findOtherCompanyFingerprints({ document, files: fps }, companyId) {
+      const or = [];
+      if (document) or.push({ 'fingerprints.document': document });
+      if (fps?.length) or.push({ 'fingerprints.files': { $in: fps } });
+      if (!or.length) return [];
+      const hits = await V.find({ companyId: { $ne: String(companyId) }, $or: or }).select('fingerprints companyId userId declared.fullName').limit(20).lean();
+      return hits.map((hit) => ({ kind: document && hit.fingerprints?.document === document ? 'document' : 'file', companyId: hit.companyId, userId: hit.userId || null, fullName: hit.declared?.fullName || '' }));
     },
     async listStaleProcessing(before) { return (await V.find({ status: 'processing', processingStartedAt: { $lt: before } }).limit(100).lean()).map(plain); },
     async createFile(doc) { return plain((await F.create(doc)).toObject()); },
