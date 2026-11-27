@@ -20,6 +20,12 @@ export const TRAVELER_TIER = 'nomad_traveler';
 export { INCLUDED_MINUTES_BY_TIER };
 export const NOMAD_INCLUDED_MINUTES = INCLUDED_MINUTES_BY_TIER[NOMAD_TIER];
 export const TRAVELER_INCLUDED_MINUTES = INCLUDED_MINUTES_BY_TIER[TRAVELER_TIER];
+/**
+ * Jetons IA inclus dans NOMAD Traveler (décision du fondateur du 27/11/2026) : 20 000, comme le mois NOMAD, accordés UNE fois par achat
+ * (répondeur : proposition IA, écoute de la voix, activation ; retranscription des messages). Perdus à la fin des 21 jours, comme les
+ * minutes. Jamais affichés sur la carte d'offre (cartes courtes) ; aucun achat de jetons pour Traveler.
+ */
+export const TRAVELER_INCLUDED_TOKENS = 20000;
 
 /** Minutes incluses imposées pour ce palier, ou null (autres offres : métadonnées Stripe). */
 export const includedMinutesForTier = (tier) => INCLUDED_MINUTES_BY_TIER[tier] ?? null;
