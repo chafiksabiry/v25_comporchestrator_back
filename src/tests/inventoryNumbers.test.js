@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 process.env.TELNYX_API_KEY ||= 'x';
 process.env.TWILIO_ACCOUNT_SID ||= 'ACx';
 process.env.TWILIO_AUTH_TOKEN ||= 'x';
-process.env.TWILIO_INVENTORY_EXCLUDE = '+33218940999, +13023132631';
+process.env.TWILIO_INVENTORY_EXCLUDE = '+33218940999';
+process.env.TWILIO_INVENTORY_EXCLUDE_EXTRA = ' +13023132631 ';
 
 const { phoneNumberService, INVENTORY_FRIENDLY_PREFIX } = await import('../services/phoneNumberService.js');
 const { PhoneNumber } = await import('../models/PhoneNumber.js');

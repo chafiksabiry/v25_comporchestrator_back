@@ -51,7 +51,9 @@ export const config = {
   // Royaume-Uni : dossier réglementaire Twilio « United Kingdom: Local - Business » (approuvé) et son adresse. Tant que ces deux
   // variables sont vides, la recherche de numéros +44 répond « dossier requis » (rien n'est vendu sans dossier approuvé).
   // Numéros de l'inventaire Twilio à ne JAMAIS proposer à la vente (numéros propres de HARX, séparés par des virgules, format E.164).
-  twilioInventoryExclude: String(process.env.TWILIO_INVENTORY_EXCLUDE || '')
+  // TWILIO_INVENTORY_EXCLUDE_EXTRA complète la liste sans réécrire la variable existante (27/11/2026 : numéros d'essai US, CA, UK de la recette,
+  // compte Twilio partagé avec la production).
+  twilioInventoryExclude: [process.env.TWILIO_INVENTORY_EXCLUDE, process.env.TWILIO_INVENTORY_EXCLUDE_EXTRA].map((v) => String(v || '')).join(',')
     .split(',').map((x) => x.trim()).filter(Boolean),
   twilioGbBundleSid: process.env.TWILIO_GB_BUNDLE_SID || '',
   twilioGbAddressSid: process.env.TWILIO_GB_ADDRESS_SID || '',
