@@ -26,6 +26,12 @@ export const includedMinutesForTier = (tier) => INCLUDED_MINUTES_BY_TIER[tier] ?
 
 /** NOMAD Traveler : prix unique (centimes, même chiffre dans les trois devises), durée, devises acceptées. */
 export const TRAVELER_PRICE_CENTS = 999;
+/**
+ * Prix et devise d'un achat Traveler selon le pays du NUMÉRO (décisions du fondateur du 27/11/2026) : États-Unis 9,99 $, Royaume-Uni
+ * 9,99 £, France 9,99 €, Canada 14,99 $ US (payé en dollars américains). Le serveur n'encaisse jamais un autre montant.
+ */
+export const TRAVELER_PRICES = Object.freeze({ US: { cents: 999, currency: 'USD' }, CA: { cents: 1499, currency: 'USD' }, GB: { cents: 999, currency: 'GBP' }, FR: { cents: 999, currency: 'EUR' } });
+export const travelerPriceFor = (country) => TRAVELER_PRICES[String(country || '').trim().toUpperCase().replace(/^UK$/, 'GB')] || null;
 export const TRAVELER_DAYS = 21;
 export const TRAVELER_DURATION_MS = TRAVELER_DAYS * 24 * 60 * 60 * 1000;
 export const OFFER_CURRENCIES = Object.freeze(['EUR', 'USD', 'GBP']);
