@@ -1,4 +1,4 @@
-import { isNomadNumberCountry } from './nomadOffers.js';
+import { isNomadNumberCountry, isNomadSoonCountry } from './nomadOffers.js';
 import { createRateLimiter } from '../integrations/rateLimit.js';
 import { clientIp } from '../integrations/clientIp.js';
 import { normalizeCountryCode } from '../middleware/companyScope.js';
@@ -58,7 +58,7 @@ export function createPublicAvailabilityHandler({ limiter = createRateLimiter({ 
     // Offre NOMAD : seulement US, CA, GB, FR, DE, NL, BE (décision du 26/11/2026) ; ailleurs « non proposé », sans recherche opérateur.
     if (!isNomadNumberCountry(cc)) {
       res.set('Cache-Control', 'public, max-age=300');
-      return res.json({ available: false, countryCode: cc, reason: 'not_offered' });
+      return res.json({ available: false, countryCode: cc, reason: isNomadSoonCountry(cc) ? 'coming_soon' : 'not_offered' });
     }
     try {
       const value = await sharedCountryAvailability(cc, deps);

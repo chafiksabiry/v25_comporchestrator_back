@@ -55,8 +55,15 @@ export function minutesBlockPriceCents(minutes, currency = 'EUR') {
 /** Les trois choix proposés, au prix de la devise. */
 export const minutePacksFor = (currency) => MINUTE_PACKS.map((p) => ({ ...p, priceCents: minutesBlockPriceCents(p.minutes, currency) }));
 
-/** Pays de numéro proposés à NOMAD (décision du 26/11 : Italie, Espagne, Maroc, Émirats, Arabie saoudite retirés). */
-export const NOMAD_NUMBER_COUNTRIES = Object.freeze(['US', 'CA', 'GB', 'FR', 'DE', 'NL', 'BE']);
+/**
+ * Pays NOMAD (décisions du fondateur du 26 et du 27/11/2026) : ACTIFS (souscription possible) = États-Unis, Canada, Royaume-Uni, France ;
+ * « bientôt disponible » (dans le sélecteur, sans prix ni achat, « Me prévenir ») = Allemagne, Pays-Bas, Belgique. Italie, Espagne,
+ * Maroc, Émirats, Arabie saoudite retirés.
+ */
+export const NOMAD_ACTIVE_COUNTRIES = Object.freeze(['US', 'CA', 'GB', 'FR']);
+export const NOMAD_SOON_COUNTRIES = Object.freeze(['DE', 'NL', 'BE']);
+/** Pays affichés dans le sélecteur NOMAD (actifs puis « bientôt »). */
+export const NOMAD_NUMBER_COUNTRIES = Object.freeze([...NOMAD_ACTIVE_COUNTRIES, ...NOMAD_SOON_COUNTRIES]);
 /**
  * Pays de numéro de NOMAD Traveler (décision du 26/11 : États-Unis, Canada, Royaume-Uni, France). France : numéros géographiques
  * +33 1 à 5, achetés par le même chemin que les lignes NOMAD françaises (dossier réglementaire et adresse France de HARX joints à
@@ -65,7 +72,10 @@ export const NOMAD_NUMBER_COUNTRIES = Object.freeze(['US', 'CA', 'GB', 'FR', 'DE
 export const TRAVELER_NUMBER_COUNTRIES = Object.freeze(['US', 'CA', 'GB', 'FR']);
 
 const iso = (c) => { const v = String(c ?? '').trim().toUpperCase(); return v === 'UK' ? 'GB' : v; };
-export const isNomadNumberCountry = (country) => NOMAD_NUMBER_COUNTRIES.includes(iso(country));
+/** Souscription NOMAD possible avec un numéro de ce pays (pays ACTIFS seulement). */
+export const isNomadNumberCountry = (country) => NOMAD_ACTIVE_COUNTRIES.includes(iso(country));
+/** Pays « bientôt disponible » (affiché, jamais souscriptible). */
+export const isNomadSoonCountry = (country) => NOMAD_SOON_COUNTRIES.includes(iso(country));
 
 /**
  * Numéro autorisé pour NOMAD Traveler : +1 des États-Unis ou du Canada (jamais les Caraïbes ni un numéro surtaxé),

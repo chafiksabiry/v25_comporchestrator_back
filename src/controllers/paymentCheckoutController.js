@@ -10,7 +10,7 @@ import { bundleAmountCents, bundleLabel, parseBundleQuantities } from '../servic
 import { config } from '../config/env.js';
 import { paypalCaptureId, paypalCaptureNotCompleted, paypalOrderMismatch, stripeSessionMismatch } from '../services/paymentVerification.js';
 import { FALLBACK_PURCHASE_CURRENCY, formatAmountLabel, offerPurchaseCurrency } from '../services/purchaseCurrency.js';
-import { blockCentsFor, minutePacksFor, MINUTE_BLOCK, NOMAD_INCLUDED_MINUTES, TRAVELER_DAYS, TRAVELER_INCLUDED_MINUTES, TRAVELER_NUMBER_COUNTRIES, TRAVELER_PRICE_CENTS, NOMAD_NUMBER_COUNTRIES } from '../services/nomadOffers.js';
+import { blockCentsFor, minutePacksFor, MINUTE_BLOCK, NOMAD_INCLUDED_MINUTES, TRAVELER_DAYS, TRAVELER_INCLUDED_MINUTES, TRAVELER_NUMBER_COUNTRIES, TRAVELER_PRICE_CENTS, NOMAD_ACTIVE_COUNTRIES, NOMAD_SOON_COUNTRIES } from '../services/nomadOffers.js';
 import {
   computeMinutesPurchaseCents,
   computeTokensPurchaseCents,
@@ -115,7 +115,7 @@ export const paymentCheckoutController = {
         /** Recharges de minutes : Stripe seulement (décision du 26/11 : pas de PayPal pour les minutes). */
         minutesProviders: ['stripe'],
         offers: {
-          nomad: { includedMinutes: NOMAD_INCLUDED_MINUTES, numberCountries: NOMAD_NUMBER_COUNTRIES },
+          nomad: { includedMinutes: NOMAD_INCLUDED_MINUTES, numberCountries: NOMAD_ACTIVE_COUNTRIES, comingSoonCountries: NOMAD_SOON_COUNTRIES },
           traveler: { priceCents: TRAVELER_PRICE_CENTS, days: TRAVELER_DAYS, includedMinutes: TRAVELER_INCLUDED_MINUTES, numberCountries: TRAVELER_NUMBER_COUNTRIES, oneTime: true },
         },
         pricing: {

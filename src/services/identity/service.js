@@ -374,6 +374,17 @@ export function createIdentityService({
     };
   }
 
+  /**
+   * Nom lu sur la pièce d'identité VALIDÉE (champs latins conservés, spec §11.1), pour comparer le nom d'un autre document
+   * (billet, visa NOMAD Traveler). Aucune vérification validée : null.
+   */
+  async function verifiedNameFor(companyId) {
+    const { approved } = await snapshot(companyId);
+    const id = approved?.extracted?.id;
+    if (!approved || !id || !(id.lastName || id.givenNames)) return null;
+    return { lastName: id.lastName || '', firstName: id.givenNames || '' };
+  }
+
   // ---------------- Administration (revue humaine) ----------------
 
   async function adminList(statusFilter = 'review') {
@@ -481,7 +492,7 @@ export function createIdentityService({
     return (await store.listForCompany(companyId)).length > 0;
   }
 
-  return { status, upload, removeFile, submit, process, requestReview, recoverStale, verifiedCountriesFor, hasRecord, isStale, adminList, adminDetail, adminFile, adminDecide };
+  return { status, upload, removeFile, submit, process, requestReview, recoverStale, verifiedCountriesFor, verifiedNameFor, hasRecord, isStale, adminList, adminDetail, adminFile, adminDecide };
 }
 
 /** Champs extraits conservés (spec §11.1) : ni numéro de document, ni lignes MRZ, ni adresse complète. */
