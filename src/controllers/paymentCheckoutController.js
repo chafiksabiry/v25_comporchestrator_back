@@ -10,7 +10,7 @@ import { bundleAmountCents, bundleLabel, parseBundleQuantities } from '../servic
 import { config } from '../config/env.js';
 import { paypalCaptureId, paypalCaptureNotCompleted, paypalOrderMismatch, stripeSessionMismatch } from '../services/paymentVerification.js';
 import { FALLBACK_PURCHASE_CURRENCY, formatAmountLabel, offerPurchaseCurrency } from '../services/purchaseCurrency.js';
-import { blockCentsFor, minutePacksFor, MINUTE_BLOCK, NOMAD_INCLUDED_MINUTES, TRAVELER_DAYS, TRAVELER_INCLUDED_MINUTES, TRAVELER_NUMBER_COUNTRIES, TRAVELER_PRICE_CENTS, NOMAD_ACTIVE_COUNTRIES, NOMAD_SOON_COUNTRIES } from '../services/nomadOffers.js';
+import { blockCentsFor, minutePacksFor, MINUTE_BLOCK, NOMAD_INCLUDED_MINUTES, TRAVELER_DAYS, TRAVELER_INCLUDED_MINUTES, TRAVELER_NUMBER_COUNTRIES, TRAVELER_PRICE_CENTS, TRAVELER_PRICES, travelerPriceFor, NOMAD_ACTIVE_COUNTRIES, NOMAD_SOON_COUNTRIES } from '../services/nomadOffers.js';
 import {
   computeMinutesPurchaseCents,
   computeTokensPurchaseCents,
@@ -116,7 +116,7 @@ export const paymentCheckoutController = {
         minutesProviders: ['stripe'],
         offers: {
           nomad: { includedMinutes: NOMAD_INCLUDED_MINUTES, numberCountries: NOMAD_ACTIVE_COUNTRIES, comingSoonCountries: NOMAD_SOON_COUNTRIES },
-          traveler: { priceCents: TRAVELER_PRICE_CENTS, days: TRAVELER_DAYS, includedMinutes: TRAVELER_INCLUDED_MINUTES, numberCountries: TRAVELER_NUMBER_COUNTRIES, oneTime: true },
+          traveler: { priceCents: TRAVELER_PRICE_CENTS, prices: TRAVELER_PRICES, days: TRAVELER_DAYS, includedMinutes: TRAVELER_INCLUDED_MINUTES, numberCountries: TRAVELER_NUMBER_COUNTRIES, oneTime: true },
         },
         pricing: {
           currency,
@@ -343,12 +343,16 @@ export const paymentCheckoutController = {
       if (availability.unknown) return res.status(503).json({ error: 'NUMBER_CHECK_UNAVAILABLE', code: 'NUMBER_CHECK_UNAVAILABLE', retryable: true });
       if (!availability.available) return res.status(409).json({ error: 'NUMBER_NO_LONGER_AVAILABLE', code: 'NUMBER_NO_LONGER_AVAILABLE' });
       if (!stripeService.isConfigured()) return res.status(503).json({ error: 'Stripe not configured', code: 'STRIPE_UNAVAILABLE' });
-      const currency = traveler.travelerCurrency(askedCurrency, await offerPurchaseCurrency(req, companyId));
+      // Prix et devise fixés par le pays du numéro choisi (Canada : 14,99 $ US ; US 9,99 $ ; UK 9,99 £ ; FR 9,99 €), jamais par la demande.
+      const price = travelerPriceFor(gate.chosen.country);
+      if (!price) return res.status(400).json({ error: 'TRAVELER_NUMBER_NOT_ALLOWED', code: 'TRAVELER_NUMBER_NOT_ALLOWED' });
+      const currency = price.currency;
+      void askedCurrency;
       const payment = await CompanyPayment.create({
         companyId: new mongoose.Types.ObjectId(companyId),
         purpose: 'traveler_purchase',
         provider: 'stripe',
-        amount: TRAVELER_PRICE_CENTS,
+        amount: price.cents,
         currency,
         status: 'pending',
         meta: { userId: String(access.userId), companyId: String(companyId), chosenNumber: gate.chosen, offer: 'nomad_traveler', days: TRAVELER_DAYS },
@@ -359,7 +363,7 @@ export const paymentCheckoutController = {
       const successQuery = new URLSearchParams({ paymentId: String(payment._id), flow: 'payment', returnTo, apiBase });
       try {
         const session = await stripeService.createOneShotCheckoutSession({
-          amountCents: TRAVELER_PRICE_CENTS,
+          amountCents: price.cents,
           currency,
           productName: `NOMAD Traveler — ${TRAVELER_DAYS} jours`,
           successUrl: `${returnBase}/stripe-return.html?${successQuery.toString()}&session_id={CHECKOUT_SESSION_ID}`,
@@ -373,7 +377,7 @@ export const paymentCheckoutController = {
         payment.providerRef = session.id;
         payment.checkoutUrl = session.url || null;
         await payment.save();
-        return res.status(201).json({ success: true, paymentId: payment._id, checkoutUrl: session.url || null, ...(embedded ? { clientSecret: session.client_secret } : {}), amount: TRAVELER_PRICE_CENTS, currency, provider: 'stripe' });
+        return res.status(201).json({ success: true, paymentId: payment._id, checkoutUrl: session.url || null, ...(embedded ? { clientSecret: session.client_secret } : {}), amount: price.cents, currency, provider: 'stripe' });
       } catch (stripeErr) {
         await CompanyPayment.findByIdAndDelete(payment._id);
         console.error('[nomad-traveler] Stripe :', stripeErr.message);

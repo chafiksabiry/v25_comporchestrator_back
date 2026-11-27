@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import {
   TRAVELER_DAYS, TRAVELER_DURATION_MS, TRAVELER_NUMBER_COUNTRIES, TRAVELER_PRICE_CENTS, TRAVELER_TIER,
-  offerCurrency, travelerNumberCountry, travelerVisaRequired,
+  offerCurrency, travelerNumberCountry, travelerPriceFor, travelerVisaRequired,
 } from './nomadOffers.js';
 import { callcenterTierFromMetadata } from './callcenterTier.js';
 
@@ -208,6 +208,9 @@ export async function fulfillTravelerPurchase(payment, deps = {}) {
   const companyId = String(payment.companyId);
   const userId = String(payment.meta?.userId || '');
   if (!userId) throw new Error('Traveler payment without userId');
+  // Montant et devise contrôlés contre le prix du pays du numéro (Canada 14,99 $ US, autres 9,99) : jamais un autre montant.
+  const expected = travelerPriceFor(payment.meta?.chosenNumber?.country || travelerNumberCountry(payment.meta?.chosenNumber?.phoneNumber));
+  if (!expected || Number(payment.amount) !== expected.cents || String(payment.currency || '').toUpperCase() !== expected.currency) throw new Error('TRAVELER_AMOUNT_MISMATCH');
   const plan = await (deps.ensurePlan || ensureTravelerPlan)();
   const { Subscription } = await import('../models/Subscription.js');
   const ref = `${TRAVELER_SUB_PREFIX}${payment._id}`;
