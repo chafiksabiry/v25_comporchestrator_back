@@ -168,3 +168,22 @@ test('Réutilisation d’un passeport : option désactivée -> refus motivé mê
   const st = await reuseCase({ on: false });
   assert.equal(st.status, 'rejected'); assert(st.reasons.includes('DOCUMENT_REUSED'));
 });
+
+test('Réutilisation : un des comptes précédents est une autre personne -> refus, même si un autre est la même personne', async () => {
+  reuseOn = true; emails = { u1: 'chafik@example.com', u3: 'autre@example.com', u2: 'chafik@example.com' };
+  declared = { fullName: 'Anna Eriksson', residence: 'US', nationality: 'FR' }; idData = idExtraction({ issuing: 'FRA' });
+  const s = svc();
+  for (const [company, user, m] of [['64b0000000000000000000d1', 'u1', 1], ['64b0000000000000000000d3', 'u3', 3], [C, 'u2', 2]]) {
+    await s.upload(company, user, { kind: 'passport', docType: 'passport', offer: 'traveler', buffer: fakeJpeg({ marker: m }) });
+    await s.submit({}, company, user); await run();
+  }
+  const st = await s.status(C);
+  assert.equal(st.status, 'rejected'); assert(st.reasons.includes('DOCUMENT_REUSED'));
+});
+
+test('maskEmail : jamais d’e-mail en clair dans les journaux', async () => {
+  const { maskEmail } = await import('../services/identity/service.js');
+  assert.equal(maskEmail('Chafik.Sabiry@YopMail.com'), 'ch***@yopmail.com');
+  assert.equal(maskEmail(''), 'e-mail introuvable');
+  assert.equal(maskEmail('x', true), 'utilisateur inconnu');
+});
