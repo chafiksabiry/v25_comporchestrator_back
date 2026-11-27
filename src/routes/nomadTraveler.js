@@ -63,7 +63,7 @@ router.post('/documents', authenticate, owner, (req, res, next) => upload.fields
 
 router.get('/numbers', authenticate, owner, async (req, res) => {
   try {
-    return res.json({ numbers: await searchTravelerNumbers(req.query.country, { limit: req.query.limit }) });
+    return res.json({ numbers: await searchTravelerNumbers(req.query.country, { limit: req.query.limit, locality: req.query.locality }) });
   } catch (e) {
     if (e instanceof TravelerError) return sendError(res, e);
     console.error('[nomad-traveler] recherche de numéros :', e?.message || e);

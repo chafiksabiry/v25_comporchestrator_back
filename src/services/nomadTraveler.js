@@ -177,6 +177,17 @@ export async function submitTravelerDocuments(companyId, userId, { ticket, visa,
   return { status: saved?.status || 'approved', visaRequired, trip: t.trip };
 }
 
+/**
+ * Pièces Traveler validées automatiquement PENDANT la vérification d'identité (parcours NOMAD, 27/11/2026) : billet et visa lus par l'IA
+ * dans le même dossier que le passeport, décision par le code (identity/service.js). Enregistrement lu par la garde du paiement Traveler.
+ */
+export async function saveTravelerApproval(doc) {
+  const { TravelerDocument } = await import('../models/TravelerDocument.js');
+  const at = doc.reviewedAt instanceof Date ? doc.reviewedAt : new Date();
+  const set = { ...doc, expiresAt: new Date(at.getTime() + TRAVELER_FILES_TTL_MS) };
+  return TravelerDocument.findOneAndUpdate({ companyId: String(doc.companyId) }, { $set: set, $unset: { ticket: 1, visa: 1, ...(doc.visaFacts ? {} : { visaFacts: 1 }) } }, { upsert: true, new: true }).lean();
+}
+
 /** Revue humaine (admin HARX) : approved / rejected (motif). */
 export async function reviewTravelerDocuments(companyId, { decision, reason, reviewer }) {
   if (!['approved', 'rejected'].includes(decision)) throw new TravelerError(400, 'INVALID_DECISION');
@@ -226,18 +237,20 @@ export async function ensureTravelerPlan() {
 }
 
 /** Numéros proposés pour un pays Traveler : US/CA locaux, mobiles britanniques +447 (jamais +4470), France géographique (+33 1 à 5). */
-export async function searchTravelerNumbers(countryRaw, { limit = 30, service } = {}) {
+export async function searchTravelerNumbers(countryRaw, { limit = 30, service, locality = '' } = {}) {
   const cc = String(countryRaw || '').trim().toUpperCase() === 'UK' ? 'GB' : String(countryRaw || '').trim().toUpperCase();
   if (!TRAVELER_NUMBER_COUNTRIES.includes(cc)) throw new TravelerError(400, 'TRAVELER_COUNTRY_NOT_ALLOWED', undefined, { countries: [...TRAVELER_NUMBER_COUNTRIES] });
   const svc = service || (await import('./phoneNumberService.js')).phoneNumberService;
   const size = Math.min(Math.max(Number(limit) || 30, 10), 50);
   let rows = [];
+  // Ville cherchée (même champ « Ville » que NOMAD) : États-Unis et Canada seulement (les mobiles britanniques n'ont pas de ville).
+  const city = String(locality || '').trim().slice(0, 60);
   if (cc === 'GB') {
     rows = await svc.twilioClient.availablePhoneNumbers('GB').mobile.list({ voiceEnabled: true, pageSize: 50, limit: 50 });
   } else if (cc === 'FR') {
     rows = await svc.searchTwilioNumbers({ countryCode: 'FR', limit: 50 });
   } else {
-    rows = await svc.twilioClient.availablePhoneNumbers(cc).local.list({ voiceEnabled: true, pageSize: 50, limit: 50 });
+    rows = await svc.twilioClient.availablePhoneNumbers(cc).local.list({ voiceEnabled: true, pageSize: 50, limit: 50, ...(city ? { inLocality: city } : {}) });
   }
   return (rows || [])
     .filter((n) => travelerNumberCountry(n.phoneNumber) === cc)

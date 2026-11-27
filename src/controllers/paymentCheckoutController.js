@@ -331,7 +331,8 @@ export const paymentCheckoutController = {
    */
   async initTravelerCheckout(req, res) {
     try {
-      const { companyId, chosenNumber, currency: askedCurrency, returnUrl, apiBaseUrl } = req.body || {};
+      const { companyId, chosenNumber, currency: askedCurrency, returnUrl, apiBaseUrl, uiMode } = req.body || {};
+      const embedded = uiMode === 'embedded';
       if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ error: 'Valid companyId is required', code: 'INVALID_COMPANY' });
       const access = await guardCompanyAccess(req, res, companyId, { ownerOnly: true });
       if (!access) return;
@@ -367,11 +368,12 @@ export const paymentCheckoutController = {
           customerId: await findCompanyStripeCustomerId(companyId),
           locale: stripeLocaleFromRequest(req),
           metadata: { purpose: 'traveler_purchase', companyId: String(companyId), paymentId: String(payment._id) },
+          uiMode: embedded ? 'embedded' : null,
         });
         payment.providerRef = session.id;
-        payment.checkoutUrl = session.url;
+        payment.checkoutUrl = session.url || null;
         await payment.save();
-        return res.status(201).json({ success: true, paymentId: payment._id, checkoutUrl: session.url, amount: TRAVELER_PRICE_CENTS, currency, provider: 'stripe' });
+        return res.status(201).json({ success: true, paymentId: payment._id, checkoutUrl: session.url || null, ...(embedded ? { clientSecret: session.client_secret } : {}), amount: TRAVELER_PRICE_CENTS, currency, provider: 'stripe' });
       } catch (stripeErr) {
         await CompanyPayment.findByIdAndDelete(payment._id);
         console.error('[nomad-traveler] Stripe :', stripeErr.message);
@@ -396,7 +398,15 @@ export const paymentCheckoutController = {
       }
 
       // Route anonyme : la réponse ne porte jamais le document paiement (société, référence, lien) ni de solde.
-      const done = () => res.status(200).json({ success: true, status: payment.status, purpose: payment.purpose });
+      // NOMAD Traveler : issue de l'achat du numéro (faite pendant l'exécution du paiement), comme la confirmation d'abonnement NOMAD.
+      const done = async () => {
+        let numberPurchase;
+        if (payment.purpose === 'traveler_purchase') {
+          const np = (await CompanyPayment.findById(payment._id).select('meta.numberPurchase').lean())?.meta?.numberPurchase;
+          if (np?.status) numberPurchase = { status: np.status, ...(np.phoneNumber ? { phoneNumber: np.phoneNumber } : {}) };
+        }
+        return res.status(200).json({ success: true, status: payment.status, purpose: payment.purpose, ...(numberPurchase ? { numberPurchase } : {}) });
+      };
 
       if (payment.status === 'succeeded') {
         await fulfillCompanyPaymentOnce(payment);

@@ -7,7 +7,7 @@ import mongoose from 'mongoose';
 const schema = new mongoose.Schema({
   verificationId: { type: String, required: true, index: true },
   companyId: { type: String, required: true, index: true },
-  kind: { type: String, enum: ['passport', 'id_front', 'id_back', 'address_proof'], required: true },
+  kind: { type: String, enum: ['passport', 'id_front', 'id_back', 'address_proof', 'ticket', 'visa'], required: true },
   mime: { type: String, required: true },
   size: Number,
   /** SHA-256 du fichier d'origine (comparaison entre comptes via une empreinte HMAC dans IdentityVerification). */

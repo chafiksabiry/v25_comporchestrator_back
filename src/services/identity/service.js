@@ -14,6 +14,8 @@ import { loadDeclaration as defaultLoadDeclaration } from './declaration.js';
 import { normalizeIso2 } from './countries.js';
 import { sharedIdentityInboxReporter } from '../../support/inboxRequests.js';
 import { notifyIdentityChanged } from './notify.js';
+import { TRAVELER_NUMBER_COUNTRIES, travelerVisaRequired } from '../nomadOffers.js';
+import { decideTicket, decideVisa, extractTravelDocument } from '../travelDocuments.js';
 
 export class IdentityError extends Error {
   constructor(status, code, extra = {}) {
@@ -24,7 +26,16 @@ export class IdentityError extends Error {
   }
 }
 
-export const FILE_KINDS = ['passport', 'id_front', 'id_back', 'address_proof'];
+export const FILE_KINDS = ['passport', 'id_front', 'id_back', 'address_proof', 'ticket', 'visa'];
+/** NOMAD Traveler (27/11/2026) : billet et visa déposés dans le même dossier que la pièce, à la place du justificatif de domicile. */
+export const TRAVEL_KINDS = ['ticket', 'visa'];
+export const TRAVELER_OFFER = 'traveler';
+const isTraveler = (v) => v?.offer === TRAVELER_OFFER;
+/** Pièces exigées : NOMAD selon le type de pièce ; Traveler = passeport + billet + visa si la nationalité déclarée l'exige. */
+export function requiredKinds(v, declared = null) {
+  if (isTraveler(v)) return ['passport', 'ticket', ...(travelerVisaRequired(declared?.nationality) ? ['visa'] : [])];
+  return REQUIRED[v?.docType] || REQUIRED.id_card;
+}
 export const DOC_TYPES = ['passport', 'id_card', 'residence_permit'];
 const REQUIRED = { passport: ['passport', 'address_proof'], id_card: ['id_front', 'id_back', 'address_proof'], residence_permit: ['id_front', 'id_back', 'address_proof'] };
 const ID_KINDS_FOR = { passport: ['passport'], id_card: ['id_front', 'id_back'], residence_permit: ['id_front', 'id_back'] };
@@ -32,7 +43,7 @@ const ID_KINDS_FOR = { passport: ['passport'], id_card: ['id_front', 'id_back'],
 export const ADMIN_REJECT_CODES = [...REJECT_CODES, 'NAME_MISMATCH', 'PROOF_HOLDER_OTHER', 'DOCUMENT_SUSPECTED'];
 
 /** Échecs techniques de NOTRE côté (erreur interne, IA indisponible, clé absente, délai) : ils ne comptent jamais comme un essai. */
-const TECHNICAL_REASONS = new Set(['PROCESSING_ERROR', 'PROCESSING_INTERRUPTED', 'AI_UNAVAILABLE']);
+const TECHNICAL_REASONS = new Set(['PROCESSING_ERROR', 'PROCESSING_INTERRUPTED', 'AI_UNAVAILABLE', 'TRAVEL_CHECK_UNAVAILABLE']);
 const TECHNICAL_AI_ERRORS = new Set(['timeout', 'api_error', 'not_configured']);
 
 /**
@@ -66,6 +77,9 @@ export function createIdentityService({
   notify = notifyIdentityChanged,
   // Parcours d'inscription (users.journey) : identité envoyée / vérifiée, première fois seulement, jamais attendu ni bloquant.
   journey = stampJourneyLater,
+  // NOMAD Traveler : lecture du billet et du visa (même client, même modèle) et enregistrement des pièces validées.
+  travelExtract = (kind, pages, deps) => extractTravelDocument(kind, pages, { cfg: deps.cfg, claude: deps.claude }),
+  saveTravel = async (doc) => (await import('../nomadTraveler.js')).saveTravelerApproval(doc),
 } = {}) {
   const cfg = () => (typeof config === 'function' ? config() : config);
   // Inbox support : tout dossier qui passe en revue humaine y crée une demande et prévient l'équipe (e-mail support@, webhook) ;
@@ -108,6 +122,8 @@ export function createIdentityService({
 
   function allowedOf(v) {
     if (!v || v.status !== 'approved') return [];
+    // Traveler : seul le pays du numéro pour lequel le billet (et le visa) ont été validés.
+    if (isTraveler(v)) return uniq([normalizeIso2(v.travelerCountry)]);
     return uniq([normalizeIso2(v.verifiedCountries?.residence), normalizeIso2(v.verifiedCountries?.nationality)]);
   }
 
@@ -134,6 +150,8 @@ export function createIdentityService({
     const shown = current || null;
     return {
       enabled: c.enabled,
+      offer: (draft || shown)?.offer || null,
+      travelerCountry: shown && isTraveler(shown) ? shown.travelerCountry || null : null,
       status: shown ? shown.status : draft ? 'draft' : 'none',
       verificationId: shown ? String(shown._id) : null,
       docType: draft?.docType || shown?.docType || null,
@@ -156,19 +174,23 @@ export function createIdentityService({
     };
   }
 
-  async function upload(companyId, userId, { kind, docType, buffer }) {
+  async function upload(companyId, userId, { kind, docType, buffer, offer = null }) {
     if (!FILE_KINDS.includes(kind)) throw new IdentityError(400, 'FILE_KIND_INVALID');
-    const type = DOC_TYPES.includes(docType) ? docType : kind === 'passport' ? 'passport' : 'id_card';
-    if (kind !== 'address_proof' && !ID_KINDS_FOR[type].includes(kind)) throw new IdentityError(400, 'FILE_KIND_INVALID');
+    const traveler = offer === TRAVELER_OFFER;
+    // Traveler : passeport seulement, billet et visa à la place du justificatif ; NOMAD : jamais de billet ni de visa.
+    const type = traveler ? 'passport' : DOC_TYPES.includes(docType) ? docType : kind === 'passport' ? 'passport' : 'id_card';
+    if (traveler ? !['passport', ...TRAVEL_KINDS].includes(kind) : TRAVEL_KINDS.includes(kind) || (kind !== 'address_proof' && !ID_KINDS_FOR[type].includes(kind))) throw new IdentityError(400, 'FILE_KIND_INVALID');
     const k = keys();
-    const prepared = await prepareUpload(buffer, kind, cfg(), { now: now(), sharp });
+    const prepared = await prepareUpload(buffer, TRAVEL_KINDS.includes(kind) ? 'travel_document' : kind, cfg(), { now: now(), sharp });
     let { draft } = await snapshot(companyId);
-    if (!draft) draft = await store.createVerification({ companyId: String(companyId), userId: userId ? String(userId) : null, status: 'draft', docType: type });
-    else if (draft.docType !== type) draft = await store.updateVerification(draft._id, { docType: type });
+    const mode = traveler ? TRAVELER_OFFER : null;
+    if (!draft) draft = await store.createVerification({ companyId: String(companyId), userId: userId ? String(userId) : null, status: 'draft', docType: type, offer: mode });
+    else if (draft.docType !== type || (draft.offer || null) !== mode) draft = await store.updateVerification(draft._id, { docType: type, offer: mode });
     const existing = await store.listFiles(draft._id);
+    const keep = traveler ? ['passport', ...TRAVEL_KINDS] : ['address_proof', ...ID_KINDS_FOR[type]];
     for (const f of existing) {
-      // Même emplacement remplacé ; pièces d'un autre type de document retirées (passeport <-> recto/verso).
-      if (f.kind === kind || (f.kind !== 'address_proof' && !ID_KINDS_FOR[type].includes(f.kind))) await store.deleteFile(companyId, f._id);
+      // Même emplacement remplacé ; pièces d'un autre type de document (ou d'une autre offre) retirées.
+      if (f.kind === kind || !keep.includes(f.kind)) await store.deleteFile(companyId, f._id);
     }
     const fileId = crypto.randomBytes(12).toString('hex');
     const enc = encryptBuffer(prepared.data, k.enc, `identity:${companyId}:${fileId}`);
@@ -195,22 +217,39 @@ export function createIdentityService({
       // Correction de la déclaration après un refus : nouvelle analyse avec les images encore conservées (24 h), sans renvoi.
       const kept = await store.listFiles(snap.current._id);
       if (kept.length) {
-        target = await store.createVerification({ companyId: String(companyId), userId: userId ? String(userId) : null, status: 'draft', docType: snap.current.docType });
+        target = await store.createVerification({ companyId: String(companyId), userId: userId ? String(userId) : null, status: 'draft', docType: snap.current.docType, offer: snap.current.offer || null });
         await store.moveFiles(snap.current._id, target._id);
         await store.setFilesExpiry(target._id, new Date(now().getTime() + c.fileTtlMs));
       }
     }
     if (!target) throw new IdentityError(409, 'FILES_MISSING', { missing: REQUIRED.id_card });
+    const traveler = isTraveler(target);
     const files = await store.listFiles(target._id);
-    const missing = REQUIRED[target.docType].filter((k) => !files.some((f) => f.kind === k));
-    if (missing.length) throw new IdentityError(409, 'FILES_MISSING', { missing });
+    if (!traveler) {
+      const missing = requiredKinds(target).filter((k) => !files.some((f) => f.kind === k));
+      if (missing.length) throw new IdentityError(409, 'FILES_MISSING', { missing });
+    }
     // Déclaration relue côté serveur : rien n'est lu dans le corps de la requête.
     const declared = await loadDeclaration(req, companyId);
+    // Traveler : aucune adresse ; « résidence » = pays du numéro choisi (US, CA, GB, FR), nationalité = pays du passeport.
     const incomplete = ['fullName', 'residence', 'nationality'].filter((k) => !declared[k]);
+    if (traveler && declared.residence && !TRAVELER_NUMBER_COUNTRIES.includes(declared.residence)) incomplete.push('residence');
     if (incomplete.length) throw new IdentityError(409, 'DECLARATION_INCOMPLETE', { missing: incomplete });
+    if (traveler) {
+      const missing = requiredKinds(target, declared).filter((k) => !files.some((f) => f.kind === k));
+      if (missing.length) throw new IdentityError(409, 'FILES_MISSING', { missing });
+    }
     const used = attemptsUsed(snap.list);
     const attempt = (snap.list.filter((v) => v.status !== 'draft').length || 0) + 1;
     await store.supersedeOthers(companyId, target._id, ['review', 'rejected', 'processing']);
+    if ((used.today >= c.maxAiAttemptsPerDay || used.total >= c.maxAiAttemptsTotal) && traveler) {
+      // Traveler : jamais de revue par l'équipe (validation automatique seulement) ; refus motivé, nouvel essai plus tard.
+      await store.updateVerification(target._id, {
+        status: 'rejected', declared, attempt, decision: { outcome: 'rejected', reasonCodes: ['ATTEMPT_LIMIT'], by: 'auto', at: now() },
+        checks: [{ code: 'ATTEMPTS', result: 'fail', detail: 'Limite d’analyses automatiques atteinte', reason: 'ATTEMPT_LIMIT' }],
+      });
+      return { status: 'rejected' };
+    }
     if (used.today >= c.maxAiAttemptsPerDay || used.total >= c.maxAiAttemptsTotal) {
       // Au-delà des limites : revue humaine obligatoire, aucun appel à l'IA (spec §9.3).
       await store.updateVerification(target._id, {
@@ -236,6 +275,12 @@ export function createIdentityService({
     } catch (e) {
       // Jamais de validation par défaut : une erreur interne part en revue humaine.
       logger.error?.('[identity] analyse en échec :', e?.code || e?.message);
+      if (isTraveler(v)) {
+        // Traveler : jamais de revue par l'équipe ; échec technique (non décompté), nouvel envoi possible.
+        await store.updateVerification(v._id, { status: 'rejected', decision: { outcome: 'rejected', reasonCodes: ['PROCESSING_ERROR'], by: 'auto', at: now() }, checks: [{ code: 'PROCESSING', result: 'fail', detail: 'Erreur interne pendant l’analyse', reason: 'PROCESSING_ERROR' }] });
+        changed(v.companyId, 'rejected');
+        return { outcome: 'rejected', reasonCodes: ['PROCESSING_ERROR'] };
+      }
       await store.updateVerification(v._id, {
         status: 'review', decision: { outcome: 'review', reasonCodes: ['PROCESSING_ERROR'], by: 'auto', at: now() },
         checks: [{ code: 'PROCESSING', result: 'review', detail: 'Erreur interne pendant l’analyse', reason: 'PROCESSING_ERROR' }],
@@ -254,13 +299,14 @@ export function createIdentityService({
     const clear = (f) => splitPages({ mime: f.mime, meta: f.meta, data: decryptBuffer(f, k.enc, `identity:${v.companyId}:${f._id}`) });
     const order = ['passport', 'id_front', 'id_back'];
     const idFiles = files.filter((f) => order.includes(f.kind)).sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
-    const proofFile = files.find((f) => f.kind === 'address_proof');
+    const traveler = isTraveler(v);
+    const proofFile = traveler ? null : files.find((f) => f.kind === 'address_proof');
     const deps = { cfg: c, claude: claudeClient };
     const [idRes, proofRes] = await Promise.all([
       idFiles.length ? extract('identity', idFiles.flatMap(clear), deps) : { ok: false, error: 'invalid_output', model: c.model },
-      proofFile ? extract('proof', clear(proofFile), deps) : { ok: false, error: 'invalid_output', model: c.model },
+      traveler ? { ok: false, error: 'skipped', model: c.model } : proofFile ? extract('proof', clear(proofFile), deps) : { ok: false, error: 'invalid_output', model: c.model },
     ]);
-    const aiCalled = [idRes, proofRes].some((r) => r.ok || !['not_configured'].includes(r.error));
+    const aiCalled = [idRes, proofRes].some((r) => r.ok || !['not_configured', 'skipped'].includes(r.error));
 
     // Signaux techniques des fichiers (EXIF, PDF), plus cohérence date de création PDF / date imprimée.
     const signals = [];
@@ -270,7 +316,7 @@ export function createIdentityService({
     if (pdfCreated && proofIssue && /^\d{4}-\d{2}-\d{2}$/.test(proofIssue) && Date.parse(pdfCreated) + 24 * 3600 * 1000 < Date.parse(proofIssue)) {
       signals.push({ code: 'PDF_CREATED_BEFORE_ISSUE', detail: 'PDF créé avant la date d’émission imprimée' });
     }
-    const input = { declared: v.declared, id: idRes.ok ? idRes.data : null, idError: idRes.ok ? null : idRes.error, proof: proofRes.ok ? proofRes.data : null, proofError: proofRes.ok ? null : proofRes.error, now: now(), rules: { minAge: c.minAge, proofMaxMonths: c.proofMaxMonths } };
+    const input = { declared: v.declared, id: idRes.ok ? idRes.data : null, idError: idRes.ok ? null : idRes.error, proof: proofRes.ok ? proofRes.data : null, proofError: proofRes.ok ? null : proofRes.error, now: now(), rules: { minAge: c.minAge, proofMaxMonths: c.proofMaxMonths }, traveler };
     let result = decide({ ...input, signals });
 
     // Empreintes (anti-réutilisation entre comptes) : le numéro de document n'est jamais stocké, seulement son HMAC.
@@ -285,6 +331,8 @@ export function createIdentityService({
         : { code: 'FILE_REUSED', detail: 'Même fichier déjà envoyé par un autre compte' });
       result = decide({ ...input, signals });
     }
+    const travelAi = [];
+    if (traveler) result = await travelDecision(v, result, files, clear, deps, travelAi);
     result.documentNumber = null;
 
     // Premier refus « illisible » : la tentative n'est pas décomptée (spec §5.5).
@@ -293,7 +341,7 @@ export function createIdentityService({
     const onlyUnreadable = result.outcome === OUTCOMES.REJECTED && result.reasonCodes.length === 1 && result.reasonCodes[0] === 'UNREADABLE';
     const counted = aiCalled && !(onlyUnreadable && !freeUsed);
 
-    const ai = [['identity', idRes], ['proof', proofRes]].map(([doc, r]) => ({
+    const ai = [['identity', idRes], ...(traveler ? travelAi : [['proof', proofRes]])].map(([doc, r]) => ({
       doc, model: r.model || c.model, requestId: r.requestId || null, input: r.usage?.input || 0, output: r.usage?.output || 0, cacheRead: r.usage?.cacheRead || 0, error: r.ok ? null : r.error, at: now(),
     }));
     const updated = await store.updateVerification(v._id, {
@@ -303,6 +351,7 @@ export function createIdentityService({
       verifiedCountries: result.verifiedCountries || { nationality: null, residence: null },
       pendingCountries: result.outcome === OUTCOMES.APPROVED ? (result.pendingCountries || []) : [],
       fingerprints: fps,
+      ...(traveler ? { travelerCountry: result.outcome === OUTCOMES.APPROVED ? normalizeIso2(v.declared?.residence) : null } : {}),
       extracted: minimize(idRes.ok ? idRes.data : null, proofRes.ok ? proofRes.data : null, result.facts),
       aiCounted: counted,
       aiAt: aiCalled ? now() : null,
@@ -317,6 +366,54 @@ export function createIdentityService({
     const notPassed = (result.checks || []).filter((c) => c.result !== 'pass').map((c) => `${c.code}:${c.result}:${c.reason || '-'}${c.code === 'ID_TYPE' || c.code === 'PROOF_TYPE' ? `:${String(c.detail || '').split(':').pop().trim()}` : ''}`);
     if (notPassed.length) logger.log?.(`[identity] contrôles non passés : ${notPassed.join(' | ')}`);
     return { outcome: result.outcome, reasonCodes: result.reasonCodes };
+  }
+
+  /**
+   * NOMAD Traveler (27/11/2026) : après la pièce, lecture du billet et du visa par l'IA puis décision par le code (nom, dates, durée,
+   * pays du visa, numéro de passeport). Jamais de revue par l'équipe : tout point non validé devient un refus motivé (code), la pièce
+   * peut être renvoyée. Tout passe : pièces enregistrées « approved » (garde du paiement Traveler), étape suivante ouverte aussitôt.
+   */
+  async function travelDecision(v, result, files, clear, deps, travelAi) {
+    const reject = (codes, extra = []) => ({ ...result, outcome: OUTCOMES.REJECTED, reasonCodes: uniq(codes), checks: [...result.checks, ...extra], verifiedCountries: null, pendingCountries: [] });
+    if (result.outcome === OUTCOMES.REVIEW) return reject(result.reasonCodes.filter((r) => r !== 'INCOMPLETE_CHECKS').length ? result.reasonCodes.filter((r) => r !== 'INCOMPLETE_CHECKS') : ['NO_MRZ']);
+    if (result.outcome !== OUTCOMES.APPROVED) return result;
+    const nationality = normalizeIso2(result.verifiedCountries?.nationality);
+    const numberCountry = normalizeIso2(v.declared?.residence);
+    if (!nationality || !TRAVELER_NUMBER_COUNTRIES.includes(numberCountry)) return reject(['COUNTRY_MISMATCH_NATIONALITY']);
+    const idName = result.idNames ? { lastName: result.idNames.lastName || '', firstName: result.idNames.firstName || '' } : null;
+    const at = now();
+    const read = async (kind) => {
+      const f = files.find((x) => x.kind === kind);
+      if (!f) return { missing: true };
+      const r = await travelExtract(kind, clear(f), deps);
+      travelAi.push([kind, r]);
+      return r;
+    };
+    const ticket = await read('ticket');
+    if (ticket.missing) return reject(['TICKET_REQUIRED']);
+    if (!ticket.ok) return reject(['TRAVEL_CHECK_UNAVAILABLE']);
+    const t = decideTicket(ticket.data, { idName, now: at.getTime() });
+    if (!t.ok) return reject([t.code], [{ code: 'TICKET', result: 'fail', detail: t.code, reason: t.code }]);
+    const checks = [{ code: 'TICKET', result: 'pass', detail: `Voyage du ${t.trip.departAt} au ${t.trip.returnAt}` }];
+    const visaRequired = travelerVisaRequired(nationality);
+    let visaFacts = null;
+    if (visaRequired) {
+      const visa = await read('visa');
+      if (visa.missing) return reject(['VISA_REQUIRED']);
+      if (!visa.ok) return reject(['TRAVEL_CHECK_UNAVAILABLE']);
+      const d = decideVisa(visa.data, { idName, numberCountry, trip: t.trip, now: at.getTime(), idDocumentNumber: result.documentNumber?.number || null });
+      if (!d.ok) return reject([d.code], [{ code: 'VISA', result: 'fail', detail: d.code, reason: d.code }]);
+      visaFacts = d.visa;
+      checks.push({ code: 'VISA', result: 'pass', detail: `Visa ${d.visa.country || ''} valable jusqu’au ${d.visa.validUntil}` });
+    }
+    await saveTravel({
+      companyId: String(v.companyId), userId: v.userId ? String(v.userId) : null, nationality, visaRequired, numberCountry,
+      departAt: new Date(`${t.trip.departAt}T00:00:00Z`), returnAt: new Date(`${t.trip.returnAt}T00:00:00Z`),
+      ticketFacts: { passengers: (ticket.data.passenger_names || []).length, documentType: ticket.data.document_type },
+      ...(visaFacts ? { visaFacts } : {}),
+      status: 'approved', reviewedAt: at, reviewedBy: 'auto', rejectReason: null,
+    });
+    return { ...result, checks: [...result.checks, ...checks] };
   }
 
   /** Images : supprimées dès la décision (validé : tout de suite ; refusé : 24 h pour une correction ; revue : à la décision humaine). */
@@ -334,7 +431,8 @@ export function createIdentityService({
 
   async function requestReview(companyId) {
     const { current } = await snapshot(companyId);
-    if (!current || current.status !== 'rejected') throw new IdentityError(409, 'NOTHING_TO_REVIEW');
+    // Traveler : validation automatique seulement, jamais de revue par l'équipe.
+    if (!current || current.status !== 'rejected' || isTraveler(current)) throw new IdentityError(409, 'NOTHING_TO_REVIEW');
     const c = cfg();
     await store.updateVerification(current._id, {
       status: 'review', reviewRequestedAt: now(),
@@ -349,6 +447,11 @@ export function createIdentityService({
   async function recoverStale() {
     const before = new Date(now().getTime() - cfg().staleProcessingMs);
     for (const v of await store.listStaleProcessing(before)) {
+      if (isTraveler(v)) {
+        await store.updateVerification(v._id, { status: 'rejected', decision: { outcome: 'rejected', reasonCodes: ['PROCESSING_INTERRUPTED'], by: 'auto', at: now() }, checks: [...(v.checks || []), { code: 'PROCESSING', result: 'fail', detail: 'Analyse interrompue (redémarrage)', reason: 'PROCESSING_INTERRUPTED' }] });
+        changed(v.companyId, 'rejected');
+        continue;
+      }
       await store.updateVerification(v._id, {
         status: 'review', decision: { outcome: 'review', reasonCodes: ['PROCESSING_INTERRUPTED'], by: 'auto', at: now() },
         checks: [...(v.checks || []), { code: 'PROCESSING', result: 'review', detail: 'Analyse interrompue (redémarrage)', reason: 'PROCESSING_INTERRUPTED' }],

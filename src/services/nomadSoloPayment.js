@@ -117,7 +117,9 @@ export async function numberStillAvailable({ phoneNumber, country }, { service }
   let readOne = false;
   for (const cc of peers) {
     try {
-      const list = await svc.twilioClient.availablePhoneNumbers(cc).local.list({ contains, limit: 50 });
+      // Mobile britannique (+447, numéros NOMAD Traveler) : catalogue des mobiles, pas celui des numéros locaux.
+      const type = cc === 'GB' && /^\+447/.test(phoneNumber) ? 'mobile' : 'local';
+      const list = await svc.twilioClient.availablePhoneNumbers(cc)[type].list({ contains, limit: 50 });
       readOne = true;
       if ((list || []).some((n) => n.phoneNumber === phoneNumber)) return { available: true, inventory: false };
     } catch (e) {
