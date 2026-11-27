@@ -49,8 +49,9 @@ export function createMemoryStore({ now = () => new Date() } = {}) {
     async findOtherCompanyFingerprint({ document, files: fps }, companyId) {
       for (const v of verifications.values()) {
         if (v.companyId === String(companyId)) continue;
-        if (document && v.fingerprints?.document === document) return { kind: 'document' };
-        if (fps?.length && (v.fingerprints?.files || []).some((f) => fps.includes(f))) return { kind: 'file' };
+        const who = { companyId: v.companyId, userId: v.userId || null, fullName: v.declared?.fullName || '' };
+        if (document && v.fingerprints?.document === document) return { kind: 'document', ...who };
+        if (fps?.length && (v.fingerprints?.files || []).some((f) => fps.includes(f))) return { kind: 'file', ...who };
       }
       return null;
     },
@@ -114,9 +115,9 @@ export async function createMongoStore() {
       if (document) or.push({ 'fingerprints.document': document });
       if (fps?.length) or.push({ 'fingerprints.files': { $in: fps } });
       if (!or.length) return null;
-      const hit = await V.findOne({ companyId: { $ne: String(companyId) }, $or: or }).select('fingerprints').lean();
+      const hit = await V.findOne({ companyId: { $ne: String(companyId) }, $or: or }).select('fingerprints companyId userId declared.fullName').lean();
       if (!hit) return null;
-      return { kind: document && hit.fingerprints?.document === document ? 'document' : 'file' };
+      return { kind: document && hit.fingerprints?.document === document ? 'document' : 'file', companyId: hit.companyId, userId: hit.userId || null, fullName: hit.declared?.fullName || '' };
     },
     async listStaleProcessing(before) { return (await V.find({ status: 'processing', processingStartedAt: { $lt: before } }).limit(100).lean()).map(plain); },
     async createFile(doc) { return plain((await F.create(doc)).toObject()); },
