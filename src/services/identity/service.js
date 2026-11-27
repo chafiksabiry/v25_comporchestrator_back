@@ -31,9 +31,12 @@ export const FILE_KINDS = ['passport', 'id_front', 'id_back', 'address_proof', '
 export const TRAVEL_KINDS = ['ticket', 'visa'];
 export const TRAVELER_OFFER = 'traveler';
 const isTraveler = (v) => v?.offer === TRAVELER_OFFER;
-/** Pièces exigées : NOMAD selon le type de pièce ; Traveler = passeport + billet + visa si la nationalité déclarée l'exige. */
+/**
+ * Pièces exigées : NOMAD selon le type de pièce. Traveler (règle corrigée du fondateur, 27/11/2026) : ressortissants exemptés (UE/EEE,
+ * Suisse, Royaume-Uni, Golfe, États-Unis, Canada) -> passeport SEUL ; autres nationalités -> passeport + billet + visa du pays du numéro.
+ */
 export function requiredKinds(v, declared = null) {
-  if (isTraveler(v)) return ['passport', 'ticket', ...(travelerVisaRequired(declared?.nationality) ? ['visa'] : [])];
+  if (isTraveler(v)) return travelerVisaRequired(declared?.nationality) ? ['passport', 'ticket', 'visa'] : ['passport'];
   return REQUIRED[v?.docType] || REQUIRED.id_card;
 }
 export const DOC_TYPES = ['passport', 'id_card', 'residence_permit'];
@@ -382,6 +385,15 @@ export function createIdentityService({
     if (!nationality || !TRAVELER_NUMBER_COUNTRIES.includes(numberCountry)) return reject(['COUNTRY_MISMATCH_NATIONALITY']);
     const idName = result.idNames ? { lastName: result.idNames.lastName || '', firstName: result.idNames.firstName || '' } : null;
     const at = now();
+    // Ressortissant exempté : passeport seul, aucun billet ni visa lu (règle corrigée du 27/11/2026).
+    const visaRequired = travelerVisaRequired(nationality);
+    if (!visaRequired) {
+      await saveTravel({
+        companyId: String(v.companyId), userId: v.userId ? String(v.userId) : null, nationality, visaRequired: false, numberCountry,
+        departAt: null, returnAt: null, status: 'approved', reviewedAt: at, reviewedBy: 'auto', rejectReason: null,
+      });
+      return result;
+    }
     const read = async (kind) => {
       const f = files.find((x) => x.kind === kind);
       if (!f) return { missing: true };
@@ -395,9 +407,8 @@ export function createIdentityService({
     const t = decideTicket(ticket.data, { idName, now: at.getTime() });
     if (!t.ok) return reject([t.code], [{ code: 'TICKET', result: 'fail', detail: t.code, reason: t.code }]);
     const checks = [{ code: 'TICKET', result: 'pass', detail: `Voyage du ${t.trip.departAt} au ${t.trip.returnAt}` }];
-    const visaRequired = travelerVisaRequired(nationality);
     let visaFacts = null;
-    if (visaRequired) {
+    {
       const visa = await read('visa');
       if (visa.missing) return reject(['VISA_REQUIRED']);
       if (!visa.ok) return reject(['TRAVEL_CHECK_UNAVAILABLE']);

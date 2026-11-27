@@ -305,3 +305,12 @@ test('recharges d\'une ligne NOMAD Traveler : devise du paiement Traveler (pays 
     assert.equal(await computeMinutesPurchaseCents(30, c), cents, `30 min = 5 ${cur}`);
   }
 });
+
+test('Traveler, garde du paiement : ressortissant exempté, passeport seul (aucune date de voyage) -> paiement ouvert ; visa exigé sans dates -> refus', async () => {
+  const now = () => Date.parse('2026-11-26T12:00:00Z');
+  const deps = (nationality, doc) => ({ now, verifiedIdentity: async () => ({ verified: true, nationality }), documentOf: async () => doc, liveSubscriptions: async () => [] });
+  const ok = await T.travelerPaymentGate('c1', { chosenNumber: { phoneNumber: '+12125550101' } }, deps('FR', { status: 'approved', departAt: null, returnAt: null }));
+  assert.equal(ok.ok, true);
+  const ma = await T.travelerPaymentGate('c1', { chosenNumber: { phoneNumber: '+12125550101' } }, deps('MA', { status: 'approved', departAt: null, returnAt: null, visaFacts: { country: 'US' }, numberCountry: 'US' }));
+  assert.equal(ma.ok, false); assert.equal(ma.body.code, 'TRIP_DATES_REQUIRED');
+});

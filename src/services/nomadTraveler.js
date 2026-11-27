@@ -42,7 +42,7 @@ export class TravelerError extends Error {
 
 const metadataOf = (m) => (m instanceof Map ? Object.fromEntries(m.entries()) : m && typeof m === 'object' ? m : {});
 export const isTravelerSubscription = (s) => callcenterTierFromMetadata(metadataOf(s?.planId?.metadata)) === TRAVELER_TIER;
-const day = (v) => { const d = new Date(v); return Number.isFinite(d.getTime()) ? d : null; };
+const day = (v) => { if (v === null || v === undefined || v === '') return null; const d = new Date(v); return Number.isFinite(d.getTime()) ? d : null; };
 
 /**
  * Contrôle automatique d'un titre de voyage : dates lisibles, retour (ou fin) après le départ, retour pas encore passé, voyage d'au plus
@@ -136,8 +136,11 @@ export async function travelerPaymentGate(companyId, { chosenNumber }, deps = {}
   if (status.visaRequired && !doc.hasVisa) return refuse(409, 'VISA_REQUIRED');
   // Visa contrôlé pour le pays du numéro choisi à l'envoi : un numéro d'un autre pays exige un visa de ce pays (pièces à renvoyer).
   if (status.visaRequired && doc.numberCountry && doc.numberCountry !== country) return refuse(409, 'VISA_WRONG_COUNTRY', { numberCountry: doc.numberCountry });
-  const problem = tripDatesProblem(doc, d.now());
-  if (problem) return refuse(409, problem);
+  // Billet exigé seulement pour une nationalité soumise au visa (règle corrigée du 27/11/2026) : dates contrôlées dans ce cas.
+  if (status.visaRequired || doc.departAt || doc.returnAt) {
+    const problem = tripDatesProblem(doc, d.now());
+    if (problem) return refuse(409, problem);
+  }
   return { ok: true, chosen: { phoneNumber, country } };
 }
 
