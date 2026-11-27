@@ -15,6 +15,10 @@ const int = (v, d) => {
 export function getIdentityConfig(env = process.env) {
   return {
     enabled: bool(env.IDENTITY_VERIFICATION_ENABLED, false),
+    // OPTION PRÉPARÉE, NON ACTIVÉE (27/11/2026, décision du fondateur attendue) : une même pièce déjà présentée sur un autre compte
+    // n'est plus un signal de réutilisation si c'est la MÊME personne (même compte de connexion HARX, donc même e-mail, et même nom
+    // déclaré). Désactivée par défaut : toute réutilisation reste un signal (revue en NOMAD, refus motivé en Traveler).
+    reuseSamePerson: bool(env.IDENTITY_REUSE_SAME_PERSON, false),
     // --- Claude (même clé que les autres usages ; modèle dédié, défaut validé par le fondateur le 22/11) ---
     anthropicApiKey: env.ANTHROPIC_API_KEY || '',
     model: env.IDENTITY_CLAUDE_MODEL || 'claude-sonnet-5-5',

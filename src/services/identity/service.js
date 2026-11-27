@@ -83,6 +83,8 @@ export function createIdentityService({
   // NOMAD Traveler : lecture du billet et du visa (même client, même modèle) et enregistrement des pièces validées.
   travelExtract = (kind, pages, deps) => extractTravelDocument(kind, pages, { cfg: deps.cfg, claude: deps.claude }),
   saveTravel = async (doc) => (await import('../nomadTraveler.js')).saveTravelerApproval(doc),
+  // E-mail de connexion d'un utilisateur (collection partagée `users`), pour reconnaître la même personne sur deux comptes.
+  userEmail = defaultUserEmail,
 } = {}) {
   const cfg = () => (typeof config === 'function' ? config() : config);
   // Inbox support : tout dossier qui passe en revue humaine y crée une demande et prévient l'équipe (e-mail support@, webhook) ;
@@ -327,7 +329,8 @@ export function createIdentityService({
       document: result.documentNumber?.number ? fingerprint(k.hmac, 'doc', result.documentNumber.country, result.documentNumber.type, result.documentNumber.number) : null,
       files: files.map((f) => fingerprint(k.hmac, 'file', f.sha256)),
     };
-    const reuse = await store.findOtherCompanyFingerprint(fps, v.companyId);
+    const found = await store.findOtherCompanyFingerprint(fps, v.companyId);
+    const reuse = found && !(c.reuseSamePerson && await samePerson(found, v, userEmail)) ? found : null;
     if (reuse) {
       signals.push(reuse.kind === 'document'
         ? { code: 'DOCUMENT_REUSED', detail: 'Même pièce d’identité déjà présentée sur un autre compte' }
@@ -609,6 +612,26 @@ export function createIdentityService({
   return { status, upload, removeFile, submit, process, requestReview, recoverStale, verifiedCountriesFor, verifiedNameFor, hasRecord, isStale, adminList, adminDetail, adminFile, adminDecide };
 }
 
+/**
+ * Réutilisation d'une pièce par la MÊME personne (décision du fondateur du 27/11/2026, ex. une ligne NOMAD et une ligne Traveler) :
+ * même nom déclaré (accents, casse et ordre tolérés) ET même e-mail de connexion HARX (insensible à la casse). Activée par
+ * IDENTITY_REUSE_SAME_PERSON=true. Nom OU e-mail différent : la réutilisation reste un signal (refus motivé en Traveler).
+ */
+export async function samePerson(other, v, userEmail) {
+  if (!other?.userId || !v?.userId) return false;
+  const nameOk = sameNameTokens(other.fullName, v.declared?.fullName);
+  if (!nameOk) return false;
+  let a = ''; let b = '';
+  try { [a, b] = await Promise.all([userEmail(other.userId), userEmail(v.userId)]); } catch { return false; }
+  const norm = (e) => String(e || '').trim().toLowerCase();
+  return Boolean(norm(a)) && norm(a) === norm(b);
+}
+/** Même nom : mêmes mots, accents, casse et ordre ignorés (« Chafik SABIRY » = « sabiry chafik » = « Chafik Sabiry »). */
+export function sameNameTokens(a, b) {
+  const key = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().split(/[^a-z0-9\u0600-\u06ff]+/).filter(Boolean).sort().join(' ');
+  return Boolean(key(a)) && key(a) === key(b);
+}
+
 /** Champs extraits conservés (spec §11.1) : ni numéro de document, ni lignes MRZ, ni adresse complète. */
 function minimize(id, proof, facts) {
   return {
@@ -624,6 +647,13 @@ function minimize(id, proof, facts) {
       issueDate: proof.issue_date, legibility: proof.legibility, observations: proof.observations,
     } : null,
   };
+}
+
+async function defaultUserEmail(userId) {
+  const mongoose = (await import('mongoose')).default;
+  if (!/^[a-f0-9]{24}$/i.test(String(userId || '')) || !mongoose.connection.db) return '';
+  const u = await mongoose.connection.db.collection('users').findOne({ _id: new mongoose.Types.ObjectId(String(userId)) }, { projection: { email: 1 } });
+  return String(u?.email || '');
 }
 
 let shared = null;
