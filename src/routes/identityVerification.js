@@ -71,7 +71,7 @@ export function createIdentityRoutes({ service = null, config = getIdentityConfi
   router.post('/files', authenticate, enabled, limited, owner, (req, res, next) => upload.single('file')(req, res, (err) => (err ? sendError(res, err) : next())), async (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ error: 'FILE_REQUIRED', code: 'FILE_REQUIRED' });
-      const out = await (await svc()).upload(req.identityCompanyId, req.user?.userId || req.user?.id, { kind: String(req.body?.kind || ''), docType: String(req.body?.docType || ''), buffer: req.file.buffer });
+      const out = await (await svc()).upload(req.identityCompanyId, req.user?.userId || req.user?.id, { kind: String(req.body?.kind || ''), docType: String(req.body?.docType || ''), offer: req.body?.offer === 'traveler' ? 'traveler' : null, buffer: req.file.buffer });
       return res.status(201).json(out);
     } catch (e) { return sendError(res, e); }
   });

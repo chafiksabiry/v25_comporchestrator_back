@@ -54,9 +54,12 @@ async function createOneShotCheckoutSession({
   captureMethod = 'automatic',
   customerId = null,
   invoiceDescription = null,
-  locale = null
+  locale = null,
+  uiMode = null
 }) {
   const manual = captureMethod === 'manual';
+  // Paiement intégré dans HARX (même fenêtre que l'abonnement NOMAD, 27/11/2026) : pas de redirection, confirmation par le portail.
+  const embedded = uiMode === 'embedded';
   // Facture téléchargeable pour les achats ponctuels. Non activée en capture manuelle (autorisation puis capture
   // différée après commande du numéro) : le comportement de la facture Checkout y est incertain et ne doit pas casser l'achat.
   const invoiceCreation = manual ? {} : {
@@ -84,8 +87,7 @@ async function createOneShotCheckoutSession({
         quantity: 1
       }
     ],
-    success_url: successUrl,
-    cancel_url: cancelUrl,
+    ...(embedded ? { ui_mode: 'embedded_page', redirect_on_completion: 'never' } : { success_url: successUrl, cancel_url: cancelUrl }),
     client_reference_id: String(clientReferenceId),
     ...(manual ? { payment_intent_data: { capture_method: 'manual' } } : {}),
     metadata: {
