@@ -9,7 +9,8 @@ import { fulfillCompanyPaymentOnce } from '../services/paymentFulfillment.js';
 import { bundleAmountCents, bundleLabel, parseBundleQuantities } from '../services/bundlePurchase.js';
 import { config } from '../config/env.js';
 import { paypalCaptureId, paypalCaptureNotCompleted, paypalOrderMismatch, stripeSessionMismatch } from '../services/paymentVerification.js';
-import { FALLBACK_PURCHASE_CURRENCY, formatAmountLabel, purchaseCurrency } from '../services/purchaseCurrency.js';
+import { FALLBACK_PURCHASE_CURRENCY, formatAmountLabel, offerPurchaseCurrency } from '../services/purchaseCurrency.js';
+import { blockCentsFor, minutePacksFor, MINUTE_BLOCK, NOMAD_INCLUDED_MINUTES, TRAVELER_DAYS, TRAVELER_INCLUDED_MINUTES, TRAVELER_NUMBER_COUNTRIES, TRAVELER_PRICE_CENTS, TRAVELER_PRICES, travelerPriceFor, NOMAD_ACTIVE_COUNTRIES, NOMAD_SOON_COUNTRIES } from '../services/nomadOffers.js';
 import {
   computeMinutesPurchaseCents,
   computeTokensPurchaseCents,
@@ -73,14 +74,14 @@ function sanitizePaymentReturnUrl(url, fallback) {
   return fallback;
 }
 
-async function computeAmountCents(purpose, { amountEuros, minutes, tokens }) {
+async function computeAmountCents(purpose, { amountEuros, minutes, tokens, currency }) {
   if (purpose === 'wallet_deposit') {
     const euros = Number(amountEuros);
     if (!Number.isFinite(euros) || euros <= 0) return null;
     return Math.round(euros * 100);
   }
   if (purpose === 'minutes_purchase') {
-    return computeMinutesPurchaseCents(minutes);
+    return computeMinutesPurchaseCents(minutes, currency);
   }
   if (purpose === 'tokens_purchase') {
     return computeTokensPurchaseCents(tokens);
@@ -88,7 +89,7 @@ async function computeAmountCents(purpose, { amountEuros, minutes, tokens }) {
   if (purpose === 'bundle_purchase') {
     const qty = parseBundleQuantities({ minutes, tokens });
     if (!qty) return null;
-    return bundleAmountCents(await computeMinutesPurchaseCents(qty.minutes), await computeTokensPurchaseCents(qty.tokens));
+    return bundleAmountCents(await computeMinutesPurchaseCents(qty.minutes, currency), await computeTokensPurchaseCents(qty.tokens));
   }
   return null;
 }
@@ -97,8 +98,8 @@ export const paymentCheckoutController = {
   async getConfig(req, res) {
     try {
       const pricing = await getPlatformPricing();
-      // `?companyId=` : devise du pays de l'entreprise (mêmes montants dans les trois devises) ; sinon EUR.
-      const currency = req.query?.companyId ? await purchaseCurrency(req, req.query.companyId) : FALLBACK_PURCHASE_CURRENCY;
+      // `?companyId=` : devise de l'abonnement du client (mêmes montants dans les trois devises, décision du 26/11) ; sinon EUR.
+      const currency = req.query?.companyId ? await offerPurchaseCurrency(req, req.query.companyId) : FALLBACK_PURCHASE_CURRENCY;
       res.json({
         success: true,
         paypal: {
@@ -107,13 +108,23 @@ export const paymentCheckoutController = {
           mode: paypalService.getMode()
         },
         stripe: {
-          enabled: stripeService.isConfigured()
+          enabled: stripeService.isConfigured(),
+          /** 'test' ou 'live' (jamais la clé) : la recette doit répondre 'test'. */
+          mode: stripeService.isConfigured() ? stripeService.getStripeMode() : null
+        },
+        /** Recharges de minutes : Stripe seulement (décision du 26/11 : pas de PayPal pour les minutes). */
+        minutesProviders: ['stripe'],
+        offers: {
+          nomad: { includedMinutes: NOMAD_INCLUDED_MINUTES, numberCountries: NOMAD_ACTIVE_COUNTRIES, comingSoonCountries: NOMAD_SOON_COUNTRIES },
+          traveler: { priceCents: TRAVELER_PRICE_CENTS, prices: TRAVELER_PRICES, days: TRAVELER_DAYS, includedMinutes: TRAVELER_INCLUDED_MINUTES, numberCountries: TRAVELER_NUMBER_COUNTRIES, oneTime: true },
         },
         pricing: {
           currency,
-          minutePacks: pricing.minutePacks,
-          minutesCustomRateCents: pricing.minutesCustomRateCents,
-          minutesCustomRateEuros: pricing.minutesCustomRateCents / 100,
+          // Prix dans la devise du client : 30 min = 5 (€, $, £) ou 8 (dollar canadien).
+          minuteBlock: { minutes: MINUTE_BLOCK.minutes, priceCents: blockCentsFor(currency) },
+          minutePacks: minutePacksFor(currency),
+          minutesCustomRateCents: blockCentsFor(currency) / MINUTE_BLOCK.minutes,
+          minutesCustomRateEuros: blockCentsFor(currency) / MINUTE_BLOCK.minutes / 100,
           tokenPacks: pricing.tokenPacks,
           tokensCustomRateCents: pricing.tokensCustomRateCents,
           tokensCustomRateEuros: pricing.tokensCustomRateCents / 100,
@@ -142,11 +153,16 @@ export const paymentCheckoutController = {
       if (!['stripe', 'paypal'].includes(provider)) {
         return res.status(400).json({ error: "provider must be 'stripe' or 'paypal'" });
       }
+      // Recharges de minutes (seules ou avec des jetons) : Stripe seulement (décision du fondateur du 26/11/2026).
+      if (provider !== 'stripe' && (purpose === 'minutes_purchase' || purpose === 'bundle_purchase')) {
+        return res.status(400).json({ error: 'stripe_only', code: 'STRIPE_ONLY_FOR_MINUTES', message: 'Les minutes s’achètent par carte (Stripe) uniquement.' });
+      }
 
-      const currency = purpose === 'wallet_deposit' ? WALLET_CURRENCY : await purchaseCurrency(req, companyId);
-      const amountCents = await computeAmountCents(purpose, { amountEuros, minutes, tokens });
+      const currency = purpose === 'wallet_deposit' ? WALLET_CURRENCY : await offerPurchaseCurrency(req, companyId);
+      const amountCents = await computeAmountCents(purpose, { amountEuros, minutes, tokens, currency });
       if (amountCents == null || amountCents <= 0) {
-        return res.status(400).json({ error: 'Invalid amount, minutes or tokens quantity' });
+        // Minutes : par tranche de 30 min seulement (30, 60, 90…).
+        return res.status(400).json({ error: 'Invalid amount, minutes or tokens quantity', ...(purpose === 'minutes_purchase' || purpose === 'bundle_purchase' ? { code: 'MINUTES_BLOCK_REQUIRED', blockMinutes: MINUTE_BLOCK.minutes } : {}) });
       }
 
       const quantity =
@@ -307,6 +323,72 @@ export const paymentCheckoutController = {
     }
   },
 
+  /**
+   * POST /api/nomad/traveler/checkout/init { companyId, chosenNumber: { phoneNumber }, currency?, returnUrl? } — NOMAD Traveler :
+   * paiement UNIQUE Stripe (mode payment, jamais d'abonnement ni de PayPal), 9,99 dans la devise choisie (€, $, £ : même chiffre).
+   * Gardes avant toute création de paiement : propriétaire de SA société, aucun abonnement NOMAD/Traveler en cours, identité vérifiée,
+   * pièces de voyage conformes, numéro d'un pays Traveler encore disponible. Confirmation : POST /api/payments/checkout/confirm.
+   */
+  async initTravelerCheckout(req, res) {
+    try {
+      const { companyId, chosenNumber, currency: askedCurrency, returnUrl, apiBaseUrl, uiMode } = req.body || {};
+      const embedded = uiMode === 'embedded';
+      if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) return res.status(400).json({ error: 'Valid companyId is required', code: 'INVALID_COMPANY' });
+      const access = await guardCompanyAccess(req, res, companyId, { ownerOnly: true });
+      if (!access) return;
+      const traveler = await import('../services/nomadTraveler.js');
+      const gate = await traveler.travelerPaymentGate(companyId, { chosenNumber });
+      if (!gate.ok) return res.status(gate.status).json(gate.body);
+      const availability = await traveler.travelerNumberAvailable(gate.chosen.phoneNumber);
+      if (availability.unknown) return res.status(503).json({ error: 'NUMBER_CHECK_UNAVAILABLE', code: 'NUMBER_CHECK_UNAVAILABLE', retryable: true });
+      if (!availability.available) return res.status(409).json({ error: 'NUMBER_NO_LONGER_AVAILABLE', code: 'NUMBER_NO_LONGER_AVAILABLE' });
+      if (!stripeService.isConfigured()) return res.status(503).json({ error: 'Stripe not configured', code: 'STRIPE_UNAVAILABLE' });
+      // Prix et devise fixés par le pays du numéro choisi (Canada : 14,99 $ US ; US 9,99 $ ; UK 9,99 £ ; FR 9,99 €), jamais par la demande.
+      const price = travelerPriceFor(gate.chosen.country);
+      if (!price) return res.status(400).json({ error: 'TRAVELER_NUMBER_NOT_ALLOWED', code: 'TRAVELER_NUMBER_NOT_ALLOWED' });
+      const currency = price.currency;
+      void askedCurrency;
+      const payment = await CompanyPayment.create({
+        companyId: new mongoose.Types.ObjectId(companyId),
+        purpose: 'traveler_purchase',
+        provider: 'stripe',
+        amount: price.cents,
+        currency,
+        status: 'pending',
+        meta: { userId: String(access.userId), companyId: String(companyId), chosenNumber: gate.chosen, offer: 'nomad_traveler', days: TRAVELER_DAYS },
+      });
+      const returnBase = stripeReturnBase();
+      const returnTo = sanitizePaymentReturnUrl(returnUrl, `${returnBase}/`);
+      const apiBase = ((apiBaseUrl && String(apiBaseUrl)) || publicApiBase()).replace(/\/$/, '');
+      const successQuery = new URLSearchParams({ paymentId: String(payment._id), flow: 'payment', returnTo, apiBase });
+      try {
+        const session = await stripeService.createOneShotCheckoutSession({
+          amountCents: price.cents,
+          currency,
+          productName: `NOMAD Traveler — ${TRAVELER_DAYS} jours`,
+          successUrl: `${returnBase}/stripe-return.html?${successQuery.toString()}&session_id={CHECKOUT_SESSION_ID}`,
+          cancelUrl: `${returnBase}/stripe-cancel.html?paymentId=${payment._id}&returnTo=${encodeURIComponent(returnTo)}`,
+          clientReferenceId: payment._id,
+          customerId: await findCompanyStripeCustomerId(companyId),
+          locale: stripeLocaleFromRequest(req),
+          metadata: { purpose: 'traveler_purchase', companyId: String(companyId), paymentId: String(payment._id) },
+          uiMode: embedded ? 'embedded' : null,
+        });
+        payment.providerRef = session.id;
+        payment.checkoutUrl = session.url || null;
+        await payment.save();
+        return res.status(201).json({ success: true, paymentId: payment._id, checkoutUrl: session.url || null, ...(embedded ? { clientSecret: session.client_secret } : {}), amount: price.cents, currency, provider: 'stripe' });
+      } catch (stripeErr) {
+        await CompanyPayment.findByIdAndDelete(payment._id);
+        console.error('[nomad-traveler] Stripe :', stripeErr.message);
+        return res.status(502).json({ error: 'Stripe checkout creation failed', code: 'STRIPE_CHECKOUT_FAILED' });
+      }
+    } catch (error) {
+      console.error('[nomad-traveler/checkout/init]', error?.message || error);
+      return res.status(500).json({ error: 'Failed to initialize checkout' });
+    }
+  },
+
   async confirmCheckout(req, res) {
     try {
       const { paymentId, providerRef } = req.body;
@@ -320,7 +402,15 @@ export const paymentCheckoutController = {
       }
 
       // Route anonyme : la réponse ne porte jamais le document paiement (société, référence, lien) ni de solde.
-      const done = () => res.status(200).json({ success: true, status: payment.status, purpose: payment.purpose });
+      // NOMAD Traveler : issue de l'achat du numéro (faite pendant l'exécution du paiement), comme la confirmation d'abonnement NOMAD.
+      const done = async () => {
+        let numberPurchase;
+        if (payment.purpose === 'traveler_purchase') {
+          const np = (await CompanyPayment.findById(payment._id).select('meta.numberPurchase').lean())?.meta?.numberPurchase;
+          if (np?.status) numberPurchase = { status: np.status, ...(np.phoneNumber ? { phoneNumber: np.phoneNumber } : {}) };
+        }
+        return res.status(200).json({ success: true, status: payment.status, purpose: payment.purpose, ...(numberPurchase ? { numberPurchase } : {}) });
+      };
 
       if (payment.status === 'succeeded') {
         await fulfillCompanyPaymentOnce(payment);

@@ -41,9 +41,14 @@ function splitTokenGrantKey(grantKey) {
  * Credit the plan's included AI tokens once per billing period.
  * "AI TOKEN (Million)" is stored as an absolute count on aiTokensIncluded.
  */
-export async function ensurePlanTokensGranted(companyId) {
+export async function ensurePlanTokensGranted(companyId, { travelerGrant } = {}) {
   const oid = toCompanyObjectId(companyId);
   if (!oid) return { granted: false, allowance: 0 };
+
+  // NOMAD Traveler (27/11/2026) : 20 000 jetons une fois par achat (pas de métadonnée Stripe, pas de période mensuelle).
+  const grantTraveler = travelerGrant || (await import('./nomadTraveler.js')).ensureTravelerTokensGranted;
+  const traveler = await grantTraveler(companyId);
+  if (traveler?.allowance > 0) return { ...traveler, planName: 'NOMAD TRAVELER' };
 
   const subscription = await Subscription.findOne({
     companyId: String(companyId),

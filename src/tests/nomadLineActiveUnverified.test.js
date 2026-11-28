@@ -125,6 +125,8 @@ const ALLOWED = {
   'src/services/nomadSoloPayment.js': ['stillAvailableFor', 'nomadSoloPaymentGate', 'defaultVerifiedCountries', 'nomadPendingNumberPurchase'],
   'src/services/numberAvailability.js': ['availabilityFor', 'defaultVerifiedCountries', 'soloCheckoutEligibility'],
   'index.js': ['identity-recover-timer'],
+  // NOMAD Traveler (26/11/2026) : identité vérifiée exigée pour un NOUVEL achat (pièces de voyage, paiement unique, nouveau numéro).
+  'src/services/nomadTraveler.js': ['verifiedIdentity'],
   'src/services/numberCountry.js': ['defaultVerifiedCountries', 'defaultHasIdentityRecord', 'soloIdentityGate', 'nomadPurchaseIdentityGate', 'checkNumberCountry', 'isSoloProfileStrict'],
 };
 const SKIP = (rel) => rel.startsWith('src/tests/') || rel.startsWith('src/services/identity/') || rel.startsWith('src/models/Identity') || rel === 'src/routes/identityVerification.js';

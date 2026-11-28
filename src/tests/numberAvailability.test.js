@@ -228,7 +228,7 @@ describe('route GET /api/phone-numbers/availability', () => {
     phoneNumberService.listClaimableInventory = async () => [];
     phoneNumberService.searchTwilioNumbers = async (p) => {
       searches.push(p.countryCode);
-      if (p.countryCode === 'BE') throw err({ message: 'Twilio down' });
+      if (p.countryCode === 'GB') throw err({ message: 'Twilio down' }); // panne simulée (pays actif ; BE est « bientôt » depuis le 27/11)
       return p.countryCode === 'MA' ? [] : [{ phoneNumber: '+33142000000' }];
     };
   });
@@ -238,7 +238,9 @@ describe('route GET /api/phone-numbers/availability', () => {
   // Décision du fondateur « oui me prévenir » : la page NOMAD (visiteur non connecté) lit la disponibilité du pays choisi.
   it('sans companyId ni session : public, réponse réduite à { available, reason?, countryCode }', async () => {
     assert.deepEqual(await call('/availability?countryCode=FR'), { status: 200, body: { available: true, countryCode: 'FR' } });
-    assert.deepEqual(await call('/availability?countryCode=ma'), { status: 200, body: { available: false, reason: 'no_inventory', countryCode: 'MA' } });
+    assert.deepEqual(await call('/availability?countryCode=ma'), { status: 200, body: { available: false, reason: 'not_offered', countryCode: 'MA' } }, 'Maroc retiré de l\'offre NOMAD (26/11)');
+    assert.deepEqual(await call('/availability?countryCode=IT'), { status: 200, body: { available: false, reason: 'not_offered', countryCode: 'IT' } }, 'Italie retirée');
+    assert.ok(!searches.includes('MA') && !searches.includes('IT'), 'aucune recherche opérateur pour un pays non proposé');
   });
   it('aucune fuite : ni numéro ni détail d’inventaire, même quand l’opérateur en renvoie', async () => {
     const r = await call('/availability?countryCode=FR');
@@ -280,18 +282,25 @@ describe('route GET /api/phone-numbers/availability', () => {
     assert.deepEqual(searches, []);
   });
   it('panne de l’opérateur (public) : 503 AVAILABILITY_UNAVAILABLE, rien d’inventé', async () => {
-    const r = await call('/availability?countryCode=BE');
+    const r = await call('/availability?countryCode=GB');
     assert.equal(r.status, 503);
     assert.equal(r.body.code, 'AVAILABILITY_UNAVAILABLE');
   });
   it('sans companyId (avant paiement) : disponibilité du pays', async () => {
     assert.deepEqual(await call('/availability?countryCode=FR', 'jp'), { status: 200, body: { available: true, countryCode: 'FR' } });
-    assert.deepEqual(await call('/availability?countryCode=ma', 'jp'), { status: 200, body: { available: false, reason: 'no_inventory', countryCode: 'MA' } });
+    assert.deepEqual(await call('/availability?countryCode=ma', 'jp'), { status: 200, body: { available: false, reason: 'not_offered', countryCode: 'MA' } });
+    for (const cc of ['ES', 'AE', 'SA', 'IT']) assert.equal((await call(`/availability?countryCode=${cc}`, 'jp')).body.reason, 'not_offered', cc);
+    for (const cc of ['US', 'CA', 'FR']) assert.notEqual((await call(`/availability?countryCode=${cc}`, 'jp')).body.reason, 'not_offered', cc);
+    // Allemagne, Pays-Bas, Belgique : « bientôt disponible » (27/11), sans recherche opérateur, connecté ou non.
+    for (const cc of ['DE', 'NL', 'BE']) {
+      assert.deepEqual((await call(`/availability?countryCode=${cc}`, 'jp')).body, { available: false, reason: 'coming_soon', countryCode: cc });
+      assert.equal((await call(`/availability?countryCode=${cc}`)).body.reason, 'coming_soon', cc);
+    }
     assert.equal((await call('/availability', 'jp')).status, 400);
   });
   it('companyId d’une autre entreprise : refusé ; panne Twilio : 503 sans réponse inventée', async () => {
     assert.equal((await call(`/availability?countryCode=FR&companyId=${MA_CO}`, 'stranger')).status, 403);
-    const down = await call('/availability?countryCode=BE', 'jp');
+    const down = await call('/availability?countryCode=GB', 'jp');
     assert.equal(down.status, 503);
     assert.equal(down.body.code, 'AVAILABILITY_UNAVAILABLE', 'code de panne unifié avec la garde du paiement');
   });

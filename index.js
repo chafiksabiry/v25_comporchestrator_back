@@ -56,6 +56,8 @@ import { identityVerificationRoutes, identityAdminRoutes } from './src/routes/id
 import { getIdentityConfig } from './src/services/identity/config.js';
 import { trialCallRoutes, trialCallController } from './src/routes/trialCall.js';
 import { nomadAppLinkRoutes } from './src/routes/nomadAppLink.js';
+import { nomadTravelerRoutes } from './src/routes/nomadTraveler.js';
+import { expireTravelers, ensureTravelerPlan } from './src/services/nomadTraveler.js';
 import { startTrialCallJobs } from './src/services/trialCall/jobs.js';
 import { runNomadNumberLifecycle } from './src/services/nomadNumberLifecycle.js';
 import { mongoTrialStore } from './src/services/trialCall/store.js';
@@ -178,6 +180,8 @@ app.use('/admin/identity', identityAdminRoutes);
 app.use('/api/trial-call', trialCallRoutes);
 // « M'envoyer le lien par SMS » (app HARX Nomad) : lien harx.ai/app vers le mobile du compte, 1 par minute et 3 par jour.
 app.use('/api/nomad-app', nomadAppLinkRoutes);
+// NOMAD Traveler (26/11/2026) : offre, pièces de voyage, numéros US/CA/UK/FR, paiement unique.
+app.use('/api/nomad/traveler', nomadTravelerRoutes);
 
 // HARX WhatsApp AI Assistant : webhook Meta + liaison de compte + administration du support (voir docs/WHATSAPP_AI_ASSISTANT.md).
 app.use('/api/whatsapp', whatsappModule.router);
@@ -270,6 +274,14 @@ setInterval(() => {
     console.warn('[nomad-numero-cron]', err.message);
   });
 }, RETRACTION_CRON_MS);
+
+// NOMAD Traveler : résiliation automatique au 21e jour (numéro rendu au fournisseur, minutes restantes perdues). Idempotent, toutes les 15 min ;
+// TRAVELER_EXPIRY_DRY_RUN=true : journalise sans rien modifier. Forfait local Traveler créé au démarrage (idempotent).
+setTimeout(() => { if (mongoose.connection.readyState === 1) ensureTravelerPlan().catch((e) => console.warn('[nomad-traveler] forfait :', e?.message || e)); }, 20 * 1000);
+setInterval(() => {
+  if (mongoose.connection.readyState !== 1) return;
+  expireTravelers().catch((err) => console.warn('[nomad-traveler-cron]', err?.message || err));
+}, 15 * 60 * 1000);
 
 // Métadonnées des produits Stripe (dont phone_line_price_cents) -> forfaits : au démarrage puis toutes les 6 h, en plus du
 // webhook product.updated, pour qu'un webhook manqué ne laisse pas un prix de ligne périmé.

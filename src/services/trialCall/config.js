@@ -93,7 +93,7 @@ export function trialConfig(env = process.env) {
     twilioAuthToken: trimmed(env.TWILIO_AUTH_TOKEN),
     pinnedAppSid: /^AP[0-9a-f]{32}$/i.test(trimmed(env.TRIAL_CALL_TWIML_APP_SID)) ? trimmed(env.TRIAL_CALL_TWIML_APP_SID) : '',
     countries: parseCountries(env.TRIAL_CALL_COUNTRIES),
-    numbers: parseTrialNumbers(env.TRIAL_CALL_NUMBERS),
+    numbers: trialNumbersFromEnv(env),
     alertEmail: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed(env.TRIAL_CALL_ALERT_EMAIL)) ? trimmed(env.TRIAL_CALL_ALERT_EMAIL) : '',
     alertSlackUrl: /^https:\/\/hooks\.slack\.com\/\S+$/.test(slack) ? slack : '',
     webOtpDomain: /^[a-z0-9.-]+\.[a-z]{2,}$/.test(webOtp) ? webOtp : '',
@@ -136,7 +136,15 @@ export function trialNumberFor(cfg, country) {
  * Numéros d'essai déclarés dans l'environnement, QUEL QUE SOIT le drapeau : jamais proposés à la vente (inventaire Twilio,
  * phoneNumberService.isInventoryCandidate), jamais appelables comme destination.
  */
-export const configuredTrialNumbers = (env = process.env) => Object.values(parseTrialNumbers(env.TRIAL_CALL_NUMBERS));
+export const configuredTrialNumbers = (env = process.env) => Object.values(trialNumbersFromEnv(env));
+
+/**
+ * Numéros d'essai : TRIAL_CALL_NUMBERS, complété par TRIAL_CALL_NUMBERS_EXTRA (27/11/2026 : numéros d'essai US, CA, UK pris dans le
+ * stock HARX déjà acheté, ajoutés sans réécrire la variable existante). Un pays présent dans les deux garde TRIAL_CALL_NUMBERS.
+ */
+export function trialNumbersFromEnv(env = process.env) {
+  return { ...parseTrialNumbers(env.TRIAL_CALL_NUMBERS_EXTRA), ...parseTrialNumbers(env.TRIAL_CALL_NUMBERS) };
+}
 
 /** Tous les numéros d'essai configurés (jamais appelables comme destination). */
 export const allTrialNumbers = (cfg) => Object.values(cfg.numbers);

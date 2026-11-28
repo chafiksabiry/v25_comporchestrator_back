@@ -38,6 +38,8 @@ export function buildAnalyzeUrl({ apiBase, companyId, from, recordingSid, langua
 }
 
 export async function getTokensBalance(companyId) {
+  // Rattrapage NOMAD Traveler : 20 000 jetons inclus accordés (une fois par achat) avant la lecture du solde.
+  try { await (await import('./nomadTraveler.js')).ensureTravelerTokensGranted(companyId); } catch (e) { console.warn('[voicemail] jetons Traveler non accordés :', e?.message || e); }
   const row = await TokensCompany.findOne({ companyId }).lean();
   return Number(row?.tokens) || 0;
 }

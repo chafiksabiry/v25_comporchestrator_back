@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import jwt from 'jsonwebtoken';
 import { companyCountry, companyCountryRaw, normalizeCountryCode } from '../middleware/companyScope.js';
 import { currencyForCountry, normalizeCurrency, oneShotCurrencyForCountry } from './currency.js';
@@ -101,4 +102,46 @@ export async function phoneLineCurrency(req, companyId, { monthly = false, hintC
   if (/^[A-Z]{2}$/.test(hint)) return { currency: forCountry(hint).toUpperCase(), source: 'client_country' };
   console.warn(JSON.stringify({ event: 'phone_line_currency_fallback', companyId: companyId ? String(companyId) : null, reason }));
   return { currency: FALLBACK_PURCHASE_CURRENCY, source: 'fallback' };
+}
+
+/** Devise du NOMAD Traveler EN COURS de la société (devise de son paiement unique), sinon null. */
+async function defaultTravelerCurrency(companyId) {
+  const { Subscription } = await import('../models/Subscription.js');
+  const live = await Subscription.findOne({ companyId: String(companyId), status: { $in: ['active', 'trialing', 'past_due', 'unpaid'] }, stripeSubscriptionId: { $regex: '^traveler_' } }).select('_id').lean();
+  if (!live) return null;
+  const { default: CompanyPayment } = await import('../models/CompanyPayment.js');
+  const p = await CompanyPayment.findOne({ companyId: String(companyId), purpose: 'traveler_purchase', status: 'succeeded' }).sort({ createdAt: -1 }).select('currency').lean();
+  return p?.currency || null;
+}
+
+/**
+ * Devise (EUR, USD ou GBP) d'une recharge de minutes ou de jetons NOMAD (décision du 26/11/2026) : celle de l'ABONNEMENT du client,
+ * plus de packs toujours en EUR. Même chiffre dans les trois devises (30 min pour 5 €, 5 $ ou 5 £).
+ *  1. appelant identifié ET membre de la société (lecture du pays par `lookup`, qui le vérifie), sinon EUR ;
+ *  2. NOMAD Traveler en cours : devise de son paiement unique (celle du pays du numéro choisi : $, £ ou €) ;
+ *  3. devise du client Stripe de l'abonnement d'offre (NOMAD), si c'est EUR, USD, GBP ou CAD ;
+ *  4. sinon devise du pays de la société (GB -> GBP, US -> USD, sinon EUR ; Canada : EUR, aucun montant CAD décidé).
+ * Ne lève jamais.
+ * Abonnement en dollars canadiens : CAD (30 min = 8 $ CA).
+ * @returns {Promise<'EUR'|'USD'|'GBP'|'CAD'>}
+ */
+export async function offerPurchaseCurrency(req, companyId, { lookup = companyCountry, customerCurrency = offerCustomerCurrency, travelerCurrency = defaultTravelerCurrency, dbReady = () => mongoose.connection.readyState === 1 } = {}) {
+  try {
+    if (!companyId || !identifyCaller(req)) return FALLBACK_PURCHASE_CURRENCY;
+    const country = await lookup(req, String(companyId));
+    // Dollar canadien accepté pour un abonnement en CAD (30 min = 8 $ CA, décision du 26/11/2026).
+    const ok = (c) => { const v = String(c || '').trim().toUpperCase(); return ['EUR', 'USD', 'GBP', 'CAD'].includes(v) ? v : null; };
+    let fixed = null;
+    // Base non connectée (démarrage, tests) : pas de lecture de l'abonnement, devise du pays (comme avant).
+    if (dbReady()) {
+      // Traveler d'abord : son client Stripe peut garder la devise d'un ancien abonnement NOMAD (ex. EUR) alors que Traveler a été payé en £.
+      try { fixed = ok(await travelerCurrency(String(companyId))); } catch { fixed = null; }
+      if (fixed) return fixed;
+      try { fixed = ok(await customerCurrency(String(companyId))); } catch { fixed = null; }
+      if (fixed) return fixed;
+    }
+    return oneShotCurrencyForCountry(country).toUpperCase();
+  } catch {
+    return FALLBACK_PURCHASE_CURRENCY;
+  }
 }

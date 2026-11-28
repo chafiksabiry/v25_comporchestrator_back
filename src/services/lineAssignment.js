@@ -26,7 +26,7 @@ const fail = (status, code, message) => new AssignmentError(status, code, messag
 export function offerKind(limits) {
   if (limits?.product !== 'callcenter') return 'other';
   if (limits.callcenterTier === 'accueil') return 'accueil';
-  if (limits.callcenterTier === 'nomad_solo') return 'nomad';
+  if (limits.callcenterTier === 'nomad_solo' || limits.callcenterTier === 'nomad_traveler') return 'nomad';
   if (limits.callcenterTier === 'full_scope' || limits.callcenterTier === 'multi_clients') return 'agents';
   return 'other';
 }

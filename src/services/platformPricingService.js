@@ -2,13 +2,17 @@ import mongoose from 'mongoose';
 import { loadCompanyPlanLimits } from './planLimits.js';
 import { cloudPhoneLinePrice } from './phoneLineSubscription.js';
 
-const DEFAULT_MINUTE_PACKS = [
-  { minutes: 150, priceCents: 1000, label: 'Standard' },
-  { minutes: 500, priceCents: 3200, label: 'Pro' },
-  { minutes: 1000, priceCents: 6200, label: 'Expert' },
-];
+import { MINUTE_BLOCK, MINUTE_PACKS as OFFER_MINUTE_PACKS, minutesBlockPriceCents } from './nomadOffers.js';
 
-const DEFAULT_MINUTES_CUSTOM_RATE_CENTS = Math.round((1000 / 150) * 100) / 100;
+/**
+ * Recharges de minutes (décision du fondateur du 26/11/2026) : 30 minutes pour 5 (même chiffre en €, $, £), choix 60 / 150 / 300 min
+ * ou toute quantité par tranche de 30 min. Règle de gestion fixée dans le code (nomadOffers.js) : les anciens packs éventuellement
+ * enregistrés en base (`platformpricings.minutePacks`, 150 min pour 10…) ne s'appliquent plus.
+ */
+const DEFAULT_MINUTE_PACKS = OFFER_MINUTE_PACKS.map((p) => ({ ...p }));
+
+/** Compatibilité (anciens clients) : prix d'une tranche ramené à la minute ; jamais affiché par le portail NOMAD. */
+const DEFAULT_MINUTES_CUSTOM_RATE_CENTS = MINUTE_BLOCK.priceCents / MINUTE_BLOCK.minutes;
 
 /** AI token packs (prepaid). priceCents for the whole pack. */
 const DEFAULT_TOKEN_PACKS = [
@@ -30,9 +34,8 @@ let cache = null;
 let cacheAt = 0;
 const CACHE_MS = 30_000;
 
-function activeMinutePacks(doc) {
-  const packs = Array.isArray(doc?.minutePacks) ? doc.minutePacks : DEFAULT_MINUTE_PACKS;
-  return packs
+function activeMinutePacks() {
+  return DEFAULT_MINUTE_PACKS
     .filter((pack) => pack.active !== false)
     .map((pack) => ({
       label: pack.label,
@@ -55,12 +58,9 @@ function activeTokenPacks(doc) {
 }
 
 function buildPricingSnapshot(doc) {
-  const minutePacks = activeMinutePacks(doc);
+  const minutePacks = activeMinutePacks();
   const tokenPacks = activeTokenPacks(doc);
-  const customRate =
-    typeof doc?.minutesCustomRateCents === 'number' && doc.minutesCustomRateCents > 0
-      ? doc.minutesCustomRateCents
-      : DEFAULT_MINUTES_CUSTOM_RATE_CENTS;
+  const customRate = DEFAULT_MINUTES_CUSTOM_RATE_CENTS;
   const tokensCustomRate =
     typeof doc?.tokensCustomRateCents === 'number' && doc.tokensCustomRateCents > 0
       ? doc.tokensCustomRateCents
@@ -68,6 +68,7 @@ function buildPricingSnapshot(doc) {
 
   return {
     minutePacks,
+    minuteBlock: { minutes: MINUTE_BLOCK.minutes, priceCents: MINUTE_BLOCK.priceCents },
     minutesCustomRateCents: customRate,
     tokenPacks,
     tokensCustomRateCents: tokensCustomRate,
@@ -106,15 +107,9 @@ export async function getPlatformPricing() {
   return cache;
 }
 
-export async function computeMinutesPurchaseCents(minutes) {
-  const qty = Number(minutes);
-  if (!Number.isFinite(qty) || qty <= 0) return null;
-
-  const pricing = await getPlatformPricing();
-  const pack = pricing.minutePacks.find((entry) => entry.minutes === qty);
-  if (pack) return pack.priceCents;
-
-  return Math.round(qty * pricing.minutesCustomRateCents);
+/** Prix d'une recharge : multiple de 30 min, 5 par tranche (les trois choix proposés suivent la même règle) ; sinon null (refusée). */
+export async function computeMinutesPurchaseCents(minutes, currency = 'EUR') {
+  return minutesBlockPriceCents(minutes, currency);
 }
 
 export async function computeTokensPurchaseCents(tokens) {

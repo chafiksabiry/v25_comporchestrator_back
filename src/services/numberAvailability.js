@@ -1,3 +1,4 @@
+import { isNomadNumberCountry, isNomadSoonCountry } from './nomadOffers.js';
 import { phoneNumberService } from './phoneNumberService.js';
 import { checkNumberCountry } from './numberCountry.js';
 import { companyNumberProfile, normalizeCountryCode, ScopeError } from '../middleware/companyScope.js';
@@ -87,6 +88,10 @@ export async function countryAvailability(countryCode, { service = phoneNumberSe
 export async function availabilityFor(req, { countryCode, companyId } = {}, deps = {}) {
   const cc = normalizeCountryCode(countryCode);
   if (!/^[A-Z]{2}$/.test(cc)) return { status: 400, body: { error: 'A two-letter countryCode is required', code: 'COUNTRY_CODE_REQUIRED' } };
+  // Offre NOMAD : seulement US, CA, GB, FR, DE, NL, BE (décision du 26/11/2026). Ailleurs : jamais « disponible », sans lecture Twilio.
+  // Allemagne, Pays-Bas, Belgique : « bientôt disponible » (27/11/2026).
+  if (isNomadSoonCountry(cc)) return { status: 200, body: { available: false, reason: 'coming_soon', countryCode: cc } };
+  if (!isNomadNumberCountry(cc === 'UK' ? 'GB' : cc)) return { status: 200, body: { available: false, reason: 'not_offered', countryCode: cc } };
   if (companyId) {
     // Affichage seulement : sans vérification d'identité, la règle historique s'applique (le paiement et l'achat restent gardés).
     const gate = await (deps.check || checkNumberCountry)(req, companyId, { countryCode: cc, allowUnverified: true }, deps.countryDeps || {});

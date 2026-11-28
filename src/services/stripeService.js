@@ -3,6 +3,7 @@ import { config } from '../config/env.js';
 import { withoutPromotion } from './checkoutNoPromotion.js';
 import { resolveStripeLocale } from './stripeLocale.js';
 import { priceAmounts } from './currency.js';
+import { INCLUDED_MINUTES_BY_TIER, callcenterTierFromMetadata } from './callcenterTier.js';
 
 let stripeOverride = null;
 /** Réservé aux tests : injecte un faux client Stripe (null pour revenir au vrai). */
@@ -53,9 +54,12 @@ async function createOneShotCheckoutSession({
   captureMethod = 'automatic',
   customerId = null,
   invoiceDescription = null,
-  locale = null
+  locale = null,
+  uiMode = null
 }) {
   const manual = captureMethod === 'manual';
+  // Paiement intégré dans HARX (même fenêtre que l'abonnement NOMAD, 27/11/2026) : pas de redirection, confirmation par le portail.
+  const embedded = uiMode === 'embedded';
   // Facture téléchargeable pour les achats ponctuels. Non activée en capture manuelle (autorisation puis capture
   // différée après commande du numéro) : le comportement de la facture Checkout y est incertain et ne doit pas casser l'achat.
   const invoiceCreation = manual ? {} : {
@@ -83,8 +87,7 @@ async function createOneShotCheckoutSession({
         quantity: 1
       }
     ],
-    success_url: successUrl,
-    cancel_url: cancelUrl,
+    ...(embedded ? { ui_mode: 'embedded_page', redirect_on_completion: 'never' } : { success_url: successUrl, cancel_url: cancelUrl }),
     client_reference_id: String(clientReferenceId),
     ...(manual ? { payment_intent_data: { capture_method: 'manual' } } : {}),
     metadata: {
@@ -381,6 +384,9 @@ export function extractStripeProductLimits(product) {
   if (gigs != null) out.maxGigs = Math.round(gigs);
   if (reps != null) out.maxReps = Math.round(reps);
   if (minutes != null) out.communicationMinutes = Math.round(minutes);
+  // NOMAD (120 min) et NOMAD Traveler (30 min) : minutes incluses fixées par règle de gestion (26/11/2026), quelle que soit la métadonnée.
+  const forcedMinutes = INCLUDED_MINUTES_BY_TIER[callcenterTierFromMetadata(meta)];
+  if (forcedMinutes != null) out.communicationMinutes = forcedMinutes;
   if (localNumbers != null) out.activeLocalNumbers = Math.round(localNumbers);
 
   const aiEntry = metaFind(meta, 'AI TOKEN (Million)', 'AI TOKEN');

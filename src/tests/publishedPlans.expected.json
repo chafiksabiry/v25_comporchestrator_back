@@ -21,7 +21,7 @@
     "stripePriceId": "price_nomad",
     "description": "Nomad Solo description",
     "features": [
-     "Communication minutes: 30",
+     "Communication minutes: 120",
      "Active local numbers: 1",
      "AI tokens: 1",
      "Nomad Solo feature"
@@ -41,7 +41,7 @@
     "aiAgentIncludedMinutes": null,
     "aiAgentOverageCentsTtc": null,
     "isPopular": false,
-    "communicationMinutes": 30,
+    "communicationMinutes": 120,
     "activeLocalNumbers": 1,
     "aiToken": "1",
     "aiTokensIncluded": 1000000
@@ -242,7 +242,7 @@
     "stripePriceId": "price_nomad",
     "description": "Nomad Solo description",
     "features": [
-     "Communication minutes: 30",
+     "Communication minutes: 120",
      "Active local numbers: 1",
      "AI tokens: 1",
      "Nomad Solo feature"
@@ -262,7 +262,7 @@
     "aiAgentIncludedMinutes": null,
     "aiAgentOverageCentsTtc": null,
     "isPopular": false,
-    "communicationMinutes": 30,
+    "communicationMinutes": 120,
     "activeLocalNumbers": 1,
     "aiToken": "1",
     "aiTokensIncluded": 1000000
@@ -423,7 +423,7 @@
     "stripePriceId": "price_nomad",
     "description": "Nomad Solo description",
     "features": [
-     "Communication minutes: 30",
+     "Communication minutes: 120",
      "Active local numbers: 1",
      "AI tokens: 1",
      "Nomad Solo feature"
@@ -443,7 +443,7 @@
     "aiAgentIncludedMinutes": null,
     "aiAgentOverageCentsTtc": null,
     "isPopular": false,
-    "communicationMinutes": 30,
+    "communicationMinutes": 120,
     "activeLocalNumbers": 1,
     "aiToken": "1",
     "aiTokensIncluded": 1000000
@@ -604,7 +604,7 @@
     "stripePriceId": "price_nomad",
     "description": "Nomad Solo description",
     "features": [
-     "Communication minutes: 30",
+     "Communication minutes: 120",
      "Active local numbers: 1",
      "AI tokens: 1",
      "Nomad Solo feature"
@@ -624,7 +624,7 @@
     "aiAgentIncludedMinutes": null,
     "aiAgentOverageCentsTtc": null,
     "isPopular": false,
-    "communicationMinutes": 30,
+    "communicationMinutes": 120,
     "activeLocalNumbers": 1,
     "aiToken": "1",
     "aiTokensIncluded": 1000000

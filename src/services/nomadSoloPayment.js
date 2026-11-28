@@ -2,8 +2,9 @@ import { normalizeCountryCode } from '../middleware/companyScope.js';
 import { countryOfE164 } from '../utils/e164Country.js';
 import { numberZonePeers, sameNumberZone } from '../utils/numberZone.js';
 import { checkNumberCountry } from './numberCountry.js';
-import { callcenterTierFromMetadata } from './callcenterTier.js';
+import { callcenterTierFromMetadata, isNomadTier } from './callcenterTier.js';
 import { TRIAL_REQUIRED, trialPaymentGate } from './trialCall/paymentGate.js';
+import { NOMAD_ACTIVE_COUNTRIES, isNomadNumberCountry, isNomadSoonCountry } from './nomadOffers.js';
 
 /**
  * Parcours Nomad (PARCOURS.md §4, maquette validée le 23/11) : garde du paiement Nomad Solo et achat du numéro choisi.
@@ -25,6 +26,14 @@ export const NUMBER_OWNED_BY_YOU = 'NUMBER_OWNED_BY_YOU';
 /** Un abonnement NOMAD existe déjà (actif, en essai, ou impayé) : jamais un second abonnement (défaut 2 de l'audit #618). */
 export const NOMAD_SUBSCRIPTION_EXISTS = 'NOMAD_SUBSCRIPTION_EXISTS';
 export { TRIAL_REQUIRED };
+/** Pays du numéro hors de l'offre NOMAD active (décisions des 26 et 27/11/2026 : US, CA, GB, FR ; DE, NL, BE « bientôt »). */
+export const COUNTRY_NOT_OFFERED = 'COUNTRY_NOT_OFFERED';
+
+/** Refus d'un pays hors de l'offre NOMAD, ou null. */
+export function nomadCountryRefusal(country) {
+  if (isNomadNumberCountry(country)) return null;
+  return { ok: false, status: 403, body: { error: 'Country not offered', code: COUNTRY_NOT_OFFERED, offeredCountries: [...NOMAD_ACTIVE_COUNTRIES], ...(isNomadSoonCountry(country) ? { comingSoon: true } : {}), message: 'NOMAD est proposé avec un numéro des États-Unis, du Canada, du Royaume-Uni ou de France.' } };
+}
 
 /** Statuts d'un abonnement NOMAD qui interdisent d'en ouvrir un autre : actif, en essai, impayé (`past_due`, `unpaid`). */
 export const NOMAD_BLOCKING_STATUSES = ['active', 'trialing', 'past_due', 'unpaid'];
@@ -51,7 +60,8 @@ export async function existingNomadSubscriptionGate(companyId, deps = {}) {
   } catch {
     return { ok: false, status: 503, body: { error: 'Subscription state unavailable', code: 'SUBSCRIPTION_STATE_UNAVAILABLE', retryable: true } };
   }
-  const nomad = (subs || []).find((s) => NOMAD_BLOCKING_STATUSES.includes(String(s?.status)) && callcenterTierFromMetadata(metadataOf(s?.planId?.metadata)) === 'nomad_solo');
+  const nomad = (subs || []).find((s) => NOMAD_BLOCKING_STATUSES.includes(String(s?.status)) && isNomadTier(callcenterTierFromMetadata(metadataOf(s?.planId?.metadata))));
+  // NOMAD Traveler en cours compte aussi : jamais deux offres NOMAD en même temps (une seule personne, une seule ligne).
   if (!nomad) return { ok: true };
   const unpaid = UNPAID_STATUSES.includes(String(nomad.status));
   return {
@@ -107,7 +117,9 @@ export async function numberStillAvailable({ phoneNumber, country }, { service }
   let readOne = false;
   for (const cc of peers) {
     try {
-      const list = await svc.twilioClient.availablePhoneNumbers(cc).local.list({ contains, limit: 50 });
+      // Mobile britannique (+447, numéros NOMAD Traveler) : catalogue des mobiles, pas celui des numéros locaux.
+      const type = cc === 'GB' && /^\+447/.test(phoneNumber) ? 'mobile' : 'local';
+      const list = await svc.twilioClient.availablePhoneNumbers(cc)[type].list({ contains, limit: 50 });
       readOne = true;
       if ((list || []).some((n) => n.phoneNumber === phoneNumber)) return { available: true, inventory: false };
     } catch (e) {
@@ -125,6 +137,8 @@ export async function numberStillAvailable({ phoneNumber, country }, { service }
 export async function stillAvailableFor(req, { phoneNumber, country, companyId }, deps = {}) {
   const chosen = normalizeChosenNumber({ phoneNumber, country });
   if (!chosen) return { status: 400, body: { error: 'Invalid phone number', code: CHOSEN_NUMBER_REQUIRED } };
+  const notOffered = nomadCountryRefusal(chosen.country);
+  if (notOffered) return { status: notOffered.status, body: notOffered.body };
   const gate = await (deps.checkCountry || checkNumberCountry)(req, companyId, { countryCode: chosen.country, phoneNumber: chosen.phoneNumber });
   if (!gate.ok) return { status: gate.status, body: gate.body };
   // Recette du 25/11 : numéro déjà détenu par CETTE société (acheté par le webhook juste après le paiement) -> jamais « pris par
@@ -154,6 +168,9 @@ export async function nomadSoloPaymentGate(req, { companyId, userId, chosenNumbe
   if (!chosen) {
     return { ok: false, status: 400, body: { error: 'Chosen number required', code: CHOSEN_NUMBER_REQUIRED, message: 'Choisissez d’abord votre numéro : il est acheté juste après le paiement.' } };
   }
+  // Pays de l'offre NOMAD seulement (décision du 26/11/2026), avant toute autre vérification et tout paiement.
+  const notOffered = nomadCountryRefusal(chosen.country);
+  if (notOffered) return notOffered;
   const gate = await (deps.checkCountry || checkNumberCountry)(req, companyId, { countryCode: chosen.country, phoneNumber: chosen.phoneNumber });
   if (!gate.ok) return { ok: false, status: gate.status, body: gate.body };
   let trial;

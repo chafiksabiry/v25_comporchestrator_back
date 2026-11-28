@@ -53,6 +53,11 @@ export function createSubscriptionStopHandlers(deps = {}) {
       res.status(404).json({ success: false, code: 'NO_SUBSCRIPTION', error: 'Aucun abonnement à gérer.' });
       return null;
     }
+    // NOMAD Traveler : paiement unique, fin automatique au 21e jour ; rien à résilier (décision du 26/11/2026).
+    if (String(subscription.stripeSubscriptionId || '').startsWith('traveler_')) {
+      res.status(409).json({ success: false, code: 'TRAVELER_ONE_TIME', error: 'NOMAD Traveler est un paiement unique : il s’arrête seul à la fin des 21 jours.' });
+      return null;
+    }
     return subscription;
   }
 

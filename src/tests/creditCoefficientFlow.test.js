@@ -1,6 +1,6 @@
 // Run: JWT_SECRET=t TELNYX_API_KEY=x TWILIO_ACCOUNT_SID=ACtest TWILIO_AUTH_TOKEN=x node --test src/tests/creditCoefficientFlow.test.js
-// Câblage du coefficient de crédits (1 minute internationale = N crédits) : lecture du solde, charge-call, webhook sortant, pré-contrôle,
-// lecture pour l'écran Facturation. Un seul solde. Coefficient absent = comportement actuel pour les 4 offres. Base et Twilio SIMULÉS.
+// Décompte 1:1 (décision du 26/11/2026) câblé partout : lecture du solde, charge-call, webhook sortant, pré-contrôle, lecture pour l'écran
+// Facturation. Une configuration résiduelle (INTERNATIONAL_MINUTE_CREDITS, métadonnée international_minute_credits) est sans effet. Base et Twilio SIMULÉS.
 import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import mongoose from 'mongoose';
@@ -74,24 +74,18 @@ after(() => { Object.assign(console, saved); delete process.env.INTERNATIONAL_MI
 const callDoc = (sid, duration, over = {}) => ({ sid, duration, direction: 'outbound', to: FR, startTime: new Date('2026-11-10T10:00:00Z'), companyId: C1, ...over });
 
 // --- Débit (lecture du solde) ------------------------------------------------------------------------------------------------
-test('lecture du solde, coefficient 4 (environnement) : FR→FR 2, FR→DE 1, FR→GB 8, FR→DOM 1, ENTRANTS toujours 1 (même provenance internationale)', async () => {
-  process.env.INTERNATIONAL_MINUTE_CREDITS = '4';
+test('décompte 1:1 (26/11/2026) : configuration résiduelle (INTERNATIONAL_MINUTE_CREDITS=4, métadonnée 3) IGNORÉE, minute entamée = 1 minute, entrants compris', async () => {
+  process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; meta = { ...BASE, international_minute_credits: '3' };
   N = wallet(100);
   CALLS = [callDoc('FRA', 61, { to: FR }), callDoc('EU', 60, { to: DE }), callDoc('INT', 61, { to: GB }), callDoc('DOM', 60, { to: DOM }),
-    callDoc('IN1', 60, { direction: 'inbound', from: GB, to: FR }), callDoc('IN2', 60, { direction: 'inbound', from: 'anonymous', to: FR })];
+    callDoc('IN1', 60, { direction: 'inbound', from: GB, to: FR }), callDoc('IN2', 61, { direction: 'inbound', from: 'anonymous', to: FR })];
   await syncMinutesFromCalls(C1);
-  assert.equal(N.minutes, 100 - 2 - 1 - 8 - 1 - 1 - 1, 'entrant GB = 1 crédit');
-  assert.equal(N.consumedSeconds, 362, 'les secondes réelles restent celles des appels');
+  assert.equal(N.minutes, 100 - 2 - 1 - 2 - 1 - 1 - 2, 'appels passés et reçus : minutes entamées, sans coefficient');
+  assert.equal(N.consumedSeconds, 363, 'les secondes réelles restent celles des appels');
   assert.equal(N.chargedCallSids.length, 6);
   await syncMinutesFromCalls(C1); // idempotence : même clé par appel
-  assert.equal(N.minutes, 86); assert.equal(N.consumedSeconds, 362);
-});
-
-test('coefficient du forfait (métadonnée Stripe) prioritaire sur l\'environnement', async () => {
-  process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; meta = { ...BASE, international_minute_credits: '3' };
-  N = wallet(100); CALLS = [callDoc('INT', 60, { to: GB })];
-  await syncMinutesFromCalls(C1);
-  assert.equal(N.minutes, 97);
+  assert.equal(N.minutes, 91); assert.equal(N.consumedSeconds, 363);
+  assert.equal(lineReads, 0, 'coefficient 1 : les lignes ne sont pas lues');
 });
 
 test('coefficient absent : comportement actuel INCHANGÉ pour les 4 offres (1 crédit par minute, même à l\'international)', async () => {
@@ -104,30 +98,24 @@ test('coefficient absent : comportement actuel INCHANGÉ pour les 4 offres (1 cr
   }
 });
 
-test('coefficient invalide : 1 + avertissement', async () => {
+test('valeurs résiduelles invalides : sans effet ni avertissement', async () => {
   for (const bad of ['0', '101', 'abc', '2.5']) {
     clearCoefficientCache(); meta = { ...BASE, international_minute_credits: bad }; N = wallet(100); CALLS = [callDoc('INT', 61, { to: GB })]; warnings.length = 0;
     await syncMinutesFromCalls(C1);
-    assert.equal(N.minutes, 98, bad); assert.ok(warnings.some((w) => /international_minute_credits/.test(w)), bad);
+    assert.equal(N.minutes, 98, bad); assert.ok(!warnings.some((w) => /international_minute_credits/.test(w)), bad);
   }
 });
 
-test('appel traversant le solde : 61 s international à 4 = 8 crédits ; B.1 : le solde s\'arrête à 0, les 3 crédits de grâce ne sont pas facturés', async () => {
-  process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(5); CALLS = [callDoc('INT', 61, { to: GB })];
+test('appel traversant le solde : 61 s = 2 minutes ; B.1 : le solde s\'arrête à 0, la minute de grâce n\'est pas facturée', async () => {
+  process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(1); CALLS = [callDoc('INT', 61, { to: GB })];
   await syncMinutesFromCalls(C1);
-  assert.equal(N.minutes, 0); assert.equal(N.graceWaivedMinutes, 3);
+  assert.equal(N.minutes, 0); assert.equal(N.graceWaivedMinutes, 1);
 });
 
-test('entreprise sans ligne : pays inconnu => 1 crédit par minute (comportement historique) + avertissement', async () => {
+test('entreprise sans ligne : 1 minute par minute, sans lecture des lignes', async () => {
   process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; lines = []; N = wallet(100); CALLS = [callDoc('INT', 61, { to: GB })];
   await syncMinutesFromCalls(C1);
-  assert.equal(N.minutes, 98); assert.ok(warnings.some((w) => /pays de l'entreprise inconnu/.test(w)));
-});
-
-test('pays de l\'entreprise lu des lignes même si le titulaire a personnalisé ses pays activés', async () => {
-  process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(100); CALLS = [callDoc('INT', 60, { to: GB })];
-  await syncMinutesFromCalls(C1);
-  assert.equal(N.minutes, 96);
+  assert.equal(N.minutes, 98); assert.equal(lineReads, 0);
 });
 
 test('A4 : forfait illisible => 1 crédit par minute (comme avant), le débit normal n\'est jamais sauté ni reporté', async () => {
@@ -153,42 +141,31 @@ test('A4 : coefficient absent ou 1 => aucune lecture des lignes ; forfait lu au 
   assert.equal(lineReads, 0); assert.equal(planReads, 1); assert.equal(N.minutes, 98);
 });
 
-test('A2 : sortant classé d\'après la ligne réellement utilisée (from), repli sur la première ligne de l\'entreprise', async () => {
+test('ligne et destination quelconques : toujours 1 minute par minute entamée', async () => {
   process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(100);
   CALLS = [
-    callDoc('UKLINE', 60, { to: GB, from: '+442071230000' }),            // ligne britannique → Royaume-Uni : domestique, 1
-    callDoc('UKLINE_FR', 60, { to: FR, from: '+442071230000' }),         // ligne britannique → France : international, 4
-    callDoc('FRLINE', 60, { to: GB, from: '+33411112222' }),             // ligne française → Royaume-Uni : international, 4
-    callDoc('CLIENT', 60, { to: GB, from: 'client:cc-sec1' }),           // from illisible : première ligne (France) → 4
-    callDoc('NOFROM', 60, { to: DE }),                                   // pas de from : première ligne (France) → UE : 1
+    callDoc('UKLINE', 60, { to: GB, from: '+442071230000' }), callDoc('UKLINE_FR', 60, { to: FR, from: '+442071230000' }),
+    callDoc('FRLINE', 60, { to: GB, from: '+33411112222' }), callDoc('CLIENT', 60, { to: GB, from: 'client:cc-sec1' }), callDoc('NOFROM', 60, { to: DE }),
   ];
   await syncMinutesFromCalls(C1);
-  assert.equal(N.minutes, 100 - 1 - 4 - 4 - 4 - 1);
-});
-
-test('A2 : la classification ne dépend pas de l\'instant de la synchro (première ligne changée entre-temps)', async () => {
-  process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(100);
-  lines = [{ ...lines[0], phoneNumber: '+442071230000' }]; // la première ligne de l'entreprise est devenue britannique
-  CALLS = [callDoc('FRLINE', 60, { to: GB, from: '+33411112222' })];
-  await syncMinutesFromCalls(C1);
-  assert.equal(N.minutes, 96, 'jugé d\'après la ligne de l\'appel (France → Royaume-Uni)');
+  assert.equal(N.minutes, 95);
 });
 
 // --- charge-call -----------------------------------------------------------------------------------------------------------------
 const res200 = () => { const r = { code: 200 }; r.status = (c) => { r.code = c; return r; }; r.json = (b) => { r.body = b; return r; }; return r; };
 const charge = async (body) => { const r = res200(); await minutesCompanyController.chargeCall({ body }, r); return r; };
 
-test('charge-call : durée relue de l\'appel stocké, crédits selon la zone, idempotent', async () => {
+test('charge-call : durée relue de l\'appel stocké, 1 minute par minute entamée, idempotent', async () => {
   process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(100);
   CALLS = [callDoc('INT', 61, { to: GB }), callDoc('DOM', 61, { to: DE })];
   let r = await charge({ companyId: C1, callSid: 'INT', duration: 99999 });
-  assert.equal(r.body.charged, true); assert.equal(N.minutes, 92, '2 minutes × 4');
+  assert.equal(r.body.charged, true); assert.equal(N.minutes, 98, '2 minutes entamées');
   r = await charge({ companyId: C1, callSid: 'INT', duration: 99999 });
-  assert.equal(r.body.charged, false); assert.equal(N.minutes, 92);
+  assert.equal(r.body.charged, false); assert.equal(N.minutes, 98);
   await charge({ companyId: C1, callSid: 'DOM', duration: 1 });
-  assert.equal(N.minutes, 90, 'UE : 2 × 1');
+  assert.equal(N.minutes, 96);
   await syncMinutesFromCalls(C1);
-  assert.equal(N.minutes, 90, 'la lecture du solde ne redébite pas');
+  assert.equal(N.minutes, 96, 'la lecture du solde ne redébite pas');
 });
 
 test('charge-call : coefficient absent => comme aujourd\'hui ; forfait illisible => 1 crédit (comme avant), débit jamais sauté', async () => {
@@ -215,46 +192,51 @@ const said = (xml) => (String(xml).match(/<Say[^>]*>([^<]*)<\/Say>/) || [])[1];
 // B.1 : le timeLimit du <Dial> ajoute 5 minutes de grâce aux secondes couvertes ; on compare ici les secondes COUVERTES.
 const timeLimit = (xml) => Number((String(xml).match(/timeLimit="(\d+)"/) || [])[1]) - 300;
 
-test('webhook, coefficient 4 : durée = solde / 4 pour l\'international, solde entier pour le national et l\'UE', async () => {
+test('webhook : durée = solde entier (1 minute = 1 minute) ; autre indicatif que la ligne : refusé', async () => {
   process.env.INTERNATIONAL_MINUTE_CREDITS = '4';
   N = wallet(10);
-  assert.equal(timeLimit(await webhook(GB)), 120); assert.equal(timeLimit(await webhook(DE)), 600); assert.equal(timeLimit(await webhook(FR)), 600);
-  N = wallet(8); assert.equal(timeLimit(await webhook(GB)), 120);
+  assert.equal(timeLimit(await webhook(FR)), 600);
+  assert.equal(said(await webhook(GB)), 'From your line, you can only call numbers in its country.');
+  assert.equal(said(await webhook(DE)), 'From your line, you can only call numbers in its country.');
 });
 
-test('webhook, solde insuffisant pour la première minute internationale : refus clair « 1 minute = N crédits »', async () => {
+test('webhook : solde de 3 minutes = 3 minutes d\'appel ; solde nul : message historique', async () => {
   process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(3);
-  assert.equal(said(await webhook(GB)), 'Solde insuffisant pour un appel international : 1 minute = 4 crédits.');
-  assert.equal(timeLimit(await webhook(DE)), 180, 'UE : 3 crédits suffisent');
+  assert.equal(timeLimit(await webhook(FR)), 180);
   N = wallet(0);
-  assert.equal(said(await webhook(DE)), 'Solde de minutes insuffisant.', 'national : message historique');
+  assert.equal(said(await webhook(FR)), 'Solde de minutes insuffisant.');
 });
 
-test('webhook, coefficient absent : comportement actuel pour les 4 offres', async () => {
-  for (const tier of ['nomad_solo', 'accueil', 'full_scope', 'multi_clients']) {
+test('webhook : même décompte pour les offres CLOUD (NOMAD : voir les 120 minutes incluses, test suivant)', async () => {
+  for (const tier of ['accueil', 'full_scope', 'multi_clients']) {
     meta = { harx_product: 'callcenter', callcenter_tier: tier };
-    N = wallet(3); assert.equal(timeLimit(await webhook(GB)), 180, tier);
-    N = wallet(0); assert.equal(said(await webhook(GB)), 'Solde de minutes insuffisant.', tier);
+    N = wallet(3); assert.equal(timeLimit(await webhook(FR)), 180, tier);
+    N = wallet(0); assert.equal(said(await webhook(FR)), 'Solde de minutes insuffisant.', tier);
   }
 });
 
-test('pré-contrôle : 402 avec N pour un solde insuffisant à l\'international ; le reste inchangé', async () => {
-  process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(3);
-  const refused = await pc.minutesShortfall(C1, GB);
-  assert.equal(refused.code, 'MINUTES_INSUFFICIENT_FOR_DESTINATION'); assert.equal(refused.creditsPerMinute, 4); assert.equal(refused.zone, 'international');
-  assert.match(refused.message, /1 minute = 4 credits/); assert.match(refused.messageFr, /1 minute = 4 crédits/); assert.match(refused.messageEs, /1 minuto = 4 créditos/);
-  N = wallet(4); assert.equal(await pc.minutesShortfall(C1, GB), null);
-  N = wallet(3); assert.equal(await pc.minutesShortfall(C1, DE), null, 'UE'); assert.equal(await pc.minutesShortfall(C1), null, 'jeton sans destination');
-  N = wallet(0); assert.equal((await pc.minutesShortfall(C1, DE)).code, 'MINUTES_INSUFFICIENT_FOR_DESTINATION');
-  assert.equal((await pc.minutesShortfall(C1, DE)).creditsPerMinute, undefined, 'message historique pour le national');
-  delete process.env.INTERNATIONAL_MINUTE_CREDITS; N = wallet(3);
-  assert.equal(await pc.minutesShortfall(C1, GB), null, 'coefficient absent : comme avant');
+test('NOMAD : 120 minutes incluses accordées (au lieu de 30), quelle que soit la métadonnée ; NOMAD Traveler : 30', async () => {
+  for (const [tier, included] of [['nomad_solo', 120], ['nomad_traveler', 30]]) {
+    meta = { harx_product: 'callcenter', callcenter_tier: tier, 'COMMUNICATION MINUTES Included': '30' };
+    N = wallet(0);
+    assert.equal(timeLimit(await webhook(FR)), included * 60, tier);
+  }
 });
 
-test('limites du forfait : coefficient exposé (plan, environnement, défaut)', async () => {
+test('pré-contrôle : une minute entière suffit, quelle que soit la destination ; plus de message « 1 minute = N crédits »', async () => {
+  process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(1);
+  assert.equal(await pc.minutesShortfall(C1, GB), null);
+  assert.equal(await pc.minutesShortfall(C1, FR), null); assert.equal(await pc.minutesShortfall(C1), null, 'jeton sans destination');
+  N = wallet(0);
+  const r = await pc.minutesShortfall(C1, FR);
+  assert.equal(r.code, 'MINUTES_INSUFFICIENT_FOR_DESTINATION'); assert.equal(r.creditsPerMinute, undefined); assert.equal(r.zone, null);
+});
+
+test('limites du forfait : coefficient toujours 1, même avec la métadonnée ou la variable', async () => {
   assert.equal((await loadCompanyPlanLimits(C1)).internationalCoefficient, 1);
-  process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; assert.equal((await loadCompanyPlanLimits(C1)).internationalCoefficient, 4);
-  meta = { ...BASE, international_minute_credits: '7' }; assert.equal((await loadCompanyPlanLimits(C1)).internationalCoefficient, 7);
+  process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; assert.equal((await loadCompanyPlanLimits(C1)).internationalCoefficient, 1);
+  meta = { ...BASE, international_minute_credits: '7' }; assert.equal((await loadCompanyPlanLimits(C1)).internationalCoefficient, 1);
+  assert.equal((await loadCompanyPlanLimits(C1)).internationalCoefficientSource, 'fixed');
 });
 
 // --- Lecture pour l'écran Facturation -----------------------------------------------------------------------------------------
@@ -274,10 +256,10 @@ test('endpoint : crédits restants, coefficient appliqué, minutes international
   assert.equal(one.internationalCreditsPerMinute, 1); assert.equal(one.internationalMinutesEquivalent, 10);
 });
 
-test('A5 : lecture Facturation avec forfait illisible (limits null) : coefficient de l\'environnement', async () => {
+test('A5 : lecture Facturation avec forfait illisible (limits null) : 1, la variable n\'est plus lue', async () => {
   process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(10);
   const d = (await get(handlers({ loadLimits: async () => null }))).body.data;
-  assert.equal(d.internationalCreditsPerMinute, 4); assert.equal(d.coefficientSource, 'env'); assert.equal(d.internationalMinutesEquivalent, 2);
+  assert.equal(d.internationalCreditsPerMinute, 1); assert.equal(d.coefficientSource, 'fixed'); assert.equal(d.internationalMinutesEquivalent, 10);
 });
 
 test('endpoint : titulaire de CETTE entreprise seulement, lecture seule, route GET authentifiée', async () => {
@@ -292,29 +274,17 @@ test('endpoint : titulaire de CETTE entreprise seulement, lecture seule, route G
 });
 
 // --- Revue CTO : B1 (trace du webhook réutilisée au débit), B2 (entrant / interne = 1), C4 (ligne de l'appel transféré) -------------------
-test('B1 : le webhook enregistre sa décision (ligne, zone, facteur) et le débit la réutilise au lieu de reclasser, même si from est « client:cc-… » et la première ligne a changé', async () => {
+test('B1 : coefficient 1 : le webhook n\'enregistre aucune trace et le débit compte 1 minute par minute entamée', async () => {
   process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(100);
-  const xml = await webhook(GB); // ligne FR (+33…) → Royaume-Uni : international
-  assert.equal(timeLimit(xml), 25 * 60);
-  assert.equal(decisions.get('CA1').factor, 4, 'facteur décidé enregistré sous le sid de l\'appel'); assert.equal(decisions.get('CA1').zone, 'international');
-  // Entre-temps la première ligne lisible devient britannique : un reclassement donnerait « national » (1).
-  lines = [{ ...lines[0], phoneNumber: '+442071230000' }];
-  CALLS = [callDoc('CA1', 60, { to: GB, from: 'client:cc-sec1' })];
+  const xml = await webhook(FR);
+  assert.equal(timeLimit(xml), 100 * 60, 'solde entier : 100 minutes');
+  assert.equal(decisions.size, 0);
+  CALLS = [callDoc('CA1', 60, { to: FR, from: 'client:cc-sec1' })];
   await syncMinutesFromCalls(C1);
-  assert.equal(N.minutes, 96, 'débité 4 (décision du webhook), pas 1 (reclassement)');
+  assert.equal(N.minutes, 99);
 });
 
-test('B1 : sans trace (autre canal), le débit reclasse comme avant ; un échec d\'enregistrement ne bloque jamais l\'appel', async () => {
-  process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(100);
-  CALLS = [callDoc('NOTRACE', 60, { to: GB, from: '+33411112222' })];
-  await syncMinutesFromCalls(C1);
-  assert.equal(N.minutes, 96);
-  N = wallet(100); CALLS = []; decisions = new Map();
-  CallCreditDecision.updateOne = async () => { throw new Error('mongo down'); };
-  assert.equal(timeLimit(await webhook(GB)), 25 * 60, 'l\'appel passe malgré l\'échec de la trace');
-});
-
-test('B2 : direction absente, « incoming », « inbound » ou appel vers une ligne de l\'entreprise => 1 crédit ; sortant explicite (outbound, outbound-api, outbound-dial) => N', async () => {
+test('B2 : entrants, internes et sortants (outbound, outbound-api, outbound-dial) : tous 1 minute par minute', async () => {
   process.env.INTERNATIONAL_MINUTE_CREDITS = '4'; N = wallet(100);
   CALLS = [
     callDoc('ABS', 60, { to: GB, direction: undefined }), callDoc('INC', 60, { to: GB, direction: 'incoming' }), callDoc('INB', 60, { to: GB, direction: 'inbound' }),
@@ -322,7 +292,7 @@ test('B2 : direction absente, « incoming », « inbound » ou appel vers une li
     callDoc('OUT', 60, { to: GB }), callDoc('API', 60, { to: GB, direction: 'outbound-api' }), callDoc('DIAL', 60, { to: GB, direction: 'outbound-dial' }),
   ];
   await syncMinutesFromCalls(C1);
-  assert.equal(N.minutes, 100 - 4 * 1 - 3 * 4);
+  assert.equal(N.minutes, 93);
 });
 
 test('C4 : le transfert passe au calcul la ligne réellement utilisée (celle qui a reçu l\'appel)', async () => {
@@ -333,24 +303,13 @@ test('C4 : le transfert passe au calcul la ligne réellement utilisée (celle qu
   assert.match(src, /lineNumber = String\(child\.from \|\| ''\);/);
 });
 
-test('journal de consommation : à N > 1 les lignes d\'appels montrent le facteur RÉELLEMENT débité (trace du webhook, reclassement, entrant, interne), tous canaux', async () => {
+test('journal de consommation : aucun facteur ajouté (quantité historique = minutes entamées), même avec une ancienne trace à 4', async () => {
   const { debitsForCalls } = await import('../services/creditCoefficient.js');
-  const { buildMinutesRows } = await import('../services/consumptionJournal.js');
   process.env.INTERNATIONAL_MINUTE_CREDITS = '4';
-  const calls = [callDoc('TRACE', 60, { to: GB, from: 'client:cc-sec1' }), callDoc('RECLASS', 60, { to: GB, from: '+33411112222' }), callDoc('FRNAT', 60, { to: FR }), callDoc('INC', 60, { to: GB, direction: 'incoming' })];
+  const calls = [callDoc('TRACE', 60, { to: GB, from: 'client:cc-sec1' }), callDoc('FRNAT', 60, { to: FR })];
   decisions.set('TRACE', { factor: 4, zone: 'international' });
-  const debits = await debitsForCalls({ companyId: C1, calls });
-  assert.deepEqual(debits.TRACE, { coefficient: 4, zone: 'international' });
-  assert.deepEqual(debits.RECLASS, { coefficient: 4, zone: 'international' });
-  assert.deepEqual(debits.FRNAT, { coefficient: 1, zone: 'domestic' });
-  assert.deepEqual(debits.INC, { coefficient: 1, zone: 'domestic' });
-  const { rows } = buildMinutesRows({ wallet: { chargedCallSids: calls.map((c) => c.sid), credits: [] }, payments: [], calls, debits });
-  const q = Object.fromEntries(rows.filter((r) => r.id.startsWith('call:')).map((r) => [r.id, r.quantity]));
-  assert.deepEqual(q, { 'call:TRACE': -4, 'call:RECLASS': -4, 'call:FRNAT': -1, 'call:INC': -1 });
-  // le solde réellement débité par la lecture du solde est cohérent avec le journal
-  N = wallet(100); CALLS = calls; await syncMinutesFromCalls(C1);
-  assert.equal(N.minutes, 100 + Object.values(q).reduce((a, b) => a + b, 0));
-  // coefficient 1 : aucune information en plus (quantité historique)
-  delete process.env.INTERNATIONAL_MINUTE_CREDITS; clearCoefficientCache();
   assert.deepEqual(await debitsForCalls({ companyId: C1, calls }), {});
+  N = wallet(100); CALLS = calls; await syncMinutesFromCalls(C1);
+  assert.equal(N.minutes, 98);
 });
+

@@ -12,6 +12,7 @@ import { loadUserName } from '../services/followUpDirectory.js';
 import { loadTools, mergedTools } from '../services/secretariatTools.js';
 import { voiceIdentity } from '../services/voicePresenceService.js';
 import { normalizeOutboundDestination, maxSecondsForBalance } from '../services/browserOutbound.js';
+import { countryPrefixOf, toStrictE164 } from '../services/outboundDestinations.js';
 import { graceLimitSeconds } from '../services/minutesGrace.js';
 import { insufficientInternationalMessages, loadCallDecisions, outboundCreditFactor, recordCallDecision } from '../services/creditCoefficient.js';
 import { dialLegCall, outboundRemainderCall } from '../services/transferBilling.js';
@@ -192,7 +193,9 @@ export const callTransferController = {
       let maxSeconds;
       let transferFactor = 0;
       if (mode === 'dial') {
-        number = normalizeOutboundDestination(entry.phone);
+        // Décision du 26/11/2026 : transfert seulement vers un numéro du même indicatif pays que la ligne (jamais surtaxé).
+        const linePrefix = countryPrefixOf(toStrictE164(lineNumber));
+        number = normalizeOutboundDestination(entry.phone, linePrefix ? [linePrefix] : undefined);
         if (!number) return fail(res, 422, `Le numéro de ${entry.name} n’est pas une destination autorisée.`, { code: 'destination_not_allowed' });
         const creditFactor = await deps.creditFactor(access.companyId, number, lineNumber);
         transferFactor = creditFactor;
